@@ -237,15 +237,59 @@ def _load_skills_toc() -> str:
 def _ctx_chars(msgs: list) -> int:
     return sum(len(str(m.get("content") or "")) for m in msgs)
 
-def _trim_context(msgs: list) -> int:
+def _trim_and_compact_context(msgs: list) -> int:
+    """
+    上下文压缩（Tool Clearing）：
+    Token 溢出时，保留系统提示词 + 最新 10 条消息。
+    被清理的老消息不直接丢弃，而是：
+      · role=tool   → 内容替换为占位符
+      · role=user/assistant → 截断保留前 100 字符
+    再将这些消息合并为一条 role=assistant 的摘要插回 system 之后。
+    """
     if _ctx_chars(msgs) <= DYNAMIC_CONFIG["ctx_max_chars"]:
         return 0
-    dropped = 0; i = 1
-    while _ctx_chars(msgs) > DYNAMIC_CONFIG["ctx_trim_to"] and i < len(msgs) - 1:
-        if msgs[i].get("_pinned"):
-            i += 1; continue
-        msgs.pop(i); dropped += 1
-    return dropped
+
+    KEEP_TAIL = 10
+    # system 占 index 0；至少要有可压缩空间
+    if len(msgs) <= KEEP_TAIL + 1:
+        return 0
+
+    cutoff = len(msgs) - KEEP_TAIL   # [1 : cutoff] 为待压缩区间
+
+    old_msgs = msgs[1:cutoff]
+
+    compacted_lines: list[str] = []
+    for m in old_msgs:
+        role    = m.get("role", "unknown")
+        content = m.get("content") or ""
+        if role == "tool":
+            compacted_lines.append(f"[tool/{m.get('tool_call_id', '')}]: "
+                                   "(Tool output compacted to save context)")
+        elif role in ("user", "assistant"):
+            snippet = str(content)[:100]
+            ellipsis = "…" if len(str(content)) > 100 else ""
+            compacted_lines.append(f"[{role}]: {snippet}{ellipsis}")
+        # assistant with tool_calls: note the call names only
+        if role == "assistant" and m.get("tool_calls"):
+            names = [tc.get("function", {}).get("name", "?")
+                     for tc in m.get("tool_calls", [])]
+            compacted_lines.append(f"  └─ tool_calls: {', '.join(names)}")
+
+    summary_content = (
+        "📝 [Context Compacted]:\n"
+        + "\n".join(compacted_lines)
+    )
+    summary_msg = {
+        "role":     "assistant",
+        "content":  summary_content,
+        "_pinned":  True,   # 防止摘要本身在下次压缩时被再次弹出
+    }
+
+    # 用摘要替换老消息区间
+    del msgs[1:cutoff]
+    msgs.insert(1, summary_msg)
+
+    return len(old_msgs)
 
 # ════════════════════════════════════════════════════════
 # XML Plan 渲染器（含"憋尿"修复）
@@ -598,6 +642,9 @@ class AgentSession:
             "  web_search → fetch_url (full page) → synthesize → write_file\n\n"
             "History:\n"
             "  /chat find <keywords>  →  /chat view <id>  →  answer user\n\n"
+            "Delegation (Smart Routing):\n"
+            "  当需要阅读超过 500 行的长代码、分析巨型 Log 或进行深度全网搜索时，\n"
+            "  MUST 使用 delegate_task。不要用自己的上下文硬扛。\n\n"
             "Environment & Files:\n"
             "  WSL Paths: Windows Desktop in WSL is '/mnt/c/Users/<username>/Desktop'.\n"
             "    ALWAYS start paths with '/'. 'mnt/c/...' (no leading slash) is WRONG.\n"
@@ -728,11 +775,13 @@ class AgentSession:
         self._reset_system_prompt(knowledge_query=user_input)
         self.messages.append({"role": "user", "content": user_input})
 
-        dropped = _trim_context(self.messages)
+        dropped = _trim_and_compact_context(self.messages)
         if dropped:
-            print(c(YELLOW, f"  ⚠ 上下文过长，已裁剪最旧 {dropped} 条"))
+            print(c(YELLOW,
+                    f"  ⚠ 上下文过长，已将最旧 {dropped} 条消息压缩为摘要（Tool Clearing）"
+                    ))
             logger.warning(
-                "Context trimmed | session={} dropped={} model={}",
+                "Context compacted (Tool Clearing) | session={} compacted={} model={}",
                 self.session_id[:8], dropped, self.model_alias,
             )
 

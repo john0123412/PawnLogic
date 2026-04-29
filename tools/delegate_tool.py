@@ -7,6 +7,11 @@ delegate_task(task_description)：
   · 捕获子 agent 的工具调用日志和最终回复，精简后返回给主 Session
   · 主 Session 上下文不增长，只获得结果摘要
 
+双模型路由（v1.1 新增）：
+  · 子任务强制使用"高速/低成本"小模型（worker_model）
+  · 优先级列表：ds-v4-flash → glm-4.5-air → qwen-turbo → gpt-4o-mini
+  · 由代码底层自动选取首个可用模型，大模型无权干预
+
 避免循环导入：
   · 本模块不在顶层 import core/session.py
   · TOOL_MAP 和 TOOLS_SCHEMA 在工具被调用时通过函数懒加载
@@ -17,6 +22,7 @@ import sys, io, json, contextlib, threading
 from datetime import datetime
 from config import (
     DYNAMIC_CONFIG, DEFAULT_MODEL, MODELS, get_api_config,
+    validate_api_key,
 )
 from core.api_client import stream_request, ensure_tool_call_id
 from core.memory     import _gen_id
@@ -26,6 +32,28 @@ from utils.ansi      import c, YELLOW, GRAY, GREEN, RED, MAGENTA, BOLD
 # ── 递归深度保护 ──────────────────────────────────────────
 _delegate_ctx = threading.local()   # .depth 表示当前线程的委派深度
 _MAX_DEPTH    = 2                   # 子 Agent 最大嵌套层数
+
+# ── 双模型路由：Worker 候选优先级列表 ────────────────────
+_WORKER_MODEL_CANDIDATES = [
+    "ds-v4-flash",
+    "glm-4.5-air",
+    "qwen-turbo",
+    "gpt-4o-mini",
+]
+
+def _select_worker_model() -> str:
+    """
+    按优先级列表检查第一个可用的小模型。
+    使用 validate_api_key 验证 API Key 是否已配置。
+    若全部不可用则回退到 DEFAULT_MODEL。
+    """
+    for alias in _WORKER_MODEL_CANDIDATES:
+        if alias not in MODELS:
+            continue
+        ok, _ = validate_api_key(alias)
+        if ok:
+            return alias
+    return DEFAULT_MODEL
 
 # ════════════════════════════════════════════════════════
 # 懒加载：避免与 session.py 的循环导入
@@ -187,15 +215,22 @@ def tool_delegate_task(a: dict) -> str:
     """
     委派子任务工具的入口函数。
     在主 Session 内被调用，执行完整子任务后返回精简结果。
+
+    双模型路由：忽略传入的 model_alias，强制由 _select_worker_model()
+    从候选列表中选取第一个 API Key 可用的小模型作为 worker_model。
     """
     task        = a.get("task_description", "").strip()
-    model_alias = a.get("model_alias", DEFAULT_MODEL)
+    caller_model = a.get("model_alias", DEFAULT_MODEL)   # 记录主模型，仅用于日志
     verbose     = bool(a.get("verbose", False))
 
     if not task:
         return "ERROR: task_description 不能为空"
-    if model_alias not in MODELS:
-        model_alias = DEFAULT_MODEL
+
+    # ── ★ 双模型路由：强制降维至小模型 ──────────────────
+    worker_model = _select_worker_model()
+    print(c(YELLOW,
+        f"  ⚡ 智能降维: 主会话模型 → [Worker: {worker_model}] (成本优化)"
+    ))
 
     # ── 递归深度保护 ──────────────────────────────────────
     current_depth = getattr(_delegate_ctx, "depth", 0)
@@ -207,9 +242,9 @@ def tool_delegate_task(a: dict) -> str:
 
     print(c(MAGENTA, f"  🤖 [Sub-agent] 启动委派任务..."))
     print(c(GRAY,    f"  任务: {task[:80]}{'...' if len(task)>80 else ''}"))
-    print(c(GRAY,    f"  模型: {model_alias}  深度: {current_depth+1}/{_MAX_DEPTH}  上限: {_SubAgentSession.MAX_ITER} 轮"))
+    print(c(GRAY,    f"  模型: {worker_model}  深度: {current_depth+1}/{_MAX_DEPTH}  上限: {_SubAgentSession.MAX_ITER} 轮"))
 
-    sub    = _SubAgentSession(task, model_alias)
+    sub    = _SubAgentSession(task, worker_model)
 
     _delegate_ctx.depth = current_depth + 1
     try:
@@ -247,7 +282,9 @@ DELEGATE_SCHEMA = {
             "将复杂子任务委派给一个全新的子 Agent 执行（Fresh Context）。\n"
             "子 Agent 拥有独立的上下文，使用所有工具完成任务后只返回精简结果。\n"
             "主 Agent 的上下文不会因子任务的工具调用而膨胀。\n"
-            "适用场景：大型重构的某个模块、独立的搜索+整理任务、多步骤测试流程。"
+            "适用场景：大型重构的某个模块、独立的搜索+整理任务、多步骤测试流程、\n"
+            "阅读超过 500 行的长代码、分析巨型 Log、深度全网搜索。\n"
+            "注意：子任务模型由系统底层自动选取（成本优化），无需指定。"
         ),
         "parameters": {
             "type": "object",
@@ -256,10 +293,8 @@ DELEGATE_SCHEMA = {
                     "type":        "string",
                     "description": "子任务的详细描述，越具体越好",
                 },
-                "model_alias": {
-                    "type":        "string",
-                    "description": "子 Agent 使用的模型（默认与主 Agent 相同）",
-                },
+                # ★ model_alias 字段已移除——子任务模型由代码底层接管，
+                #   大模型无权干预（双模型路由策略）。
                 "verbose": {
                     "type":        "boolean",
                     "description": "True 时在结果中包含完整工具调用日志（默认 False）",
