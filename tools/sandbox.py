@@ -303,7 +303,9 @@ SANDBOX_SCHEMAS = [
             "在沙箱中执行代码。语言: python / c / cpp / javascript / bash / rust / go / java。\n"
             "Python: use_venv=true 自动创建/复用 ./venv；install_deps='numpy requests' 安装依赖。\n"
             "C/C++: 自动 gcc/g++ 编译，先输出编译信息再运行。\n"
-            "资源限制：内存 512MB，CPU = timeout+5s，输出 256KB。"
+            "资源限制：内存 512MB，CPU = timeout+5s，输出 256KB。\n"
+            "🚨 防幻觉警告：如果你的脚本需要处理本地文件，必须在脚本中使用 open('path').read() "
+            "真实读取！绝不允许在脚本字符串中伪造、编造或 hardcode 目标文件的假内容！"
         ),
         "parameters": {
             "type": "object",

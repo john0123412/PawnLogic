@@ -108,11 +108,32 @@ def tool_pwn_env(a: dict) -> str:
 # inspect_binary
 # ════════════════════════════════════════════════════════
 
+_TEXT_EXTENSIONS = {".c", ".cpp", ".cc", ".cxx", ".py", ".md", ".txt",
+                    ".js", ".ts", ".html", ".htm", ".sh", ".bash", ".rs",
+                    ".go", ".java", ".rb", ".php", ".css", ".json", ".yaml",
+                    ".yml", ".toml", ".ini", ".cfg"}
+
 def tool_inspect_binary(a: dict) -> str:
     path = a["path"]; grep = a.get("strings_grep", "")
     ok, reason = _check_read(path)
     if not ok: return reason
     if not Path(path).expanduser().exists(): return f"ERROR: 不存在: {path}"
+
+    # ── 🚨 物理拦截：严禁对文本源码文件使用二进制分析工具 ──────────
+    _suffix = Path(path).suffix.lower()
+    if _suffix in _TEXT_EXTENSIONS:
+        return (
+            f"🚨 [HARD BLOCK] inspect_binary 拒绝处理文本文件！\n"
+            f"  文件: {path}  (检测到文本扩展名: '{_suffix}')\n\n"
+            f"  ❌ 错误原因: inspect_binary 是二进制分析工具（file/checksec/hexdump/readelf），\n"
+            f"     对源码文本文件执行这些命令毫无意义，属于严重的工具误用。\n\n"
+            f"  ✅ 正确做法（根据你的实际需求选择）：\n"
+            f"     · 阅读源码内容  → read_file(path='{path}')\n"
+            f"     · 搜索函数/符号 → run_shell('grep -n <关键词> {path}')\n"
+            f"     · 搜索全项目引用→ run_shell('grep -rn <关键词> .')\n"
+            f"     · 查找相关文件  → find_files('<pattern>')\n\n"
+            f"  📌 记住：inspect_binary 只能用于 ELF / PE / so / o 等真正的二进制文件！"
+        )
 
     # ── 缓存命中 ──────────────────────────────────────────
     cache_slot = f"inspect:{grep}"
@@ -466,7 +487,12 @@ PWN_SCHEMAS = [
 
     {"type":"function","function":{
         "name":"inspect_binary",
-        "description":"对二进制运行 file/checksec/strings/hexdump/readelf/ldd。",
+        "description":(
+            "对二进制运行 file/checksec/strings/hexdump/readelf/ldd。\n"
+            "🚨 严禁：绝对不要对源码文件（.c .cpp .py .js .sh .md .txt 等文本文件）使用此工具！"
+            "源码请用 grep 或 read_file。此工具仅对 ELF/PE/so/o 等真正的二进制文件有意义，"
+            "对文本文件调用将被系统硬性拦截并返回错误。"
+        ),
         "parameters":{"type":"object","properties":{
             "path":{"type":"string"},
             "strings_grep":{"type":"string"}},
