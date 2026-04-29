@@ -582,15 +582,32 @@ class AgentSession:
             "  · For pure conversation (no tools), a plan is optional.\n"
             "  · For even a single tool call, output AT MINIMUM: <plan><intent>reason</intent></plan>\n\n"
             # ════════════════════════════════════════════════
-            # ★ 修改 2：放宽工具调用说明，加入文本兜底容错指引
+            # ★ 终极防线：打破 JSON 惯性，强化 XML 强制力
             # ════════════════════════════════════════════════
-            "<CRITICAL_EXECUTION_CONTRACT>\n"
-            "  ⚠ NO WAITING RULE: Output the <plan> block AND invoke the tool in the EXACT SAME\n"
-            "  response. Do NOT output a plan then wait for user confirmation.\n\n"
-            "  [TOOL INVOCATION: Trigger the native function calling API immediately after </plan>.\n"
-            "  If native calling fails, you MAY fallback to outputting raw JSON wrapped EXACTLY in\n"
-            "  <tool_call>{\"name\": \"...\", \"arguments\": {...}}</tool_call> tags.]\n"
-            "</CRITICAL_EXECUTION_CONTRACT>\n\n"
+            "### === TOOL CALLING PROTOCOL (CRITICAL) ===\n"
+            "You have TWO output formats. Choosing the wrong format will cause system crash.\n\n"
+            "[RULE 1: COMPACT JSON]\n"
+            "Use ONLY for simple parameters (short strings, numbers, NO newlines, NO quotes).\n"
+            "Format: {\"name\":\"tool_name\",\"arguments\":{\"key\":\"val\"}}\n\n"
+            "[RULE 2: XML TAGS (MANDATORY FOR CODE/TEXT)]\n"
+            "You MUST use XML tags if your argument contains:\n"
+            "- Bash scripts, Python code, or JSON payloads.\n"
+            "- Multi-line text (newlines).\n"
+            "- Quotes (\" or ').\n"
+            "- Chinese characters.\n"
+            "Specifically, tools like `write_file`, `patch_file`, `web_search` MUST use XML.\n\n"
+            "Format:\n"
+            "<call name=\"write_file\">\n"
+            "  <path>report.md</path>\n"
+            "  <content>\n"
+            "# Write raw unescaped text here\n"
+            "watch -n 1 \"grep -rnw /proc/net\"\n"
+            "  </content>\n"
+            "</call>\n\n"
+            "🚨 DO NOT WRAP XML IN <tool_call> TAGS. JUST OUTPUT <call>.\n"
+            "🚨 NEVER output JSON with unescaped quotes. Use XML to bypass escaping.\n\n"
+            "⚠ NO WAITING RULE: Output the <plan> block AND invoke the tool in the EXACT SAME\n"
+            "response. Do NOT output a plan then wait for user confirmation.\n\n"
 
             "Self-Correction Protocol (when you see PLAN_MISSING signal):\n"
             "  Do NOT apologize. Do NOT repeat failed call text.\n"
@@ -774,6 +791,147 @@ class AgentSession:
         except Exception:
             return ""
 
+    # ════════════════════════════════════════════════════
+    # Hybrid v2 双协议解析器
+    # ════════════════════════════════════════════════════
+
+    def _extract_calls(self, text_buf: str) -> list:
+        """
+        Hybrid v2 双协议解析器。
+
+        优先级：
+          1. XML <call name="...">...</call>   — 零转义，完美处理中文与多行代码
+          2. JSON <tool_call>{...}</tool_call> — 紧凑格式，适合单行 ASCII 参数
+
+        返回格式：
+          [{"name": str, "args": dict, "_source": "xml"|"json"}, ...]
+
+        容错：
+          · XML 缺失 </call> 尾标签时，截取至字符串末尾尝试补全解析。
+          · JSON 使用 strict=False 允许参数字符串中出现真实换行符。
+        """
+        import re
+        results = []
+
+        # ── 1. XML 路径：优先匹配完整 <call>…</call> ─────────────
+        _XML_FULL = re.compile(
+            r'<call\s+name="(?P<name>[^"]+)">(?P<args_block>.*?)</call>',
+            re.DOTALL,
+        )
+        # 容错：模型忘记写 </call> 时，截取至字符串末尾
+        _XML_PARTIAL = re.compile(
+            r'<call\s+name="(?P<name>[^"]+)">(?P<args_block>.*)',
+            re.DOTALL,
+        )
+        # XML 参数内部子标签匹配（递归解析 args_block）
+        _XML_PARAM = re.compile(
+            r'<(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)>(?P<val>.*?)</(?P=key)>',
+            re.DOTALL,
+        )
+
+        xml_matches = list(_XML_FULL.finditer(text_buf))
+        _used_partial = False
+        if not xml_matches:
+            xml_matches = list(_XML_PARTIAL.finditer(text_buf))
+            _used_partial = bool(xml_matches)
+
+        if xml_matches:
+            for m in xml_matches:
+                name = m.group("name").strip()
+                args_block = m.group("args_block")
+                if _used_partial:
+                    print(c(GRAY, "  ⚙ [XML Parser] 检测到未闭合 </call>，已启用容错补全解析"))
+
+                args: dict = {}
+                for pm in _XML_PARAM.finditer(args_block):
+                    key = pm.group("key").strip()
+                    # 🔑 零转义：仅 .strip() 去除标签周围空白，内容原样透传
+                    val_raw = pm.group("val").strip()
+
+                    # ── 类型自动纠正 ──────────────────────────────
+                    if val_raw.lstrip("-").isdigit():
+                        val: object = int(val_raw)
+                    elif val_raw.lower() == "true":
+                        val = True
+                    elif val_raw.lower() == "false":
+                        val = False
+                    else:
+                        val = val_raw   # 保留原始字符串（含换行符、中文等）
+
+                    args[key] = val
+
+                if name and args:
+                    results.append({"name": name, "args": args, "_source": "xml"})
+
+            if results:
+                return results
+
+        # ── 2. JSON 兜底：兼容 <tool_call>{...}</tool_call> 幻觉 ─
+        if "<tool_call>" in text_buf:
+            match = re.search(r"<tool_call>\s*(\{.*)", text_buf, re.DOTALL)
+            if match:
+                json_str = match.group(1)
+                json_str = re.sub(
+                    r"</tool_call>.*$", "", json_str, flags=re.DOTALL
+                ).strip()
+                try:
+                    # strict=False 允许参数中存在真实换行符（专治代码生成器）
+                    parsed_tc = json.loads(json_str, strict=False)
+                    if "name" in parsed_tc and "arguments" in parsed_tc:
+                        raw_args = parsed_tc["arguments"]
+                        args_dict = (
+                            raw_args
+                            if isinstance(raw_args, dict)
+                            else {"_raw_args": str(raw_args)}
+                        )
+                        results.append({
+                            "name":    parsed_tc["name"],
+                            "args":    args_dict,
+                            "_source": "json",
+                        })
+                except json.JSONDecodeError as e:
+                        # ── 脏 JSON 抢救逻辑：尝试修复未转义的双引号 ──
+                        rescued = False
+                        try:
+                            import re as _re
+                            # 贪婪匹配 content 字段中的所有内容
+                            content_match = _re.search(r'"content"\s*:\s*"(.*)"\s*\}', json_str, _re.DOTALL)
+                            if content_match:
+                                bad_content = content_match.group(1)
+                                # 将中间的双引号转义，但避免重复转义已转义的引号
+                                fixed_content = _re.sub(r'(?<!\\)"', r'\"', bad_content)
+                                fixed_j_str = json_str.replace(bad_content, fixed_content)
+
+                                parsed_tc = json.loads(fixed_j_str, strict=False)
+                                if "name" in parsed_tc and "arguments" in parsed_tc:
+                                    raw_args = parsed_tc["arguments"]
+                                    args_dict = (
+                                        raw_args
+                                        if isinstance(raw_args, dict)
+                                        else {"_raw_args": str(raw_args)}
+                                    )
+                                    results.append({
+                                        "name": parsed_tc["name"],
+                                        "args": args_dict,
+                                        "_source": "json_rescued",
+                                    })
+                                    rescued = True
+                        except Exception:
+                            pass
+
+                        if not rescued:
+                            logger.error(
+                                "Hybrid Parser: JSON fallback corrupted | "
+                                "model={} session={} exc={!r}\n"
+                                "--- RAW (truncated 4096) ---\n{}\n--- END ---",
+                                self.model_alias, self.session_id[:8], e, json_str[:4096],
+                            )
+                            print(c(RED, f"  ✗ [Hybrid Parser] JSON 兜底解析失败: {e}"))
+                        else:
+                            print(c(YELLOW, f"  ⚠ [Hybrid Parser] 探测到脏 JSON，已通过正则抢救成功！"))
+
+        return results
+
     # ── 主轮次 ────────────────────────────────────────────
     def run_turn(self, user_input: str):
         self._reset_system_prompt(knowledge_query=user_input)
@@ -883,48 +1041,46 @@ class AgentSession:
             if leftover: sys.stdout.write(leftover); sys.stdout.flush()
             print()
 
-            # --- Fallback Parser: 捕获文本中的 <tool_call> 幻觉 ---
-            import re
-            if not tc_buf and "<tool_call>" in text_buf:
-                # 兼容模型忘记写 </tool_call> 的情况（非贪婪匹配到末尾）
-                match = re.search(r"<tool_call>\s*(\{.*)", text_buf, re.DOTALL)
-                if match:
-                    json_str = match.group(1)
-                    # 清理尾部可能的残缺标签或啰嗦废话
-                    json_str = re.sub(r"</tool_call>.*$", "", json_str, flags=re.DOTALL).strip()
-                    try:
-                        # strict=False 是灵魂！它允许 JSON 字符串中存在真实的换行符（专治代码生成器）
-                        parsed_tc = json.loads(json_str, strict=False)
-                        if "name" in parsed_tc and "arguments" in parsed_tc:
-                            args_str = json.dumps(parsed_tc["arguments"]) if isinstance(parsed_tc["arguments"],
-                                                                                        dict) else str(
-                                parsed_tc["arguments"])
-                            tc_buf[0] = {
-                                "id": f"call_fallback_{iteration}",
-                                "name": parsed_tc["name"],
-                                "args": args_str,
-                            }
-                            text_buf = text_buf[:match.start()]
-                            print(c(GRAY, "  ⚙ [Fallback Parser] 成功拦截并解析异常工具调用 (终极容错模式)"))
-                            # ★ 记录到文件，便于分析哪些模型频繁触发 Fallback
-                            logger.info(
-                                "Fallback Parser: intercepted tool call | "
-                                "model={} session={} iteration={} tool_name={}",
-                                self.model_alias, self.session_id[:8],
-                                iteration, parsed_tc["name"],
-                            )
-                    except json.JSONDecodeError as e:
-                        print(c(RED, f"  ✗ [Fallback Parser] 模型生成的 JSON 彻底损坏: {e}"))
-                        # ★ 完整记录原始损坏 JSON，是排查模型输出格式问题的关键证据
-                        logger.error(
-                            "Fallback Parser: JSON completely corrupted | "
-                            "model={} session={} iteration={} exc={!r}\n"
-                            "--- RAW JSON (truncated to 4096 chars) ---\n{}\n"
-                            "--- END RAW JSON ---",
-                            self.model_alias, self.session_id[:8],
-                            iteration, e, json_str[:4096],
-                        )
-            # --------------------------------------------------------
+            # ── Hybrid v2 Parser：XML 优先，JSON 兜底 ─────────────
+            # 仅在 API 未通过 native tool_calls 返回结果时介入。
+            # XML 路径保证 content/query 等字段零转义直通执行器。
+            if not tc_buf and (
+                '<call name="' in text_buf or "<tool_call>" in text_buf
+            ):
+                extracted = self._extract_calls(text_buf)
+                for i, call in enumerate(extracted):
+                    source = call["_source"]
+                    call_id = (
+                        f"call_xml_{iteration}_{i}"
+                        if source == "xml"
+                        else f"call_fallback_{iteration}_{i}"
+                    )
+                    tc_buf[i] = {
+                        "id":           call_id,
+                        "name":         call["name"],
+                        # args 序列化为 JSON 字符串用于日志/display；
+                        # 执行路径通过 _args_parsed 直接拿 dict，跳过二次解析。
+                        "args":         json.dumps(call["args"], ensure_ascii=False),
+                        "_args_parsed": call["args"],   # 🔑 零转义透传
+                    }
+                    label = "XML" if source == "xml" else "JSON"
+                    print(c(GRAY,
+                        f"  ⚙ [Hybrid Parser/{label}] 拦截工具调用: {call['name']} "
+                        f"(params: {list(call['args'].keys())})"
+                    ))
+                    logger.info(
+                        "Hybrid Parser/{} intercepted | "
+                        "model={} session={} iteration={} tool={}",
+                        label, self.model_alias, self.session_id[:8],
+                        iteration, call["name"],
+                    )
+                # 截断 text_buf 到第一个 <call 或 <tool_call> 之前，
+                # 避免将协议标签暴露给上下文。
+                import re as _re
+                _trim = _re.search(r'<call\s+name="|<tool_call>', text_buf)
+                if _trim and extracted:
+                    text_buf = text_buf[:_trim.start()]
+            # ─────────────────────────────────────────────────────────
 
             if not tc_buf:
                 self.messages.append({"role": "assistant", "content": text_buf})
@@ -1005,13 +1161,22 @@ class AgentSession:
 
             # ── 执行所有工具 ───────────────────────────────
             for i in sorted(tc_buf):
-                tc = tc_buf[i]; name = tc["name"]
-                fn_args = {}
-                if tc["args"].strip():
-                    try:    fn_args = json.loads(tc["args"])
-                    except json.JSONDecodeError:
-                        try:    fn_args = json.loads(tc["args"].strip().lstrip("\ufeff"))
-                        except: fn_args = {"_raw_args": tc["args"]}
+                tc = tc_buf[i];
+                name = tc["name"]
+
+                # 🔑 优先使用 XML/Hybrid Parser 透传的零转义字典
+                if "_args_parsed" in tc:
+                    fn_args = tc["_args_parsed"]
+                else:
+                    fn_args = {}
+                    if tc["args"].strip():
+                        try:
+                            fn_args = json.loads(tc["args"])
+                        except json.JSONDecodeError:
+                            try:
+                                fn_args = json.loads(tc["args"].strip().lstrip("\ufeff"))
+                            except:
+                                fn_args = {"_raw_args": tc["args"]}
 
                 preview  = ", ".join(f"{k}={repr(v)[:40]}" for k, v in fn_args.items())
                 iter_tag = c(GRAY, f"[{iteration+1}/{max_iter}]")
