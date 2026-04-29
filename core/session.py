@@ -48,6 +48,7 @@ from tools.pwn_chain import (tool_pwn_env, tool_inspect_binary, tool_pwn_rop,
                               tool_pwn_cyclic, tool_pwn_disasm, tool_pwn_libc,
                               tool_pwn_debug, tool_pwn_one_gadget, PWN_SCHEMAS)
 from tools.vision    import analyze_local_image, VISION_SCHEMAS
+from core.logger import logger
 
 TOOL_MAP: dict = {
     "read_file":           tool_read_file,
@@ -485,6 +486,9 @@ class AgentSession:
             "the stack. Use ROP chains (pwn_rop) or one_gadget (pwn_one_gadget) instead.\n"
             "RULE: If 'inspect_binary' shows 'Canary found', you MUST find a canary leak path before "
             "attempting any stack smashing exploit.\n\n"
+            "=== VULN_DEV 漏洞开发纪律 ===\n"
+            "你处于无头(Headless)终端。绝对禁止直接运行等待输入的 gdb/nc 等交互式命令！\n"
+            "最佳实践：在漏洞开发阶段，优先编写包含 pwntools 的 exploit.py 脚本。利用 cyclic() 生成偏移数据、process() 启动程序、corefile 读取崩溃内存，然后使用 run_shell 执行 'python3 exploit.py' 来测试。这是最稳定的方式。\n\n"
 
             "=== Memory & History Awareness ===\n"
             "You have a persistent conversation database. While you have no spontaneous memory,\n"
@@ -727,10 +731,18 @@ class AgentSession:
         dropped = _trim_context(self.messages)
         if dropped:
             print(c(YELLOW, f"  ⚠ 上下文过长，已裁剪最旧 {dropped} 条"))
+            logger.warning(
+                "Context trimmed | session={} dropped={} model={}",
+                self.session_id[:8], dropped, self.model_alias,
+            )
 
         ok, env_name = validate_api_key(self.model_alias)
         if not ok:
             print(c(RED, f"  ✗ {self.model_alias} 需要 {env_name}，请 export {env_name}=sk-..."))
+            logger.error(
+                "API key missing | model={} required_env={}",
+                self.model_alias, env_name,
+            )
             return
 
         cfg = self.model
@@ -775,7 +787,12 @@ class AgentSession:
                 max_tokens=current_max_tokens,
             ):
                 if "_error" in delta:
-                    print(c(RED, f"\nAPI Error: {delta['_error']}"))
+                    _err_detail = delta["_error"]
+                    print(c(RED, f"\nAPI Error: {_err_detail}"))
+                    logger.error(
+                        "API stream error | model={} session={} iteration={} raw_error={}",
+                        self.model_alias, self.session_id[:8], iteration, _err_detail,
+                    )
                     self.messages.pop(); return
 
                 choices = delta.get("choices", [])
@@ -832,12 +849,28 @@ class AgentSession:
                             tc_buf[0] = {
                                 "id": f"call_fallback_{iteration}",
                                 "name": parsed_tc["name"],
-                                "args": args_str
+                                "args": args_str,
                             }
                             text_buf = text_buf[:match.start()]
                             print(c(GRAY, "  ⚙ [Fallback Parser] 成功拦截并解析异常工具调用 (终极容错模式)"))
+                            # ★ 记录到文件，便于分析哪些模型频繁触发 Fallback
+                            logger.info(
+                                "Fallback Parser: intercepted tool call | "
+                                "model={} session={} iteration={} tool_name={}",
+                                self.model_alias, self.session_id[:8],
+                                iteration, parsed_tc["name"],
+                            )
                     except json.JSONDecodeError as e:
                         print(c(RED, f"  ✗ [Fallback Parser] 模型生成的 JSON 彻底损坏: {e}"))
+                        # ★ 完整记录原始损坏 JSON，是排查模型输出格式问题的关键证据
+                        logger.error(
+                            "Fallback Parser: JSON completely corrupted | "
+                            "model={} session={} iteration={} exc={!r}\n"
+                            "--- RAW JSON (truncated to 4096 chars) ---\n{}\n"
+                            "--- END RAW JSON ---",
+                            self.model_alias, self.session_id[:8],
+                            iteration, e, json_str[:4096],
+                        )
             # --------------------------------------------------------
 
             if not tc_buf:
@@ -863,26 +896,33 @@ class AgentSession:
 
             _plan_signal_injected = False
 
-            if need_plan:
-                _plan_rejected += 1
-
-                if _plan_rejected > _MAX_SOFT_CORRECTIONS:
-                    # ── 硬终止：软拦截已耗尽 ──────────────────
-                    print(c(RED,
+            if _plan_rejected > _MAX_SOFT_CORRECTIONS:
+                # ── 硬终止：软拦截已耗尽 ──────────────────
+                print(c(RED,
                         f"  ⛔ [CoT Guard] 连续 {_plan_rejected} 次未提供 <plan>，任务已终止。"
-                    ))
-                    print(c(GRAY,
+                        ))
+                print(c(GRAY,
                         "  建议：1. 简化指令  2. 切换更强模型（/model ds-chat）"
-                    ))
-                    if self.messages and self.messages[-1]["role"] == "user":
-                        self.messages.pop()   # 撤销上一条 user 消息，保持上下文干净
-                    return
+                        ))
+                logger.warning(
+                    "CoT Guard: hard kill triggered | "
+                    "model={} session={} iteration={} plan_rejected={}",
+                    self.model_alias, self.session_id[:8],
+                    iteration, _plan_rejected,
+                )
+                if self.messages and self.messages[-1]["role"] == "user":
+                    self.messages.pop()  # 撤销上一条 user 消息，保持上下文干净
+                return
 
                 # ── 软拦截：工具仍执行，计划注入信号 ──────────
                 print(c(YELLOW,
                     f"  💭 [CoT Soft #{_plan_rejected}/{_MAX_SOFT_CORRECTIONS}] "
                     "检测到缺失 <plan>，工具已执行，修正信号将在结果后注入..."
                 ))
+                logger.debug(
+                    "CoT Guard: soft intercept #{} | model={} session={} iteration={}",
+                    _plan_rejected, self.model_alias, self.session_id[:8], iteration,
+                )
                 _plan_signal_injected = True
 
             else:
@@ -894,6 +934,11 @@ class AgentSession:
                 kept = sorted(tc_buf.keys())[:_MAX_CONCURRENT_TOOLS]
                 tc_buf = {k: tc_buf[k] for k in kept}
                 print(c(YELLOW, f"  ✂ [并发限制] {orig} 个工具调用已截断至前 {_MAX_CONCURRENT_TOOLS} 个。"))
+                logger.warning(
+                    "Concurrent tool limit | model={} session={} original={} kept={}",
+                    self.model_alias, self.session_id[:8], orig, _MAX_CONCURRENT_TOOLS,
+                )
+
 
             self.messages.append({
                 "role":    "assistant",
@@ -943,6 +988,11 @@ class AgentSession:
                         print(c(MAGENTA,
                             f"  🔀 [Phase Switch] {old_phase} → {target}  ({reason[:60]})"
                         ))
+                        logger.info(
+                            "Phase switch | model={} session={} {} → {} reason={}",
+                            self.model_alias, self.session_id[:8],
+                            old_phase, target, reason,
+                        )
                         # 刷新系统提示词中的 Phase 感知块
                         self._reset_system_prompt()
                     else:
@@ -1016,6 +1066,10 @@ class AgentSession:
                 ))
 
         print(c(RED, f"\n[达到 max_iter={max_iter}，用 /mid /deep 或 /iter <n> 提升]"))
+        logger.warning(
+            "max_iter reached | model={} session={} max_iter={}",
+            self.model_alias, self.session_id[:8], max_iter,
+        )
         self._print_turn_summary()
         self._autosave()
 
@@ -1067,7 +1121,13 @@ class AgentSession:
                 from core.memory import upsert_session, save_messages
                 upsert_session(sid, "", model_alias, cwd, cfg_snap)
                 save_messages(sid, msgs_snapshot)
-            except Exception: pass
-            finally: self._save_lock.release()
+            except Exception as _autosave_exc:
+                # 原来是 pass（静默丢失错误），现在写入日志文件
+                logger.error(
+                    "Autosave failed | session={} model={} exc={!r}",
+                    sid[:8], model_alias, _autosave_exc,
+                )
+            finally:
+                self._save_lock.release()
 
         threading.Thread(target=_do, daemon=True, name=f"save-{sid[:8]}").start()

@@ -14,6 +14,7 @@ import os, re, difflib, subprocess
 from pathlib import Path
 from config import DYNAMIC_CONFIG, READ_BLACKLIST, WRITE_BLACKLIST, DANGEROUS_PATTERNS
 from utils.ansi import c, YELLOW, BLUE, GRAY, RED
+from core.logger import logger
 
 # ── 全局 cwd 引用 ─────────────────────────────────────────
 _session_cwd = [os.getcwd()]
@@ -40,26 +41,64 @@ def _check_write(path: str):
 # Shell 执行（文件工具内部用）
 # ════════════════════════════════════════════════════════
 
-def _run(cmd: str, timeout: int = 40, cwd: str = None, env=None) -> str:
+def _run(cmd: str, timeout: int = 15, cwd: str = None, env=None) -> str:
+    """
+    执行 Shell 命令的底层实现。
+
+    防阻塞加固（v1.1）：
+      · stdin=DEVNULL  —— 切断键盘输入，防止交互式程序挂起（SIGTTIN）
+      · timeout=15s    —— 默认超时熔断，防止大模型逻辑死锁
+      · logger         —— 记录执行轨迹，便于调试和审计
+    """
     work_dir = cwd or _session_cwd[0]
+
+    # ── 安全检查 ────────────────────────────────────────────
     for pat in DANGEROUS_PATTERNS:
         if re.search(pat, cmd):
+            logger.warning(f"[run_shell] SECURITY BLOCK: cmd={cmd!r}, pattern={pat!r}")
             return f"SECURITY BLOCK: 命令匹配危险模式 '{pat}'"
+
+    logger.debug(f"[run_shell] 开始执行: {cmd!r}  (timeout={timeout}s, cwd={work_dir})")
     print(c(YELLOW, f"  ⚡ $ {cmd[:120]}"))
+
     try:
         res = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True,
-            timeout=timeout, cwd=work_dir, env=env
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,   # ★ 核心防阻塞：切断标准输入
+            timeout=timeout,
+            cwd=work_dir,
+            env=env,
         )
         out   = res.stdout + res.stderr
         limit = DYNAMIC_CONFIG["tool_max_chars"]
         if len(out) > limit:
             half = limit // 2
             out  = out[:half] + f"\n...[共{len(out)}字符，截断至{limit}]...\n" + out[-half // 4:]
+
+        if res.returncode != 0:
+            logger.warning(
+                f"[run_shell] 命令返回非零退出码 {res.returncode}: {cmd!r}\n"
+                f"  stderr: {res.stderr[:300]!r}"
+            )
+
         return out or "(no output)"
+
     except subprocess.TimeoutExpired:
-        return f"ERROR: 超时 {timeout}s"
+        # ★ 超时熔断：给大模型明确的行动指引
+        msg = (
+            f"ERROR: 命令执行超时（>{timeout}s），进程已被终止。\n"
+            "你是否运行了交互式程序（如 gdb、python、vim、nc）？\n"
+            "  · 如果是 GDB，请务必加 -batch 参数，例如：gdb -batch -ex 'run' ./binary\n"
+            "  · 如果需要与进程交互，请改用 run_interactive 工具并通过 inputs 传入脚本化输入。"
+        )
+        logger.warning(f"[run_shell] 超时 ({timeout}s): {cmd!r}")
+        return msg
+
     except Exception as e:
+        logger.error(f"[run_shell] 执行异常: {cmd!r} — {type(e).__name__}: {e}")
         return f"ERROR: {e}"
 
 # ════════════════════════════════════════════════════════
