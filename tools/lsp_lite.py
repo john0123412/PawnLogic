@@ -22,7 +22,8 @@ from utils.ansi import c, BLUE, GRAY, YELLOW
 _PYTHON_EXTS = {".py"}
 _GREP_EXTS   = {".c", ".cpp", ".cc", ".cxx", ".h", ".hpp",
                 ".js", ".ts", ".jsx", ".tsx",
-                ".go", ".rs", ".java", ".swift", ".kt"}
+                ".go", ".rs", ".java", ".swift", ".kt",
+                ".php", ".s", ".asm"}
 
 # 各语言的定义关键字正则（用于 grep 搜索）
 _LANG_DEF_PATTERNS = {
@@ -34,6 +35,7 @@ _LANG_DEF_PATTERNS = {
     ".go":   r"\bfunc\s+(\(\w+\s+\*?\w+\)\s+)?{sym}\s*\(",
     ".rs":   r"\b(fn|struct|enum|trait|impl)\s+{sym}\b",
     ".java": r"\b(class|interface|void|public|private|protected)\s+{sym}\s*[({]",
+    ".php":  r"\b(function|class|interface|trait)\s+{sym}\b",
 }
 _DEFAULT_DEF_PATTERN = r"\b(def|function|fn|func|class|struct)\s+{sym}\b"
 
