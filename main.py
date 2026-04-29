@@ -58,6 +58,8 @@ from core.persistence import (session_save, session_load, session_list,
 from tools.web_ops    import web_tool_status
 from tools.pwn_chain  import tool_pwn_env
 from tools.file_ops   import _session_cwd, tool_read_file
+# ★ 新增：loguru 日志模块
+from core.logger import logger, setup_logger
 
 # ════════════════════════════════════════════════════════
 # 模块 2：交互式 API Key 配置向导
@@ -1064,6 +1066,20 @@ def main():
     )
     args, _ = parser.parse_known_args()
     config.QUIET_MODE = args.quiet  # mutate the single canonical flag in config
+
+    # ★ 初始化 loguru 双端输出
+    # · QUIET_MODE 下终端只输出 WARNING 及以上，减少干扰
+    # · 文件始终记录 DEBUG 级别，保留完整诊断信息
+    setup_logger(
+        stderr_level="WARNING" if config.QUIET_MODE else "INFO",
+        file_level="DEBUG",
+    )
+    logger.info(
+        "PawnLogic {} starting | model={} quiet={}",
+        config.VERSION,
+        args.model or config.DEFAULT_MODEL,
+        config.QUIET_MODE,
+    )
 
     init_db()
 

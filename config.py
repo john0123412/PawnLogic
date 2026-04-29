@@ -22,6 +22,8 @@ VERSION = "1.0.0"
 SESSIONS_DIR       = Path.home() / ".pawnlogic" / "sessions"
 DB_PATH            = Path.home() / ".pawnlogic" / "pawn.db"
 GLOBAL_SKILLS_PATH = Path.home() / ".pawnlogic" / "global_skills.md"   # GSA 技能存档
+# ★ 新增：日志存储目录，供 core/logger.py 读取
+LOG_DIR            = Path.home() / ".pawnlogic" / "logs"
 
 # ════════════════════════════════════════════════════════
 # 厂商注册表
