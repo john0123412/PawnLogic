@@ -1,13 +1,26 @@
 """
 tools/web_ops.py — Web 搜索 + 内容抓取
-策略（按优先级）：
-  1. Jina Reader  https://r.jina.ai/<url>   → 反爬穿透，返回 Markdown
-  2. Pandoc       pandoc -f html -t markdown  → 本地 HTML→Markdown（若已安装）
-  3. 正则清洗     原版 regex strip             → 零依赖兜底方案
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【搜索三级降级策略】（按优先级）
+  1. Tavily API   https://api.tavily.com/search       → 专业 AI 搜索，需 TAVILY_API_KEY
+  2. Jina Search  https://s.jina.ai/<query>           → 免费 Markdown 搜索，无需 Key
+  3. DuckDuckGo   https://html.duckduckgo.com/html/   → 正则兜底，零依赖
+
+【抓取三级降级策略】（按优先级）
+  1. Jina Reader  https://r.jina.ai/<url>             → 反爬穿透，返回 Markdown
+  2. Pandoc       pandoc -f html -t markdown           → 本地 HTML→Markdown（若已安装）
+  3. 正则清洗     原版 regex strip                     → 零依赖兜底方案
 """
 
-import re, shutil, subprocess, random
-import urllib.request, urllib.parse, urllib.error
+import os
+import re
+import json
+import shutil
+import subprocess
+import random
+import urllib.request
+import urllib.parse
+import urllib.error
 from config import DYNAMIC_CONFIG, USER_AGENTS
 from utils.ansi import c, BLUE, YELLOW, GRAY, GREEN, RED
 
@@ -19,11 +32,95 @@ def _ua() -> str:
     """随机返回一个 User-Agent。"""
     return random.choice(USER_AGENTS)
 
-# ── DuckDuckGo 搜索 ──────────────────────────────────────
+# ── 搜索：第一级 Tavily API ──────────────────────────────
 
-def tool_web_search(a: dict) -> str:
-    query = a["query"]
-    print(c(BLUE, f"  🔍 {query}"))
+def _search_tavily(query: str) -> str | None:
+    """
+    通过 Tavily API 搜索。
+    需要环境变量 TAVILY_API_KEY。
+    成功返回格式化文本，失败或无 Key 返回 None。
+    """
+    key = os.getenv("TAVILY_API_KEY")
+    if not key:
+        return None
+
+    print(c(BLUE, f"  🔍 [Tavily] {query}"))
+    payload = json.dumps({
+        "api_key": key,
+        "query": query,
+        "search_depth": "basic",
+    }).encode("utf-8")
+
+    try:
+        req = urllib.request.Request(
+            "https://api.tavily.com/search",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": _ua(),
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+
+        results = data.get("results", [])
+        if not results:
+            return None
+
+        lines = []
+        for i, item in enumerate(results[:8], start=1):
+            title   = item.get("title", "").strip()
+            url     = item.get("url", "").strip()
+            content = item.get("content", "").strip()
+            lines.append(f"[{i}] {title}\n    {url}\n    {content}")
+
+        return "\n\n".join(lines) if lines else None
+
+    except Exception:
+        return None
+
+# ── 搜索：第二级 Jina Search ─────────────────────────────
+
+def _search_jina(query: str, max_chars: int = 4000) -> str | None:
+    """
+    通过 Jina Search 搜索，返回 Markdown 格式摘要。
+    无需 API Key，但受限于免费额度。
+    成功返回截断后的 Markdown，失败返回 None。
+    """
+    print(c(YELLOW, f"  🔍 [Jina Search] {query}"))
+    jina_url = f"https://s.jina.ai/{urllib.parse.quote(query)}"
+
+    try:
+        req = urllib.request.Request(
+            jina_url,
+            headers={
+                "Accept": "text/markdown",
+                "User-Agent": _ua(),
+            },
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            text = resp.read(600_000).decode("utf-8", errors="replace").strip()
+
+        if not text or len(text) < 50:
+            return None
+
+        if len(text) > max_chars:
+            text = text[:max_chars] + f"\n...[Jina Search: 截断至 {max_chars} 字符]..."
+
+        return text
+
+    except Exception:
+        return None
+
+# ── 搜索：第三级 DuckDuckGo 正则兜底 ────────────────────
+
+def _search_ddg(query: str) -> str:
+    """
+    通过 DuckDuckGo HTML 接口搜索，正则提取标题/URL/摘要。
+    零依赖，作为最终兜底方案。
+    """
+    print(c(GRAY, f"  🔍 [DDG Fallback] {query}"))
     try:
         url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote_plus(query)}"
         req = urllib.request.Request(url, headers={
@@ -43,9 +140,36 @@ def tool_web_search(a: dict) -> str:
             sc = re.sub(r'<[^>]+>', '', s).strip()
             uc = urllib.parse.unquote(urls[i]) if i < len(urls) else ""
             results.append(f"[{i+1}] {tc}\n    {uc}\n    {sc}")
+
         return "\n\n".join(results) if results else "未找到结果。"
+
     except Exception as e:
         return f"搜索失败: {e}"
+
+# ── 主搜索入口（三级降级） ───────────────────────────────
+
+def tool_web_search(a: dict) -> str:
+    """
+    三级降级搜索主入口：
+      1. Tavily API   — 专业 AI 搜索（有 Key 时优先）
+      2. Jina Search  — 免费 Markdown 搜索
+      3. DuckDuckGo   — 正则兜底
+    """
+    query = a["query"]
+
+    # ① Tavily
+    result = _search_tavily(query)
+    if result:
+        return f"[来源: Tavily AI Search]\n{result}"
+
+    # ② Jina Search
+    result = _search_jina(query)
+    if result:
+        return f"[来源: Jina Search]\n{result}"
+
+    # ③ DuckDuckGo 兜底
+    result = _search_ddg(query)
+    return f"[来源: DuckDuckGo Fallback]\n{result}"
 
 # ── Jina Reader 抓取 ─────────────────────────────────────
 
@@ -85,7 +209,6 @@ def _fetch_pandoc(raw_html: str, max_chars: int) -> str | None:
         text = proc.stdout.strip()
         if not text:
             return None
-        # 清理 pandoc 生成的多余 backslash 转义
         text = re.sub(r'\\([`*_{}()\[\]#+.!|])', r'\1', text)
         text = re.sub(r'\n{3,}', '\n\n', text)
         if len(text) > max_chars:
@@ -112,7 +235,7 @@ def _fetch_regex(raw_html: str, max_chars: int) -> str:
         text = text[:max_chars] + f"\n...[Regex: 截断至 {max_chars} 字符]..."
     return text or "(页面为空)"
 
-# ── 主入口 ───────────────────────────────────────────────
+# ── 主抓取入口 ───────────────────────────────────────────
 
 def tool_fetch_url(a: dict) -> str:
     url       = a["url"]
@@ -160,26 +283,26 @@ def tool_git_op(a: dict) -> str:
         "log":    "git log --oneline -20",
         "stash":  "git stash",
     }
-    if action in cmds:      cmd = cmds[action]
-    elif action == "add":   cmd = f"git add {a.get('files','.')}"
+    if action in cmds:       cmd = cmds[action]
+    elif action == "add":    cmd = f"git add {a.get('files', '.')}"
     elif action == "commit":
         msg = a.get("message", "")
         if not msg: return "ERROR: commit 需要 'message' 参数"
-        cmd = f"git commit -m '{msg.replace(chr(39), chr(39)+'\\\\'+chr(39)+chr(39))}'"
-    elif action == "push":  cmd = f"git push {a.get('remote','origin')}"
-    elif action == "pull":  cmd = f"git pull {a.get('remote','origin')}"
+        cmd = f"git commit -m '{msg.replace(chr(39), chr(39)+chr(92)+chr(39)+chr(39))}'"
+    elif action == "push":   cmd = f"git push {a.get('remote', 'origin')}"
+    elif action == "pull":   cmd = f"git pull {a.get('remote', 'origin')}"
     elif action == "clone":
-        url = a.get("url","")
+        url = a.get("url", "")
         if not url: return "ERROR: clone 需要 'url' 参数"
         cmd = f"git clone {url}"
     elif action == "branch":
         cmd = f"git branch {a.get('branch','')}" if a.get("branch") else "git branch -a"
     elif action == "checkout":
-        br = a.get("branch","")
+        br = a.get("branch", "")
         if not br: return "ERROR: checkout 需要 'branch' 参数"
         cmd = f"git checkout {br}"
     elif action == "raw":
-        rc = a.get("raw_cmd","")
+        rc = a.get("raw_cmd", "")
         if not rc: return "ERROR: raw 需要 'raw_cmd' 参数"
         cmd = f"git {rc}"
     else:
@@ -194,54 +317,79 @@ def tool_git_op(a: dict) -> str:
     except Exception as e:
         return f"ERROR: {e}"
 
-import subprocess   # noqa: E402 (already imported above via shutil section)
-
 # ── Schema ───────────────────────────────────────────────
 
 WEB_SCHEMAS = [
-    {"type":"function","function":{
-        "name":"web_search",
-        "description":"通过 DuckDuckGo 搜索网页，返回最多8条结果（标题、URL、摘要）。搜索后用 fetch_url 读全文。",
-        "parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}},
+    {"type": "function", "function": {
+        "name": "web_search",
+        "description": (
+            "强力三级降级搜索：搜索能力极强，始终能返回结果。"
+            "① Tavily AI Search（配置 TAVILY_API_KEY 时优先，专业 AI 搜索，结果精准）；"
+            "② Jina Search（无 Key 时自动降级，免费 Markdown 搜索，覆盖广泛）；"
+            "③ DuckDuckGo 正则兜底（前两级均失败时使用，零依赖，保底可用）。"
+            "搜索后可用 fetch_url 进一步读取全文。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    }},
 
-    {"type":"function","function":{
-        "name":"fetch_url",
-        "description":(
+    {"type": "function", "function": {
+        "name": "fetch_url",
+        "description": (
             "抓取 URL 并返回可读文本。"
             "优先使用 Jina Reader（穿透反爬），备用 Pandoc，最后正则清洗。"
             "strategy 可选 auto|jina|pandoc|direct。"
         ),
-        "parameters":{"type":"object","properties":{
-            "url":{"type":"string"},
-            "max_chars":{"type":"integer","description":"最大返回字符数"},
-            "strategy":{"type":"string","description":"auto|jina|pandoc|direct，默认 auto"}},
-        "required":["url"]}}},
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url":       {"type": "string"},
+                "max_chars": {"type": "integer", "description": "最大返回字符数"},
+                "strategy":  {"type": "string",  "description": "auto|jina|pandoc|direct，默认 auto"},
+            },
+            "required": ["url"],
+        },
+    }},
 
-    {"type":"function","function":{
-        "name":"git_op",
-        "description":"Git 操作：status/diff/log/add/commit/push/pull/clone/branch/checkout/stash/raw",
-        "parameters":{"type":"object","properties":{
-            "action":{"type":"string","enum":["status","diff","log","add","commit","push","pull","clone","branch","checkout","stash","raw"]},
-            "message":{"type":"string"},
-            "files":{"type":"string"},
-            "branch":{"type":"string"},
-            "remote":{"type":"string"},
-            "url":{"type":"string"},
-            "raw_cmd":{"type":"string"},
-            "repo_path":{"type":"string"}},
-        "required":["action"]}}},
+    {"type": "function", "function": {
+        "name": "git_op",
+        "description": "Git 操作：status/diff/log/add/commit/push/pull/clone/branch/checkout/stash/raw",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action":    {"type": "string", "enum": ["status","diff","log","add","commit","push","pull","clone","branch","checkout","stash","raw"]},
+                "message":   {"type": "string"},
+                "files":     {"type": "string"},
+                "branch":    {"type": "string"},
+                "remote":    {"type": "string"},
+                "url":       {"type": "string"},
+                "raw_cmd":   {"type": "string"},
+                "repo_path": {"type": "string"},
+            },
+            "required": ["action"],
+        },
+    }},
 ]
 
 # ── 启动时打印工具状态 ────────────────────────────────────
 
 def web_tool_status() -> str:
-    parts = []
-    parts.append(("Jina Reader", True, "自动穿透反爬"))
-    parts.append(("Pandoc",      _has_pandoc, "HTML→Markdown 高质量解析" if _has_pandoc else "未安装 (apt install pandoc)"))
-    parts.append(("Lynx",        _has_lynx,   "字符浏览器备用" if _has_lynx else "未安装"))
+    _has_tavily = bool(os.getenv("TAVILY_API_KEY"))
+
+    parts = [
+        ("Tavily Search API", _has_tavily,  "AI 精准搜索（首选）" if _has_tavily else "未配置 TAVILY_API_KEY，已跳过"),
+        ("Jina Search",       True,          "免费 Markdown 搜索（二级降级）"),
+        ("DuckDuckGo",        True,          "正则兜底搜索（三级降级）"),
+        ("Jina Reader",       True,          "URL 抓取，自动穿透反爬"),
+        ("Pandoc",            _has_pandoc,   "HTML→Markdown 高质量解析" if _has_pandoc else "未安装 (apt install pandoc)"),
+        ("Lynx",              _has_lynx,     "字符浏览器备用" if _has_lynx else "未安装"),
+    ]
+
     lines = []
     for name, avail, note in parts:
-        from utils.ansi import GREEN, GRAY
         tag = c(GREEN, "✓") if avail else c(GRAY, "✗")
-        lines.append(f"  {tag} {name:14} {c(GRAY, note)}")
+        lines.append(f"  {tag} {name:20} {c(GRAY, note)}")
     return "\n".join(lines)
