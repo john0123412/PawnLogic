@@ -548,7 +548,10 @@ class AgentSession:
         _session_cwd[0]  = self.cwd
         self.current_phase = "RECON"   # MoE 初始阶段
         init_db()
-        self._reset_system_prompt()
+        # ── P1: Time-aware scheduling state（必须在 _reset_system_prompt 之前）──
+        self._turn_start_time        = 0.0
+        self._time_budget_sec        = 0   # 0 = 不限时间
+        self._urgent_mode            = False
         self._save_lock = threading.Lock()
         # ── Usage & audit counters (cumulative across all turns) ──
         self.total_prompt_tokens     = 0
@@ -558,10 +561,8 @@ class AgentSession:
         self._turn_prompt_tokens     = 0
         self._turn_completion_tokens = 0
         self._turn_tool_calls        = 0
-        # ── P1: Time-aware scheduling state ──
-        self._turn_start_time        = 0.0
-        self._time_budget_sec        = 0   # 0 = 不限时间
-        self._urgent_mode            = False
+        # 最后调用，因为它依赖上面所有属性
+        self._reset_system_prompt()
 
     def _time_remaining(self) -> float:
         """返回当前 turn 的剩余秒数。time_budget=0 时返回 inf。"""
@@ -650,7 +651,7 @@ class AgentSession:
             "  Sandbox  : run_code  (python / c / cpp / javascript / bash / rust / go / java)\n"
             "  Vision   : analyze_local_image  (jpg/png/gif/webp — glm-4v / gpt-4o)\n"
             "  CTF/Pwn  : pwn_env · inspect_binary · pwn_rop · pwn_cyclic · pwn_disasm\n"
-            "             pwn_libc · pwn_debug · pwn_one_gadget\n"
+            "             pwn_libc · pwn_debug · pwn_one_gadget · pwn_timed_debug\n"
             "  Advanced : delegate_task  (fresh context sub-agent)\n"
             "  History  : /chat list · /chat view · /chat find · /chat tag · /chat related\n\n"
 

@@ -516,18 +516,22 @@ AGENT_PHASES: dict[str, list[str]] = {
     # 侦察阶段：了解目标环境和二进制特征
     "RECON": [
         "pwn_env", "list_dir", "find_files", "read_file", "inspect_binary",
+        "pwn_timed_debug",   # CTF 动态靶机随时可用
     ],
     # 漏洞开发阶段：定位偏移、反汇编、构建 ROP 链
     "VULN_DEV": [
         "pwn_cyclic", "pwn_disasm", "pwn_rop", "pwn_libc", "pwn_one_gadget", "run_shell",
+        "pwn_timed_debug",
     ],
     # 利用阶段：编写 / 调试 exploit，交互式验证
     "EXPLOIT": [
-        "write_file", "patch_file", "run_code", "pwn_debug", "run_interactive", "run_shell",
+        "write_file", "patch_file", "run_code", "pwn_debug", "pwn_timed_debug",
+        "run_interactive", "run_shell",
     ],
     # 通用后备阶段：研究、文件操作、联网
     "GENERAL": [
         "read_file", "write_file", "patch_file", "run_shell", "web_search", "fetch_url",
+        "pwn_timed_debug",
         "bump_skill",   # ★ GSA 反馈，全阶段可用
     ],
 }
