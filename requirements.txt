@@ -1,9 +1,13 @@
-# PawnLogic 1.0 — Core Dependencies
+# PawnLogic 1.1 — Core Dependencies
 # Install: pip install -r requirements.txt
 
 # Required
 loguru>=0.7.0
 python-dotenv>=1.0.0
+
+# P2: CLI UX — Terminal experience upgrade
+prompt_toolkit>=3.0.0    # Fish-style completion, PromptSession, multiline input
+rich>=13.0.0             # Markdown rendering, syntax highlighting, panels
 
 # Optional (enhanced features)
 # pandoc  — HTML→Markdown conversion (apt install pandoc)

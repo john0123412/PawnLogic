@@ -1203,7 +1203,22 @@ class AgentSession:
                     tc_buf[idx]["args"] += fn.get("arguments") or ""
 
             leftover = renderer.flush()
-            if leftover: sys.stdout.write(leftover); sys.stdout.flush()
+
+            # ── P2: rich Markdown 渲染（仅对非 plan 文本）──
+            if leftover:
+                _md_indicators = ("```", "**", "| ", "## ", "- ", "1. ", "> ")
+                _has_md = any(ind in leftover for ind in _md_indicators)
+                _rendered = False
+                if _has_md:
+                    try:
+                        from main import render_agent_output
+                        render_agent_output(leftover)
+                        _rendered = True
+                    except (ImportError, Exception):
+                        pass
+                if not _rendered:
+                    sys.stdout.write(leftover)
+                    sys.stdout.flush()
             print()
 
             # ── Hybrid v2 Parser：XML 优先，JSON 兜底 ─────────────

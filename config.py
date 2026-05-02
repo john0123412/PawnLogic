@@ -16,7 +16,7 @@ try:
 except ImportError:
     pass  # 未安装 python-dotenv 时降级为纯 os.environ
 
-VERSION = "1.1.0"
+VERSION = "1.1"
 
 # ── 路径 ──────────────────────────────────────────────────
 SESSIONS_DIR       = Path.home() / ".pawnlogic" / "sessions"

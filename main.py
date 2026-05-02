@@ -12,12 +12,39 @@ PawnLogic 1.1 (Expert Edition) — main.py
   pawn   # 首次运行会自动进入 API Key 配置向导
 """
 
-import os, sys, shutil, getpass, argparse
+import os, sys, shutil, getpass, argparse, time
 try:
     import readline  # noqa  — Windows 原生无此模块，Tab 补全见 main() 内
 except ImportError:
     readline = None
 from pathlib import Path
+
+# ── P2: CLI UX — prompt_toolkit / rich 可用性检测 ────────
+_HAS_PROMPT_TOOLKIT = False
+_HAS_RICH = False
+_PT_IMPORT_ERROR = None
+_RICH_IMPORT_ERROR = None
+try:
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.completion import WordCompleter, FuzzyCompleter, Completion
+    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+    from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.styles import Style as _PTStyle
+    from prompt_toolkit.formatted_text import HTML
+    from prompt_toolkit.shortcuts import CompleteStyle
+    _HAS_PROMPT_TOOLKIT = True
+except Exception as _e:
+    _PT_IMPORT_ERROR = str(_e)
+    PromptSession = None
+
+try:
+    from rich.console import Console as _RichConsole
+    from rich.markdown import Markdown as _RichMarkdown
+    _rich_console = _RichConsole(force_terminal=True, highlight=False)
+    _HAS_RICH = True
+except Exception as _e:
+    _RICH_IMPORT_ERROR = str(_e)
+    _rich_console = None
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -718,14 +745,28 @@ def handle_slash(cmd: str, session: AgentSession):
     # ── 模型 ────────────────────────────────────────────
     elif verb == "/model":
         if not arg:
-            print(c(BOLD, "\n  可用模型："))
-            for alias, cfg_m in MODELS.items():
-                tick   = c(GREEN, " ◀ 当前") if alias == session.model_alias else ""
-                ok, _  = validate_api_key(alias)
-                ktag   = c(GREEN, "[key✓]") if ok else c(RED, "[key✗]")
-                vtag   = c(CYAN,  " 📷")    if cfg_m.get("vision") else ""
-                print(f"    {c(cfg_m['color'], f'{alias:14}')}{cfg_m['desc']:30} {ktag}{vtag}{tick}")
-            print(c(GRAY, "\n  用法: /model <alias>  📷=支持视觉"))
+            # ── CC 风格内联选择器 ──────────────────────────
+            if _HAS_PROMPT_TOOLKIT:
+                result = cc_style_model_selector(MODELS, session.model_alias)
+                if result:
+                    session.model_alias = result
+                    ok, env = validate_api_key(result)
+                    if not ok:
+                        print(c(YELLOW, f"  ⚠ 已切换到 {result}，但 {env} 未设置。用 /setkey 配置。"))
+                    else:
+                        print(c(GREEN, f"  ✓ 已切换到 {c(MODELS[result]['color'], result)}"))
+                else:
+                    print(c(GRAY, "  已取消"))
+            else:
+                # readline 降级：纯文本列表
+                print(c(BOLD, "\n  可用模型："))
+                for alias, cfg_m in MODELS.items():
+                    tick   = c(GREEN, " ◀ 当前") if alias == session.model_alias else ""
+                    ok, _  = validate_api_key(alias)
+                    ktag   = c(GREEN, "[key✓]") if ok else c(RED, "[key✗]")
+                    vtag   = c(CYAN,  " 📷")    if cfg_m.get("vision") else ""
+                    print(f"    {c(cfg_m['color'], f'{alias:14}')}{cfg_m['desc']:30} {ktag}{vtag}{tick}")
+                print(c(GRAY, "\n  用法: /model <alias>  📷=支持视觉"))
         elif arg in MODELS:
             session.model_alias = arg
             ok, env = validate_api_key(arg)
@@ -1181,6 +1222,197 @@ def handle_slash(cmd: str, session: AgentSession):
 # main
 # ════════════════════════════════════════════════════════
 
+def _safe_write_history(path: str) -> None:
+    """安全写入 readline 历史文件。"""
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        readline.write_history_file(path)
+    except Exception:
+        pass
+
+
+# ════════════════════════════════════════════════════════
+# P2.6: CC 风格内联模型选择器（替代 radiolist_dialog）
+# ════════════════════════════════════════════════════════
+
+def cc_style_model_selector(
+    models: dict, current_alias: str
+) -> str | None:
+    """
+    Claude Code 风格的内联交互式模型选择器。
+
+    使用 prompt_toolkit 底层组件构建：
+      · 标题行（青色加粗）+ 灰色描述
+      · 数字序号列表，光标态用 ❯ + 绿色高亮
+      · 当前模型后显示 ✔ 标记
+      · 底部灰色帮助栏
+      · 完全透明背景，无边框
+
+    Parameters
+    ----------
+    models : dict
+        MODELS 字典，键为 alias，值为包含 desc/color/vision 的 dict
+    current_alias : str
+        当前正在使用的模型别名
+
+    Returns
+    -------
+    str | None
+        用户选择的模型别名，或 None（按 Esc 取消）
+    """
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout, HSplit
+    from prompt_toolkit.widgets import Frame
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.layout.containers import Window
+
+    entries = list(models.items())
+    selected_idx = 0
+
+    # ── 构建 FormattedTextControl ─────────────────────────
+    def get_menu_fragments():
+        """动态生成菜单文本片段（每次渲染时调用）。"""
+        fragments = []
+
+        # 标题
+        fragments.append(("class:title", "  Select model\n"))
+        fragments.append(("class:desc",   "  Choose a model for this session\n"))
+        fragments.append(("",             "\n"))
+
+        # 选项列表
+        for i, (alias, cfg_m) in enumerate(entries):
+            # 光标指示器
+            if i == selected_idx:
+                fragments.append(("class:cursor", "  ❯ "))
+            else:
+                fragments.append(("", "    "))
+
+            # 序号
+            fragments.append(("class:index", f"{i+1}."))
+
+            # 模型名
+            is_current = (alias == current_alias)
+            if i == selected_idx:
+                fragments.append(("class:selected", f" {alias}"))
+            else:
+                fragments.append(("", f" {alias}"))
+
+            # 当前标记
+            if is_current:
+                fragments.append(("class:current", " ✔"))
+
+            # 描述
+            desc = cfg_m.get("desc", "")[:45]
+            if desc:
+                if i == selected_idx:
+                    fragments.append(("class:desc-hi", f"  {desc}"))
+                else:
+                    fragments.append(("class:desc", f"  {desc}"))
+
+            # 视觉标记
+            if cfg_m.get("vision"):
+                fragments.append(("class:vision", " 📷"))
+
+            fragments.append(("", "\n"))
+
+        # 底部帮助
+        fragments.append(("", "\n"))
+        fragments.append(("class:help", "  Enter to confirm · Esc to exit\n"))
+
+        return fragments
+
+    control = FormattedTextControl(get_menu_fragments)
+
+    # ── KeyBindings ────────────────────────────────────────
+    kb = KeyBindings()
+
+    @kb.add("up")
+    def _(event):
+        nonlocal selected_idx
+        selected_idx = (selected_idx - 1) % len(entries)
+
+    @kb.add("down")
+    def _(event):
+        nonlocal selected_idx
+        selected_idx = (selected_idx + 1) % len(entries)
+
+    @kb.add("enter")
+    def _(event):
+        event.app.exit(result=entries[selected_idx][0])
+
+    @kb.add("escape")
+    def _(event):
+        event.app.exit(result=None)
+
+    @kb.add("c-c")
+    def _(event):
+        event.app.exit(result=None)
+
+    # 数字键快速跳转（1-9）
+    for _n in range(1, min(10, len(entries) + 1)):
+        @kb.add(str(_n))
+        def _(event, _idx=_n - 1):
+            nonlocal selected_idx
+            if _idx < len(entries):
+                selected_idx = _idx
+
+    # ── Layout ─────────────────────────────────────────────
+    body = Window(content=control, always_hide_cursor=True)
+
+    # ── Style ──────────────────────────────────────────────
+    style = _PTStyle.from_dict({
+        "title":      "#00afff bold",
+        "desc":       "#888888",
+        "desc-hi":    "#aaaaaa",
+        "cursor":     "#00ff00 bold",
+        "selected":   "#00ff00 bold",
+        "current":    "#00d700",
+        "index":      "#666666",
+        "vision":     "#00afff",
+        "help":       "#555555",
+    })
+
+    # ── Application ────────────────────────────────────────
+    app = Application(
+        layout=Layout(body),
+        key_bindings=kb,
+        style=style,
+        mouse_support=False,
+        full_screen=False,
+    )
+
+    return app.run()
+
+
+# ════════════════════════════════════════════════════════
+# P2: rich Markdown 渲染器（供 session.py 调用）
+# ════════════════════════════════════════════════════════
+
+def render_agent_output(text: str) -> None:
+    """
+    渲染 Agent 的文本输出。
+    · rich 可用时：检测 Markdown 结构（代码块、表格、粗体）并渲染
+    · rich 不可用时：直接 print
+    """
+    if not _HAS_RICH or not text.strip():
+        print(text)
+        return
+
+    # 检测是否包含 Markdown 结构
+    _md_indicators = ("```", "**", "| ", "## ", "- ", "1. ", "> ")
+    has_md = any(indicator in text for indicator in _md_indicators)
+
+    if has_md:
+        try:
+            _rich_console.print(_RichMarkdown(text))
+            return
+        except Exception:
+            pass  # 渲染失败降级
+
+    print(text)
+
+
 def main():
     # ── CLI 参数解析 ─────────────────────────────────────
     parser = argparse.ArgumentParser(
@@ -1288,54 +1520,238 @@ def main():
         prx_sym = f" proxy={PROXY_STATUS}" if PROXY_STATUS else ""
         print(c(GRAY, f"PawnLogic {VERSION}  model={session.model_alias}  key{key_sym}{prx_sym}  /help"))
 
-    # ── Tab 补全注册 ──────────────────────────────────────
-    _ALL_COMMANDS = sorted([
-        "/model", "/clear", "/context", "/pin", "/unpin", "/cd", "/file", "/history",
-        "/setkey", "/keys",
-        "/save", "/load", "/sessions", "/del",
-        "/memorize", "/knowledge", "/forget",
-        "/init_project", "/state",
+    # ════════════════════════════════════════════════════════
+    # P2: CLI UX — FuzzyCompleter + WordCompleter + Bottom Toolbar
+    # ════════════════════════════════════════════════════════
+
+    # ── 扁平命令列表 + 右侧灰色说明 ──────────────────────
+    _all_cmd_words = [
+        "/model", "/clear", "/context", "/pin", "/unpin", "/cd", "/file",
+        "/history", "/setkey", "/keys", "/save", "/load", "/sessions", "/del",
+        "/memorize", "/knowledge", "/forget", "/init_project", "/state",
         "/low", "/mid", "/deep", "/normal", "/limits",
         "/tokens", "/ctx", "/iter", "/toolsize", "/fetchsize",
-        "/webstatus", "/pwnenv", "/stats",
-        "/time", "/worker", "/worker auto",
-        "/failures", "/failures clear", "/failures list",
-        "/memo", "/skills",
-        "/chat list", "/chat view", "/chat export", "/chat find",
-        "/chat tag", "/chat untag", "/chat bytag",
-        "/chat link", "/chat unlink", "/chat related",
-        "/help", "/exit",
-    ] + [f"/model {alias}" for alias in MODELS.keys()])
+        "/webstatus", "/pwnenv", "/stats", "/time",
+        "/worker", "/failures", "/memo", "/skills",
+        "/chat", "/help", "/exit",
+    ]
 
-    def _completer(text: str, state: int):
-        """readline 补全函数：/ 开头时匹配命令，否则匹配文件路径。"""
-        line = readline.get_line_buffer()
-        if line.startswith("/"):
-            matches = [cmd for cmd in _ALL_COMMANDS if cmd.startswith(line)]
-            # 若用户只输入了 /chat 还没空格，也列出 /chat 子命令
-            if not matches:
-                matches = [cmd for cmd in _ALL_COMMANDS if cmd.startswith(text)]
-        else:
-            import glob
-            matches = glob.glob(text + "*") if text else glob.glob("*")
-            # 展开 ~ 和添加 / 后缀
-            matches = [os.path.expanduser(m) + ("/" if os.path.isdir(m) else "") for m in matches]
-        return matches[state] if state < len(matches) else None
+    _cmd_meta = {
+        "/model":         "切换 AI 模型（/model ds-r1）",
+        "/clear":         "清空上下文（保留 Pin 消息）",
+        "/context":       "查看上下文大小 / token 估算",
+        "/pin":           "固定最近 N 条消息（/pin msg 5 按序号）",
+        "/unpin":         "解除所有 Pin",
+        "/cd":            "切换工作目录",
+        "/file":          "载入文件到上下文",
+        "/history":       "查看带序号的消息历史",
+        "/setkey":        "重新运行 API Key 配置向导",
+        "/keys":          "显示各厂商 Key 配置状态",
+        "/save":          "保存当前会话到 SQLite",
+        "/load":          "加载历史会话",
+        "/sessions":      "列出所有已保存会话",
+        "/del":           "删除指定会话",
+        "/memorize":      "AI 总结对话 → 存入知识库",
+        "/knowledge":     "搜索 / 列出知识条目",
+        "/forget":        "删除指定知识条目",
+        "/init_project":  "初始化 .pawn_state.md 项目状态",
+        "/state":         "查看当前项目 .pawn_state.md",
+        "/low":           "日常模式（tokens=4k, ctx=40k）",
+        "/mid":           "开发模式（tokens=8k, ctx=150k）← 默认",
+        "/deep":          "全火力模式（tokens=32k, ctx=400k）",
+        "/normal":        "重置到 /mid",
+        "/limits":        "查看所有运行时限制",
+        "/tokens":        "设置 max_tokens",
+        "/ctx":           "设置上下文上限",
+        "/iter":          "设置最大迭代轮次",
+        "/toolsize":      "设置工具输出截断大小",
+        "/fetchsize":     "设置网页抓取截断大小",
+        "/webstatus":     "Jina / Pandoc / Lynx 工具状态",
+        "/pwnenv":        "CTF/Pwn 工具链完整性检查",
+        "/stats":         "本次会话 Token 用量统计",
+        "/time":          "时间预算（/time 300 = 5 分钟）",
+        "/worker":        "子任务 Worker 模型选择",
+        "/failures":      "查看 / 清空失败记录",
+        "/memo":          "手动存档技能到 GSA",
+        "/skills":        "查看全局技能存档目录",
+        "/chat":          "会话浏览器（list/view/find/tag/link）",
+        "/help":          "显示帮助",
+        "/exit":          "退出 PawnLogic",
+    }
 
-    if readline is not None:
-        readline.set_completer(_completer)
-        readline.set_completer_delims(" \t")
-        readline.parse_and_bind("tab: complete")
+    # 合并一级命令 + 模型别名 + 子命令
+    _all_words = list(_all_cmd_words)
+    _all_meta  = dict(_cmd_meta)
+    for _alias, _minfo in MODELS.items():
+        _w = f"/model {_alias}"
+        _all_words.append(_w)
+        _all_meta[_w] = _minfo.get("desc", "")
+    # 常用子命令
+    for _sub in ("list", "view", "export", "find", "tag", "untag",
+                 "bytag", "link", "unlink", "related"):
+        _w = f"/chat {_sub}"
+        _all_words.append(_w)
+        _all_meta[_w] = f"会话 {_sub}"
+    for _sub in ("clear", "list"):
+        _w = f"/failures {_sub}"
+        _all_words.append(_w)
+        _all_meta[_w] = f"失败记录 {_sub}"
+    _all_words.extend(["/worker auto", "/skills view", "/skills path"])
+    _all_meta["/worker auto"] = "恢复自动路由"
+    _all_meta["/skills view"] = "查看完整技能文件"
+    _all_meta["/skills path"] = "显示技能文件路径"
 
+    # ── readline 历史文件路径 ─────────────────────────────
+    _history_path = str(Path.home() / ".pawnlogic" / ".input_history")
+
+    if _HAS_PROMPT_TOOLKIT:
+        # ── WordCompleter + FuzzyCompleter（乱序/错别字匹配）──
+        _word_completer = WordCompleter(
+            _all_words,
+            meta_dict=_all_meta,
+            ignore_case=True,
+            sentence=True,
+        )
+        _fuzzy = FuzzyCompleter(_word_completer)
+
+        try:
+            _pt_history = FileHistory(_history_path)
+        except Exception:
+            from prompt_toolkit.history import InMemoryHistory
+            _pt_history = InMemoryHistory()
+
+        # ── Bottom Toolbar：显示当前模型 / 档位 / 目录 ────
+        def _bottom_toolbar():
+            _m = session.model_alias
+            _tier = "MID"
+            if DYNAMIC_CONFIG["max_tokens"] <= 4096:
+                _tier = "LOW"
+            elif DYNAMIC_CONFIG["max_tokens"] >= 32768:
+                _tier = "DEEP"
+            _tb = DYNAMIC_CONFIG.get("time_budget_sec", 0)
+            _time_str = f"  ⏱ {_tb}s" if _tb > 0 else ""
+            return HTML(
+                f" <b>Model:</b> {_m}"
+                f"  <b>Tier:</b> {_tier}"
+                f"  <b>Dir:</b> {session.cwd}"
+                f"  <b>Phase:</b> {session.current_phase}"
+                f"{_time_str}"
+                f"  <b>Ctrl-C</b>=exit"
+            )
+
+        # ── 样式：彻底透明化，无灰色方块 ──────────────────
+        _pawn_style = _PTStyle.from_dict({
+            # 输入提示符
+            "prompt": "ansigreen bold",
+            "you":    "bold",
+
+            # 1. 彻底清除所有容器的默认背景
+            "completion-menu":                    "bg:default fg:#bbbbbb",
+            "completion-menu.completion":         "bg:default fg:#bbbbbb",
+            "completion-menu.meta.completion":    "bg:default fg:#666666",
+
+            # 2. 选中行（极暗灰底 + 白字，meta 同步变暗）
+            "completion-menu.completion.current":      "bg:#333333 fg:#ffffff",
+            "completion-menu.meta.completion.current": "bg:#333333 fg:#aaaaaa",
+
+            # 3. 模糊匹配字母高亮（荧光绿）
+            "completion-menu.completion.character-match": "fg:#00d787 bold",
+
+            # 4. 彻底隐形滚动条
+            "scrollbar.background": "bg:default",
+            "scrollbar.button":     "bg:default",
+
+            # 5. 底部状态栏
+            "bottom-toolbar": "bg:#222222 fg:#cccccc",
+        })
+
+        _pt_session = PromptSession(
+            completer=_fuzzy,
+            auto_suggest=AutoSuggestFromHistory(),
+            history=_pt_history,
+            complete_while_typing=True,
+            complete_style=CompleteStyle.COLUMN,
+            mouse_support=False,
+            bottom_toolbar=_bottom_toolbar,
+            reserve_space_for_menu=10,
+        )
+
+        if not config.QUIET_MODE:
+            print(c(GRAY, "  🐚 FuzzyCompleter 就绪（模糊匹配 + 多列补全 + 底部工具栏）"))
+            if _HAS_RICH:
+                print(c(GRAY, "  📝 rich 就绪（Markdown 渲染 + 代码高亮）"))
+            elif _RICH_IMPORT_ERROR:
+                print(c(YELLOW, f"  ⚠ rich 加载失败: {_RICH_IMPORT_ERROR}"))
+    else:
+        # ── readline 降级模式 ─────────────────────────────
+        _ALL_COMMANDS = sorted(_all_words)
+
+        def _completer_rl(text: str, state: int):
+            line = readline.get_line_buffer()
+            if line.startswith("/"):
+                matches = [cmd for cmd in _ALL_COMMANDS if cmd.startswith(line)]
+                if not matches:
+                    matches = [cmd for cmd in _ALL_COMMANDS if cmd.startswith(text)]
+            else:
+                import glob
+                matches = glob.glob(text + "*") if text else glob.glob("*")
+                matches = [os.path.expanduser(m) + ("/" if os.path.isdir(m) else "") for m in matches]
+            return matches[state] if state < len(matches) else None
+
+        if readline is not None:
+            readline.set_completer(_completer_rl)
+            readline.set_completer_delims(" \t")
+            readline.parse_and_bind("tab: complete")
+            try:
+                readline.read_history_file(_history_path)
+            except FileNotFoundError:
+                pass
+            import atexit
+            atexit.register(lambda: _safe_write_history(_history_path))
+
+        if not config.QUIET_MODE:
+            print(c(GRAY, "  🐚 readline 降级模式（Tab 补全可用，无模糊匹配）"))
+            if _PT_IMPORT_ERROR:
+                print(c(YELLOW, f"  ⚠ prompt_toolkit 加载失败: {_PT_IMPORT_ERROR}"))
+                print(c(YELLOW, f"     Python: {sys.executable}"))
+                print(c(YELLOW, f"     修复: 在 venv 中执行 pip install prompt_toolkit rich"))
+                print(c(YELLOW, f"     或重新安装: pip install -e ."))
+
+    # ── 主循环 ────────────────────────────────────────────
     while True:
         try:
-            print()  # 确保提示符在新行（readline 不计 \n 宽度）
-            raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ")).strip()
+            print()  # 确保提示符在新行
+            if _HAS_PROMPT_TOOLKIT:
+                raw = _pt_session.prompt(
+                    [("class:prompt", "▶ "), ("class:you", "You > ")],
+                    style=_pawn_style,
+                ).strip()
+            else:
+                raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ")).strip()
         except (EOFError, KeyboardInterrupt):
             print(c(CYAN, "\n  Goodbye! 👋")); break
-        if not raw: continue
+        if not raw:
+            continue
         if raw.startswith("/"):
-            handle_slash(raw, session); continue
+            # ── 模糊命令修正（typo correction）──────────────
+            _cmd_parts = raw.split(None, 1)
+            _cmd_verb  = _cmd_parts[0]
+            _cmd_rest  = _cmd_parts[1] if len(_cmd_parts) > 1 else ""
+            if _cmd_verb not in _all_cmd_words and len(_cmd_verb) >= 3:
+                import difflib
+                _close = difflib.get_close_matches(
+                    _cmd_verb, _all_cmd_words, n=1, cutoff=0.7
+                )
+                if _close:
+                    _corrected = _close[0]
+                    if _cmd_rest:
+                        _corrected_full = f"{_corrected} {_cmd_rest}"
+                    else:
+                        _corrected_full = _corrected
+                    print(c(YELLOW, f"  ✔ 已自动修正: {_cmd_verb} → {_corrected}"))
+                    raw = _corrected_full
+            handle_slash(raw, session)
+            continue
         try:
             session.run_turn(raw)
         except KeyboardInterrupt:
