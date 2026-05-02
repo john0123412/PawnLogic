@@ -9,34 +9,71 @@ WSL 性能优化：
   ⑤ 编译产物写入 /tmp（tmpfs，WSL 下比 /home 快）
 """
 
-import os, sys, re, subprocess, tempfile, resource
+import os, sys, re, subprocess, tempfile
 from pathlib import Path
 from config import DYNAMIC_CONFIG, SANDBOX_LANGS
 from utils.ansi import c, YELLOW, RED
 
+# ── 资源限制仅在 POSIX 系统可用（Linux / WSL2 / macOS）──────
+_IS_POSIX = (os.name == "posix")
+if _IS_POSIX:
+    import resource
+
 # ── WSL 资源限制常量 ──────────────────────────────────────
-_MEM_LIMIT_MB   = 512          # 子进程最大内存（MB）
-_NICE_LEVEL     = 10           # nice 值：降低调度优先级
-_OUTPUT_HARD_BYTES = 256_000   # subprocess 输出硬截断（字节）
+_MEM_LIMIT_MB      = 512          # 子进程最大内存（MB）
+_NICE_LEVEL        = 10           # nice 值：降低调度优先级
+_OUTPUT_HARD_BYTES = 256_000      # subprocess 输出硬截断（字节）
+
+# ── 最小化环境变量：防止 API Key 等敏感信息泄露给子进程 ────
+_SENSITIVE_ENV_KEYS = {
+    "PAWN_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "QWEN_API_KEY",
+    "ZHIPU_API_KEY", "SILICON_API_KEY", "OPENROUTER_API_KEY", "MOONSHOT_API_KEY",
+    "MINIMAX_API_KEY", "GROQ_API_KEY", "LOCAL_API_KEY", "XIAOMI_API_KEY",
+    "TAVILY_API_KEY", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+}
+
+def _build_sandbox_env() -> dict:
+    """构建最小化环境变量，只保留 PATH/HOME/LANG 等基础变量，剔除所有 API Key。"""
+    env = {}
+    safe_keys = {"PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE",
+                 "TERM", "SHELL", "TMPDIR", "TEMP", "TMP", "PYTHONPATH",
+                 "VIRTUAL_ENV", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"}
+    for k, v in os.environ.items():
+        if k in safe_keys:
+            env[k] = v
+        elif k in _SENSITIVE_ENV_KEYS:
+            continue  # 剔除 API Key
+        elif k.startswith("PAWN_") or k.startswith("OPENAI_") or k.startswith("DEEPSEEK_"):
+            continue  # 剔除所有可能的 API 相关变量
+    return env
 
 
 def _sandbox_preexec(cpu_timeout: int) -> None:
     """
-    在子进程 fork 后、exec 前执行。
-    设置资源上限，防止失控进程拖垮 WSL。
+    在子进程 fork 后、exec 前执行（仅 POSIX）。
+    设置资源上限，防止失控进程拖垮系统。
     """
+    if not _IS_POSIX:
+        return  # Windows 下无 resource 模块，跳过
+
     # 内存上限：512 MB
     mem = _MEM_LIMIT_MB * 1024 * 1024
     try:
         resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
     except (ValueError, resource.error):
-        pass  # 部分 WSL 内核不支持，忽略
+        pass
 
     # CPU 时间上限：比 timeout 多 5s 作为缓冲
     cpu = cpu_timeout + 5
     try:
         resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
     except (ValueError, resource.error):
+        pass
+
+    # 进程数限制（防 fork bomb）—— 仅 Linux
+    try:
+        resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))
+    except (ValueError, resource.error, AttributeError):
         pass
 
     # 降低调度优先级（nice +10）
@@ -60,6 +97,15 @@ def _run_limited(
     返回 (output_text, return_code)。
     输出超过 _OUTPUT_HARD_BYTES 时直接截断，不会全量进内存。
     """
+    # 默认使用最小化沙箱环境，防止 API Key 泄露
+    if env is None:
+        env = _build_sandbox_env()
+
+    # Windows 不支持 preexec_fn
+    preexec = None
+    if not disable_rlimit and _IS_POSIX:
+        preexec = lambda: _sandbox_preexec(timeout)
+
     try:
         proc = subprocess.Popen(
             cmd,
@@ -69,7 +115,7 @@ def _run_limited(
             stderr=subprocess.STDOUT,   # 合并 stderr，只读一个管道
             cwd=cwd,
             env=env,
-            preexec_fn=None if disable_rlimit else lambda: _sandbox_preexec(timeout),
+            preexec_fn=preexec,
         )
         # communicate 带超时
         try:
@@ -139,8 +185,9 @@ def tool_run_code(a: dict) -> str:
     ext      = lang_cfg["ext"]
     output   = []
 
-    # 使用 /tmp 下的临时目录（WSL 中 tmpfs，比 /home 快）
-    with tempfile.TemporaryDirectory(prefix="pawn_sandbox_", dir="/tmp") as tmpdir:
+    # 使用系统临时目录（Linux/WSL: /tmp tmpfs；Windows: %TEMP%）
+    _tmp_root = "/tmp" if _IS_POSIX else None  # None = 系统默认 tempdir
+    with tempfile.TemporaryDirectory(prefix="pawn_sandbox_", dir=_tmp_root) as tmpdir:
 
         # ══ Python ══════════════════════════════════════
         if language == "python":

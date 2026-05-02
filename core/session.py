@@ -22,7 +22,7 @@ core/session.py — AgentSession · Agentic Loop
 所有原有功能（GSA、Anti-Loop 并发截断、Pwn 约束、自动直觉检索等）均保留。
 """
 
-import os, json, sys, threading
+import os, json, sys, threading, time
 from datetime import datetime
 from pathlib import Path
 from config import (
@@ -48,7 +48,7 @@ from tools.pwn_chain import (tool_pwn_env, tool_inspect_binary, tool_pwn_rop,
                               tool_pwn_cyclic, tool_pwn_disasm, tool_pwn_libc,
                               tool_pwn_debug, tool_pwn_one_gadget, PWN_SCHEMAS)
 from tools.vision    import analyze_local_image, VISION_SCHEMAS
-from core.logger import logger
+from core.logger import logger, audit_tool_call
 
 TOOL_MAP: dict = {
     "read_file":           tool_read_file,
@@ -272,7 +272,7 @@ def _trim_and_compact_context(msgs: list) -> int:
         # assistant with tool_calls: note the call names only
         if role == "assistant" and m.get("tool_calls"):
             names = [tc.get("function", {}).get("name", "?")
-                     for tc in m.get("tool_calls", [])]
+                     for tc in (m.get("tool_calls") or [])]
             compacted_lines.append(f"  └─ tool_calls: {', '.join(names)}")
 
     summary_content = (
@@ -1026,7 +1026,7 @@ class AgentSession:
                     if printable: sys.stdout.write(printable); sys.stdout.flush()
                     text_buf += chunk
 
-                for tcd in d.get("tool_calls", []):
+                for tcd in (d.get("tool_calls") or []):
                     idx = tcd.get("index", 0)
                     if idx not in tc_buf:
                         tc_buf[idx] = {
@@ -1226,7 +1226,30 @@ class AgentSession:
                         "pwn_debug", "pwn_rop", "pwn_disasm", "pwn_cyclic", "pwn_libc",
                         "inspect_binary", "web_search", "fetch_url", "find_refs",
                     }
-                    result = TOOL_MAP[name](fn_args) if name in TOOL_MAP else f"ERROR: 未知工具 '{name}'"
+                    # ── 审计计时 ────────────────────────────
+                    _t0 = time.monotonic()
+                    _audit_ok = True
+                    try:
+                        result = TOOL_MAP[name](fn_args) if name in TOOL_MAP else f"ERROR: 未知工具 '{name}'"
+                    except Exception as _tool_exc:
+                        result = f"ERROR: {type(_tool_exc).__name__}: {_tool_exc}"
+                        _audit_ok = False
+                    _elapsed_ms = int((time.monotonic() - _t0) * 1000)
+
+                    # ── 写入审计日志 ────────────────────────
+                    try:
+                        audit_tool_call(
+                            tool_name    = name,
+                            args_summary = preview[:200],
+                            result_len   = len(result),
+                            elapsed_ms   = _elapsed_ms,
+                            session_id   = self.session_id,
+                            model_alias  = self.model_alias,
+                            iteration    = iteration,
+                            success      = _audit_ok,
+                        )
+                    except Exception:
+                        pass  # 审计日志不应阻断主流程
 
                     if QUIET_MODE or name in _VERBOSE_TOOLS:
                         result = smart_truncate(result, head=30, tail=30)

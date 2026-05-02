@@ -112,6 +112,36 @@ def _create_core_tables():
         CREATE INDEX IF NOT EXISTS idx_session_tags  ON sessions(tags);
         """)
 
+    # ── FTS5 全文搜索引擎（v1.1 新增）─────────────────────
+    # 使用 content=messages 延迟同步模式，FTS5 自动读取 messages 表
+    with get_conn() as conn:
+        try:
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
+                USING fts5(content, session_id, role, content=messages, content_rowid=id)
+            """)
+            # 创建触发器保持 FTS5 与 messages 表同步
+            conn.executescript("""
+                CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+                    INSERT INTO messages_fts(rowid, content, session_id, role)
+                    VALUES (new.id, new.content, new.session_id, new.role);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, content, session_id, role)
+                    VALUES ('delete', old.id, old.content, old.session_id, old.role);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, content, session_id, role)
+                    VALUES ('delete', old.id, old.content, old.session_id, old.role);
+                    INSERT INTO messages_fts(rowid, content, session_id, role)
+                    VALUES (new.id, new.content, new.session_id, new.role);
+                END;
+            """)
+        except sqlite3.OperationalError:
+            pass  # FTS5 不可用时静默降级
+
     # 迁移旧库：给 sessions 表加 tags 列（若不存在）
     with get_conn() as conn:
         cols = [row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()]
@@ -290,23 +320,43 @@ def full_text_search(query: str, limit: int = 20) -> list[dict]:
     在所有会话的消息内容中搜索关键词。
     返回列表，每项含：session 元数据 + 命中的消息片段。
     支持多词搜索（空格分隔，AND 语义）。
+
+    优先使用 FTS5（速度快 100x+），不可用时降级为 LIKE 全表扫描。
     """
     keywords = [w.strip() for w in query.split() if w.strip()]
     if not keywords:
         return []
 
-    # SQLite LIKE 多词 AND 过滤（不依赖 FTS5 插件）
-    like_clauses = " AND ".join("content LIKE ?" for _ in keywords)
-    params       = tuple(f"%{kw}%" for kw in keywords)
+    hits = []
 
-    with get_conn() as conn:
-        hits = conn.execute(f"""
-            SELECT m.session_id, m.seq, m.role, m.content, m.created_at
-            FROM messages m
-            WHERE {like_clauses}
-            ORDER BY m.created_at DESC
-            LIMIT ?
-        """, (*params, limit * 3)).fetchall()   # 多拉一些，后面按 session 去重
+    # ── 策略 1：FTS5 全文搜索（优先）──────────────────────
+    try:
+        fts_query = " AND ".join(f'"{kw}"' for kw in keywords)
+        with get_conn() as conn:
+            rows = conn.execute("""
+                SELECT m.session_id, m.seq, m.role, m.content, m.created_at
+                FROM messages_fts fts
+                JOIN messages m ON m.id = fts.rowid
+                WHERE messages_fts MATCH ?
+                ORDER BY rank
+                LIMIT ?
+            """, (fts_query, limit * 3)).fetchall()
+            hits = rows
+    except (sqlite3.OperationalError, sqlite3.DatabaseError):
+        hits = []  # FTS5 不可用，降级
+
+    # ── 策略 2：LIKE 全表扫描（降级兜底）──────────────────
+    if not hits:
+        like_clauses = " AND ".join("content LIKE ?" for _ in keywords)
+        params       = tuple(f"%{kw}%" for kw in keywords)
+        with get_conn() as conn:
+            hits = conn.execute(f"""
+                SELECT m.session_id, m.seq, m.role, m.content, m.created_at
+                FROM messages m
+                WHERE {like_clauses}
+                ORDER BY m.created_at DESC
+                LIMIT ?
+            """, (*params, limit * 3)).fetchall()
 
     if not hits:
         return []

@@ -16,7 +16,7 @@ core/logger.py — PawnLogic 统一日志模块
     setup_logger()
 """
 
-import sys
+import sys, json, time
 from pathlib import Path
 
 from loguru import logger   # noqa: F401  — 让外部模块可以 `from core.logger import logger`
@@ -36,6 +36,45 @@ _FMT_FILE = (
     "{name}:{function}:{line} — "
     "{message}"
 )
+
+# ── 审计日志：工具调用专用 ──────────────────────────────
+# 独立文件，JSON 格式，便于 ELK/Loki 等日志系统解析
+_audit_logger = None
+
+
+def audit_tool_call(
+    tool_name: str,
+    args_summary: str,
+    result_len: int,
+    elapsed_ms: int,
+    session_id: str = "",
+    model_alias: str = "",
+    iteration: int = 0,
+    success: bool = True,
+) -> None:
+    """
+    记录工具调用审计日志（JSON 格式）。
+    每条记录包含：时间戳、工具名、参数摘要、结果长度、耗时、会话ID。
+    """
+    global _audit_logger
+    if _audit_logger is None:
+        return  # 尚未初始化，静默跳过
+
+    record = {
+        "ts":       time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "tool":     tool_name,
+        "args":     args_summary[:200],
+        "result_bytes": result_len,
+        "elapsed_ms":  elapsed_ms,
+        "success":  success,
+        "session":  session_id[:16] if session_id else "",
+        "model":    model_alias,
+        "iter":     iteration,
+    }
+    try:
+        _audit_logger.info(json.dumps(record, ensure_ascii=False))
+    except Exception:
+        pass  # 审计日志不应阻断主流程
 
 
 def setup_logger(stderr_level: str = "INFO", file_level: str = "DEBUG") -> None:
@@ -95,5 +134,36 @@ def setup_logger(stderr_level: str = "INFO", file_level: str = "DEBUG") -> None:
         stderr_level, file_level, log_dir,
     )
 
+    # ── Handler 3: 审计日志（工具调用 JSON 格式）──────────
+    global _audit_logger
+    try:
+        from loguru import logger as _audit
+        # 【关键】必须 bind(audit=True)，否则 filter 会拦截所有审计日志
+        _audit_logger = _audit.bind(audit=True)
+        audit_file = log_dir / "audit_{time:YYYY-MM-DD}.jsonl"
+        _audit_logger.add(
+            str(audit_file),
+            level="INFO",
+            rotation="10 MB",
+            retention="4 weeks",    # 审计日志保留更久
+            compression="zip",
+            encoding="utf-8",
+            format="{message}",     # 纯 JSON，无需额外格式
+            enqueue=True,
+            catch=True,
+            filter=lambda record: record["extra"].get("audit", False),
+        )
+        logger.debug("Audit logger initialized | file={}", audit_file)
+    except Exception:
+        _audit_logger = None  # 审计日志初始化失败不影响主程序
 
-__all__ = ["logger", "setup_logger"]
+
+# ── 审计专用 logger 实例（带 audit=True 标记）──────────
+def get_audit_logger():
+    """返回带 audit=True 标记的 logger 实例，其输出只写审计文件。"""
+    if _audit_logger is None:
+        return logger.bind(audit=False)  # 无操作
+    return _audit_logger.bind(audit=True)
+
+
+__all__ = ["logger", "setup_logger", "audit_tool_call", "get_audit_logger"]

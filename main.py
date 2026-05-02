@@ -13,10 +13,24 @@ PawnLogic 1.0 (Expert Edition) — main.py
 """
 
 import os, sys, shutil, getpass, argparse
-import readline  # noqa
+try:
+    import readline  # noqa  — Windows 原生无此模块，Tab 补全见 main() 内
+except ImportError:
+    readline = None
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# ── 启动时加载 .env（必须在 import config 之前）───────────
+try:
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).resolve().parent / ".env"
+    if _env_path.exists():
+        load_dotenv(dotenv_path=_env_path)
+    else:
+        print(f"\033[93m  ⚠ 警告: 未找到 {_env_path} 文件\033[0m")
+except ImportError:
+    print("\033[93m  ⚠ 警告: 未安装 python-dotenv！请执行 pip install python-dotenv\033[0m")
 
 # ── 代理（最先初始化）────────────────────────────────────
 import urllib.request
@@ -72,7 +86,8 @@ _WIZARD_PROVIDERS = [
     ("3", "OPENROUTER_API_KEY", "OpenRouter",     "多模型聚合，含 gpt-4o 视觉",            False),
     ("4", "SILICON_API_KEY",    "SiliconFlow",    "ds-coder · qwen 等国产模型",            False),
     ("5", "ZHIPU_API_KEY",      "ZhipuAI 智谱",  "glm-4v-plus 视觉识图（国内直连）",      False),
-    ("6", None,                 "本地 Ollama",    "需先运行 ollama serve，无需 Key",        True),
+    ("6", "XIAOMI_API_KEY",     "Xiaomi MiMo",   "mimo-v2.5-pro · mimo-v2-omni",       False),
+    ("7", None,                 "本地 Ollama",    "需先运行 ollama serve，无需 Key",        True),
 ]
 
 def _detect_shell_config() -> Path | None:
@@ -175,6 +190,7 @@ def _run_key_wizard() -> bool:
                 "OPENROUTER_API_KEY": "https://openrouter.ai/keys",
                 "SILICON_API_KEY":    "https://cloud.siliconflow.cn/account/ak",
                 "ZHIPU_API_KEY":      "https://open.bigmodel.cn/usercenter/apikeys",
+                "XIAOMI_API_KEY":     "https://token-plan-cn.xiaomimimo.com",
             }
             url = _KEY_URLS.get(env_var, "")
             if url:
@@ -444,8 +460,8 @@ def _handle_chat(arg: str, arg2: str, session):
             return
         print(c(BOLD, f"\n  对话历史（最近 {len(rows)} 条）："))
         for i, r in enumerate(rows):
-            tags_str = c(CYAN, f"  [{r['tags']}]") if r.get("tags") else ""
-            name_str = c(YELLOW, r["name"]) if r.get("name") else c(GRAY, "(未命名)")
+            tags_str = c(CYAN, f"  [{r['tags']}]") if r["tags"] else ""
+            name_str = c(YELLOW, r["name"]) if r["name"] else c(GRAY, "(未命名)")
             print(
                 c(GRAY, f"  [{i + 1:2d}] ") +
                 c(CYAN, f"{r['id'][:24]}") +
@@ -1151,6 +1167,43 @@ def main():
         key_sym = "✓" if key_ok else "✗"
         prx_sym = f" proxy={PROXY_STATUS}" if PROXY_STATUS else ""
         print(c(GRAY, f"PawnLogic {VERSION}  model={session.model_alias}  key{key_sym}{prx_sym}  /help"))
+
+    # ── Tab 补全注册 ──────────────────────────────────────
+    _ALL_COMMANDS = sorted([
+        "/model", "/clear", "/context", "/pin", "/unpin", "/cd", "/file", "/history",
+        "/setkey", "/keys",
+        "/save", "/load", "/sessions", "/del",
+        "/memorize", "/knowledge", "/forget",
+        "/init_project", "/state",
+        "/low", "/mid", "/deep", "/normal", "/limits",
+        "/tokens", "/ctx", "/iter", "/toolsize", "/fetchsize",
+        "/webstatus", "/pwnenv", "/stats",
+        "/memo", "/skills",
+        "/chat list", "/chat view", "/chat export", "/chat find",
+        "/chat tag", "/chat untag", "/chat bytag",
+        "/chat link", "/chat unlink", "/chat related",
+        "/help", "/exit",
+    ] + [f"/model {alias}" for alias in MODELS.keys()])
+
+    def _completer(text: str, state: int):
+        """readline 补全函数：/ 开头时匹配命令，否则匹配文件路径。"""
+        line = readline.get_line_buffer()
+        if line.startswith("/"):
+            matches = [cmd for cmd in _ALL_COMMANDS if cmd.startswith(line)]
+            # 若用户只输入了 /chat 还没空格，也列出 /chat 子命令
+            if not matches:
+                matches = [cmd for cmd in _ALL_COMMANDS if cmd.startswith(text)]
+        else:
+            import glob
+            matches = glob.glob(text + "*") if text else glob.glob("*")
+            # 展开 ~ 和添加 / 后缀
+            matches = [os.path.expanduser(m) + ("/" if os.path.isdir(m) else "") for m in matches]
+        return matches[state] if state < len(matches) else None
+
+    if readline is not None:
+        readline.set_completer(_completer)
+        readline.set_completer_delims(" \t")
+        readline.parse_and_bind("tab: complete")
 
     while True:
         try:

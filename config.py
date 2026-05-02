@@ -101,6 +101,13 @@ PROVIDERS: dict[str, dict] = {
         "label":       "Groq (Ultra-Fast)",
         "models_hint": "llama-3.3-70b-versatile, mixtral-8x7b-32768",
     },
+    # ── 小米 MiMo ────────────────────────────────────────
+    "xiaomi": {
+        "base_url":    "https://token-plan-cn.xiaomimimo.com/v1/chat/completions",
+        "api_key_env": "XIAOMI_API_KEY",
+        "label":       "Xiaomi MiMo (小米)",
+        "models_hint": "MiMo-V2.5-Pro, MiMo-V2.5, MiMo-V2-Pro, MiMo-V2-Omni",
+    },
     # ── 本地 Ollama ─────────────────────────────────────
     "local": {
         "base_url":    os.environ.get("LOCAL_API_URL",
@@ -274,6 +281,35 @@ MODELS: dict[str, dict] = {
         "color":    "\033[91m",
         "vision":   False,
     },
+    # ── 小米 MiMo 系列 ──────────────────────────────────
+    "mimo-v2.5-pro": {
+        "id":       "mimo-v2.5-pro",
+        "provider": "xiaomi",
+        "desc":     "小米 MiMo V2.5 Pro — 旗舰推理",
+        "color":    "\033[96m",
+        "vision":   False,
+    },
+    "mimo-v2.5": {
+        "id":       "mimo-v2.5",
+        "provider": "xiaomi",
+        "desc":     "小米 MiMo V2.5 — 高性价比主力",
+        "color":    "\033[36m",
+        "vision":   False,
+    },
+    "mimo-v2-pro": {
+        "id":       "mimo-v2-pro",
+        "provider": "xiaomi",
+        "desc":     "小米 MiMo V2 Pro — 稳定生产力",
+        "color":    "\033[96m",
+        "vision":   False,
+    },
+    "mimo-v2-omni": {
+        "id":       "mimo-v2-omni",
+        "provider": "xiaomi",
+        "desc":     "小米 MiMo V2 Omni — 多模态全能",
+        "color":    "\033[36m",
+        "vision":   False,
+    },
     # ── 本地 Ollama ─────────────────────────────────────
     "qwen-local": {
         "id":       "qwen2.5-7b-instruct",
@@ -420,6 +456,14 @@ WRITE_BLACKLIST = [
 DANGEROUS_PATTERNS = [
     r"rm\s+-rf\s+[/~]", r"sudo\s+rm\s+-rf", r"mkfs\.",
     r"dd\s+if=", r">\s*/dev/sd", r"chmod\s+-R\s+777\s+/", r"\bshred\b",
+    r":\(\)\s*\{.*\|.*&\s*\};\s*:",                     # fork bomb :(){ :|:& };:
+    r"curl\s.*\|\s*(ba)?sh",                             # remote code exec via curl|sh
+    r"wget\s.*\|\s*(ba)?sh",                             # remote code exec via wget|sh
+    r"wget\s.*-O\s*-\s*\|\s*(ba)?sh",                    # wget -O- | bash variant
+    r"\bnc\s.*-[celp]\s*\d*\s*/bin/(ba)?sh",             # netcat reverse/bind shell
+    r"\bncat\s.*-e\s*/bin/(ba)?sh",                      # ncat reverse shell
+    r"python[23]?\s*-c.*socket.*connect",                 # python reverse shell
+    r"mkfifo\s.*/tmp/",                                   # named pipe for reverse shell
 ]
 
 # ════════════════════════════════════════════════════════

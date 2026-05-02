@@ -277,40 +277,48 @@ def tool_git_op(a: dict) -> str:
     from tools.file_ops import _session_cwd
     action = a["action"]
     rp     = a.get("repo_path") or _session_cwd[0]
-    cmds   = {
-        "status": "git status",
-        "diff":   "git diff",
-        "log":    "git log --oneline -20",
-        "stash":  "git stash",
-    }
-    if action in cmds:       cmd = cmds[action]
-    elif action == "add":    cmd = f"git add {a.get('files', '.')}"
+
+    # ── 安全构建参数列表（避免 shell 注入）─────────────────
+    if action == "status":
+        argv = ["git", "status"]
+    elif action == "diff":
+        argv = ["git", "diff"]
+    elif action == "log":
+        argv = ["git", "log", "--oneline", "-20"]
+    elif action == "stash":
+        argv = ["git", "stash"]
+    elif action == "add":
+        files = a.get("files", ".")
+        argv = ["git", "add"] + files.split()
     elif action == "commit":
         msg = a.get("message", "")
         if not msg: return "ERROR: commit 需要 'message' 参数"
-        cmd = f"git commit -m '{msg.replace(chr(39), chr(39)+chr(92)+chr(39)+chr(39))}'"
-    elif action == "push":   cmd = f"git push {a.get('remote', 'origin')}"
-    elif action == "pull":   cmd = f"git pull {a.get('remote', 'origin')}"
+        argv = ["git", "commit", "-m", msg]
+    elif action == "push":
+        argv = ["git", "push", a.get("remote", "origin")]
+    elif action == "pull":
+        argv = ["git", "pull", a.get("remote", "origin")]
     elif action == "clone":
         url = a.get("url", "")
         if not url: return "ERROR: clone 需要 'url' 参数"
-        cmd = f"git clone {url}"
+        argv = ["git", "clone", url]
     elif action == "branch":
-        cmd = f"git branch {a.get('branch','')}" if a.get("branch") else "git branch -a"
+        br = a.get("branch", "")
+        argv = ["git", "branch"] + (br.split() if br else ["-a"])
     elif action == "checkout":
         br = a.get("branch", "")
         if not br: return "ERROR: checkout 需要 'branch' 参数"
-        cmd = f"git checkout {br}"
+        argv = ["git", "checkout", br]
     elif action == "raw":
         rc = a.get("raw_cmd", "")
         if not rc: return "ERROR: raw 需要 'raw_cmd' 参数"
-        cmd = f"git {rc}"
+        argv = ["git"] + rc.split()
     else:
         return f"ERROR: 未知 action '{action}'"
 
-    print(c(YELLOW, f"  🌿 {cmd}"))
+    print(c(YELLOW, f"  🌿 {' '.join(argv)}"))
     try:
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60, cwd=rp)
+        res = subprocess.run(argv, capture_output=True, text=True, timeout=60, cwd=rp)
         return (res.stdout + res.stderr).strip() or "(no output)"
     except subprocess.TimeoutExpired:
         return "ERROR: git 超时"
