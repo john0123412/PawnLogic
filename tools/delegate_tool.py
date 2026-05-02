@@ -43,10 +43,25 @@ _WORKER_MODEL_CANDIDATES = [
 
 def _select_worker_model() -> str:
     """
-    按优先级列表检查第一个可用的小模型。
-    使用 validate_api_key 验证 API Key 是否已配置。
+    选择子任务 Worker 模型。
+    优先检查 DYNAMIC_CONFIG["preferred_worker"]：
+      · 若非 "auto" → 直接返回用户锁定的模型（极客模式）
+      · 若为 "auto" → 按优先级列表自动选取首个可用小模型
     若全部不可用则回退到 DEFAULT_MODEL。
     """
+    # ── 用户手动锁定的模型优先 ──────────────────────────
+    preferred = DYNAMIC_CONFIG.get("preferred_worker", "auto")
+    if preferred and preferred != "auto":
+        if preferred in MODELS:
+            ok, _ = validate_api_key(preferred)
+            if ok:
+                return preferred
+            # Key 未配置，降级到自动路由
+        else:
+            # 模型不存在，降级到自动路由
+            pass
+
+    # ── 自动优先级路由 ──────────────────────────────────
     for alias in _WORKER_MODEL_CANDIDATES:
         if alias not in MODELS:
             continue
@@ -228,9 +243,15 @@ def tool_delegate_task(a: dict) -> str:
 
     # ── ★ 双模型路由：强制降维至小模型 ──────────────────
     worker_model = _select_worker_model()
-    print(c(YELLOW,
-        f"  ⚡ 智能降维: 主会话模型 → [Worker: {worker_model}] (成本优化)"
-    ))
+    _preferred = DYNAMIC_CONFIG.get("preferred_worker", "auto")
+    if _preferred and _preferred != "auto":
+        print(c(MAGENTA,
+            f"  🎯 极客模式: 子任务强制使用模型 → [{worker_model}]"
+        ))
+    else:
+        print(c(YELLOW,
+            f"  ⚡ 智能降维: 主会话模型 → [Worker: {worker_model}] (成本优化)"
+        ))
 
     # ── 递归深度保护 ──────────────────────────────────────
     current_depth = getattr(_delegate_ctx, "depth", 0)

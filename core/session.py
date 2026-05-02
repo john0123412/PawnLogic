@@ -1306,25 +1306,60 @@ class AgentSession:
                     _audit_ok = True
                     try:
                         result = TOOL_MAP[name](fn_args) if name in TOOL_MAP else f"ERROR: 未知工具 '{name}'"
+
+                        # ★ P0.7 增强：语义级失败判定
+                        # 工具本身没抛异常，但 result 内容表明执行失败
+                        _SEMANTIC_FAILURE_SIGNALS = (
+                            "ERROR:", "Traceback", "Segmentation fault", "SIGSEGV",
+                            "NameError", "SyntaxError", "TypeError", "AttributeError",
+                            "ImportError", "ModuleNotFoundError", "FileNotFoundError",
+                            "PermissionError", "RuntimeError", "ValueError",
+                            "panic", "FATAL", "core dumped", "Aborted",
+                            "编译失败", "exit 1", "exit 2", "exit 126", "exit 127",
+                            "exit 134", "exit 139", "command not found",
+                        )
+                        if any(sig in str(result) for sig in _SEMANTIC_FAILURE_SIGNALS):
+                            _audit_ok = False
+
                     except Exception as _tool_exc:
                         result = f"ERROR: {type(_tool_exc).__name__}: {_tool_exc}"
                         _audit_ok = False
                     _elapsed_ms = int((time.monotonic() - _t0) * 1000)
 
                     # ── P0.7: 失败自动记录 ──────────────────
-                    if not _audit_ok or (result.startswith("ERROR") and name in _AUDITED_TOOLS):
+                    if not _audit_ok and name in _AUDITED_TOOLS:
                         try:
                             _error_type = ""
-                            if "TimeoutExpired" in result or "超时" in result:
+                            _r = str(result)
+                            _rl = _r.lower()
+                            if "timeoutexpired" in _rl or "超时" in _r:
                                 _error_type = "Timeout"
-                            elif "Segfault" in result or "SIGSEGV" in result:
+                            elif "segmentation fault" in _rl or "sigsegv" in _rl or "core dumped" in _rl:
                                 _error_type = "Segfault"
-                            elif "CompileError" in result or "编译失败" in result:
+                            elif "编译失败" in _r or "compileerror" in _rl:
                                 _error_type = "CompileError"
-                            elif "MemoryError" in result or "内存" in result:
+                            elif "memoryerror" in _rl or "内存超限" in _r:
                                 _error_type = "MemoryError"
-                            elif result.startswith("ERROR"):
+                            elif "syntaxerror" in _rl or "indentationerror" in _rl:
+                                _error_type = "SyntaxError"
+                            elif "nameerror" in _rl or "attributeerror" in _rl or "typeerror" in _rl:
+                                _error_type = "LogicError"
+                            elif "importerror" in _rl or "modulenotfounderror" in _rl:
+                                _error_type = "MissingModule"
+                            elif "filenotfounderror" in _rl or "command not found" in _rl:
+                                _error_type = "NotFound"
+                            elif "permissionerror" in _rl:
+                                _error_type = "Permission"
+                            elif "panic" in _rl or "fatal" in _rl:
+                                _error_type = "Panic"
+                            elif "exit 139" in _r or "aborted" in _rl:
+                                _error_type = "Crash"
+                            elif "traceback" in _rl:
+                                _error_type = "PythonError"
+                            elif "ERROR" in _r:
                                 _error_type = "RuntimeError"
+                            else:
+                                _error_type = "UnknownFailure"
 
                             _fid = write_failure(
                                 tool_name    = name,

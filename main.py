@@ -273,6 +273,7 @@ HELP_TEXT = f"""
 {c(BOLD,"── 细粒度调节 ──")}
   {c(YELLOW,"/tokens /ctx /iter /toolsize /fetchsize <n>")}
   {c(YELLOW,"/limits")}  查看所有当前限制
+  {c(YELLOW,"/worker [alias|auto]")}  子任务 Worker 模型选择
 
 {c(BOLD,"── 工具状态 ──")}
   {c(YELLOW,"/webstatus")}  Jina / Pandoc / Lynx 状态
@@ -993,6 +994,63 @@ def handle_slash(cmd: str, session: AgentSession):
             print(c(BOLD,  "  ╚══════════════════════════════════════════════╝"))
             print(c(GRAY, "  (成本估算基于 $1.50/1M tokens 均值，仅供参考)"))
 
+    # ── /worker：子任务 Worker 模型选择 ───────────────────
+    elif verb == "/worker":
+        from tools.delegate_tool import _WORKER_MODEL_CANDIDATES
+        target = arg.lower().strip() if arg else ""
+
+        if not target:
+            # 无参数：显示交互式菜单
+            current = DYNAMIC_CONFIG.get("preferred_worker", "auto")
+            print(c(BOLD, "\n  子任务 Worker 模型（delegate_task 使用）："))
+            for i, alias in enumerate(_WORKER_MODEL_CANDIDATES):
+                if alias not in MODELS:
+                    continue
+                ok, env = validate_api_key(alias)
+                ktag = c(GREEN, "[key✓]") if ok else c(RED, "[key✗]")
+                desc = MODELS[alias].get("desc", "")
+                tick = c(GREEN, " ◀ 当前") if alias == current else ""
+                print(
+                    c(GRAY, f"  [{i+1}] ")
+                    + c(CYAN, f"{alias:16}")
+                    + f" {desc:30} {ktag}{tick}"
+                )
+            # auto 选项
+            auto_tick = c(GREEN, " ◀ 当前") if current == "auto" else ""
+            print(
+                c(GRAY, f"  [A] ")
+                + c(YELLOW, f"{'auto':16}")
+                + f" {'系统自动路由（按优先级选取首个可用模型）':30} {auto_tick}"
+            )
+            print(c(GRAY, f"\n  用法: /worker <alias> 或 /worker auto"))
+
+        elif target == "auto":
+            DYNAMIC_CONFIG["preferred_worker"] = "auto"
+            session._reset_system_prompt()
+            print(c(GREEN, "  ✓ Worker 已恢复为自动路由模式"))
+
+        elif target in MODELS:
+            ok, env = validate_api_key(target)
+            if not ok:
+                print(c(YELLOW, f"  ⚠ 已切换到 {target}，但 {env} 未设置。用 /setkey 配置。"))
+            DYNAMIC_CONFIG["preferred_worker"] = target
+            session._reset_system_prompt()
+            print(c(GREEN, f"  ✓ Worker 已锁定为 {c(CYAN, target)}（子任务将强制使用此模型）"))
+
+        else:
+            # 尝试按序号匹配
+            try:
+                idx = int(target) - 1
+                if 0 <= idx < len(_WORKER_MODEL_CANDIDATES):
+                    alias = _WORKER_MODEL_CANDIDATES[idx]
+                    DYNAMIC_CONFIG["preferred_worker"] = alias
+                    session._reset_system_prompt()
+                    print(c(GREEN, f"  ✓ Worker 已锁定为 {c(CYAN, alias)}"))
+                else:
+                    print(c(RED, f"  ✗ 序号超出范围"))
+            except ValueError:
+                print(c(RED, f"  ✗ 未知模型 '{target}'。用 /worker 查看候选列表。"))
+
     # ── P0: /failures 命令 ────────────────────────────────
     elif verb == "/failures":
         sub = arg.lower().strip() if arg else "list"
@@ -1210,6 +1268,7 @@ def main():
         "/low", "/mid", "/deep", "/normal", "/limits",
         "/tokens", "/ctx", "/iter", "/toolsize", "/fetchsize",
         "/webstatus", "/pwnenv", "/stats",
+        "/worker", "/worker auto",
         "/failures", "/failures clear", "/failures list",
         "/memo", "/skills",
         "/chat list", "/chat view", "/chat export", "/chat find",
