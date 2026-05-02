@@ -1,6 +1,6 @@
 """
 core/session.py — AgentSession · Agentic Loop
-1.0 (Expert Edition — Plan-as-Key Architecture)
+1.1 (Expert Edition — Plan-as-Key Architecture)
 
 本次修改摘要（Plan-as-Key + 教练模式 CoT Guard）：
   [1] 常量重构：
@@ -36,8 +36,11 @@ from core.api_client import stream_request, ensure_tool_call_id
 from core.memory import (
     init_db, _gen_id, save_messages,
     search_knowledge, format_knowledge_for_prompt,
+    # P0: Failure Pattern DB
+    write_failure, check_failure, count_failure,
+    format_failures_for_prompt,
 )
-from core.gsa import load_relevant_skills, bump_skill   # ★ GSA 衰减检索 + 反馈工具
+from core.gsa import load_relevant_skills, bump_skill, sink_failure_to_gsa  # ★ GSA
 
 from tools.file_ops  import (tool_read_file, tool_read_file_lines, tool_write_file,
                               tool_patch_file, tool_list_dir, tool_find_files,
@@ -157,6 +160,63 @@ _BUMP_SKILL_SCHEMA = {
 
 TOOL_MAP["bump_skill"] = tool_bump_skill
 TOOLS_SCHEMA.append(_BUMP_SKILL_SCHEMA)
+
+# ── P0: audit_payload 工具（防御性审计）───────────────────
+# 需要审计的危险工具集合
+_AUDITED_TOOLS = {"run_code", "run_shell", "run_interactive"}
+
+
+def tool_audit_payload(args: dict) -> str:
+    """
+    Payload 投前审计工具。
+    查询指定工具的历史失败记录，返回警告和建议。
+    """
+    tool_name   = args.get("tool_name", "").strip()
+    payload_hint = args.get("payload_preview", "").strip()
+
+    if not tool_name:
+        return "ERROR: tool_name 参数不能为空"
+
+    rows = check_failure(tool_name, args_keywords=payload_hint, limit=3)
+    if not rows:
+        return f"✓ 审计通过: {tool_name} 无历史失败记录。"
+
+    warning = format_failures_for_prompt(rows)
+    return (
+        f"⚠ 审计警告: {tool_name} 存在 {len(rows)} 条历史失败记录\n\n"
+        f"{warning}\n\n"
+        f"建议: 修改 Payload 或换用其他方案后再试。"
+    )
+
+
+_AUDIT_PAYLOAD_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "audit_payload",
+        "description": (
+            "Payload 投前审计工具。在调用 run_code / run_shell / run_interactive 执行危险操作之前，\n"
+            "使用此工具检查是否有同类历史失败记录。如果有，系统会返回失败原因和修改建议。\n"
+            "适用场景：执行 exploit 脚本、运行 shellcode、调用 GDB 调试前。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tool_name": {
+                    "type": "string",
+                    "description": "目标工具名：run_code / run_shell / run_interactive",
+                },
+                "payload_preview": {
+                    "type": "string",
+                    "description": "Payload 或参数摘要（用于模糊匹配历史失败记录）",
+                },
+            },
+            "required": ["tool_name"],
+        },
+    },
+}
+
+TOOL_MAP["audit_payload"] = tool_audit_payload
+TOOLS_SCHEMA.append(_AUDIT_PAYLOAD_SCHEMA)
 
 def _try_load_delegate():
     try:
@@ -1226,6 +1286,21 @@ class AgentSession:
                         "pwn_debug", "pwn_rop", "pwn_disasm", "pwn_cyclic", "pwn_libc",
                         "inspect_binary", "web_search", "fetch_url", "find_refs",
                     }
+
+                    # ── P0.6: 投前失败审计（危险工具自动检查）───
+                    _failure_warning = ""
+                    if name in _AUDITED_TOOLS:
+                        try:
+                            _fail_rows = check_failure(name, args_keywords=preview[:200], limit=3)
+                            if _fail_rows:
+                                _failure_warning = format_failures_for_prompt(_fail_rows)
+                                print(c(YELLOW,
+                                    f"  ⚠ [Anti-Pattern] {name} 存在 "
+                                    f"{len(_fail_rows)} 条历史失败记录"
+                                ))
+                        except Exception:
+                            pass
+
                     # ── 审计计时 ────────────────────────────
                     _t0 = time.monotonic()
                     _audit_ok = True
@@ -1235,6 +1310,48 @@ class AgentSession:
                         result = f"ERROR: {type(_tool_exc).__name__}: {_tool_exc}"
                         _audit_ok = False
                     _elapsed_ms = int((time.monotonic() - _t0) * 1000)
+
+                    # ── P0.7: 失败自动记录 ──────────────────
+                    if not _audit_ok or (result.startswith("ERROR") and name in _AUDITED_TOOLS):
+                        try:
+                            _error_type = ""
+                            if "TimeoutExpired" in result or "超时" in result:
+                                _error_type = "Timeout"
+                            elif "Segfault" in result or "SIGSEGV" in result:
+                                _error_type = "Segfault"
+                            elif "CompileError" in result or "编译失败" in result:
+                                _error_type = "CompileError"
+                            elif "MemoryError" in result or "内存" in result:
+                                _error_type = "MemoryError"
+                            elif result.startswith("ERROR"):
+                                _error_type = "RuntimeError"
+
+                            _fid = write_failure(
+                                tool_name    = name,
+                                args_summary = preview[:200],
+                                error_msg    = result[:500],
+                                error_type   = _error_type,
+                                session_id   = self.session_id,
+                            )
+
+                            # ── P0.9: 同类失败 ≥ 3 次自动沉淀到 GSA ──
+                            if _error_type:
+                                _fail_count = count_failure(name, _error_type)
+                                if _fail_count >= 3:
+                                    _ok, _msg = sink_failure_to_gsa(
+                                        tool_name   = name,
+                                        error_type  = _error_type,
+                                        error_msg   = result[:300],
+                                        args_preview= preview[:200],
+                                    )
+                                    if _ok:
+                                        print(c(YELLOW, f"  📝 [GSA Sink] {_msg}"))
+                        except Exception:
+                            pass  # 失败记录不应阻断主流程
+
+                    # ── 将投前审计警告追加到 tool result ─────
+                    if _failure_warning:
+                        result = result + "\n\n" + _failure_warning
 
                     # ── 写入审计日志 ────────────────────────
                     try:

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-PawnLogic 1.0 (Expert Edition) — main.py
+PawnLogic 1.1 (Expert Edition) — main.py
 多 Provider · 多模态视觉 · SQLite · CoT 引导 · GSA 技能存档 · 规格驱动 · GSD架构
 
 快速部署（WSL2 Ubuntu）:
-  cp -r PawnLogic_1.0 ~/.local/share/pawnlogic
+  cp -r PawnLogic_1.1 ~/.local/share/pawnlogic
   chmod +x ~/.local/share/pawnlogic/main.py
   ln -sf ~/.local/share/pawnlogic/main.py ~/.local/bin/pawn
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
@@ -66,6 +66,8 @@ from core.memory import (
     export_session_to_markdown,
     tag_session, untag_session, find_sessions_by_tag,
     link_sessions, unlink_sessions, get_linked_sessions,
+    # P0: Failure Pattern DB
+    list_failures, clear_failures,
 )
 from core.persistence import (session_save, session_load, session_list,
                                session_delete, memorize)
@@ -278,6 +280,8 @@ HELP_TEXT = f"""
 
 {c(BOLD,"── 用量审计 ──")}
   {c(CYAN,"/stats")}        本次会话 Token 用量 & 工具调用统计
+  {c(CYAN,"/failures [N]")}  查看失败记录（防御性审计数据库）
+  {c(CYAN,"/failures clear")} 清空所有失败记录
 
 {c(BOLD,"── 对话历史浏览（新）──")}
   {c(CYAN,"/chat list [n]")}       列出最近 n 个会话（默认20）
@@ -989,6 +993,34 @@ def handle_slash(cmd: str, session: AgentSession):
             print(c(BOLD,  "  ╚══════════════════════════════════════════════╝"))
             print(c(GRAY, "  (成本估算基于 $1.50/1M tokens 均值，仅供参考)"))
 
+    # ── P0: /failures 命令 ────────────────────────────────
+    elif verb == "/failures":
+        sub = arg.lower().strip() if arg else "list"
+        if sub == "clear":
+            n = clear_failures()
+            print(c(GREEN, f"  ✓ 已清空 {n} 条失败记录"))
+        elif sub == "list" or sub.isdigit():
+            n = int(sub) if sub.isdigit() else 20
+            rows = list_failures(n)
+            if not rows:
+                print(c(GREEN, "  ✓ 暂无失败记录（防御性审计数据库为空）"))
+            else:
+                print(c(BOLD, f"\n  失败记录（最近 {len(rows)} 条）："))
+                for i, r in enumerate(rows):
+                    etype = r["error_type"] or "?"
+                    ts = r["created_at"][:16] if r["created_at"] else ""
+                    tool = r["tool_name"]
+                    msg = r["error_msg"][:80].replace("\n", " ")
+                    print(
+                        c(GRAY, f"  [{i+1:2d}] ")
+                        + c(RED, f"{tool:20}")
+                        + c(YELLOW, f" {etype:15}")
+                        + c(GRAY, f" {ts}")
+                    )
+                    print(c(GRAY, f"       {msg}"))
+        else:
+            print(c(GRAY, "  用法: /failures [list|clear|N]"))
+
     # ── /memo ────────────────────────────────────────────
     elif verb == "/memo":
         raw_content = (arg + " " + arg2).strip()
@@ -1178,6 +1210,7 @@ def main():
         "/low", "/mid", "/deep", "/normal", "/limits",
         "/tokens", "/ctx", "/iter", "/toolsize", "/fetchsize",
         "/webstatus", "/pwnenv", "/stats",
+        "/failures", "/failures clear", "/failures list",
         "/memo", "/skills",
         "/chat list", "/chat view", "/chat export", "/chat find",
         "/chat tag", "/chat untag", "/chat bytag",

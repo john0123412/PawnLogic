@@ -1,5 +1,5 @@
 """
-tools/lsp_lite.py — LSP-lite: Semantic Code Indexing (1.0 新增)
+tools/lsp_lite.py — LSP-lite: Semantic Code Indexing (1.1 新增)
 
 无需完整语言服务器，提供：
   · find_symbol  — 跨工作区查找函数/类定义（Python 用 ast，其他语言用 grep）

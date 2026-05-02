@@ -1,8 +1,8 @@
 """
 tools/pwn_chain.py — CTF / Pwn 工具链
   inspect_binary · pwn_rop · pwn_cyclic · pwn_disasm · pwn_libc · pwn_env
-  pwn_debug (1.0 NEW) — GDB 批处理动态调试
-  pwn_one_gadget (1.0 NEW) — one_gadget 一键 execve 跳板搜索
+  pwn_debug (1.1 NEW) — GDB 批处理动态调试
+  pwn_one_gadget (1.1 NEW) — one_gadget 一键 execve 跳板搜索
 """
 
 import re, shutil, subprocess, tempfile, os

@@ -1,5 +1,5 @@
 """
-PawnLogic 1.0 (GitHub Release) — config.py
+PawnLogic 1.1 (GitHub Release) — config.py
 全生态 API 路由 · 2026 主流模型适配 · 视觉模型支持 · 三档预设 · 安全名单 · GSA 技能存档
 
 所有 API Key 通过环境变量注入（.env 文件 + python-dotenv）。
@@ -16,7 +16,7 @@ try:
 except ImportError:
     pass  # 未安装 python-dotenv 时降级为纯 os.environ
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # ── 路径 ──────────────────────────────────────────────────
 SESSIONS_DIR       = Path.home() / ".pawnlogic" / "sessions"

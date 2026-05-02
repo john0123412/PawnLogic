@@ -1,11 +1,11 @@
 """
 tools/file_ops.py — 文件读写、目录列出、文件搜索
-1.0 新增（模块 3）：
+1.1 新增（模块 3）：
   · patch_file 重构为 Aider 风格 SEARCH/REPLACE 块机制
   · 支持多块连续替换，提供精确的失败定位信息
   · 允许轻微缩进宽容度（indentation tolerance）
   · 向后兼容：仍接受旧式 old_content/new_content 参数
-1.0 优化：
+1.1 优化：
   · _best_match_context 现在输出逐行相似度百分比和原因提示
     例："Your SEARCH line 1 is 90% similar to file line 145. Please check indentation."
 """

@@ -1,7 +1,7 @@
 """
-core/memory.py — SQLite 数据库管理器（1.0 对话存储扩展版）
+core/memory.py — SQLite 数据库管理器（1.1 对话存储扩展版）
 
-1.0 新增：
+1.1 新增：
   · sessions 表新增 tags 列（逗号分隔标签）
   · session_links 表（双向关联两个会话）
   · full_text_search() 跨会话全文检索消息内容
@@ -59,6 +59,7 @@ def get_conn() -> sqlite3.Connection:
 def init_db():
     _create_core_tables()
     init_facts_table()
+    init_failures_table()
 
 def _create_core_tables():
     with get_conn() as conn:
@@ -783,4 +784,143 @@ def format_facts_for_prompt(rows: list[sqlite3.Row], max_chars: int = 600) -> st
             break
         lines.append(entry)
         total += len(entry) + 1
+    return "\n".join(lines)
+
+
+# ════════════════════════════════════════════════════════
+# P0: Failure Patterns — 防御性审计数据库
+#
+# 用途：记录工具调用失败的历史，用于 Payload 投前审计。
+# 当 Agent 准备调用 run_code / run_shell / run_interactive 时，
+# 自动查询是否有同类失败记录，有则注入警告。
+#
+# API 摘要：
+#   write_failure(tool_name, args_summary, error_msg, error_type, session_id)
+#       → 写入一条失败记录
+#   check_failure(tool_name, args_keywords, limit)
+#       → 查询同类历史失败（返回 list[sqlite3.Row]）
+#   list_failures(limit)
+#       → 列出最近 N 条失败记录
+#   count_failure(tool_name, error_type)
+#       → 统计同类失败次数（用于自动沉淀阈值判断）
+#   clear_failures()
+#       → 清空所有失败记录
+# ════════════════════════════════════════════════════════
+
+def init_failures_table():
+    """Create agent_failures table (idempotent). Called automatically by init_db()."""
+    with get_conn() as conn:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS agent_failures (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            tool_name   TEXT    NOT NULL,
+            args_hash   TEXT    NOT NULL DEFAULT '',
+            args_preview TEXT   NOT NULL DEFAULT '',
+            error_msg   TEXT    NOT NULL DEFAULT '',
+            error_type  TEXT    NOT NULL DEFAULT '',
+            session_id  TEXT    NOT NULL DEFAULT '',
+            created_at  TEXT    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_failures_tool ON agent_failures(tool_name);
+        CREATE INDEX IF NOT EXISTS idx_failures_type ON agent_failures(error_type);
+        CREATE INDEX IF NOT EXISTS idx_failures_time ON agent_failures(created_at);
+        """)
+
+
+def write_failure(
+    tool_name: str,
+    args_summary: str,
+    error_msg: str,
+    error_type: str = "",
+    session_id: str = "",
+) -> int:
+    """
+    写入一条工具调用失败记录。
+    """
+    import hashlib
+    args_hash = hashlib.md5(args_summary[:100].encode()).hexdigest()[:12]
+    with get_conn() as conn:
+        cur = conn.execute("""
+            INSERT INTO agent_failures
+                (tool_name, args_hash, args_preview, error_msg, error_type, session_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            tool_name, args_hash, args_summary[:200],
+            error_msg[:500], error_type, session_id, _now(),
+        ))
+        return cur.lastrowid
+
+
+def check_failure(tool_name: str, args_keywords: str = "", limit: int = 3) -> list[sqlite3.Row]:
+    """
+    查询指定工具的历史失败记录。
+    """
+    with get_conn() as conn:
+        if args_keywords:
+            keywords = [w.strip() for w in args_keywords.split() if w.strip()]
+            conditions = ["tool_name = ?"]
+            params: list = [tool_name]
+            for kw in keywords[:3]:
+                conditions.append("(args_preview LIKE ? OR error_msg LIKE ?)")
+                params.extend([f"%{kw}%", f"%{kw}%"])
+            where = " AND ".join(conditions)
+            params.append(limit)
+            return conn.execute(f"""
+                SELECT * FROM agent_failures WHERE {where} ORDER BY created_at DESC LIMIT ?
+            """, params).fetchall()
+        else:
+            return conn.execute("""
+                SELECT * FROM agent_failures WHERE tool_name=? ORDER BY created_at DESC LIMIT ?
+            """, (tool_name, limit)).fetchall()
+
+
+def count_failure(tool_name: str, error_type: str = "") -> int:
+    """统计指定工具的失败总次数。"""
+    with get_conn() as conn:
+        if error_type:
+            row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM agent_failures WHERE tool_name=? AND error_type=?",
+                (tool_name, error_type),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM agent_failures WHERE tool_name=?",
+                (tool_name,),
+            ).fetchone()
+    return row["cnt"] if row else 0
+
+
+def list_failures(limit: int = 20) -> list[sqlite3.Row]:
+    """列出最近 limit 条失败记录。"""
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM agent_failures ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+
+
+def clear_failures() -> int:
+    """清空所有失败记录。返回删除的行数。"""
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM agent_failures")
+        return cur.rowcount
+
+
+def format_failures_for_prompt(rows: list[sqlite3.Row], max_chars: int = 800) -> str:
+    """将失败记录格式化为注入 System Prompt 的警告文本。"""
+    if not rows:
+        return ""
+    lines = ["⚠ [FAILURE WARNING — Historical failures detected for this tool/operation]"]
+    total = len(lines[0])
+    for r in rows:
+        entry = (
+            f"  · [{r['tool_name']}] {r['error_type'] or 'Unknown'}: "
+            f"{r['error_msg'][:120]}{'...' if len(r['error_msg']) > 120 else ''}\n"
+            f"    args: {r['args_preview'][:80]}"
+        )
+        if total + len(entry) + 1 > max_chars:
+            lines.append(f"  ... ({len(rows) - (len(lines) - 1)} more failures omitted)")
+            break
+        lines.append(entry)
+        total += len(entry) + 1
+    lines.append("→ Review these failures before proceeding. Consider a different approach.")
     return "\n".join(lines)

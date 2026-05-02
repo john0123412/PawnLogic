@@ -1,6 +1,6 @@
 """
 core/gsa.py — Global Skills Archive (GSA) Engine
-PawnLogic 1.0
+PawnLogic 1.1
 
 职责：
   · 读取 / 初始化 global_skills.md
@@ -545,6 +545,113 @@ def prune_zombie_skills(
             return 0, []   # IO 失败，保守返回
 
     return len(pruned), pruned
+
+
+# ════════════════════════════════════════════════════════
+# P0: Failure Pattern 自动沉淀（Anti-Pattern DB）
+#
+# 当同一工具 + 同一错误类型出现 ≥ SINK_THRESHOLD 次时，
+# 自动将失败模式写入 global_skills.md 的 # ❌ Failure Patterns 分区。
+# 格式：## <工具名> — <错误类型>，含触发条件 + 正确做法。
+# ════════════════════════════════════════════════════════
+
+_SINK_THRESHOLD = 3   # 同类失败 ≥ 3 次触发沉淀
+
+
+def _ensure_failure_section(content: str) -> str:
+    """确保 global_skills.md 中存在 # ❌ Failure Patterns 分区。"""
+    if "❌ Failure Patterns" in content:
+        return content
+    # 追加到文件末尾
+    section = (
+        "\n\n# ❌ Failure Patterns\n\n"
+        "> 自动生成的失败防雷区。当同一工具 + 同一错误类型出现 ≥ 3 次时自动记录。\n"
+        "> 请勿手动删除，Agent 会在调用危险工具前自动比对此分区。\n\n"
+    )
+    return content + section
+
+
+def sink_failure_to_gsa(
+    tool_name: str,
+    error_type: str,
+    error_msg: str,
+    args_preview: str,
+) -> tuple[bool, str]:
+    """
+    将失败模式沉淀到 global_skills.md 的 Failure Patterns 分区。
+    仅当同类失败 ≥ SINK_THRESHOLD 次时调用。
+
+    Returns
+    -------
+    (True, 成功消息) 或 (False, 原因)
+    """
+    try:
+        content = _ensure_file()
+    except Exception as e:
+        return False, f"读取 global_skills.md 失败: {e}"
+
+    # 检查是否已存在该失败模式
+    skill_name = f"{tool_name} — {error_type}"
+    pattern = re.compile(
+        r'^##\s+' + re.escape(skill_name) + r'\s*$',
+        re.MULTILINE | re.IGNORECASE,
+    )
+    if pattern.search(content):
+        return False, f"失败模式 '{skill_name}' 已存在，跳过重复写入"
+
+    # 构建技能块
+    today = datetime.now().strftime("%Y-%m-%d")
+    skill_block = (
+        f"## {skill_name}\n"
+        f"<!-- meta: hits=0 last_used={today} confidence=0.70 -->\n\n"
+        f"**What**: 工具 `{tool_name}` 在以下条件下反复失败：\n"
+        f"  - 错误类型: `{error_type}`\n"
+        f"  - 典型参数: `{args_preview[:120]}`\n\n"
+        f"**Error**:\n```\n{error_msg[:300]}\n```\n\n"
+        f"**Rule**: 调用 `{tool_name}` 前必须检查参数是否匹配上述失败条件。"
+        f"若匹配，应改用其他方案或修正参数后再试。\n"
+    )
+
+    # 确保 Failure Patterns 分区存在
+    content = _ensure_failure_section(content)
+
+    # 插入到 Failure Patterns 分区末尾
+    try:
+        from tools.file_ops import _apply_patch_blocks
+        # 找到 Failure Patterns 分区的最后一个 ## 行作为锚点
+        lines = content.splitlines(keepends=True)
+        anchor_idx = None
+        in_section = False
+        for i, line in enumerate(lines):
+            if "❌ Failure Patterns" in line:
+                in_section = True
+                continue
+            if in_section and line.startswith("# ") and "❌" not in line:
+                # 到达下一个一级标题，锚点为前一行
+                anchor_idx = i - 1
+                break
+            if in_section and line.startswith("## "):
+                anchor_idx = i
+        if anchor_idx is None:
+            # 分区是最后一个，追加到末尾
+            content += f"\n{skill_block}\n"
+            GLOBAL_SKILLS_PATH.write_text(content, encoding="utf-8")
+            return True, f"✓ 失败模式已沉淀: ## {skill_name}"
+
+        anchor_line = lines[anchor_idx].rstrip("\n")
+        patch = (
+            f"<<<<<<< SEARCH\n{anchor_line}\n=======\n"
+            f"{anchor_line}\n\n{skill_block}\n>>>>>>> REPLACE"
+        )
+        result_msg = _apply_patch_blocks(str(GLOBAL_SKILLS_PATH), patch)
+        if result_msg.startswith("OK"):
+            return True, f"✓ 失败模式已沉淀: ## {skill_name}"
+        # patch 失败 → 降级追加
+        with open(GLOBAL_SKILLS_PATH, "a", encoding="utf-8") as f:
+            f.write(f"\n{skill_block}\n")
+        return True, f"⚠ 降级追加: ## {skill_name}"
+    except Exception as e:
+        return False, f"写入失败: {e}"
 
 
 # ════════════════════════════════════════════════════════
