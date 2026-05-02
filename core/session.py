@@ -49,7 +49,8 @@ from tools.web_ops   import tool_web_search, tool_fetch_url, tool_git_op, WEB_SC
 from tools.sandbox   import tool_run_code, SANDBOX_SCHEMAS
 from tools.pwn_chain import (tool_pwn_env, tool_inspect_binary, tool_pwn_rop,
                               tool_pwn_cyclic, tool_pwn_disasm, tool_pwn_libc,
-                              tool_pwn_debug, tool_pwn_one_gadget, PWN_SCHEMAS)
+                              tool_pwn_debug, tool_pwn_one_gadget,
+                              tool_pwn_timed_debug, PWN_SCHEMAS)
 from tools.vision    import analyze_local_image, VISION_SCHEMAS
 from core.logger import logger, audit_tool_call
 
@@ -73,6 +74,7 @@ TOOL_MAP: dict = {
     "pwn_libc":            tool_pwn_libc,
     "pwn_debug":           tool_pwn_debug,
     "pwn_one_gadget":      tool_pwn_one_gadget,
+    "pwn_timed_debug":     tool_pwn_timed_debug,
     "analyze_local_image": analyze_local_image,
 }
 
@@ -237,6 +239,30 @@ _try_load_delegate()
 _MAX_CONCURRENT_TOOLS  = 3
 _MAX_SOFT_CORRECTIONS  = 2   # 软拦截最大次数（工具仍执行，追加修正信号）
 _MAX_HARD_KILLS        = 1   # 软拦截耗尽后的硬终止阈值
+
+# ════════════════════════════════════════════════════════
+# P1: 时间感知调度 — URGENT_MODE 常量
+# ════════════════════════════════════════════════════════
+
+_URGENT_THRESHOLD_SEC = 30   # 剩余 < 30s 时触发 URGENT_MODE
+
+# 极速模型候选（时间紧迫时自动切换）
+_URGENT_MODEL_CANDIDATES = [
+    "ds-v4-flash",
+    "glm-4.5-air",
+    "qwen-turbo",
+    "groq-llama3",
+]
+
+_URGENT_SIGNAL = (
+    "[SYSTEM: URGENT_MODE — time budget nearly exhausted]\n"
+    "Time remaining is critically low. You MUST:\n"
+    "  1. SKIP <plan> blocks — invoke tools directly.\n"
+    "  2. Use the SHORTEST possible answers.\n"
+    "  3. Do NOT invoke GSA / bump_skill / audit_payload.\n"
+    "  4. Focus ONLY on the core deliverable.\n"
+    "  5. If a tool call fails, do NOT retry — report partial results.\n"
+)
 
 # ── PLAN_MISSING 信号 ─────────────────────────────────────────────
 # 注入位置：tool 结果追加完毕后（而非 user 消息），
@@ -532,6 +558,17 @@ class AgentSession:
         self._turn_prompt_tokens     = 0
         self._turn_completion_tokens = 0
         self._turn_tool_calls        = 0
+        # ── P1: Time-aware scheduling state ──
+        self._turn_start_time        = 0.0
+        self._time_budget_sec        = 0   # 0 = 不限时间
+        self._urgent_mode            = False
+
+    def _time_remaining(self) -> float:
+        """返回当前 turn 的剩余秒数。time_budget=0 时返回 inf。"""
+        if self._time_budget_sec <= 0:
+            return float("inf")
+        elapsed = time.monotonic() - self._turn_start_time
+        return max(0.0, self._time_budget_sec - elapsed)
 
     @property
     def model(self) -> dict:
@@ -544,18 +581,25 @@ class AgentSession:
             rows = search_knowledge(knowledge_query, limit=3)
             knowledge_block = format_knowledge_for_prompt(rows)
         state_block  = _load_state_md(self.cwd)
-        skills_toc   = _load_skills_toc()
 
-        # ── ★ GSA 相关技能动态检索（衰减评分版）────────────
-        _relevant_skills_md  = ""
-        _conflict_warning    = ""
-        if knowledge_query:
-            try:
-                _relevant_skills_md, _conflict_warning = load_relevant_skills(
-                    knowledge_query, top_k=3
-                )
-            except Exception:
-                pass   # 降级：无相关技能注入，不中断主流程
+        # P1.8: URGENT_MODE 跳过 GSA 注入（节省 token）
+        if self._urgent_mode:
+            skills_toc = ""
+            _relevant_skills_md = ""
+            _conflict_warning = ""
+        else:
+            skills_toc   = _load_skills_toc()
+
+            # ── ★ GSA 相关技能动态检索（衰减评分版）────────────
+            _relevant_skills_md  = ""
+            _conflict_warning    = ""
+            if knowledge_query:
+                try:
+                    _relevant_skills_md, _conflict_warning = load_relevant_skills(
+                        knowledge_query, top_k=3
+                    )
+                except Exception:
+                    pass   # 降级：无相关技能注入，不中断主流程
 
         # ── MoE Phase 感知块 ──────────────────────────────
         phase_tools  = AGENT_PHASES.get(self.current_phase, [])
@@ -1024,6 +1068,15 @@ class AgentSession:
         self._turn_completion_tokens = 0
         self._turn_tool_calls        = 0
 
+        # ── P1: 时间感知初始化 ──────────────────────────
+        self._turn_start_time = time.monotonic()
+        self._time_budget_sec = DYNAMIC_CONFIG.get("time_budget_sec", 0)
+        self._urgent_mode     = False
+        if self._time_budget_sec > 0:
+            _mins = self._time_budget_sec // 60
+            _secs = self._time_budget_sec % 60
+            print(c(GRAY, f"  ⏱  时间预算: {_mins}m{_secs}s"))
+
         max_iter           = DYNAMIC_CONFIG["max_iter"]
         renderer           = _PlanRenderer()
         is_vision_model    = self.model.get("vision", False)
@@ -1050,6 +1103,57 @@ class AgentSession:
         _DIR_THRESHOLD    = 3
 
         for iteration in range(max_iter):
+            # ── P1: 每轮迭代时间检查 ────────────────────
+            _remaining = self._time_remaining()
+            if _remaining <= 0:
+                print(c(RED,
+                    f"\n  ⏰ [Time Budget] 预算已耗尽（{self._time_budget_sec}s），任务终止。"
+                ))
+                logger.warning(
+                    "Time budget exhausted | session={} budget={}s",
+                    self.session_id[:8], self._time_budget_sec,
+                )
+                break
+
+            if not self._urgent_mode and _remaining < _URGENT_THRESHOLD_SEC:
+                # ── 触发 URGENT_MODE ──────────────────────
+                self._urgent_mode = True
+                print(c(RED,
+                    f"  🚨 [URGENT_MODE] 剩余 {_remaining:.0f}s — "
+                    f"切换至极速模式"
+                ))
+                logger.info(
+                    "URGENT_MODE activated | session={} remaining={:.1f}s",
+                    self.session_id[:8], _remaining,
+                )
+
+                # 注入 URGENT 信号到上下文
+                self.messages.append({
+                    "role": "user",
+                    "content": _URGENT_SIGNAL,
+                })
+
+                # 自动切换到极速模型
+                for _u_alias in _URGENT_MODEL_CANDIDATES:
+                    if _u_alias in MODELS:
+                        _u_ok, _ = validate_api_key(_u_alias)
+                        if _u_ok and _u_alias != self.model_alias:
+                            old_model = self.model_alias
+                            self.model_alias = _u_alias
+                            print(c(MAGENTA,
+                                f"  🚨 [URGENT] 模型已切换: "
+                                f"{old_model} → {_u_alias}（极速响应）"
+                            ))
+                            # 重建工具列表
+                            phase_whitelist = set(AGENT_PHASES.get(self.current_phase, []))
+                            current_tools = [
+                                s for s in TOOLS_SCHEMA
+                                if s.get("function", {}).get("name") in phase_whitelist
+                                or s.get("function", {}).get("name") in ("switch_phase", "bump_skill")
+                            ]
+                            current_max_tokens = min(current_max_tokens, 4096)
+                            break
+
             text_buf = ""; tc_buf: dict = {}
 
             for delta in stream_request(
@@ -1161,7 +1265,8 @@ class AgentSession:
             # ════════════════════════════════════════════════
             has_plan    = "<plan>" in text_buf.lower()
             is_exempt   = _is_plan_exempt(tc_buf)
-            need_plan   = not has_plan and not is_exempt
+            # P1.7: URGENT_MODE 跳过 CoT Guard
+            need_plan   = not has_plan and not is_exempt and not self._urgent_mode
 
             _plan_signal_injected = False
 

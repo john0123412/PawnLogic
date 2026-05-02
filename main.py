@@ -274,6 +274,7 @@ HELP_TEXT = f"""
   {c(YELLOW,"/tokens /ctx /iter /toolsize /fetchsize <n>")}
   {c(YELLOW,"/limits")}  查看所有当前限制
   {c(YELLOW,"/worker [alias|auto]")}  子任务 Worker 模型选择
+  {c(YELLOW,"/time [秒数]")}  时间预算（CTF 倒计时）
 
 {c(BOLD,"── 工具状态 ──")}
   {c(YELLOW,"/webstatus")}  Jina / Pandoc / Lynx 状态
@@ -994,6 +995,35 @@ def handle_slash(cmd: str, session: AgentSession):
             print(c(BOLD,  "  ╚══════════════════════════════════════════════╝"))
             print(c(GRAY, "  (成本估算基于 $1.50/1M tokens 均值，仅供参考)"))
 
+    # ── P1: /time 命令 ───────────────────────────────────
+    elif verb == "/time":
+        budget = DYNAMIC_CONFIG.get("time_budget_sec", 0)
+        if arg and arg.strip().isdigit():
+            new_budget = max(0, int(arg.strip()))
+            DYNAMIC_CONFIG["time_budget_sec"] = new_budget
+            session._time_budget_sec = new_budget
+            session._reset_system_prompt()
+            if new_budget > 0:
+                m, s = divmod(new_budget, 60)
+                print(c(GREEN, f"  ✓ 时间预算已设为 {m}m{s}s"))
+            else:
+                print(c(GREEN, "  ✓ 时间预算已关闭（不限时）"))
+        else:
+            if budget > 0:
+                m, s = divmod(budget, 60)
+                elapsed = time.monotonic() - session._turn_start_time if session._turn_start_time else 0
+                remaining = max(0, budget - elapsed)
+                rm, rs = divmod(int(remaining), 60)
+                mode = c(RED, " [URGENT]") if session._urgent_mode else ""
+                print(c(BOLD, "\n  ⏱  时间预算："))
+                print(f"  预算: {c(CYAN, f'{m}m{s}s')}")
+                print(f"  已用: {c(YELLOW, f'{int(elapsed)}s')}")
+                print(f"  剩余: {c(GREEN if remaining > 30 else RED, f'{rm}m{rs}s')}{mode}")
+                print(c(GRAY, f"\n  /time <秒数> 修改 | /time 0 关闭"))
+            else:
+                print(c(GRAY, "  时间预算未设置（不限时）"))
+                print(c(GRAY, "  /time <秒数> 设置 | 例: /time 300 = 5分钟"))
+
     # ── /worker：子任务 Worker 模型选择 ───────────────────
     elif verb == "/worker":
         from tools.delegate_tool import _WORKER_MODEL_CANDIDATES
@@ -1268,7 +1298,7 @@ def main():
         "/low", "/mid", "/deep", "/normal", "/limits",
         "/tokens", "/ctx", "/iter", "/toolsize", "/fetchsize",
         "/webstatus", "/pwnenv", "/stats",
-        "/worker", "/worker auto",
+        "/time", "/worker", "/worker auto",
         "/failures", "/failures clear", "/failures list",
         "/memo", "/skills",
         "/chat list", "/chat view", "/chat export", "/chat find",

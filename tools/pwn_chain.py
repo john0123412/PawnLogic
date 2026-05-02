@@ -566,4 +566,145 @@ PWN_SCHEMAS = [
                           "description":"搜索深度 0-3（默认 0），越大候选越多但约束越松"},
             "only_near": {"type":"boolean","description":"仅输出约束接近 null 的候选"},
         },"required":["libc_path"]}}},
+
+    # ── P1: pwn_timed_debug — 倒计时感知的交互式调试 ──────
+    {"type":"function","function":{
+        "name":"pwn_timed_debug",
+        "description":(
+            "带倒计时感知的交互式动态调试。适用于 CTF 动态靶机（有时间限制）。\n"
+            "内部封装 run_interactive，自动管控超时并返回已收集的结果。\n"
+            "适用场景：连接远程靶机 nc host port，发送 exploit，读取 flag。\n"
+            "当 time_limit_sec 到期时自动终止并返回已收集的所有输出。"
+        ),
+        "parameters":{"type":"object","properties":{
+            "command":       {"type":"string","description":"Shell 命令，如 'nc target.ctf.site 1337'"},
+            "inputs":        {"type":"array","items":{"type":"string"},
+                              "description":"有序输入列表。'SLEEP:N' = 等待 N 秒"},
+            "time_limit_sec":{"type":"integer","description":"总时间上限秒数（默认 60）"},
+            "poll_interval": {"type":"number","description":"每次发送后等待响应的秒数（默认 0.5）"},
+        },"required":["command"]}}},
 ]
+
+
+# ════════════════════════════════════════════════════════
+# P1: pwn_timed_debug — 倒计时感知的交互式调试
+# ════════════════════════════════════════════════════════
+
+def tool_pwn_timed_debug(a: dict) -> str:
+    """
+    带倒计时感知的交互式调试工具。
+    封装 run_interactive，自动管控超时并返回已收集的结果。
+
+    参数：
+      command        — Shell 命令（如 'nc host 1337'）
+      inputs         — 有序输入列表（'SLEEP:N' = 等待 N 秒）
+      time_limit_sec — 总时间上限秒数（默认 60）
+      poll_interval  — 每次发送后等待响应的秒数（默认 0.5）
+    """
+    import time as _time
+    import threading, queue, subprocess
+
+    command        = a.get("command", "").strip()
+    inputs         = a.get("inputs", [])
+    time_limit_sec = int(a.get("time_limit_sec", 60))
+    poll_interval  = float(a.get("poll_interval", 0.5))
+
+    if not command:
+        return "ERROR: 'command' 参数不能为空"
+
+    from tools.file_ops import DANGEROUS_PATTERNS, _session_cwd
+    for pat in DANGEROUS_PATTERNS:
+        if __import__('re').search(pat, command):
+            return f"SECURITY BLOCK: 危险命令模式 '{pat}'"
+
+    print(c(MAGENTA, f"  ⏱  [timed-debug] $ {command[:100]}"))
+    print(c(GRAY,    f"  时间上限: {time_limit_sec}s  输入数: {len(inputs)}"))
+
+    output_chunks = []
+    deadline = _time.time() + time_limit_sec
+    timed_out = False
+
+    try:
+        proc = subprocess.Popen(
+            command, shell=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            cwd=_session_cwd[0],
+            bufsize=0,
+        )
+    except Exception as e:
+        return f"ERROR: 启动进程失败: {e}"
+
+    # 后台读取线程
+    output_q: queue.Queue = queue.Queue()
+    def _reader():
+        try:
+            while True:
+                chunk = proc.stdout.read(512)
+                if not chunk:
+                    break
+                output_q.put(chunk.decode("utf-8", errors="replace"))
+        except Exception:
+            pass
+    threading.Thread(target=_reader, daemon=True).start()
+
+    def _drain(wait: float = 0.3) -> str:
+        _time.sleep(wait)
+        parts = []
+        while not output_q.empty():
+            try:    parts.append(output_q.get_nowait())
+            except queue.Empty: break
+        return "".join(parts)
+
+    try:
+        # 收集初始 banner
+        output_chunks.append(_drain(0.6))
+
+        for inp in inputs:
+            # 每次操作前检查倒计时
+            if _time.time() > deadline:
+                output_chunks.append(f"\n[TIME LIMIT {time_limit_sec}s REACHED — collecting partial results]")
+                timed_out = True
+                break
+
+            if isinstance(inp, str) and inp.upper().startswith("SLEEP:"):
+                try:    _time.sleep(float(inp.split(":", 1)[1]))
+                except: pass
+                output_chunks.append(_drain(0.1))
+                continue
+
+            data = inp.encode() if isinstance(inp, str) else inp
+            try:
+                proc.stdin.write(data)
+                proc.stdin.flush()
+            except BrokenPipeError:
+                output_chunks.append("[process closed stdin early]")
+                break
+            output_chunks.append(_drain(poll_interval))
+
+        # 最终收集
+        if not timed_out:
+            try:    proc.wait(timeout=2)
+            except subprocess.TimeoutExpired: proc.terminate()
+        output_chunks.append(_drain(0.3))
+
+    except Exception as e:
+        output_chunks.append(f"\n[ERROR during timed-debug: {e}]")
+    finally:
+        try: proc.terminate()
+        except: pass
+
+    full = "".join(output_chunks)
+
+    # 截断
+    from config import DYNAMIC_CONFIG
+    limit = DYNAMIC_CONFIG["tool_max_chars"]
+    if len(full) > limit:
+        full = full[:limit // 2] + "\n...[截断]...\n" + full[-limit // 4:]
+
+    status = "⏰ 倒计时终止" if timed_out else "✓ 正常结束"
+    elapsed = min(time_limit_sec, int(_time.time() - (deadline - time_limit_sec)))
+    header = f"[pwn_timed_debug — {status} | 耗时: {elapsed}s / {time_limit_sec}s]\n"
+
+    return header + (full or "(无输出)")

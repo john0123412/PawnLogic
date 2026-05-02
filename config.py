@@ -397,6 +397,7 @@ TIER_LOW = {
     "tool_max_chars":   6_000,
     "fetch_max_chars":  8_000,
     "preferred_worker": "auto",
+    "time_budget_sec":  300,      # 5 分钟
 }
 TIER_MID = {
     "max_tokens":      8_192,
@@ -406,6 +407,7 @@ TIER_MID = {
     "tool_max_chars":   15_000,
     "fetch_max_chars":  20_000,
     "preferred_worker": "auto",
+    "time_budget_sec":  600,      # 10 分钟
 }
 TIER_DEEP = {
     "max_tokens":      32_768,
@@ -415,6 +417,7 @@ TIER_DEEP = {
     "tool_max_chars":   20_000,
     "fetch_max_chars":  30_000,
     "preferred_worker": "auto",
+    "time_budget_sec":  1800,     # 30 分钟
 }
 
 DYNAMIC_CONFIG: dict = dict(TIER_MID)
