@@ -470,6 +470,7 @@ DANGEROUS_PATTERNS = [
     r"\bncat\s.*-e\s*/bin/(ba)?sh",                      # ncat reverse shell
     r"python[23]?\s*-c.*socket.*connect",                 # python reverse shell
     r"mkfifo\s.*/tmp/",                                   # named pipe for reverse shell
+    r"\bsudo\b",                                          # 宿主机提权禁止，Root 需通过 Docker 容器
 ]
 
 # ════════════════════════════════════════════════════════
