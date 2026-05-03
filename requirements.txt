@@ -15,3 +15,4 @@ rich>=13.0.0             # Markdown rendering, syntax highlighting, panels
 # ropper  — Alternative ROP search (pip3 install ropper)
 # one_gadget — execve gadget search (gem install one_gadget)
 # pwntools — CTF exploit development (pip3 install pwntools, used inside run_code sandbox)
+# docker  — P3: Docker containerization (pip install docker + Docker CE runtime)

@@ -54,6 +54,14 @@ from tools.pwn_chain import (tool_pwn_env, tool_inspect_binary, tool_pwn_rop,
 from tools.vision    import analyze_local_image, VISION_SCHEMAS
 from core.logger import logger, audit_tool_call
 
+# P3: Docker 容器化（可选依赖，不可用时静默跳过）
+try:
+    from tools.docker_sandbox import tool_run_code_docker, tool_pwn_container, DOCKER_SCHEMAS
+except ImportError:
+    tool_run_code_docker = None
+    tool_pwn_container   = None
+    DOCKER_SCHEMAS       = []
+
 TOOL_MAP: dict = {
     "read_file":           tool_read_file,
     "read_file_lines":     tool_read_file_lines,
@@ -78,9 +86,15 @@ TOOL_MAP: dict = {
     "analyze_local_image": analyze_local_image,
 }
 
+# P3: Docker 工具注册（可选）
+if tool_run_code_docker:
+    TOOL_MAP["run_code_docker"] = tool_run_code_docker
+if tool_pwn_container:
+    TOOL_MAP["pwn_container"]   = tool_pwn_container
+
 TOOLS_SCHEMA: list = (
     FILE_SCHEMAS + WEB_SCHEMAS + SANDBOX_SCHEMAS
-    + PWN_SCHEMAS + VISION_SCHEMAS
+    + PWN_SCHEMAS + VISION_SCHEMAS + DOCKER_SCHEMAS
 )
 
 # ── switch_phase：全局路由工具（强制附加，不受 Phase 过滤）───────────
@@ -649,6 +663,7 @@ class AgentSession:
             "  Shell    : run_shell · git_op\n"
             "  Web      : web_search → fetch_url (Jina / Pandoc / regex fallback)\n"
             "  Sandbox  : run_code  (python / c / cpp / javascript / bash / rust / go / java)\n"
+            "  Docker   : run_code_docker (一次性容器) · pwn_container (持久化容器)\n"
             "  Vision   : analyze_local_image  (jpg/png/gif/webp — glm-4v / gpt-4o)\n"
             "  CTF/Pwn  : pwn_env · inspect_binary · pwn_rop · pwn_cyclic · pwn_disasm\n"
             "             pwn_libc · pwn_debug · pwn_one_gadget · pwn_timed_debug\n"

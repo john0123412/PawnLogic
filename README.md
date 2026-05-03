@@ -38,8 +38,11 @@ PawnLogic 是一个专为极客和开发者打造的全能终端 AI 智能体。
 ### 🛠️ 4. 极客专属能力
 
 - **多语言隔离沙箱**：Python / C / C++ / JS / Bash / Rust / Go / Java
+- **Docker 容器化执行**：`run_code_docker`（一次性容器）+ `pwn_container`（持久化容器），默认断网隔离
 - **智能 Web 爬虫**：Jina Reader → Pandoc → 正则兜底（三级降级策略）
-- **Pwn/CTF 工具链**：GDB 批处理动态调试、ROPgadget、de Bruijn 溢出偏移计算
+- **Pwn/CTF 工具链**：GDB 批处理动态调试、ROPgadget、de Bruijn 溢出偏移计算、倒计时感知调试
+- **GSA 防御性审计**：工具调用失败自动记录，同类失败 ≥3 次自动沉淀到技能库
+- **时间感知调度**：`/time` 设置倒计时，剩余 30s 自动切换极速模式
 
 ### 🧠 5. 结构化持久记忆
 
@@ -139,6 +142,129 @@ python main.py
    cd D:\pawnlogic
    python main.py
    ```
+
+### 🐳 Docker 容器化部署（P3 新增）
+
+Docker 容器化让 Agent 能在**完全隔离的容器环境**中执行代码，适用于 CTF 靶机 exploit 测试、多版本 libc 环境验证等场景。
+
+#### 第一步：安装 Docker CE
+
+```bash
+# Ubuntu / WSL2
+sudo apt update
+sudo apt install -y docker.io
+sudo systemctl start docker
+sudo systemctl enable docker
+
+# 将当前用户加入 docker 组（免 sudo）
+sudo usermod -aG docker $USER
+# 重新登录终端生效
+```
+
+> **WSL2 用户注意**：WSL2 默认没有 systemd，需要手动启动 dockerd：
+> ```bash
+> sudo dockerd &
+> # 或在 /etc/wsl.conf 中添加:
+> # [boot]
+> # systemd=true
+> # 然后在 PowerShell 中运行: wsl --shutdown && wsl
+> ```
+
+#### 第二步：安装 Python Docker SDK
+
+```bash
+# 在 PawnLogic venv 中安装
+pip install docker
+```
+
+#### 第三步：验证 Docker 连接
+
+启动 PawnLogic 后，运行 `/docker status`：
+
+```
+▶ You > /docker status
+
+  Docker 状态：
+  ✓ Docker 连接正常
+  版本: 24.0.7
+  容器: 0 个  |  镜像: 5 个
+  存储: /var/lib/docker
+```
+
+#### 第四步：拉取常用镜像
+
+```bash
+# 方法 1：在 PawnLogic 终端内拉取
+▶ You > /docker pull pwndocker
+▶ You > /docker pull ubuntu18
+
+# 方法 2：在系统终端拉取
+docker pull skysider/pwndocker
+docker pull ubuntu:18.04
+```
+
+#### 预设镜像说明
+
+| 别名 | 镜像 | 用途 |
+|------|------|------|
+| `pwndocker` | `skysider/pwndocker` | Pwn 全能靶机（含 GDB/pwntools/ROPgadget/checksec） |
+| `ubuntu18` | `ubuntu:18.04` | glibc 2.27，老题常用 |
+| `ubuntu22` | `ubuntu:22.04` | glibc 2.35，新题常用 |
+| `kali` | `kalilinux/kali-rolling` | Kali 渗透测试环境 |
+| `python` | `python:3.12-slim` | 纯 Python 执行环境 |
+| `gcc` | `gcc:latest` | C/C++ 编译环境 |
+
+#### 使用方式
+
+**方式 1：一次性容器（`run_code_docker`）**
+
+Agent 自动调用，代码执行完毕后容器自动销毁：
+
+```
+▶ You > 用 run_code_docker 在 pwndocker 容器中运行 exploit.py，断网模式
+```
+
+Agent 会自动：
+1. 拉取镜像（如果本地不存在）
+2. 将代码写入临时目录并挂载到容器
+3. 在容器内执行（默认断网 `network=none`）
+4. 读取输出并销毁容器
+
+**方式 2：持久化容器（`pwn_container`）**
+
+适合需要多次交互的 Pwn 调试：
+
+```
+▶ You > 创建一个名为 heap-lab 的 pwndocker 容器，然后在里面运行 checksec
+```
+
+Agent 会自动：
+1. `pwn_container(action="create", name="heap-lab", image="pwndocker")`
+2. `pwn_container(action="exec", name="heap-lab", command="checksec /target/vuln")`
+3. 多次 exec 后：`pwn_container(action="destroy", name="heap-lab")`
+
+**方式 3：手动管理（`/docker` 命令）**
+
+```bash
+▶ You > /docker status       # 查看 Docker 连接状态
+▶ You > /docker images       # 列出本地镜像
+▶ You > /docker ps           # 列出 PawnLogic 容器
+▶ You > /docker pull pwndocker  # 拉取指定镜像
+```
+
+#### 安全特性
+
+- **默认断网**：`network=none`，防止 CTF flag 泄露
+- **资源限制**：内存 512MB、CPU 0.5 核、PID 256
+- **自动销毁**：一次性容器执行后自动清理
+- **危险命令拦截**：Docker 内外共享同一套 `DANGEROUS_PATTERNS` 黑名单
+
+#### 不安装 Docker 会怎样？
+
+PawnLogic 对 Docker 采用**优雅降级**策略：
+- 本地沙箱 `run_code` 完全不受影响
+- `run_code_docker` / `pwn_container` 会返回明确的安装指引
+- `/docker status` 会显示 `✗ Docker 不可用: 未安装 docker-py`
 
 ---
 
@@ -303,6 +429,33 @@ Local Ollama     LOCAL_API_KEY       ⬜ 无需 Key
 - `/webstatus` — Jina / Pandoc / Lynx 状态
 - `/pwnenv` — CTF 工具链完整性检查
 
+### 🐳 Docker 容器管理（1.1 新增）
+
+- `/docker status` — 查看 Docker 连接状态
+- `/docker images` — 列出本地镜像
+- `/docker ps` — 列出 PawnLogic 管理的容器
+- `/docker pull <镜像>` — 拉取指定镜像（支持别名如 `pwndocker`）
+
+### ⏱️ 时间感知调度（1.1 新增）
+
+- `/time` — 查看当前时间预算、已用时间、剩余时间
+- `/time <秒数>` — 设置时间预算（如 `/time 300` = 5 分钟）
+- `/time 0` — 关闭时间限制
+- 剩余 <30s 时自动触发 URGENT_MODE（跳过 Plan、切极速模型、压缩输出）
+
+### 🎯 Worker 模型选择（1.1 新增）
+
+- `/worker` — 显示子任务 Worker 候选模型菜单（带 Key 状态）
+- `/worker <alias>` — 手动锁定子任务使用的模型
+- `/worker auto` — 恢复自动路由（按优先级选取首个可用小模型）
+
+### 🛡️ 防御性审计（1.1 新增）
+
+- `/failures` — 查看最近 20 条工具调用失败记录
+- `/failures <N>` — 查看最近 N 条
+- `/failures clear` — 清空所有失败记录
+- Agent 执行 `run_code` / `run_shell` / `run_interactive` 前自动检查历史失败
+
 ### 📚 全局技能存档 (GSA)
 
 - `/memo [内容]` — 手动存档技能：AI 自动分类并写入 `~/.pawnlogic/global_skills.md`
@@ -377,13 +530,44 @@ Agent 内置严格的软隔离保护：
 
 ### v1.1（当前版本）
 
-- ✅ **新增小米 MiMo 厂商接入**：`mimo-v2.5-pro` / `mimo-v2.5` / `mimo-v2-pro` / `mimo-v2-omni`
-- ✅ **安全加固**：git commit 命令注入修复、沙箱环境变量隔离、危险模式扩展（fork bomb / reverse shell 等）
-- ✅ **Windows 兼容**：sandbox.py 跨平台、readline 安全导入
-- ✅ **FTS5 全文搜索引擎**：SQLite FTS5 替代 LIKE 全表扫描，检索速度提升 100x+
-- ✅ **审计日志系统**：工具调用 JSON 审计日志（`~/.pawnlogic/logs/audit_*.jsonl`）
-- ✅ **Tab 补全**：`/` 命令 + 文件路径 Tab 补全
-- ✅ **依赖声明**：新增 `requirements.txt`
+**P0 — 安全加固与防御性审计**
+- ✅ 修复 git commit 命令注入（web_ops.py 改用 subprocess 列表形式）
+- ✅ 沙箱环境变量隔离（剔除所有 API Key）
+- ✅ 危险模式扩展（fork bomb / reverse shell / curl|sh 等 14 种）
+- ✅ 语义级失败判定（检测 Traceback / Segfault / exit code 等 20+ 信号）
+- ✅ 投前审计：`run_code` / `run_shell` / `run_interactive` 执行前自动检查历史失败
+- ✅ 失败自动记录 + 同类失败 ≥3 次自动沉淀到 `global_skills.md`
+- ✅ `audit_payload` 工具 + `/failures` 命令
+
+**P1 — 时间感知调度**
+- ✅ 三档预设新增 `time_budget_sec`（LOW=5min / MID=10min / DEEP=30min）
+- ✅ URGENT_MODE：剩余 <30s 自动触发极速模式（跳过 Plan、切模型、压缩输出）
+- ✅ `/time` 命令：查看/设置时间预算
+- ✅ `pwn_timed_debug` 工具：倒计时感知的 CTF 交互式调试
+
+**P2 — CLI UX 终端体验升级**
+- ✅ `prompt_toolkit` 集成：FuzzyCompleter 模糊匹配 + Fish-style 灰色内联提示
+- ✅ CC 风格内联模型选择器（上下键 + Enter 确认 + Esc 取消 + 数字键跳转）
+- ✅ `rich` Markdown 渲染（代码块高亮 + 表格对齐）
+- ✅ 底部状态栏（模型 / 档位 / 目录 / Phase 实时显示）
+- ✅ 模糊命令修正（`/modle` → `/model`，相似度 ≥0.7 自动修正）
+- ✅ Windows 兼容（readline / prompt_toolkit 安全导入）
+
+**P3 — Docker 动态容器化**
+- ✅ `run_code_docker` 工具：一次性容器执行（创建 → 执行 → 销毁）
+- ✅ `pwn_container` 工具：持久化容器管理（create / exec / destroy / list）
+- ✅ 6 个预设镜像别名（pwndocker / ubuntu18 / ubuntu22 / kali / python / gcc）
+- ✅ 默认断网 + 资源限制（512MB / 0.5 核 / PID 256）
+- ✅ `/docker` 命令（status / images / ps / pull）
+- ✅ Docker 不可用时优雅降级，不影响本地沙箱
+
+**基础改进**
+- ✅ 新增小米 MiMo 厂商接入（4 个模型）
+- ✅ `/worker` 子任务模型选择命令
+- ✅ FTS5 全文搜索引擎
+- ✅ 审计日志系统（`~/.pawnlogic/logs/audit_*.jsonl`）
+- ✅ 版本号统一为 1.1
+- ✅ `requirements.txt` 依赖声明
 
 ### v1.0
 
@@ -415,6 +599,21 @@ A: 使用 `/low` 切换低算力模式，或 `/model groq-llama3` 切换至 Groq
 
 **Q: 如何查看系统状态？**
 A: 使用 `/limits` 查看当前配置，`/pwnenv` 检查工具链完整性。
+
+**Q: Docker 连不上怎么办？**
+A: WSL2 用户需要手动启动 Docker：`sudo dockerd &`，或在 `/etc/wsl.conf` 中启用 systemd。运行 `/docker status` 查看具体错误。
+
+**Q: Docker 镜像拉取太慢怎么办？**
+A: 配置 Docker 镜像加速器（如阿里云）。在 `/etc/docker/daemon.json` 中添加 `{"registry-mirrors": ["https://xxx.mirror.aliyuncs.com"]}`，然后 `sudo systemctl restart docker`。
+
+**Q: 不装 Docker 能用 PawnLogic 吗？**
+A: 完全可以。Docker 是可选功能，本地沙箱 `run_code` 不受影响。`run_code_docker` 和 `pwn_container` 会返回安装指引。
+
+**Q: 如何用 Docker 跑不同版本 libc 的 Pwn 题？**
+A: 使用 `ubuntu18`（glibc 2.27）或 `ubuntu22`（glibc 2.35）镜像：`/docker pull ubuntu18`，然后让 Agent 用 `run_code_docker(image="ubuntu18", ...)` 执行。
+
+**Q: 时间预算用完了会怎样？**
+A: Agent 自动终止当前任务，输出已收集的结果。建议根据任务复杂度设置合理预算：`/time 300`（5 分钟）适合简单任务，`/time 1800`（30 分钟）适合复杂项目。
 
 ---
 

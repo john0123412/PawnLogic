@@ -12,7 +12,7 @@ PawnLogic 1.1 (Expert Edition) — main.py
   pawn   # 首次运行会自动进入 API Key 配置向导
 """
 
-import os, sys, shutil, getpass, argparse, time
+import os, sys, shutil, getpass, argparse, time, re
 try:
     import readline  # noqa  — Windows 原生无此模块，Tab 补全见 main() 内
 except ImportError:
@@ -26,7 +26,8 @@ _PT_IMPORT_ERROR = None
 _RICH_IMPORT_ERROR = None
 try:
     from prompt_toolkit import PromptSession
-    from prompt_toolkit.completion import WordCompleter, FuzzyCompleter, Completion
+    from prompt_toolkit.completion import Completer, Completion
+    from prompt_toolkit.formatted_text import StyleAndTextTuples
     from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
     from prompt_toolkit.history import FileHistory
     from prompt_toolkit.styles import Style as _PTStyle
@@ -306,6 +307,7 @@ HELP_TEXT = f"""
 {c(BOLD,"── 工具状态 ──")}
   {c(YELLOW,"/webstatus")}  Jina / Pandoc / Lynx 状态
   {c(YELLOW,"/pwnenv")}     CTF 工具链完整性
+  {c(YELLOW,"/docker")}     Docker 容器状态 / 镜像 / 容器管理
 
 {c(BOLD,"── 用量审计 ──")}
   {c(CYAN,"/stats")}        本次会话 Token 用量 & 工具调用统计
@@ -1066,6 +1068,62 @@ def handle_slash(cmd: str, session: AgentSession):
                 print(c(GRAY, "  /time <秒数> 设置 | 例: /time 300 = 5分钟"))
 
     # ── /worker：子任务 Worker 模型选择 ───────────────────
+    # ── P3: /docker 命令 ────────────────────────────────
+    elif verb == "/docker":
+        from tools.docker_sandbox import (
+            _get_docker_client, docker_status, _active_containers, DEFAULT_DOCKER_IMAGES,
+        )
+        sub = arg.lower().strip() if arg else "status"
+        if sub == "status":
+            print(c(BOLD, "\n  Docker 状态："))
+            print(docker_status())
+            print(c(GRAY, f"\n  可用镜像别名: {', '.join(DEFAULT_DOCKER_IMAGES.keys())}"))
+            print(c(GRAY, "  用法: /docker status | /docker images | /docker ps | /docker containers"))
+        elif sub == "images":
+            client = _get_docker_client()
+            if not client:
+                print(c(RED, f"  ✗ Docker 不可用"))
+            else:
+                images = client.images.list()
+                print(c(BOLD, f"\n  本地镜像（{len(images)} 个）："))
+                for img in images[:20]:
+                    tags = ", ".join(img.tags) if img.tags else "<none>"
+                    size_mb = img.attrs.get("Size", 0) / (1024 * 1024)
+                    print(f"  {c(CYAN, tags):40} {c(GRAY, f'{size_mb:.0f}MB')}")
+        elif sub in ("ps", "containers"):
+            client = _get_docker_client()
+            if not client:
+                print(c(RED, f"  ✗ Docker 不可用"))
+            else:
+                containers = client.containers.list(all=True)
+                pawn_containers = [ct for ct in containers if ct.labels.get("pawn") == "true"]
+                print(c(BOLD, f"\n  PawnLogic 容器（{len(pawn_containers)} 个）："))
+                for ct in pawn_containers:
+                    name = ct.labels.get("pawn_name", ct.name)
+                    status_color = GREEN if ct.status == "running" else RED
+                    print(f"  {c(CYAN, name):20} {c(status_color, ct.status):12} {c(GRAY, ct.id[:12])}")
+                if not pawn_containers:
+                    print(c(GRAY, "  (无 PawnLogic 容器)"))
+        elif sub == "pull":
+            image = arg2.strip() if arg2 else ""
+            if not image:
+                print(c(RED, "  用法: /docker pull <镜像名或别名>"))
+            else:
+                from tools.docker_sandbox import _resolve_image
+                resolved = _resolve_image(image)
+                client = _get_docker_client()
+                if not client:
+                    print(c(RED, f"  ✗ Docker 不可用"))
+                else:
+                    print(c(YELLOW, f"  📥 正在拉取 {resolved} ..."))
+                    try:
+                        client.images.pull(resolved)
+                        print(c(GREEN, f"  ✓ {resolved} 拉取完成"))
+                    except Exception as e:
+                        print(c(RED, f"  ✗ 拉取失败: {e}"))
+        else:
+            print(c(GRAY, "  用法: /docker status | /docker images | /docker ps | /docker pull <镜像>"))
+
     elif verb == "/worker":
         from tools.delegate_tool import _WORKER_MODEL_CANDIDATES
         target = arg.lower().strip() if arg else ""
@@ -1413,6 +1471,88 @@ def render_agent_output(text: str) -> None:
     print(text)
 
 
+# ════════════════════════════════════════════════════════
+# P2.6.4: PawnCompleter — 内置模糊匹配，彻底不依赖 FuzzyCompleter
+#
+# 根因修复：FuzzyCompleter 内部用 get_word_before_cursor() 取模式串，
+# '/' 属于非词字符，退格到 '/' 时返回 ""，重新计算 start_position=0
+# 与内层 start_position=-N 冲突 → 菜单消失。
+# 解法：自己做模糊匹配 + 自己做高亮，完全绕开 FuzzyCompleter。
+# ════════════════════════════════════════════════════════
+
+def _pawn_fuzzy_match(query: str, candidate: str):
+    """
+    子序列模糊匹配（大小写不敏感）。
+    返回 (matched: bool, hit_indices: list[int])
+    hit_indices 是 candidate 中被匹配到的字符位置，用于高亮。
+    """
+    q, c = query.lower(), candidate.lower()
+    indices: list[int] = []
+    ci = 0
+    for qc in q:
+        while ci < len(c) and c[ci] != qc:
+            ci += 1
+        if ci >= len(c):
+            return False, []
+        indices.append(ci)
+        ci += 1
+    return True, indices
+
+
+class PawnCompleter(Completer):
+    """
+    PawnLogic 自定义补全器（内置模糊匹配版）。
+
+    · 输入以 / 开头 → 始终激活，退格到单个 '/' 也不消失
+    · 模糊匹配：'/mdl' 能命中 '/model'，'/model d' 能命中 '/model ds-chat'
+    · start_position 始终为 -len(text)，替换整行输入，绝无冲突
+    · display 高亮命中字符（荧光绿），display_meta 保留右侧灰色描述
+    · 无需 FuzzyCompleter 包装
+    """
+
+    def __init__(self, words: list[str], meta_dict: dict[str, str] | None = None):
+        self.words    = words
+        self.meta_dict = meta_dict or {}
+
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+
+        # 只处理以 / 开头的输入；普通文本不触发命令补全
+        if not text.startswith("/"):
+            return
+
+        results: list[tuple[bool, list[int], str]] = []  # (exact_prefix, indices, word)
+
+        for word in self.words:
+            matched, indices = _pawn_fuzzy_match(text, word)
+            if not matched:
+                continue
+            # 精确前缀匹配优先排在前面
+            exact = word.startswith(text)
+            results.append((exact, indices, word))
+
+        # 精确前缀 → 模糊匹配；同级按字典序
+        results.sort(key=lambda t: (not t[0], t[2]))
+
+        for _, indices, word in results:
+            # 构建高亮 display：命中字符荧光绿，其余默认色
+            index_set = set(indices)
+            display: StyleAndTextTuples = [
+                (
+                    "class:completion-menu.completion.character-match" if i in index_set else "",
+                    ch,
+                )
+                for i, ch in enumerate(word)
+            ]
+
+            yield Completion(
+                word,
+                start_position=-len(text),   # 替换整行 / 开头的内容
+                display=display,
+                display_meta=self.meta_dict.get(word, ""),
+            )
+
+
 def main():
     # ── CLI 参数解析 ─────────────────────────────────────
     parser = argparse.ArgumentParser(
@@ -1531,7 +1671,7 @@ def main():
         "/memorize", "/knowledge", "/forget", "/init_project", "/state",
         "/low", "/mid", "/deep", "/normal", "/limits",
         "/tokens", "/ctx", "/iter", "/toolsize", "/fetchsize",
-        "/webstatus", "/pwnenv", "/stats", "/time",
+        "/webstatus", "/pwnenv", "/stats", "/time", "/docker",
         "/worker", "/failures", "/memo", "/skills",
         "/chat", "/help", "/exit",
     ]
@@ -1570,6 +1710,7 @@ def main():
         "/pwnenv":        "CTF/Pwn 工具链完整性检查",
         "/stats":         "本次会话 Token 用量统计",
         "/time":          "时间预算（/time 300 = 5 分钟）",
+        "/docker":        "Docker 容器管理（status/images/ps/pull）",
         "/worker":        "子任务 Worker 模型选择",
         "/failures":      "查看 / 清空失败记录",
         "/memo":          "手动存档技能到 GSA",
@@ -1600,19 +1741,23 @@ def main():
     _all_meta["/worker auto"] = "恢复自动路由"
     _all_meta["/skills view"] = "查看完整技能文件"
     _all_meta["/skills path"] = "显示技能文件路径"
+    # Docker 子命令
+    for _sub, _desc in [
+        ("status", "查看 Docker 连接状态"),
+        ("images", "列出本地 Docker 镜像"),
+        ("ps",     "查看当前运行中的沙箱容器"),
+        ("pull",   "从注册表拉取预设的 Pwn/环境镜像"),
+    ]:
+        _w = f"/docker {_sub}"
+        _all_words.append(_w)
+        _all_meta[_w] = _desc
 
     # ── readline 历史文件路径 ─────────────────────────────
     _history_path = str(Path.home() / ".pawnlogic" / ".input_history")
 
     if _HAS_PROMPT_TOOLKIT:
-        # ── WordCompleter + FuzzyCompleter（乱序/错别字匹配）──
-        _word_completer = WordCompleter(
-            _all_words,
-            meta_dict=_all_meta,
-            ignore_case=True,
-            sentence=True,
-        )
-        _fuzzy = FuzzyCompleter(_word_completer)
+        # ── 直接使用 PawnCompleter，内置模糊匹配，无需 FuzzyCompleter ──
+        _pawn_completer = PawnCompleter(_all_words, meta_dict=_all_meta)
 
         try:
             _pt_history = FileHistory(_history_path)
@@ -1641,35 +1786,25 @@ def main():
 
         # ── 样式：彻底透明化，无灰色方块 ──────────────────
         _pawn_style = _PTStyle.from_dict({
-            # 输入提示符
             "prompt": "ansigreen bold",
-            "you":    "bold",
-
-            # 1. 彻底清除所有容器的默认背景
-            "completion-menu":                    "bg:default fg:#bbbbbb",
-            "completion-menu.completion":         "bg:default fg:#bbbbbb",
-            "completion-menu.meta.completion":    "bg:default fg:#666666",
-
-            # 2. 选中行（极暗灰底 + 白字，meta 同步变暗）
-            "completion-menu.completion.current":      "bg:#333333 fg:#ffffff",
+            "you": "bold",
+            "completion-menu": "bg:default fg:#bbbbbb",
+            "completion-menu.completion": "bg:default fg:#bbbbbb",
+            "completion-menu.meta.completion": "bg:default fg:#666666",
+            "completion-menu.completion.current": "bg:#333333 fg:#ffffff",
             "completion-menu.meta.completion.current": "bg:#333333 fg:#aaaaaa",
-
-            # 3. 模糊匹配字母高亮（荧光绿）
             "completion-menu.completion.character-match": "fg:#00d787 bold",
-
-            # 4. 彻底隐形滚动条
             "scrollbar.background": "bg:default",
-            "scrollbar.button":     "bg:default",
-
-            # 5. 底部状态栏
+            "scrollbar.button": "bg:default",
             "bottom-toolbar": "bg:#222222 fg:#cccccc",
         })
 
         _pt_session = PromptSession(
-            completer=_fuzzy,
+            completer=_pawn_completer,
             auto_suggest=AutoSuggestFromHistory(),
             history=_pt_history,
             complete_while_typing=True,
+            complete_in_thread=False,
             complete_style=CompleteStyle.COLUMN,
             mouse_support=False,
             bottom_toolbar=_bottom_toolbar,
@@ -1677,7 +1812,7 @@ def main():
         )
 
         if not config.QUIET_MODE:
-            print(c(GRAY, "  🐚 FuzzyCompleter 就绪（模糊匹配 + 多列补全 + 底部工具栏）"))
+            print(c(GRAY, "  🐚 PawnCompleter 就绪（内置模糊匹配 + 退格不消失 + 底部工具栏）"))
             if _HAS_RICH:
                 print(c(GRAY, "  📝 rich 就绪（Markdown 渲染 + 代码高亮）"))
             elif _RICH_IMPORT_ERROR:

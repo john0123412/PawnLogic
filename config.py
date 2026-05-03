@@ -527,11 +527,25 @@ AGENT_PHASES: dict[str, list[str]] = {
     "EXPLOIT": [
         "write_file", "patch_file", "run_code", "pwn_debug", "pwn_timed_debug",
         "run_interactive", "run_shell",
+        "run_code_docker", "pwn_container",   # P3: Docker 容器化
     ],
     # 通用后备阶段：研究、文件操作、联网
     "GENERAL": [
         "read_file", "write_file", "patch_file", "run_shell", "web_search", "fetch_url",
         "pwn_timed_debug",
+        "run_code_docker", "pwn_container",    # P3: Docker 容器化
         "bump_skill",   # ★ GSA 反馈，全阶段可用
     ],
+}
+
+# ════════════════════════════════════════════════════════
+# P3: Docker 镜像注册表
+# ════════════════════════════════════════════════════════
+DOCKER_IMAGES = {
+    "pwndocker":  "skysider/pwndocker",   # Pwn 全能靶机（含 GDB/pwntools/ROPgadget）
+    "ubuntu18":   "ubuntu:18.04",          # glibc 2.27 — 老题常用
+    "ubuntu22":   "ubuntu:22.04",          # glibc 2.35 — 新题常用
+    "kali":       "kalilinux/kali-rolling", # Kali 渗透测试
+    "python":     "python:3.12-slim",      # 纯 Python 环境
+    "gcc":        "gcc:latest",            # C/C++ 编译环境
 }
