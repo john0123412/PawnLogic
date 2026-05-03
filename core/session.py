@@ -54,13 +54,19 @@ from tools.pwn_chain import (tool_pwn_env, tool_inspect_binary, tool_pwn_rop,
 from tools.vision    import analyze_local_image, VISION_SCHEMAS
 from core.logger import logger, audit_tool_call
 
-# P3: Docker 容器化（可选依赖，不可用时静默跳过）
+# P3 + P4: Docker 容器化（可选依赖，不可用时静默跳过）
 try:
-    from tools.docker_sandbox import tool_run_code_docker, tool_pwn_container, DOCKER_SCHEMAS
+    from tools.docker_sandbox import (
+        tool_run_code_docker, tool_pwn_container,
+        tool_install_package, docker_prune_resources,   # P4.2 / P4.3 新增
+        DOCKER_SCHEMAS,
+    )
 except ImportError:
-    tool_run_code_docker = None
-    tool_pwn_container   = None
-    DOCKER_SCHEMAS       = []
+    tool_run_code_docker   = None
+    tool_pwn_container     = None
+    tool_install_package   = None   # P4.2
+    docker_prune_resources = None   # P4.3
+    DOCKER_SCHEMAS         = []
 
 TOOL_MAP: dict = {
     "read_file":           tool_read_file,
@@ -86,11 +92,15 @@ TOOL_MAP: dict = {
     "analyze_local_image": analyze_local_image,
 }
 
-# P3: Docker 工具注册（可选）
+# P3 + P4: Docker 工具注册（可选）
 if tool_run_code_docker:
-    TOOL_MAP["run_code_docker"] = tool_run_code_docker
+    TOOL_MAP["run_code_docker"]    = tool_run_code_docker
 if tool_pwn_container:
-    TOOL_MAP["pwn_container"]   = tool_pwn_container
+    TOOL_MAP["pwn_container"]      = tool_pwn_container
+if tool_install_package:                                    # P4.2
+    TOOL_MAP["tool_install_package"] = tool_install_package
+if docker_prune_resources:                                  # P4.3
+    TOOL_MAP["docker_prune_resources"] = docker_prune_resources
 
 TOOLS_SCHEMA: list = (
     FILE_SCHEMAS + WEB_SCHEMAS + SANDBOX_SCHEMAS
