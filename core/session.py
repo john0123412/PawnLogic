@@ -766,6 +766,10 @@ class AgentSession:
 
             "=== NEGATIVE CONSTRAINTS — DO NOT VIOLATE ===\n"
             "NEVER do the following (violations will be intercepted and cancelled by the system):\n\n"
+            "  ✗  NEVER use 'sudo' in run_shell. The host is NOT your playground.\n"
+            "       If you need root privileges, spin up a Docker container:\n"
+            "       pwn_container(action='create', image='ubuntu22') → "
+            "the container runs as root by default.\n\n"
             "  ✗  NEVER blindly guess file paths.\n"
             "       Wrong: list_dir('.') → list_dir('src') → list_dir('src/lib') → ...\n"
             "       Right: find_files('target_name.c', root='.') once, then read directly.\n\n"

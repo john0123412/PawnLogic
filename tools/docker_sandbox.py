@@ -307,8 +307,8 @@ def tool_run_code_docker(a: dict) -> str:
             exit_code = result.get("StatusCode", -1)
 
             # 读取输出
-            stdout = container.logs(stdout=True, stderr=False).decode("utf-8", errors="replace")
-            stderr = container.logs(stdout=False, stderr=True).decode("utf-8", errors="replace")
+            stdout = container.logs(stdout=True, stderr=False).decode("utf-8", errors="ignore")  # 编码清洗：丢弃非 UTF-8
+            stderr = container.logs(stdout=False, stderr=True).decode("utf-8", errors="ignore")  # 编码清洗：丢弃非 UTF-8
             output = stdout + stderr
 
         except Exception as e:
@@ -488,7 +488,7 @@ def tool_pwn_container(a: dict) -> str:
                 stderr=True,
                 demux=False,
             )
-            result = output.decode("utf-8", errors="replace")
+            result = output.decode("utf-8", errors="ignore")  # 编码清洗：丢弃非 UTF-8
         except Exception as e:
             return f"ERROR: exec 失败: {type(e).__name__}: {e}"
 
@@ -579,7 +579,7 @@ def tool_install_package(a: dict) -> str:
             cmd=["bash", "-c", install_cmd],
             stdout=True, stderr=True, demux=False,
         )
-        result = output.decode("utf-8", errors="replace") if output else ""
+        result = output.decode("utf-8", errors="ignore") if output else ""  # 编码清洗
         status = "✓" if exit_code == 0 else f"✗ (exit {exit_code})"
         return (
             f"[Airlock {status}] {pkg_manager} install {pkg_str}\n"

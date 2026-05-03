@@ -67,6 +67,8 @@ def _run(cmd: str, timeout: int = 15, cwd: str = None, env=None) -> str:
             shell=True,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="ignore",            # ★ 编码清洗：丢弃非 UTF-8 字符
             stdin=subprocess.DEVNULL,   # ★ 核心防阻塞：切断标准输入
             timeout=timeout,
             cwd=work_dir,
@@ -115,7 +117,7 @@ def tool_read_file(a: dict) -> str:
         if size > 2_000_000:
             return (f"ERROR: 文件过大 ({size//1024}KB)。"
                     "请用 read_file_lines 分段读取，或用 run_shell 配合 head/grep/wc。")
-        return p.read_text(encoding="utf-8", errors="replace")
+        return p.read_text(encoding="utf-8", errors="ignore")  # 编码清洗：丢弃非 UTF-8
     except Exception as e:
         return f"ERROR: {e}"
 
@@ -127,7 +129,7 @@ def tool_read_file_lines(a: dict) -> str:
         if not p.exists(): return f"ERROR: 文件不存在: {a['path']}"
         start = int(a["start_line"]) - 1
         end   = int(a["end_line"])
-        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()  # 编码清洗
         total = len(lines)
         chunk = lines[max(0, start):min(end, total)]
         header   = c(GRAY, f"  行 {start+1}–{min(end,total)} / {total}  ({p.name})\n")
@@ -597,7 +599,7 @@ def tool_run_interactive(a: dict) -> str:
                 chunk = proc.stdout.read(512)
                 if not chunk:
                     break
-                output_q.put(chunk.decode("utf-8", errors="replace"))
+                output_q.put(chunk.decode("utf-8", errors="ignore"))  # 编码清洗
         except Exception:
             pass
 
