@@ -471,6 +471,7 @@ DANGEROUS_PATTERNS = [
     r"python[23]?\s*-c.*socket.*connect",                 # python reverse shell
     r"mkfifo\s.*/tmp/",                                   # named pipe for reverse shell
     r"\bsudo\b",                                          # 宿主机提权禁止，Root 需通过 Docker 容器
+    r"docker\s+(run|exec|rm)",                            # 禁止直接 docker CLI，必须走工具层
 ]
 
 # ════════════════════════════════════════════════════════

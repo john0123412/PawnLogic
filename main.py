@@ -1121,8 +1121,14 @@ def handle_slash(cmd: str, session: AgentSession):
                         print(c(GREEN, f"  ✓ {resolved} 拉取完成"))
                     except Exception as e:
                         print(c(RED, f"  ✗ 拉取失败: {e}"))
+        elif sub == "clean":
+            from tools.docker_sandbox import docker_prune_resources
+            print(c(YELLOW, "  🧹 正在清理 Docker 资源..."))
+            result = docker_prune_resources()
+            col = GREEN if result.startswith("✓") else RED
+            print(c(col, f"  {result}"))
         else:
-            print(c(GRAY, "  用法: /docker status | /docker images | /docker ps | /docker pull <镜像>"))
+            print(c(GRAY, "  用法: /docker status | /docker images | /docker ps | /docker pull <镜像> | /docker clean"))
 
     elif verb == "/worker":
         from tools.delegate_tool import _WORKER_MODEL_CANDIDATES
@@ -1747,6 +1753,7 @@ def main():
         ("images", "列出本地 Docker 镜像"),
         ("ps",     "查看当前运行中的沙箱容器"),
         ("pull",   "从注册表拉取预设的 Pwn/环境镜像"),
+        ("clean",  "清理停止的容器和悬空镜像"),
     ]:
         _w = f"/docker {_sub}"
         _all_words.append(_w)
