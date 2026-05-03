@@ -40,6 +40,11 @@ dist/
 .DS_Store
 Thumbs.db
 
+# --- CI 缓存 ---
+.ruff_cache/
+htmlcov/
+.coverage
+
 # --- 项目特定排除 (如日志或临时数据) ---
 logs/
 *.log
