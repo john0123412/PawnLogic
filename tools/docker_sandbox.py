@@ -23,6 +23,36 @@ from config import DYNAMIC_CONFIG, DANGEROUS_PATTERNS
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, MAGENTA, BOLD
 
 # ════════════════════════════════════════════════════════
+# P4.1  安全工作区定义（One-Way Glass）
+# ════════════════════════════════════════════════════════
+
+SAFE_WORKSPACE = os.path.abspath(os.path.expanduser("~/.pawnlogic/workspace"))
+os.makedirs(SAFE_WORKSPACE, exist_ok=True)
+
+
+def _check_path_safety(host_path: str, mode: str) -> str:
+    """
+    校验挂载路径安全性。
+    - 解析绝对路径（消除 .. 与软链接）
+    - rw 模式：路径必须在 SAFE_WORKSPACE 内，否则抛出 PermissionError
+    - ro 模式：仅做存在性检查，允许任意宿主机路径
+    返回规范化的绝对路径字符串。
+    """
+    real = os.path.realpath(os.path.abspath(os.path.expanduser(host_path)))
+    if mode == "rw":
+        try:
+            common = os.path.commonpath([real, SAFE_WORKSPACE])
+        except ValueError:
+            common = ""
+        if common != SAFE_WORKSPACE:
+            raise PermissionError(
+                f"RW 权限仅限 /workspace 目录 ({SAFE_WORKSPACE})，"
+                f"拒绝路径: {real}"
+            )
+    return real
+
+
+# ════════════════════════════════════════════════════════
 # Docker 可用性检测（惰性初始化）
 # ════════════════════════════════════════════════════════
 
@@ -210,11 +240,19 @@ def tool_run_code_docker(a: dict) -> str:
         volumes = {
             tmpdir: {"bind": "/code", "mode": "rw"},
         }
-        # 用户自定义挂载
-        for host_path, container_path in mount_files.items():
-            hp = os.path.expanduser(host_path)
-            if os.path.exists(hp):
-                volumes[hp] = {"bind": container_path, "mode": "rw"}
+        # 用户自定义挂载（P4.1）
+        # mount_files 格式: {"./vuln": {"bind": "/target", "mode": "ro"}}
+        for host_path, bind_spec in mount_files.items():
+            if isinstance(bind_spec, str):
+                # 兼容旧格式 {host: container_path}
+                bind_spec = {"bind": bind_spec, "mode": "ro"}
+            mount_mode = bind_spec.get("mode", "ro").lower()
+            try:
+                real_hp = _check_path_safety(host_path, mount_mode)
+            except PermissionError as e:
+                return f"ERROR: 挂载安全校验失败 — {e}"
+            if os.path.exists(real_hp):
+                volumes[real_hp] = {"bind": bind_spec["bind"], "mode": mount_mode}
 
         # ── stdin 文件 ───────────────────────────────────
         stdin_file = None
@@ -269,8 +307,8 @@ def tool_run_code_docker(a: dict) -> str:
             exit_code = result.get("StatusCode", -1)
 
             # 读取输出
-            stdout = container.logs(stdout=True, stderr=False).decode("utf-8", errors="replace")
-            stderr = container.logs(stdout=False, stderr=True).decode("utf-8", errors="replace")
+            stdout = container.logs(stdout=True, stderr=False).decode("utf-8", errors="ignore")  # 编码清洗：丢弃非 UTF-8
+            stderr = container.logs(stdout=False, stderr=True).decode("utf-8", errors="ignore")  # 编码清洗：丢弃非 UTF-8
             output = stdout + stderr
 
         except Exception as e:
@@ -346,7 +384,8 @@ def tool_pwn_container(a: dict) -> str:
     image   = _resolve_image(a.get("image", "pwndocker"))
     command = a.get("command", "").strip()
     timeout = int(a.get("timeout", 30))
-    network = a.get("network", "none")
+    network    = a.get("network", "none")
+    mount_files = a.get("mount_files", {})  # P4.1: 挂载配置
 
     if action == "list":
         if not _active_containers:
@@ -383,6 +422,19 @@ def tool_pwn_container(a: dict) -> str:
 
         print(c(MAGENTA, f"  🐳 [create] {name} ← {image}"))
 
+        # 构建挂载卷（P4.1）
+        volumes = {}
+        for host_path, bind_spec in mount_files.items():
+            if isinstance(bind_spec, str):
+                bind_spec = {"bind": bind_spec, "mode": "ro"}
+            mount_mode = bind_spec.get("mode", "ro").lower()
+            try:
+                real_hp = _check_path_safety(host_path, mount_mode)
+            except PermissionError as e:
+                return f"ERROR: 挂载安全校验失败 — {e}"
+            if os.path.exists(real_hp):
+                volumes[real_hp] = {"bind": bind_spec["bind"], "mode": mount_mode}
+
         container = client.containers.run(
             image=image,
             command="sleep infinity",
@@ -394,6 +446,7 @@ def tool_pwn_container(a: dict) -> str:
             detach=True,
             name=f"pawn_{name}",
             labels={"pawn": "true", "pawn_name": name},
+            volumes=volumes or None,   # P4.1：注入校验后的挂载
         )
 
         _active_containers[name] = container.id
@@ -435,7 +488,7 @@ def tool_pwn_container(a: dict) -> str:
                 stderr=True,
                 demux=False,
             )
-            result = output.decode("utf-8", errors="replace")
+            result = output.decode("utf-8", errors="ignore")  # 编码清洗：丢弃非 UTF-8
         except Exception as e:
             return f"ERROR: exec 失败: {type(e).__name__}: {e}"
 
@@ -463,6 +516,120 @@ def tool_pwn_container(a: dict) -> str:
             return f"⚠ 容器 '{name}' 销毁时异常（可能已不存在）: {e}"
 
     return f"ERROR: 未知 action '{action}'。可用: create / exec / destroy / list"
+
+
+# ════════════════════════════════════════════════════════
+# P4.2  气闸舱工具：tool_install_package（Airlock）
+# ════════════════════════════════════════════════════════
+
+_PKG_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
+
+
+def tool_install_package(a: dict) -> str:
+    """
+    在持久化容器内安装软件包（气闸舱模式）。
+    - 仅支持 apt / pip
+    - 包名严格校验，防止命令注入
+    - 临时接入 bridge 网络完成安装，finally 中强制断网
+    """
+    client = _get_docker_client()
+    if not client:
+        return f"ERROR: Docker 不可用 — {_docker_error}"
+
+    container_name = a.get("container_name", "").strip()
+    pkg_manager    = a.get("pkg_manager", "").lower().strip()
+    packages       = a.get("packages", [])
+
+    # ── 参数校验 ─────────────────────────────────────────
+    if not container_name:
+        return "ERROR: container_name 不能为空"
+    if pkg_manager not in ("apt", "pip"):
+        return "ERROR: pkg_manager 仅支持 apt 或 pip"
+    if not packages:
+        return "ERROR: packages 不能为空"
+
+    invalid = [p for p in packages if not _PKG_NAME_RE.match(p)]
+    if invalid:
+        return f"ERROR: 包名包含非法字符，拒绝安装: {invalid}"
+
+    # ── 获取容器 ─────────────────────────────────────────
+    cid = _active_containers.get(container_name)
+    if not cid:
+        return f"ERROR: 未找到容器 '{container_name}'，请先 create"
+    try:
+        container = client.containers.get(cid)
+    except Exception as e:
+        return f"ERROR: 容器获取失败: {e}"
+
+    # ── 构建安装命令 ──────────────────────────────────────
+    pkg_str = " ".join(packages)
+    if pkg_manager == "apt":
+        install_cmd = f"apt-get update -qq && apt-get install -y --no-install-recommends {pkg_str}"
+    else:
+        install_cmd = f"pip install --quiet {pkg_str}"
+
+    # ── 气闸舱：临时接网 → 安装 → 强制断网 ──────────────
+    bridge_net = None
+    try:
+        bridge_net = client.networks.get("bridge")
+        bridge_net.connect(container)
+        print(c(YELLOW, f"  🔌 [Airlock] 容器 '{container_name}' 临时接入 bridge 网络"))
+
+        exit_code, output = container.exec_run(
+            cmd=["bash", "-c", install_cmd],
+            stdout=True, stderr=True, demux=False,
+        )
+        result = output.decode("utf-8", errors="ignore") if output else ""  # 编码清洗
+        status = "✓" if exit_code == 0 else f"✗ (exit {exit_code})"
+        return (
+            f"[Airlock {status}] {pkg_manager} install {pkg_str}\n"
+            f"{result or '(无输出)'}"
+        )
+
+    except Exception as e:
+        return f"ERROR: 安装过程异常: {type(e).__name__}: {e}"
+
+    finally:
+        # 无论成功与否，必须断网
+        if bridge_net:
+            try:
+                bridge_net.disconnect(container, force=True)
+                print(c(GREEN, f"  🔒 [Airlock] 容器 '{container_name}' 已强制断网"))
+            except Exception as disc_err:
+                print(c(RED, f"  ⚠ [Airlock] 断网失败（请手动检查）: {disc_err}"))
+
+
+# ════════════════════════════════════════════════════════
+# P4.3  资源回收：docker_prune_resources
+# ════════════════════════════════════════════════════════
+
+def docker_prune_resources() -> str:
+    """
+    清理停止的容器和悬空镜像，返回释放空间（MB）。
+    """
+    client = _get_docker_client()
+    if not client:
+        return f"ERROR: Docker 不可用 — {_docker_error}"
+
+    freed_bytes = 0
+
+    container_result = client.containers.prune()
+    freed_bytes += container_result.get("SpaceReclaimed", 0)
+
+    image_result = client.images.prune(filters={"dangling": True})
+    freed_bytes += image_result.get("SpaceReclaimed", 0)
+
+    freed_mb = freed_bytes / (1024 * 1024)
+
+    deleted_containers = container_result.get("ContainersDeleted") or []
+    deleted_images     = image_result.get("ImagesDeleted") or []
+
+    return (
+        f"✓ 资源回收完成\n"
+        f"  已删除容器: {len(deleted_containers)} 个\n"
+        f"  已删除镜像层: {len(deleted_images)} 个\n"
+        f"  释放空间: {freed_mb:.2f} MB"
+    )
 
 
 # ════════════════════════════════════════════════════════
@@ -570,6 +737,56 @@ DOCKER_SCHEMAS = [
                     },
                 },
                 "required": ["action"],
+            },
+        },
+    },
+    # ── P4.2: tool_install_package Schema ────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "tool_install_package",
+            "description": (
+                "气闸舱软件安装工具（Airlock）。\n"
+                "在持久化容器内临时联网安装 apt/pip 包，安装完毕后立即强制断网。\n"
+                "包名经严格正则校验，防止命令注入。\n"
+                "仅对已通过 pwn_container create 创建的容器有效。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "container_name": {
+                        "type": "string",
+                        "description": "目标持久化容器名称（pwn_container create 时指定的 name）",
+                    },
+                    "pkg_manager": {
+                        "type": "string",
+                        "enum": ["apt", "pip"],
+                        "description": "包管理器：apt 或 pip",
+                    },
+                    "packages": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "要安装的包名列表，每个包名只允许 [a-zA-Z0-9_\\-\\.]+",
+                    },
+                },
+                "required": ["container_name", "pkg_manager", "packages"],
+            },
+        },
+    },
+    # ── P4.3: docker_prune_resources Schema ──────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "docker_prune_resources",
+            "description": (
+                "Docker 资源回收工具。\n"
+                "清理所有已停止的容器和悬空（dangling）镜像，返回释放的磁盘空间（MB）。\n"
+                "建议在完成 CTF 任务后或磁盘空间告急时调用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
             },
         },
     },
