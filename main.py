@@ -1799,8 +1799,28 @@ def main():
             "bottom-toolbar": "bg:#222222 fg:#cccccc",
         })
 
+        # ── 新增：拦截退格键，突破框架限制，强制触发补全 ───────────
+        from prompt_toolkit.key_binding import KeyBindings
+        _kb = KeyBindings()
+
+        @_kb.add('backspace')
+        @_kb.add('c-h')  # 兼容部分 Linux 终端的退格键值
+        def _(event):
+            b = event.app.current_buffer
+            # 1. 执行原生的删除字符动作
+            if b.text:
+                b.delete_before_cursor(1)
+
+            # 2. 核心魔法：如果删除后，输入框依然是以 '/' 开头的命令模式
+            # 强行按头让 prompt_toolkit 重新弹出菜单！
+            if b.text.startswith('/'):
+                b.start_completion(select_first=False)
+
+        # ──────────────────────────────────────────────────────────
+
         _pt_session = PromptSession(
             completer=_pawn_completer,
+            key_bindings=_kb,  # ← 【关键】将我们的按键绑定注入到 Session 中
             auto_suggest=AutoSuggestFromHistory(),
             history=_pt_history,
             complete_while_typing=True,
