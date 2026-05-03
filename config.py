@@ -530,12 +530,16 @@ AGENT_PHASES: dict[str, list[str]] = {
         "write_file", "patch_file", "run_code", "pwn_debug", "pwn_timed_debug",
         "run_interactive", "run_shell",
         "run_code_docker", "pwn_container",   # P3: Docker 容器化
+        "tool_install_package",               # P4.2: 气闸舱安装
+        "docker_prune_resources",             # P4.3: 资源回收
     ],
     # 通用后备阶段：研究、文件操作、联网
     "GENERAL": [
         "read_file", "write_file", "patch_file", "run_shell", "web_search", "fetch_url",
         "pwn_timed_debug",
         "run_code_docker", "pwn_container",    # P3: Docker 容器化
+        "tool_install_package",                # P4.2: 气闸舱安装
+        "docker_prune_resources",              # P4.3: 资源回收
         "bump_skill",   # ★ GSA 反馈，全阶段可用
     ],
 }
