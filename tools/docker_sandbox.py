@@ -570,10 +570,29 @@ def tool_install_package(a: dict) -> str:
 
     # ── 气闸舱：临时接网 → 安装 → 强制断网 ──────────────
     bridge_net = None
+    _airlock_connected = False        # 标记：是否由本次气闸舱主动接入
     try:
         bridge_net = client.networks.get("bridge")
-        bridge_net.connect(container)
-        print(c(YELLOW, f"  🔌 [Airlock] 容器 '{container_name}' 临时接入 bridge 网络"))
+
+        # 检查容器是否已在 bridge 网络上（避免重复连接 + 误断用户手动网络）
+        already_on_bridge = False
+        try:
+            net_attrs = bridge_net.attrs or {}
+            containers_on_net = net_attrs.get("Containers", {})
+            if container.id in containers_on_net:
+                already_on_bridge = True
+        except Exception:
+            pass
+
+        if already_on_bridge:
+            print(c(GRAY, f"  ℹ [Airlock] 容器 '{container_name}' 已在 bridge 网络，跳过连接"))
+        else:
+            try:
+                bridge_net.connect(container)
+                _airlock_connected = True
+                print(c(YELLOW, f"  🔌 [Airlock] 容器 '{container_name}' 临时接入 bridge 网络"))
+            except Exception as conn_err:
+                return f"ERROR: bridge 网络连接失败: {type(conn_err).__name__}: {conn_err}"
 
         exit_code, output = container.exec_run(
             cmd=["bash", "-c", install_cmd],
@@ -590,8 +609,8 @@ def tool_install_package(a: dict) -> str:
         return f"ERROR: 安装过程异常: {type(e).__name__}: {e}"
 
     finally:
-        # 无论成功与否，必须断网
-        if bridge_net:
+        # 仅断开由本次气闸舱主动接入的网络，不干扰用户手动开启的网络
+        if bridge_net and _airlock_connected:
             try:
                 bridge_net.disconnect(container, force=True)
                 print(c(GREEN, f"  🔒 [Airlock] 容器 '{container_name}' 已强制断网"))
@@ -612,17 +631,36 @@ def docker_prune_resources() -> str:
         return f"ERROR: Docker 不可用 — {_docker_error}"
 
     freed_bytes = 0
+    deleted_containers = []
+    deleted_images = []
+    errors = []
 
-    container_result = client.containers.prune()
-    freed_bytes += container_result.get("SpaceReclaimed", 0)
+    # ── 清理停止的容器 ─────────────────────────────────
+    try:
+        container_result = client.containers.prune()
+        freed_bytes += container_result.get("SpaceReclaimed", 0)
+        deleted_containers = container_result.get("ContainersDeleted") or []
+    except Exception as e:
+        errors.append(f"容器清理失败: {type(e).__name__}: {e}")
 
-    image_result = client.images.prune(filters={"dangling": True})
-    freed_bytes += image_result.get("SpaceReclaimed", 0)
+    # ── 清理悬空镜像 ───────────────────────────────────
+    try:
+        image_result = client.images.prune(filters={"dangling": True})
+        freed_bytes += image_result.get("SpaceReclaimed", 0)
+        deleted_images = image_result.get("ImagesDeleted") or []
+    except Exception as e:
+        errors.append(f"镜像清理失败: {type(e).__name__}: {e}")
 
     freed_mb = freed_bytes / (1024 * 1024)
 
-    deleted_containers = container_result.get("ContainersDeleted") or []
-    deleted_images     = image_result.get("ImagesDeleted") or []
+    if errors:
+        return (
+            f"⚠ 资源回收部分失败\n"
+            f"  已删除容器: {len(deleted_containers)} 个\n"
+            f"  已删除镜像层: {len(deleted_images)} 个\n"
+            f"  释放空间: {freed_mb:.2f} MB\n"
+            f"  错误: {'; '.join(errors)}"
+        )
 
     return (
         f"✓ 资源回收完成\n"
