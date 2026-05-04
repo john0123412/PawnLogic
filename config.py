@@ -480,7 +480,7 @@ DANGEROUS_PATTERNS = [
 BROWSER_CONFIG = {
     "timeout":        30,                                                    # 默认超时（秒）
     "screenshot_dir": str(Path.home() / ".pawnlogic" / "workspace" / "screenshots"),
-    "mcp_server_cmd": "npx -y @scrapling/mcp-server",                       # MCP Server 启动命令
+# （mcp_server_cmd 已移除：改用 Scrapling 本地 Python API，无需 npm）
     "stealthy":       True,                                                  # 默认开启 StealthyFetcher
     "solve_cf":       True,                                                  # 默认解 Cloudflare
 }
