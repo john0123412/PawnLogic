@@ -475,6 +475,17 @@ DANGEROUS_PATTERNS = [
 ]
 
 # ════════════════════════════════════════════════════════
+# P5: Scrapling 浏览器配置
+# ════════════════════════════════════════════════════════
+BROWSER_CONFIG = {
+    "timeout":        30,                                                    # 默认超时（秒）
+    "screenshot_dir": str(Path.home() / ".pawnlogic" / "workspace" / "screenshots"),
+    "mcp_server_cmd": "npx -y @scrapling/mcp-server",                       # MCP Server 启动命令
+    "stealthy":       True,                                                  # 默认开启 StealthyFetcher
+    "solve_cf":       True,                                                  # 默认解 Cloudflare
+}
+
+# ════════════════════════════════════════════════════════
 # UA 池（网页抓取随机轮换）
 # ════════════════════════════════════════════════════════
 USER_AGENTS = [
@@ -541,6 +552,14 @@ AGENT_PHASES: dict[str, list[str]] = {
         "tool_install_package",                # P4.2: 气闸舱安装
         "docker_prune_resources",              # P4.3: 资源回收
         "bump_skill",   # ★ GSA 反馈，全阶段可用
+    ],
+    # P5: Web 渗透阶段 — Scrapling 浏览器武器库
+    "WEB_PEN": [
+        "web_fetch", "web_click", "web_screenshot", "web_select", "web_type", "web_navigate",
+        "web_search", "fetch_url",   # 传统搜索/抓取仍可用
+        "read_file", "write_file",   # 读写报告
+        "run_shell",                 # 辅助命令
+        "bump_skill",
     ],
 }
 

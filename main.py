@@ -306,6 +306,7 @@ HELP_TEXT = f"""
 
 {c(BOLD,"── 工具状态 ──")}
   {c(YELLOW,"/webstatus")}  Jina / Pandoc / Lynx 状态
+  {c(YELLOW,"/browserstatus")}  Scrapling 浏览器工具状态
   {c(YELLOW,"/pwnenv")}     CTF 工具链完整性
   {c(YELLOW,"/docker")}     Docker 容器状态 / 镜像 / 容器管理
 
@@ -1015,6 +1016,13 @@ def handle_slash(cmd: str, session: AgentSession):
     elif verb == "/webstatus":
         print(c(BOLD, "\n  网页抓取工具状态：")); print(web_tool_status())
 
+    elif verb == "/browserstatus":
+        try:
+            from tools.browser_ops import browser_tool_status
+            print(c(BOLD, "\n  Scrapling 浏览器工具状态：")); print(browser_tool_status())
+        except ImportError:
+            print(c(RED, "  ✗ browser_ops 模块未加载"))
+
     elif verb == "/pwnenv":
         print(tool_pwn_env({}))
 
@@ -1677,7 +1685,7 @@ def main():
         "/memorize", "/knowledge", "/forget", "/init_project", "/state",
         "/low", "/mid", "/deep", "/normal", "/limits",
         "/tokens", "/ctx", "/iter", "/toolsize", "/fetchsize",
-        "/webstatus", "/pwnenv", "/stats", "/time", "/docker",
+        "/webstatus", "/browserstatus", "/pwnenv", "/stats", "/time", "/docker",
         "/worker", "/failures", "/memo", "/skills",
         "/chat", "/help", "/exit",
     ]
@@ -1713,6 +1721,7 @@ def main():
         "/toolsize":      "设置工具输出截断大小",
         "/fetchsize":     "设置网页抓取截断大小",
         "/webstatus":     "Jina / Pandoc / Lynx 工具状态",
+        "/browserstatus": "Scrapling 浏览器工具状态",
         "/pwnenv":        "CTF/Pwn 工具链完整性检查",
         "/stats":         "本次会话 Token 用量统计",
         "/time":          "时间预算（/time 300 = 5 分钟）",
