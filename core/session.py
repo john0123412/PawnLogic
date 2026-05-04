@@ -68,6 +68,22 @@ except ImportError:
     docker_prune_resources = None   # P4.3
     DOCKER_SCHEMAS         = []
 
+# P5: Scrapling 浏览器武器库（可选依赖，不可用时静默跳过）
+try:
+    from tools.browser_ops import (
+        tool_web_fetch, tool_web_click, tool_web_screenshot,
+        tool_web_select, tool_web_type, tool_web_navigate,
+        BROWSER_SCHEMAS,
+    )
+except ImportError:
+    tool_web_fetch      = None
+    tool_web_click      = None
+    tool_web_screenshot = None
+    tool_web_select     = None
+    tool_web_type       = None
+    tool_web_navigate   = None
+    BROWSER_SCHEMAS     = []
+
 TOOL_MAP: dict = {
     "read_file":           tool_read_file,
     "read_file_lines":     tool_read_file_lines,
@@ -102,9 +118,24 @@ if tool_install_package:                                    # P4.2
 if docker_prune_resources:                                  # P4.3
     TOOL_MAP["docker_prune_resources"] = docker_prune_resources
 
+# P5: Scrapling 浏览器工具注册（可选）
+if tool_web_fetch:
+    TOOL_MAP["web_fetch"]      = tool_web_fetch
+if tool_web_click:
+    TOOL_MAP["web_click"]      = tool_web_click
+if tool_web_screenshot:
+    TOOL_MAP["web_screenshot"] = tool_web_screenshot
+if tool_web_select:
+    TOOL_MAP["web_select"]     = tool_web_select
+if tool_web_type:
+    TOOL_MAP["web_type"]       = tool_web_type
+if tool_web_navigate:
+    TOOL_MAP["web_navigate"]   = tool_web_navigate
+
 TOOLS_SCHEMA: list = (
     FILE_SCHEMAS + WEB_SCHEMAS + SANDBOX_SCHEMAS
     + PWN_SCHEMAS + VISION_SCHEMAS + DOCKER_SCHEMAS
+    + BROWSER_SCHEMAS
 )
 
 # ── switch_phase：全局路由工具（强制附加，不受 Phase 过滤）───────────
@@ -120,6 +151,7 @@ _SWITCH_PHASE_SCHEMA = {
             "  RECON    — 侦察：环境检测、目录浏览、二进制初步分析\n"
             "  VULN_DEV — 漏洞开发：偏移计算、反汇编、ROP/libc 分析\n"
             "  EXPLOIT  — 利用：编写 exploit、动态调试、交互式验证\n"
+            "  WEB_PEN  — Web 渗透：Scrapling 反爬抓取、自适应定位、浏览器自动化\n"
             "  GENERAL  — 通用：文件操作、联网、后备场景"
         ),
         "parameters": {
@@ -672,6 +704,8 @@ class AgentSession:
             "  File     : read_file · read_file_lines · write_file · patch_file · list_dir · find_files\n"
             "  Shell    : run_shell · git_op\n"
             "  Web      : web_search → fetch_url (Jina / Pandoc / regex fallback)\n"
+            "  Browser  : web_fetch (StealthyFetcher/反爬) · web_click · web_screenshot\n"
+            "             web_select (自适应CSS) · web_type · web_navigate\n"
             "  Sandbox  : run_code  (python / c / cpp / javascript / bash / rust / go / java)\n"
             "  Docker   : run_code_docker (一次性容器) · pwn_container (持久化容器)\n"
             "  Vision   : analyze_local_image  (jpg/png/gif/webp — glm-4v / gpt-4o)\n"
@@ -679,6 +713,15 @@ class AgentSession:
             "             pwn_libc · pwn_debug · pwn_one_gadget · pwn_timed_debug\n"
             "  Advanced : delegate_task  (fresh context sub-agent)\n"
             "  History  : /chat list · /chat view · /chat find · /chat tag · /chat related\n\n"
+
+            "=== Scrapling Web Penetration (WEB_PEN Phase) ===\n"
+            "若遇到 Cloudflare 拦截或动态网页，优先使用 Scrapling 提供的自适应定位能力：\n"
+            "  · web_fetch 默认开启 StealthyFetcher + solve_cloudflare=True，可穿透反爬。\n"
+            "  · web_select 使用 adaptive_select，自动应对 DOM 结构变化。\n"
+            "  · web_screenshot 截图强制存入 ~/.pawnlogic/workspace/screenshots/。\n"
+            "  · 所有浏览器下载文件必须存入 SAFE_WORKSPACE，禁止写入其他目录。\n"
+            "  · 遇到 Cloudflare 5秒盾/人机验证 → 直接 web_fetch，Scrapling 自动处理。\n"
+            "  · 需要交互式操作（登录/点击/表单）→ web_navigate → web_type → web_click → web_screenshot。\n\n"
 
             f"Working dir : {self.cwd}\n"
             f"Time        : {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
