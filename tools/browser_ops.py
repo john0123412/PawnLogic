@@ -1,7 +1,7 @@
 """
-tools/browser_ops.py — P5: Scrapling MCP 浏览器武器库
+tools/browser_ops.py — P5: Scrapling 浏览器武器库
 =====================================================
-MCP 桥接器：连接 Scrapling MCP Server，提供 Web 渗透能力。
+直接调用 Scrapling + Patchright 本地 Python API，无需 MCP 桥接。
 
 核心能力：
   · web_fetch      — StealthyFetcher 反爬抓取（自动解 Cloudflare）
@@ -14,18 +14,16 @@ MCP 桥接器：连接 Scrapling MCP Server，提供 Web 渗透能力。
 安全约束：
   · 所有下载文件强制存入 SAFE_WORKSPACE (~/.pawnlogic/workspace)
   · 编码清洗 errors='replace'，防止终端崩溃
-  · MCP Server 进程生命周期与模块绑定
 
 依赖：
-  · pip install mcp（可选，不强制）
-  · npx（Node.js >= 18，用于启动 Scrapling MCP Server）
+  · pip install 'scrapling[ai]'（含 patchright、playwright）
+  · patchright install chromium（首次使用自动下载浏览器）
 """
 
 import os
 import json
 import time
 import shutil
-import asyncio
 import threading
 from pathlib import Path
 from datetime import datetime
@@ -33,148 +31,137 @@ from datetime import datetime
 from config import BROWSER_CONFIG
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN, BOLD
 
-# ════════════════════════════════════════════════════════
-# 安全工作区（复用 P4 的定义，保持一致性）
-# ════════════════════════════════════════════════════════
-
-SAFE_WORKSPACE = os.path.abspath(os.path.expanduser("~/.pawnlogic/workspace"))
+# ── 常量 ──────────────────────────────────────────────────
+SAFE_WORKSPACE = str(Path.home() / ".pawnlogic" / "workspace")
 SCREENSHOT_DIR = os.path.join(SAFE_WORKSPACE, "screenshots")
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
+# ── 全局浏览器上下文（惰性创建）─────────────────────────
+_browser_lock = threading.Lock()
+_browser = None       # patchright Browser
+_context = None        # patchright BrowserContext
+_page = None           # patchright Page (当前活跃页面)
+_browser_error = None  # 错误信息
 
-# ════════════════════════════════════════════════════════
-# MCP 客户端（同步化封装）
-# ════════════════════════════════════════════════════════
-
-_mcp_session = None
-_mcp_loop    = None
-_mcp_thread  = None
-_mcp_error   = None
-_mcp_ready   = False
-_mcp_lock    = threading.Lock()
-
-
-def _ensure_mcp_loop():
-    """在后台线程运行 asyncio 事件循环（MCP 需要 async）。"""
-    global _mcp_loop, _mcp_thread
-    if _mcp_loop is not None:
-        return
-    _mcp_loop = asyncio.new_event_loop()
-
-    def _run():
-        asyncio.set_event_loop(_mcp_loop)
-        _mcp_loop.run_forever()
-
-    _mcp_thread = threading.Thread(target=_run, daemon=True, name="mcp-event-loop")
-    _mcp_thread.start()
+# ── 一次性 fetch 用的 Scrapling 实例 ───────────────────
+_stealthy_fetcher = None
+_fetcher_lock = threading.Lock()
 
 
-def _run_async(coro):
-    """在后台事件循环中执行协程并同步等待结果。"""
-    _ensure_mcp_loop()
-    future = asyncio.run_coroutine_threadsafe(coro, _mcp_loop)
-    return future.result(timeout=BROWSER_CONFIG["timeout"] + 10)
+def _get_page():
+    """获取或创建浏览器页面（惰性初始化）。"""
+    global _browser, _context, _page, _browser_error
+
+    with _browser_lock:
+        if _page and not _page.is_closed():
+            return _page
+
+        try:
+            from patchright.sync_api import sync_playwright
+        except ImportError:
+            _browser_error = "patchright 未安装。修复: pip install patchright && patchright install chromium"
+            return None
+
+        try:
+            pw = sync_playwright().start()
+            _browser = pw.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-blink-features=AutomationControlled",
+                ],
+            )
+            _context = _browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                locale="en-US",
+            )
+            _page = _context.new_page()
+            _browser_error = None
+            return _page
+
+        except Exception as e:
+            _browser_error = f"浏览器启动失败: {type(e).__name__}: {e}"
+            return None
 
 
-async def _connect_mcp():
-    """连接 Scrapling MCP Server。"""
-    global _mcp_session, _mcp_error, _mcp_ready
-
-    try:
-        from mcp import ClientSession, StdioServerParameters
-        from mcp.client.stdio import stdio_client
-    except ImportError:
-        _mcp_error = "未安装 mcp 库。修复: pip install mcp"
-        return False
-
-    if not shutil.which("npx"):
-        _mcp_error = "未找到 npx 命令。需要 Node.js >= 18。"
-        return False
-
-    try:
-        server_params = StdioServerParameters(
-            command="npx",
-            args=["-y", "@scrapling/mcp-server"],
-            env={**os.environ},
-        )
-
-        # 启动 MCP Server 并建立会话
-        transport = await stdio_client(server_params)
-        read_stream, write_stream = transport
-        _mcp_session = ClientSession(read_stream, write_stream)
-        await _mcp_session.initialize()
-
-        _mcp_ready = True
-        return True
-
-    except Exception as e:
-        _mcp_error = f"MCP 连接失败: {type(e).__name__}: {e}"
-        return False
-
-
-def _get_session():
-    """获取或初始化 MCP 会话（惰性）。"""
-    global _mcp_session, _mcp_ready, _mcp_error
-    with _mcp_lock:
-        if _mcp_ready and _mcp_session:
-            return _mcp_session
-        ok = _run_async(_connect_mcp())
-        if ok:
-            return _mcp_session
-        return None
-
-
-async def _call_tool(tool_name: str, arguments: dict) -> str:
-    """调用 MCP 工具并返回结果文本。"""
-    session = _get_session()
-    if not session:
-        return f"ERROR: MCP 不可用 — {_mcp_error}"
-
-    try:
-        result = await session.call_tool(tool_name, arguments)
-        # 提取文本内容
-        if hasattr(result, "content"):
-            parts = []
-            for block in result.content:
-                if hasattr(block, "text"):
-                    parts.append(block.text)
-                else:
-                    parts.append(str(block))
-            return "\n".join(parts)
-        return str(result)
-    except Exception as e:
-        return f"ERROR: MCP 工具调用失败 ({tool_name}): {type(e).__name__}: {e}"
+def _get_stealthy_fetcher():
+    """获取或创建 StealthyFetcher 实例。"""
+    global _stealthy_fetcher
+    with _fetcher_lock:
+        if _stealthy_fetcher is None:
+            try:
+                from scrapling import StealthyFetcher
+                _stealthy_fetcher = StealthyFetcher()
+            except Exception as e:
+                _stealthy_fetcher = f"ERROR: {e}"
+        return _stealthy_fetcher
 
 
 def _safe_path(filename: str) -> str:
     """确保文件路径在 SAFE_WORKSPACE 内。"""
     full = os.path.abspath(os.path.join(SCREENSHOT_DIR, filename))
     if not full.startswith(os.path.abspath(SCREENSHOT_DIR)):
-        raise PermissionError(f"路径越界: {filename}")
+        raise ValueError(f"路径越界: {filename}")
     return full
 
 
+def _clean(text: str) -> str:
+    """编码清洗，防止终端崩溃。"""
+    if text is None:
+        return ""
+    return text.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
+
+
 # ════════════════════════════════════════════════════════
-# 工具函数
+# 工具实现
 # ════════════════════════════════════════════════════════
 
 def tool_web_fetch(a: dict) -> str:
     """
-    使用 StealthyFetcher 抓取网页（默认开启反爬）。
-    自动解 Cloudflare、返回 Markdown。
+    使用 StealthyFetcher 抓取网页。
+    自动处理 Cloudflare 反爬、JS 渲染。
     """
     url = a["url"]
     timeout = int(a.get("timeout", BROWSER_CONFIG["timeout"]))
     print(c(CYAN, f"  🌐 [Scrapling/Fetch] {url[:80]}"))
 
-    args = {
-        "url": url,
-        "timeout": timeout,
-        "solve_cloudflare": True,
-    }
-    result = _run_async(_call_tool("fetch", args))
-    # 编码清洗
-    return result.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
+    try:
+        fetcher = _get_stealthy_fetcher()
+        if isinstance(fetcher, str):
+            return fetcher
+
+        resp = fetcher.fetch(
+            url,
+            headless=True,
+            timeout=timeout * 1000,  # scrapling 用毫秒
+        )
+
+        status = resp.status
+        # Scrapling TextHandler 可能为 None；fallback 到 body 解码
+        raw_text = str(resp.text) if resp.text else ""
+        if not raw_text and resp.body:
+            raw_text = resp.body.decode("utf-8", errors="replace")
+        if not raw_text:
+            try:
+                raw_text = str(resp.get_all_text())
+            except Exception:
+                raw_text = ""
+        text = raw_text
+
+        if status >= 400:
+            return f"HTTP {status}: 请求失败\n{_clean(text[:2000])}"
+
+        # 截断输出
+        max_chars = a.get("max_chars", 15000)
+        if len(text) > max_chars:
+            result = _clean(text[:max_chars]) + f"\n\n[截断: 共 {len(text)} 字符，显示前 {max_chars}]"
+        else:
+            result = _clean(text)
+
+        return result
+
+    except Exception as e:
+        return f"ERROR: Scrapling 抓取失败: {type(e).__name__}: {e}"
 
 
 def tool_web_click(a: dict) -> str:
@@ -182,9 +169,17 @@ def tool_web_click(a: dict) -> str:
     selector = a["selector"]
     print(c(CYAN, f"  🖱 [Scrapling/Click] {selector[:60]}"))
 
-    args = {"selector": selector}
-    result = _run_async(_call_tool("click", args))
-    return result.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
+    page = _get_page()
+    if not page:
+        return f"ERROR: 浏览器不可用 — {_browser_error}"
+
+    try:
+        page.click(selector, timeout=10000)
+        # 等待可能的页面响应
+        page.wait_for_load_state("domcontentloaded", timeout=5000)
+        return f"✓ 已点击: {selector}"
+    except Exception as e:
+        return f"ERROR: 点击失败 ({selector}): {type(e).__name__}: {e}"
 
 
 def tool_web_screenshot(a: dict) -> str:
@@ -200,13 +195,18 @@ def tool_web_screenshot(a: dict) -> str:
     save_path = _safe_path(filename)
     print(c(CYAN, f"  📸 [Scrapling/Screenshot] → {save_path}"))
 
-    args = {"path": save_path}
-    result = _run_async(_call_tool("screenshot", args))
+    page = _get_page()
+    if not page:
+        return f"ERROR: 浏览器不可用 — {_browser_error}"
 
-    if os.path.exists(save_path):
-        size_kb = os.path.getsize(save_path) / 1024
-        return f"✓ 截图已保存: {save_path} ({size_kb:.1f} KB)"
-    return f"[Scrapling 返回]\n{result}"
+    try:
+        page.screenshot(path=save_path, full_page=True)
+        if os.path.exists(save_path):
+            size_kb = os.path.getsize(save_path) / 1024
+            return f"✓ 截图已保存: {save_path} ({size_kb:.1f} KB)"
+        return "ERROR: 截图文件未生成"
+    except Exception as e:
+        return f"ERROR: 截图失败: {type(e).__name__}: {e}"
 
 
 def tool_web_select(a: dict) -> str:
@@ -215,9 +215,33 @@ def tool_web_select(a: dict) -> str:
     attribute = a.get("attribute", "text")
     print(c(CYAN, f"  🔍 [Scrapling/Select] {selector[:60]}"))
 
-    args = {"selector": selector, "attribute": attribute}
-    result = _run_async(_call_tool("adaptive_select", args))
-    return result.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
+    page = _get_page()
+    if not page:
+        return f"ERROR: 浏览器不可用 — {_browser_error}"
+
+    try:
+        elements = page.query_selector_all(selector)
+        if not elements:
+            return f"未找到匹配元素: {selector}"
+
+        results = []
+        for i, el in enumerate(elements):
+            if attribute == "text":
+                val = el.text_content() or ""
+            elif attribute == "href":
+                val = el.get_attribute("href") or ""
+            elif attribute == "src":
+                val = el.get_attribute("src") or ""
+            elif attribute == "value":
+                val = el.get_attribute("value") or ""
+            else:
+                val = el.get_attribute(attribute) or ""
+            results.append(_clean(val.strip()))
+
+        return "\n".join(results) if results else f"元素存在但内容为空: {selector}"
+
+    except Exception as e:
+        return f"ERROR: 选择器查询失败 ({selector}): {type(e).__name__}: {e}"
 
 
 def tool_web_type(a: dict) -> str:
@@ -226,9 +250,15 @@ def tool_web_type(a: dict) -> str:
     text = a["text"]
     print(c(CYAN, f"  ⌨ [Scrapling/Type] {selector[:40]} → {text[:40]}"))
 
-    args = {"selector": selector, "text": text}
-    result = _run_async(_call_tool("type", args))
-    return result.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
+    page = _get_page()
+    if not page:
+        return f"ERROR: 浏览器不可用 — {_browser_error}"
+
+    try:
+        page.fill(selector, text, timeout=10000)
+        return f"✓ 已输入: {len(text)} 字符 → {selector}"
+    except Exception as e:
+        return f"ERROR: 输入失败 ({selector}): {type(e).__name__}: {e}"
 
 
 def tool_web_navigate(a: dict) -> str:
@@ -236,31 +266,47 @@ def tool_web_navigate(a: dict) -> str:
     url = a["url"]
     print(c(CYAN, f"  🧭 [Scrapling/Navigate] {url[:80]}"))
 
-    args = {"url": url}
-    result = _run_async(_call_tool("navigate", args))
-    return result.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
+    page = _get_page()
+    if not page:
+        return f"ERROR: 浏览器不可用 — {_browser_error}"
+
+    try:
+        timeout = int(a.get("timeout", BROWSER_CONFIG["timeout"]))
+        page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+        title = page.title()
+        return f"✓ 已导航至: {url}\n  标题: {title}"
+    except Exception as e:
+        return f"ERROR: 导航失败 ({url}): {type(e).__name__}: {e}"
 
 
 # ════════════════════════════════════════════════════════
-# MCP 状态检测
+# 状态检测
 # ════════════════════════════════════════════════════════
+
+_scrapling_ok = False
+_patchright_ok = False
+
+try:
+    from scrapling import StealthyFetcher as _SF
+    _scrapling_ok = True
+except ImportError:
+    pass
+
+try:
+    from patchright.sync_api import sync_playwright as _sp
+    _patchright_ok = True
+except ImportError:
+    pass
+
 
 def browser_tool_status() -> str:
     """返回浏览器工具可用性状态。"""
-    has_mcp = False
-    try:
-        import mcp  # noqa: F401
-        has_mcp = True
-    except ImportError:
-        pass
-
-    has_npx = bool(shutil.which("npx"))
-
     parts = [
-        ("mcp 库",          has_mcp,   "pip install mcp" if not has_mcp else "已安装"),
-        ("npx (Node.js)",   has_npx,   "需要 Node.js >= 18" if not has_npx else "已安装"),
-        ("Scrapling MCP",   _mcp_ready,"未连接（首次使用时自动启动）" if not _mcp_ready else "已连接"),
-        ("截图目录",         True,      SCREENSHOT_DIR),
+        ("Scrapling 库",    _scrapling_ok,    "pip install 'scrapling[ai]'" if not _scrapling_ok else "已安装"),
+        ("Patchright",      _patchright_ok,   "pip install patchright" if not _patchright_ok else "已安装"),
+        ("浏览器实例",       _page is not None and not (_page.is_closed() if _page else True),
+                                              "未启动（首次使用时自动启动）" if _page is None else "已连接"),
+        ("截图目录",         True,             SCREENSHOT_DIR),
     ]
 
     lines = []
@@ -268,8 +314,8 @@ def browser_tool_status() -> str:
         tag = c(GREEN, "✓") if avail else c(GRAY, "✗")
         lines.append(f"  {tag} {name:20} {c(GRAY, note)}")
 
-    if _mcp_error:
-        lines.append(f"  {c(RED, '⚠')} {_mcp_error}")
+    if _browser_error:
+        lines.append(f"  {c(RED, '⚠')} {_browser_error}")
 
     return "\n".join(lines)
 
@@ -278,7 +324,7 @@ def browser_tool_status() -> str:
 # Schema 定义（注册到 TOOLS_SCHEMA）
 # ════════════════════════════════════════════════════════
 
-BROWSER_SCHEMAS = [
+TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
