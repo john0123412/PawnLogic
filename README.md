@@ -1,6 +1,6 @@
 # 🤖 PawnLogic 1.1
 
-> **GSD 工程外骨骼 · 多模态视觉 · 会话管理 · SQLite 记忆 · 动态沙箱 · CTF 逆向工具链 · 双模输出 · 技能引擎**
+> **GSD 工程外骨骼 · 多模态视觉 · 会话管理 · SQLite 记忆 · 动态沙箱 · CTF 逆向工具链 · 双模输出 · 技能引擎 · P6 自动化利用链**
 
 PawnLogic 是一个专为极客和开发者打造的全能终端 AI 智能体。强大的会话管理系统，让您能够轻松浏览、搜索、标签化和关联历史对话，同时保留了所有强大功能。
 
@@ -65,10 +65,28 @@ PawnLogic 是一个专为极客和开发者打造的全能终端 AI 智能体。
 
 ### 📚 8. 本地技能引擎 (P6 新增)
 
-- `./skills/` 目录存放领域专属技能文件（`.md` 格式）
+- `./skills/` 目录存放领域专属技能文件夹（零配置：放一个 `.md` 即可）
 - Agent 执行任务前自动扫描技能目录，按文件名 + 内容关键词匹配评分
 - 匹配到的技能全文注入系统提示词，Agent 按技能指令执行任务
 - 与 GSA 全局技能存档互补：GSA 管理跨会话经验，本地技能管理项目级模板
+
+### 🔍 9. 环境嗅探工具 (P6 新增)
+
+- `check_service(port)` — 通过 lsof 或 `/proc` 文件系统快速提取端口进程详情
+- 返回：PID、进程名、可执行文件路径、命令行、工作目录、关键环境变量、引用的动态库
+- 用于侦察阶段确认目标服务运行环境，替代盲目执行 `ps aux`
+
+### 🌐 10. 全球技能包同步 (P6 新增)
+
+- `/sp sync` — 遍历 `./skills/` 下所有带 `.git` 的技能包，批量 `git pull` 同步更新
+- `/sp install <repo_url>` — 从远程仓库一键安装新技能包（自动 clone + 权限修正 + 缓存刷新）
+- USER 模式下显示简洁进度，DEV 模式显示详细结果
+
+### ⚡ 11. Scrapling 反爬引擎优化 (P6 新增)
+
+- `StealthyFetcher.configure()` 全局预热：消除首次 fetch 的冷启动超时
+- 超时自动重试：间隔 2s → 5s → 10s，最多 3 次尝试
+- 穿透 Cloudflare 5 秒盾、JS 渲染防护
 
 ---
 
@@ -442,6 +460,7 @@ Local Ollama     LOCAL_API_KEY       ⬜ 无需 Key
 ### 🛠️ 工具状态
 
 - `/webstatus` — Jina / Pandoc / Lynx 状态
+- `/browserstatus` — Scrapling 浏览器工具状态
 - `/pwnenv` — CTF 工具链完整性检查
 
 ### 🐳 Docker 容器管理（1.1 新增）
@@ -481,10 +500,19 @@ Local Ollama     LOCAL_API_KEY       ⬜ 无需 Key
 
 ### 🗂️ 本地技能引擎 (P6 新增)
 
-- `./skills/` 目录存放 `.md` 格式的领域技能文件
+- `./skills/` 目录存放技能包文件夹（零配置：放一个 `.md` 即可，可选 `manifest.json`）
 - Agent 根据任务关键词自动匹配并注入相关技能
-- 文件命名即关键词：如 `pwn_stack_overflow.md` 在分析栈溢出时自动检索
-- 技能文件格式：`# 技能名` → `## Trigger` → `## Steps` → `## Payload Template` → `## Gotcha`
+- `/sp` 或 `/skillpack` — 列出所有本地技能包
+- `/sp rescan` — 清除缓存，重新扫描 skills/ 目录
+- `/sp sync` — 同步所有带 `.git` 的技能包（批量 git pull）
+- `/sp install <url>` — 从远程仓库安装新技能包
+- `/sp <名称>` — 查看指定技能包详情（关键词、触发词、脚本）
+
+### 🔍 环境嗅探 (P6 新增)
+
+- `check_service(port)` — 检查指定端口上运行的服务进程详情
+- 返回：PID、进程名、可执行文件路径、命令行、工作目录、环境变量、动态库
+- 侦察阶段自动调用，替代盲目执行 `ps aux`
 
 ---
 
@@ -522,7 +550,21 @@ Agent 执行失败，终端只显示：`❌ 系统忙，请稍后重试`（无 T
 
 终端完整展示 Traceback、工具调用 JSON、异步线程状态——开发者可精准定位问题。
 
-### 场景五：会话管理与项目追踪 (1.1)
+### 场景五：P6 自动化利用链 (Web 渗透)
+
+> **You >** 扫描 http://target.com:8080，找到漏洞并利用
+
+Agent 自动执行完整 P6 流程：
+1. **侦察**：`web_fetch` 获取页面指纹，识别框架（如 Shiro）
+2. **环境确认**：`check_service(port=8080)` 提取进程信息（Java/Tomcat）
+3. **武器检索**：`search_skills(query='Shiro')` 匹配本地技能包
+4. **同步更新**：提醒 `/sp sync` 或 `/sp install` 获取最新利用脚本
+5. **执行**：运行技能包内的预置 exploit 脚本
+6. **验证**：确认回显/Flag，调用 `bump_skill` 提升技能权重
+
+全程 USER 模式只显示简洁进度，DEV 模式显示每个工具调用细节。
+
+### 场景六：会话管理与项目追踪 (1.1)
 
 ```bash
 /chat find Python 爬虫          # 搜索所有包含关键词的会话
@@ -538,13 +580,24 @@ Agent 执行失败，终端只显示：`❌ 系统忙，请稍后重试`（无 T
 ### 📁 代码目录：`~/.local/share/pawnlogic/`
 
 - `main.py` — 入口与 Slash 命令解析
-- `config.py` — API、预设参数、黑白名单配置
-- `core/session.py` — 核心调度环（Agentic Loop）、流式解析
+- `config.py` — API、预设参数、MoE 阶段路由、黑白名单配置
+- `core/session.py` — 核心调度环（Agentic Loop）、流式解析、工具注册
 - `core/memory.py` — SQLite 数据库管理与 RAG 检索
 - `core/persistence.py` — 会话持久化管理
 - `core/gsa.py` — 全局技能存档管理
-- `tools/` — 工具库（文件、网页、沙箱、Pwn 链）
-- `skills/` — 本地技能引擎目录（`.md` 格式领域技能文件）
+- `core/skill_manager.py` — SkillScanner 技能包扫描、匹配、同步、安装引擎
+- `core/logger.py` — loguru 双端日志系统
+- `tools/` — 工具库
+  - `file_ops.py` — 文件操作（读/写/补丁/Shell）
+  - `web_ops.py` — 网页搜索与抓取
+  - `browser_ops.py` — Scrapling 反爬浏览器武器库（StealthyFetcher + Patchright）
+  - `recon_ops.py` — 环境嗅探（check_service：端口→进程详情）
+  - `sandbox.py` — 多语言代码沙箱
+  - `docker_sandbox.py` — Docker 容器化执行
+  - `pwn_chain.py` — CTF/Pwn 工具链（GDB/ROP/libc/one_gadget）
+  - `vision.py` — 多模态视觉分析
+  - `delegate_tool.py` — 无污染子任务委派
+- `skills/` — 本地技能包目录（文件夹模式，含 skill.md + 可选 manifest.json + 脚本）
 
 ### 📁 数据存储：`~/.pawnlogic/`
 
@@ -606,6 +659,15 @@ Agent 内置严格的软隔离保护：
 - ✅ `_scan_local_skills()` 技能扫描引擎（文件名 + 内容评分排序）
 - ✅ 技能全文动态注入系统提示词
 
+**P6 — 自动化利用链架构升级**
+- ✅ Scrapling 启动优化：`StealthyFetcher.configure()` 全局预热，消除冷启动超时
+- ✅ `web_fetch` 超时自动重试：间隔 2s → 5s → 10s，最多 3 次
+- ✅ `check_service(port)` 环境嗅探工具：lsof/proc 提取端口进程详情（PID/路径/环境变量/动态库）
+- ✅ `/sp sync` 全球技能包同步：批量 git pull 所有带 .git 的技能包
+- ✅ `/sp install <url>` 远程技能包安装：git clone + 权限修正 + 缓存刷新
+- ✅ P6 流程闭环：侦察 → check_service → search_skills → install/sync → 执行
+- ✅ `check_service` 注册到 RECON/GENERAL/WEB_PEN 阶段，只读操作跳过 plan 检查
+
 **基础改进**
 - ✅ 新增小米 MiMo 厂商接入（4 个模型）
 - ✅ `/worker` 子任务模型选择命令
@@ -661,7 +723,13 @@ A: 使用 `ubuntu18`（glibc 2.27）或 `ubuntu22`（glibc 2.35）镜像：`/doc
 A: `/mode` 切换。USER 模式屏蔽所有原始报错，只显示友好中文提示（如 `❌ 系统忙，请稍后重试`），适合演示和日常使用。DEV 模式显示完整 Traceback、Tool Call JSON 和底层日志，适合开发调试。
 
 **Q: 如何添加自定义技能？**
-A: 在 `./skills/` 目录下创建 `.md` 文件，文件名即关键词（如 `web_sqli.md`）。Agent 在执行相关任务时会自动检索并注入。详见 `skills/README.md`。
+A: 在 `./skills/` 目录下创建文件夹，放入 `skill.md`（或 `guide.md`），系统自动从文件名和标题提取关键词。也可添加 `manifest.json` 补充元数据。详见 `skills/README.md`。
+
+**Q: 如何同步社区最新的利用脚本？**
+A: 使用 `/sp install <repo_url>` 从 GitHub 安装技能包，或 `/sp sync` 批量更新已有的 `.git` 技能包。
+
+**Q: check_service 工具安全吗？**
+A: 完全安全。它是只读操作，仅通过 `/proc` 或 lsof 读取进程信息，不修改任何系统状态。已加入 `_PLAN_EXEMPT_TOOLS`，跳过 plan 检查。
 
 **Q: 时间预算用完了会怎样？**
 A: Agent 自动终止当前任务，输出已收集的结果。建议根据任务复杂度设置合理预算：`/time 300`（5 分钟）适合简单任务，`/time 1800`（30 分钟）适合复杂项目。
