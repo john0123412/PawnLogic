@@ -4,6 +4,7 @@
 # Required
 loguru>=0.7.0
 python-dotenv>=1.0.0
+nest_asyncio>=1.6.0        # 允许嵌套事件循环（Jupyter/Scrapling 共存）
 
 # P2: CLI UX — Terminal experience upgrade
 prompt_toolkit>=3.0.0    # Fish-style completion, PromptSession, multiline input
