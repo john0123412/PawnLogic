@@ -2,6 +2,7 @@
 tools/browser_ops.py — P5: Scrapling 浏览器武器库
 =====================================================
 直接调用 Scrapling + Patchright 本地 Python API，无需 MCP 桥接。
+所有工具调用走"原生绿色通道"，零 MCP 开销。
 
 核心能力：
   · web_fetch      — StealthyFetcher 反爬抓取（自动解 Cloudflare）
@@ -11,9 +12,14 @@ tools/browser_ops.py — P5: Scrapling 浏览器武器库
   · web_type       — 表单输入
   · web_navigate   — 页面导航
 
+架构：
+  · web_fetch   → StealthyFetcher（Camoufox 反爬引擎，无浏览器窗口）
+  · web_screenshot / click / select / type / navigate → Patchright（Playwright 反检测 fork）
+  · _current_url 桥接两个引擎：fetch 后自动同步 URL 到 patchright 页面
+
 安全约束：
   · 所有下载文件强制存入 SAFE_WORKSPACE (~/.pawnlogic/workspace)
-  · 编码清洗 errors='replace'，防止终端崩溃
+  · 编码清洗 errors='ignore'，防止终端崩溃
 
 依赖：
   · pip install 'scrapling[ai]'（含 patchright、playwright）
@@ -36,20 +42,25 @@ SAFE_WORKSPACE = str(Path.home() / ".pawnlogic" / "workspace")
 SCREENSHOT_DIR = os.path.join(SAFE_WORKSPACE, "screenshots")
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
-# ── 全局浏览器上下文（惰性创建）─────────────────────────
+# ── 跨引擎 URL 桥接 ──────────────────────────────────────
+# web_fetch（StealthyFetcher）→ 设置 _current_url
+# web_screenshot（Patchright）→ 读取 _current_url，自动同步导航
+_current_url = None
+
+# ── 全局浏览器上下文（Patchright，惰性创建）─────────────
 _browser_lock = threading.Lock()
 _browser = None       # patchright Browser
 _context = None        # patchright BrowserContext
 _page = None           # patchright Page (当前活跃页面)
 _browser_error = None  # 错误信息
 
-# ── 一次性 fetch 用的 Scrapling 实例 ───────────────────
+# ── StealthyFetcher 实例（惰性创建）────────────────────
 _stealthy_fetcher = None
 _fetcher_lock = threading.Lock()
 
 
 def _get_page():
-    """获取或创建浏览器页面（惰性初始化）。"""
+    """获取或创建 Patchright 浏览器页面（惰性初始化）。"""
     global _browser, _context, _page, _browser_error
 
     with _browser_lock:
@@ -59,7 +70,9 @@ def _get_page():
         try:
             from patchright.sync_api import sync_playwright
         except ImportError:
-            _browser_error = "patchright 未安装。修复: pip install patchright && patchright install chromium"
+            _browser_error = (
+                "patchright 未安装。修复: pip install patchright && patchright install chromium"
+            )
             return None
 
         try:
@@ -84,8 +97,25 @@ def _get_page():
             return None
 
 
+def _ensure_page_url(url: str):
+    """确保 patchright 页面已导航到目标 URL（仅在 URL 变化时导航）。"""
+    global _current_url
+    page = _get_page()
+    if not page:
+        return
+    try:
+        current = page.url
+        # about:blank 或 URL 不匹配时自动导航
+        if not current or current == "about:blank" or current != url:
+            timeout_ms = BROWSER_CONFIG["timeout"] * 1000
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            _current_url = url
+    except Exception:
+        pass  # 导航失败不阻断，截图可能仍有内容
+
+
 def _get_stealthy_fetcher():
-    """获取或创建 StealthyFetcher 实例。"""
+    """获取或创建 StealthyFetcher 实例（Camoufox 反爬引擎）。"""
     global _stealthy_fetcher
     with _fetcher_lock:
         if _stealthy_fetcher is None:
@@ -118,9 +148,11 @@ def _clean(text: str) -> str:
 
 def tool_web_fetch(a: dict) -> str:
     """
-    使用 StealthyFetcher 抓取网页。
+    使用 StealthyFetcher 抓取网页（原生绿色通道，零 MCP）。
     自动处理 Cloudflare 反爬、JS 渲染。
+    抓取后自动同步 URL 到 patchright 浏览器，确保后续 web_screenshot 一致。
     """
+    global _current_url
     url = a["url"]
     timeout = int(a.get("timeout", BROWSER_CONFIG["timeout"]))
     print(c(CYAN, f"  🌐 [Scrapling/Fetch] {url[:80]}"))
@@ -130,17 +162,20 @@ def tool_web_fetch(a: dict) -> str:
         if isinstance(fetcher, str):
             return fetcher
 
+        # StealthyFetcher 基于 Camoufox（反检测 Playwright），timeout 单位为毫秒
         resp = fetcher.fetch(
             url,
             headless=True,
-            timeout=timeout * 1000,  # scrapling 用毫秒
+            timeout=timeout * 1000,
         )
 
+        _current_url = url  # 桥接：同步 URL 到全局状态
+
         status = resp.status
-        # Scrapling TextHandler 可能为 None；fallback 到 body 解码
+        # Scrapling TextHandler 可能为 None；多级 fallback
         raw_text = str(resp.text) if resp.text else ""
         if not raw_text and resp.body:
-            raw_text = resp.body.decode("utf-8", errors="replace")
+            raw_text = resp.body.decode("utf-8", errors="ignore")
         if not raw_text:
             try:
                 raw_text = str(resp.get_all_text())
@@ -165,7 +200,7 @@ def tool_web_fetch(a: dict) -> str:
 
 
 def tool_web_click(a: dict) -> str:
-    """点击页面元素（自适应定位）。"""
+    """点击页面元素（Patchright 自适应定位，原生绿色通道）。"""
     selector = a["selector"]
     print(c(CYAN, f"  🖱 [Scrapling/Click] {selector[:60]}"))
 
@@ -175,7 +210,6 @@ def tool_web_click(a: dict) -> str:
 
     try:
         page.click(selector, timeout=10000)
-        # 等待可能的页面响应
         page.wait_for_load_state("domcontentloaded", timeout=5000)
         return f"✓ 已点击: {selector}"
     except Exception as e:
@@ -184,22 +218,29 @@ def tool_web_click(a: dict) -> str:
 
 def tool_web_screenshot(a: dict) -> str:
     """
-    页面截图，强制存入 SAFE_WORKSPACE。
-    返回本地文件路径。
+    页面截图（原生绿色通道，零 MCP）。
+    强制存入 SAFE_WORKSPACE。
+    自动同步 _current_url：若 web_fetch 刚抓取过页面，截图会自动对齐到同一 URL。
     """
+    global _current_url
+    url = a.get("url", _current_url)
     filename = a.get("filename", "")
     if not filename:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"screenshot_{ts}.png"
 
     save_path = _safe_path(filename)
-    print(c(CYAN, f"  📸 [Scrapling/Screenshot] → {save_path}"))
+    print(c(CYAN, f"  📸 [Scrapling/Screenshot] {url or '(当前页面)'} → {save_path}"))
 
     page = _get_page()
     if not page:
         return f"ERROR: 浏览器不可用 — {_browser_error}"
 
     try:
+        # 桥接：若 fetch 过页面但 patchright 尚未导航，自动同步
+        if url:
+            _ensure_page_url(url)
+
         page.screenshot(path=save_path, full_page=True)
         if os.path.exists(save_path):
             size_kb = os.path.getsize(save_path) / 1024
@@ -262,7 +303,8 @@ def tool_web_type(a: dict) -> str:
 
 
 def tool_web_navigate(a: dict) -> str:
-    """导航到指定 URL。"""
+    """导航到指定 URL（Patchright，原生绿色通道）。"""
+    global _current_url
     url = a["url"]
     print(c(CYAN, f"  🧭 [Scrapling/Navigate] {url[:80]}"))
 
@@ -273,6 +315,7 @@ def tool_web_navigate(a: dict) -> str:
     try:
         timeout = int(a.get("timeout", BROWSER_CONFIG["timeout"]))
         page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+        _current_url = url  # 桥接
         title = page.title()
         return f"✓ 已导航至: {url}\n  标题: {title}"
     except Exception as e:
@@ -321,25 +364,26 @@ def browser_tool_status() -> str:
 
 
 # ════════════════════════════════════════════════════════
-# Schema 定义（注册到 TOOLS_SCHEMA）
+# Schema 定义（注册到 BROWSER_SCHEMAS → session.py）
 # ════════════════════════════════════════════════════════
 
-TOOLS_SCHEMA = [
+BROWSER_SCHEMAS = [
     {
         "type": "function",
         "function": {
             "name": "web_fetch",
             "description": (
-                "使用 Scrapling StealthyFetcher 抓取网页内容。\n"
-                "特性：默认开启反爬模式，自动解 Cloudflare 拦截，返回 Markdown 格式。\n"
-                "适用：动态渲染页面、有反爬保护的目标站点。\n"
+                "使用 Scrapling StealthyFetcher 抓取网页（原生绿色通道，零 MCP 开销）。\n"
+                "特性：Camoufox 反检测引擎，自动解 Cloudflare 拦截，返回纯文本。\n"
+                "抓取后自动同步 URL 到浏览器，后续 web_screenshot 自动对齐。\n"
                 "比 fetch_url 更强：能穿透 Cloudflare、JS 渲染等防护。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url":     {"type": "string", "description": "目标 URL"},
-                    "timeout": {"type": "integer", "description": f"超时秒数（默认 {BROWSER_CONFIG['timeout']}）"},
+                    "url":       {"type": "string", "description": "目标 URL"},
+                    "timeout":   {"type": "integer", "description": f"超时秒数（默认 {BROWSER_CONFIG['timeout']}）"},
+                    "max_chars": {"type": "integer", "description": "最大返回字符数（默认 15000）"},
                 },
                 "required": ["url"],
             },
@@ -368,13 +412,15 @@ TOOLS_SCHEMA = [
         "function": {
             "name": "web_screenshot",
             "description": (
-                "对当前页面截图，保存到安全工作区。\n"
+                "对当前页面截图（原生 Patchright，零 MCP 开销）。\n"
                 "文件强制存入 ~/.pawnlogic/workspace/screenshots/。\n"
+                "自动同步 web_fetch 刚抓取过的 URL，无需手动 navigate。\n"
                 "返回本地文件路径，可用 analyze_local_image 进行视觉分析。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "url":      {"type": "string", "description": "截图目标 URL（可选，默认使用最近 fetch/navigate 的 URL）"},
                     "filename": {"type": "string", "description": "文件名（默认自动生成时间戳名）"},
                 },
             },
