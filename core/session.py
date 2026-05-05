@@ -30,6 +30,8 @@ from config import (
     validate_api_key, VERSION, GLOBAL_SKILLS_PATH,
     QUIET_MODE, smart_truncate,
     AGENT_PHASES,
+    USER_MODE, user_friendly_error,
+    SKILLS_DIR,
 )
 from utils.ansi import c, BOLD, DIM, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
 from core.api_client import stream_request, ensure_tool_call_id
@@ -357,6 +359,67 @@ def _is_plan_exempt(tc_buf: dict) -> bool:
 # GSA 辅助：读取 global_skills.md TOC
 # ════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════
+# P6: 技能引擎 — 扫描 ./skills 目录，检索相关技能
+# ════════════════════════════════════════════════════════
+
+def _scan_local_skills(query: str, max_skills: int = 3) -> str:
+    """
+    扫描 ./skills/ 目录，根据用户查询的关键词匹配相关 .md 技能文件。
+    返回匹配到的技能全文（注入系统提示词）。
+    """
+    if not SKILLS_DIR.exists() or not SKILLS_DIR.is_dir():
+        return ""
+
+    skill_files = sorted(SKILLS_DIR.glob("*.md"))
+    if not skill_files:
+        return ""
+
+    # 从查询中提取关键词（中文按字，英文按空格/下划线分词）
+    import re
+    _keywords = set()
+    # 英文单词
+    _keywords.update(w.lower() for w in re.findall(r"[a-zA-Z_]+", query))
+    # 中文字符（每字作为一个匹配单元）
+    _keywords.update(c for c in query if "一" <= c <= "鿿")
+
+    if not _keywords:
+        return ""
+
+    scored: list[tuple[int, str, Path]] = []
+    for fp in skill_files:
+        fname = fp.stem.lower()  # 去掉 .md
+        try:
+            content = fp.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+
+        # 评分：文件名命中 + 内容关键词命中
+        score = 0
+        fname_lower = fname.replace("_", " ")
+        for kw in _keywords:
+            if kw in fname_lower:
+                score += 3
+            if kw in content.lower()[:2000]:  # 只检查前 2000 字符
+                score += 1
+
+        if score > 0:
+            scored.append((score, content, fp))
+
+    if not scored:
+        return ""
+
+    # 按评分降序，取 top N
+    scored.sort(key=lambda x: -x[0])
+    blocks = []
+    for score, content, fp in scored[:max_skills]:
+        blocks.append(
+            f"=== Local Skill: {fp.stem} (relevance={score}) ===\n"
+            f"{content[:3000]}\n"
+        )
+    return "\n".join(blocks)
+
+
 def _load_skills_toc() -> str:
     try:
         from core.gsa import load_toc
@@ -644,12 +707,14 @@ class AgentSession:
             skills_toc = ""
             _relevant_skills_md = ""
             _conflict_warning = ""
+            _local_skills_md = ""
         else:
             skills_toc   = _load_skills_toc()
 
             # ── ★ GSA 相关技能动态检索（衰减评分版）────────────
             _relevant_skills_md  = ""
             _conflict_warning    = ""
+            _local_skills_md     = ""
             if knowledge_query:
                 try:
                     _relevant_skills_md, _conflict_warning = load_relevant_skills(
@@ -657,6 +722,12 @@ class AgentSession:
                     )
                 except Exception:
                     pass   # 降级：无相关技能注入，不中断主流程
+
+                # ★ P6: 本地技能引擎检索
+                try:
+                    _local_skills_md = _scan_local_skills(knowledge_query, max_skills=3)
+                except Exception:
+                    pass   # 降级：无本地技能注入，不中断主流程
 
         # ── MoE Phase 感知块 ──────────────────────────────
         phase_tools  = AGENT_PHASES.get(self.current_phase, [])
@@ -907,6 +978,15 @@ class AgentSession:
                 if _relevant_skills_md else ""
             )
 
+            # ★ P6: 本地技能引擎 — 从 ./skills/ 检索相关技能
+            + (
+                f"=== Local Skills (from ./skills/ directory) ===\n"
+                f"{_local_skills_md}\n"
+                "(Above skills were auto-retrieved from local skill files. "
+                "Follow their instructions if relevant to the current task.)\n\n"
+                if _local_skills_md else ""
+            )
+
             # ★ 冲突预警注入
             + (
                 f"{_conflict_warning}\n\n"
@@ -1106,7 +1186,10 @@ class AgentSession:
                                 "--- RAW (truncated 4096) ---\n{}\n--- END ---",
                                 self.model_alias, self.session_id[:8], e, json_str[:4096],
                             )
-                            print(c(RED, f"  ✗ [Hybrid Parser] JSON 兜底解析失败: {e}"))
+                            if USER_MODE:
+                                print(c(RED, "  ❌ 系统忙，请稍后重试"))
+                            else:
+                                print(c(RED, f"  ✗ [Hybrid Parser] JSON 兜底解析失败: {e}"))
                         else:
                             print(c(YELLOW, f"  ⚠ [Hybrid Parser] 探测到脏 JSON，已通过正则抢救成功！"))
 
@@ -1239,7 +1322,10 @@ class AgentSession:
             ):
                 if "_error" in delta:
                     _err_detail = delta["_error"]
-                    print(c(RED, f"\nAPI Error: {_err_detail}"))
+                    if USER_MODE:
+                        print(c(RED, f"\n  {user_friendly_error(_err_detail)}"))
+                    else:
+                        print(c(RED, f"\nAPI Error: {_err_detail}"))
                     logger.error(
                         "API stream error | model={} session={} iteration={} raw_error={}",
                         self.model_alias, self.session_id[:8], iteration, _err_detail,
@@ -1518,7 +1604,8 @@ class AgentSession:
                             _audit_ok = False
 
                     except Exception as _tool_exc:
-                        result = f"ERROR: {type(_tool_exc).__name__}: {_tool_exc}"
+                        _raw_err = f"ERROR: {type(_tool_exc).__name__}: {_tool_exc}"
+                        result = user_friendly_error(_raw_err) if USER_MODE else _raw_err
                         _audit_ok = False
                     _elapsed_ms = int((time.monotonic() - _t0) * 1000)
 
