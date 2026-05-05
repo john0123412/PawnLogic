@@ -10,10 +10,11 @@
 - Agent 必须具备"查阅技能书"的意识：在执行复杂任务前，先调用 `list_dir("./skills")`。
 
 ### 技能包规范 (Skill Pack Spec)
-- 技能必须以**文件夹**形式存在于 `./skills/`，每个文件夹为一个独立技能包。
-- 每个技能包**必须**包含 `manifest.json`，用于描述技能的触发场景和调用参数。
-- **优先加载技能包内的 Python 脚本执行任务**，而非让 Agent 在终端即兴编写长段代码。
-- `manifest.json` schema:
+- 技能以**文件夹**形式存在于 `./skills/`，每个文件夹为一个独立技能包。
+- **零配置模式**：文件夹里放一个 `skill.md`（或 `guide.md`）即可，系统自动从文件名和标题提取关键词。
+- `manifest.json` **可选**，用于补充 keywords/triggers/scripts 等元数据。
+- **优先加载技能包内的脚本执行任务**，而非让 Agent 即兴编写代码。
+- `manifest.json` schema（可选）:
   ```json
   {
     "name": "技能包名称",
@@ -22,12 +23,10 @@
     "keywords": ["关键词1", "关键词2"],
     "triggers": ["触发条件描述1", "触发条件描述2"],
     "guide": "guide.md",
-    "scripts": ["exploit.py", "helper.sh"],
+    "scripts": ["exploit.py"],
     "author": "作者名"
   }
   ```
-- `guide.md` — 技能使用指南（Agent 读取后按步骤执行）
-- `scripts/` — 可执行脚本（Agent 优先调用，避免即兴编码）
 - User 模式下，仅告知用户"已加载 [技能名] 插件"，不展示包内具体路径和代码。
 
 ## 3. 安全与编码

@@ -1,14 +1,25 @@
 """
 core/skill_manager.py — SkillScanner: 技能包扫描与匹配引擎
 ============================================================
-P6.5 升级：从单一 *.md 文件模式升级为文件夹包模式。
-每个技能包 = 一个子目录，包含 manifest.json 描述元数据。
+零配置模式：文件夹里扔一个 .md 文件就能用。
 
-用法：
-    from core.skill_manager import SkillScanner
-    scanner = SkillScanner(skills_dir)
-    packs = scanner.match("pwn stack overflow", top_k=3)
-    prompt_text = scanner.format_for_prompt(packs)
+最简用法：
+    skills/
+    └── pwn_stack/
+        └── skill.md        ← 就这一个文件，完事
+
+进阶用法（可选）：
+    skills/
+    └── pwn_stack/
+        ├── skill.md        ← 主内容（Agent 读取执行）
+        ├── exploit.py      ← 可选：Agent 优先调用的脚本
+        └── manifest.json   ← 可选：额外元数据（keywords/triggers）
+
+扫描逻辑：
+    1. 遍历 ./skills/*/ 目录
+    2. 找 skill.md（或 guide.md / 目录内第一个 .md）
+    3. 从文件名 + 内容标题自动提取关键词
+    4. manifest.json 若存在，其 keywords/triggers 优先级更高
 """
 
 import json
@@ -17,14 +28,14 @@ from pathlib import Path
 
 
 class SkillScanner:
-    """扫描 ./skills/*/manifest.json，按关键词匹配技能包。"""
+    """扫描 ./skills/*/，从 .md 文件自动提取元数据并匹配。"""
 
     def __init__(self, skills_dir: Path):
         self.skills_dir = skills_dir
         self._cache: list[dict] | None = None
 
     def scan_all(self) -> list[dict]:
-        """扫描所有技能包，返回 manifest 元数据列表（带 _path 字段）。"""
+        """扫描所有技能包，返回元数据列表。"""
         if self._cache is not None:
             return self._cache
 
@@ -33,37 +44,85 @@ class SkillScanner:
             return []
 
         packs = []
-        for manifest_path in sorted(self.skills_dir.glob("*/manifest.json")):
-            try:
-                data = json.loads(manifest_path.read_text(encoding="utf-8", errors="ignore"))
-            except (json.JSONDecodeError, OSError):
+        for skill_dir in sorted(self.skills_dir.iterdir()):
+            if not skill_dir.is_dir():
                 continue
 
-            # 必须字段校验
-            if not data.get("name"):
-                continue
-
-            data["_path"] = manifest_path.parent  # 技能包根目录
-            data["_manifest_path"] = manifest_path
-            packs.append(data)
+            pack = self._scan_one(skill_dir)
+            if pack:
+                packs.append(pack)
 
         self._cache = packs
         return packs
 
+    def _scan_one(self, skill_dir: Path) -> dict | None:
+        """扫描单个技能包目录，返回元数据 dict 或 None。"""
+        # 1. 找主 .md 文件：skill.md > guide.md > 第一个 .md
+        md_file = None
+        for name in ("skill.md", "guide.md"):
+            candidate = skill_dir / name
+            if candidate.exists():
+                md_file = candidate
+                break
+        if not md_file:
+            mds = sorted(skill_dir.glob("*.md"))
+            if mds:
+                md_file = mds[0]
+        if not md_file:
+            return None  # 没有 .md 文件，跳过
+
+        # 2. 读取 .md 内容
+        try:
+            content = md_file.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return None
+
+        # 3. 尝试加载 manifest.json（可选）
+        manifest = {}
+        manifest_path = skill_dir / "manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8", errors="ignore"))
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # 4. 提取名称：manifest.name > .md 一级标题 > 文件夹名
+        name = manifest.get("name")
+        if not name:
+            heading = re.search(r"^#\s+(.+)", content, re.MULTILINE)
+            name = heading.group(1).strip() if heading else skill_dir.name
+
+        # 5. 提取关键词：manifest.keywords > 自动提取
+        keywords = manifest.get("keywords", [])
+        triggers = manifest.get("triggers", [])
+        if not keywords:
+            keywords = self._auto_extract_keywords(skill_dir.name, content)
+
+        # 6. 找可执行脚本
+        scripts = manifest.get("scripts", [])
+        if not scripts:
+            for ext in ("*.py", "*.sh"):
+                scripts.extend(f.name for f in sorted(skill_dir.glob(ext)))
+
+        return {
+            "name": name,
+            "description": manifest.get("description", self._auto_extract_desc(content)),
+            "version": manifest.get("version", "1.0"),
+            "keywords": keywords,
+            "triggers": triggers,
+            "guide": md_file.name,
+            "scripts": scripts,
+            "_path": skill_dir,
+            "_md_file": md_file,
+        }
+
     def match(self, query: str, top_k: int = 3) -> list[dict]:
-        """
-        按查询关键词匹配技能包。
-        评分规则：
-          - keywords 命中: +3 分/词
-          - triggers 命中: +2 分/词
-          - name 命中: +5 分/词
-          - description 命中: +1 分/词
-        """
+        """按查询匹配技能包，返回排序后的列表。"""
         packs = self.scan_all()
         if not packs or not query.strip():
             return []
 
-        keywords = self._extract_keywords(query)
+        keywords = self._extract_query_keywords(query)
         if not keywords:
             return []
 
@@ -71,26 +130,40 @@ class SkillScanner:
         for pack in packs:
             score = 0
             pack_name = pack.get("name", "").lower()
-            pack_keywords = [k.lower() for k in pack.get("keywords", [])]
-            pack_triggers = [t.lower() for t in pack.get("triggers", [])]
+            pack_kw = [k.lower() for k in pack.get("keywords", [])]
+            pack_tr = [t.lower() for t in pack.get("triggers", [])]
 
             for kw in keywords:
                 kw_l = kw.lower()
-                # name 命中
+                kw_len = len(kw_l)
+                # 名称匹配（中文 3-gram 权重更高）
                 if kw_l in pack_name:
-                    score += 5
-                # keywords 命中（双向匹配）
-                for pk in pack_keywords:
+                    score += 6 if kw_len >= 3 else 5
+                # 关键词匹配
+                for pk in pack_kw:
                     if kw_l in pk or pk in kw_l:
-                        score += 3
+                        score += 4 if kw_len >= 3 else 3
                         break
-                # triggers 命中
-                for pt in pack_triggers:
-                    if kw_l in pt:
-                        score += 2
+                # 触发词匹配：要求匹配长度 >= 触发词长度的一半（过滤短泛词命中长触发词）
+                for pt in pack_tr:
+                    if kw_l in pt and kw_len * 2 >= len(pt):
+                        score += 3 if kw_len >= 3 else 2
                         break
 
-            if score >= 3:  # 至少命中 1 个 keyword 或多个 trigger
+            # 兜底：查询关键词在 .md 内容中出现（需含至少 1 个 3-gram 或 3+ 个 2-gram 命中）
+            if score == 0:
+                md_file = pack.get("_md_file")
+                if md_file:
+                    try:
+                        content = md_file.read_text(encoding="utf-8", errors="ignore")[:1500].lower()
+                        long_hits = sum(1 for kw in keywords if len(kw) >= 3 and kw in content)
+                        short_hits = sum(1 for kw in keywords if len(kw) < 3 and kw in content)
+                        if long_hits >= 1 or short_hits >= 3:
+                            score = 2
+                    except OSError:
+                        pass
+
+            if score >= 2:
                 scored.append((score, pack))
 
         scored.sort(key=lambda x: -x[0])
@@ -105,44 +178,71 @@ class SkillScanner:
         for pack in packs:
             name = pack.get("name", "unknown")
             desc = pack.get("description", "")
-            version = pack.get("version", "1.0")
             guide = pack.get("guide", "")
             scripts = pack.get("scripts", [])
             pack_path = pack.get("_path", "")
 
-            lines = [f"=== Skill Pack: {name} v{version} ==="]
-            lines.append(f"Description: {desc}")
-            lines.append(f"Location: {pack_path}/")
-
+            lines = [f"=== Skill: {name} ==="]
+            if desc:
+                lines.append(f"  {desc}")
             if guide:
-                guide_path = pack_path / guide
-                lines.append(f"Guide: read_file(path='{guide_path}')")
-                lines.append("ACTION REQUIRED: Read the guide FIRST, then follow its steps.")
-
+                lines.append(f"  Read: read_file(path='{pack_path / guide}')")
+                lines.append(f"  Follow the guide step by step.")
             if scripts:
-                script_paths = [str(pack_path / s) for s in scripts]
-                lines.append(f"Scripts: {', '.join(script_paths)}")
-                lines.append("PREFERENCE: Run these scripts instead of writing new code.")
+                lines.append(f"  Scripts: {', '.join(scripts)}")
+                lines.append(f"  Prefer running these scripts over writing new code.")
 
             blocks.append("\n".join(lines))
 
         return "\n\n".join(blocks)
 
     def format_user_message(self, packs: list[dict]) -> str:
-        """USER_MODE 下的简洁提示。"""
+        """USER_MODE 简洁提示。"""
         if not packs:
             return ""
-        names = [p.get("name", "unknown") for p in packs]
-        return f"  ✓ 已加载技能包: {', '.join(names)}"
+        names = [p.get("name", "?") for p in packs]
+        return f"  ✓ 已加载技能: {', '.join(names)}"
+
+    # ── 内部辅助 ──────────────────────────────────────────
 
     @staticmethod
-    def _extract_keywords(query: str) -> list[str]:
-        """从查询中提取关键词（英文按词，中文按 2-gram）。"""
+    def _auto_extract_keywords(dirname: str, content: str) -> list[str]:
+        """从文件夹名 + .md 标题自动提取关键词。"""
+        kw = set()
+        # 文件夹名拆词（英文）
+        for word in re.split(r"[_\-\s]+", dirname):
+            if 2 <= len(word) <= 15 and word.isascii():
+                kw.add(word.lower())
+        # .md 标题中的英文单词
+        for m in re.finditer(r"^#{1,3}\s+(.+)", content, re.MULTILINE):
+            heading = m.group(1).strip()
+            for word in re.findall(r"[a-zA-Z_]{2,15}", heading):
+                kw.add(word.lower())
+        # .md 标题中的中文词（连续 2-4 个汉字）
+        for m in re.finditer(r"^#{1,3}\s+(.+)", content, re.MULTILINE):
+            heading = m.group(1).strip()
+            for cn in re.findall(r"[一-鿿]{2,4}", heading):
+                kw.add(cn)
+        return list(kw)
+
+    @staticmethod
+    def _auto_extract_desc(content: str) -> str:
+        """从 .md 内容提取第一段非标题文本作为描述。"""
+        for line in content.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and len(line) > 5:
+                return line[:120]
+        return ""
+
+    @staticmethod
+    def _extract_query_keywords(query: str) -> list[str]:
+        """从查询中提取关键词（英文按词，中文按 2-gram + 3-gram）。"""
         words = []
-        # 英文单词（至少 2 字符）
         words.extend(w.lower() for w in re.findall(r"[a-zA-Z_]+", query) if len(w) > 1)
-        # 中文字符 2-gram（避免单字误匹配）
         cn_chars = [c for c in query if "一" <= c <= "鿿"]
+        # 3-gram 优先（更精确），权重由 match() 中按长度加权
+        for i in range(len(cn_chars) - 2):
+            words.append(cn_chars[i] + cn_chars[i + 1] + cn_chars[i + 2])
         for i in range(len(cn_chars) - 1):
             words.append(cn_chars[i] + cn_chars[i + 1])
         return words
