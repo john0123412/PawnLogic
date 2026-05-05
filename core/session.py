@@ -360,64 +360,11 @@ def _is_plan_exempt(tc_buf: dict) -> bool:
 # ════════════════════════════════════════════════════════
 
 # ════════════════════════════════════════════════════════
-# P6: 技能引擎 — 扫描 ./skills 目录，检索相关技能
+# P6.5: 技能引擎 — SkillScanner 文件夹包模式
 # ════════════════════════════════════════════════════════
 
-def _scan_local_skills(query: str, max_skills: int = 3) -> str:
-    """
-    扫描 ./skills/ 目录，根据用户查询的关键词匹配相关 .md 技能文件。
-    返回匹配到的技能全文（注入系统提示词）。
-    """
-    if not SKILLS_DIR.exists() or not SKILLS_DIR.is_dir():
-        return ""
-
-    skill_files = sorted(SKILLS_DIR.glob("*.md"))
-    if not skill_files:
-        return ""
-
-    # 从查询中提取关键词（中文按字，英文按空格/下划线分词）
-    import re
-    _keywords = set()
-    # 英文单词
-    _keywords.update(w.lower() for w in re.findall(r"[a-zA-Z_]+", query))
-    # 中文字符（每字作为一个匹配单元）
-    _keywords.update(c for c in query if "一" <= c <= "鿿")
-
-    if not _keywords:
-        return ""
-
-    scored: list[tuple[int, str, Path]] = []
-    for fp in skill_files:
-        fname = fp.stem.lower()  # 去掉 .md
-        try:
-            content = fp.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
-
-        # 评分：文件名命中 + 内容关键词命中
-        score = 0
-        fname_lower = fname.replace("_", " ")
-        for kw in _keywords:
-            if kw in fname_lower:
-                score += 3
-            if kw in content.lower()[:2000]:  # 只检查前 2000 字符
-                score += 1
-
-        if score > 0:
-            scored.append((score, content, fp))
-
-    if not scored:
-        return ""
-
-    # 按评分降序，取 top N
-    scored.sort(key=lambda x: -x[0])
-    blocks = []
-    for score, content, fp in scored[:max_skills]:
-        blocks.append(
-            f"=== Local Skill: {fp.stem} (relevance={score}) ===\n"
-            f"{content[:3000]}\n"
-        )
-    return "\n".join(blocks)
+from core.skill_manager import SkillScanner
+_skill_scanner = SkillScanner(SKILLS_DIR)
 
 
 def _load_skills_toc() -> str:
@@ -680,6 +627,8 @@ class AgentSession:
         self._turn_prompt_tokens     = 0
         self._turn_completion_tokens = 0
         self._turn_tool_calls        = 0
+        # ★ P6.5: 技能包匹配结果缓存
+        self._loaded_skill_packs: list = []
         # 最后调用，因为它依赖上面所有属性
         self._reset_system_prompt()
 
@@ -708,6 +657,7 @@ class AgentSession:
             _relevant_skills_md = ""
             _conflict_warning = ""
             _local_skills_md = ""
+            self._loaded_skill_packs = []
         else:
             skills_toc   = _load_skills_toc()
 
@@ -723,9 +673,11 @@ class AgentSession:
                 except Exception:
                     pass   # 降级：无相关技能注入，不中断主流程
 
-                # ★ P6: 本地技能引擎检索
+                # ★ P6.5: 本地技能引擎检索（SkillScanner 文件夹包模式）
                 try:
-                    _local_skills_md = _scan_local_skills(knowledge_query, max_skills=3)
+                    _matched_packs = _skill_scanner.match(knowledge_query, top_k=3)
+                    _local_skills_md = _skill_scanner.format_for_prompt(_matched_packs)
+                    self._loaded_skill_packs = _matched_packs
                 except Exception:
                     pass   # 降级：无本地技能注入，不中断主流程
 
@@ -1262,6 +1214,19 @@ class AgentSession:
         _DIR_THRESHOLD    = 3
 
         for iteration in range(max_iter):
+            # ── P6.5: 首轮迭代显示技能包加载状态 ────────
+            if iteration == 0 and self._loaded_skill_packs:
+                if USER_MODE:
+                    print(c(GREEN, _skill_scanner.format_user_message(self._loaded_skill_packs)))
+                else:
+                    for _sp in self._loaded_skill_packs:
+                        print(c(CYAN, f"  📦 [Skill Pack] {_sp.get('name', '?')} v{_sp.get('version', '1.0')}"))
+                        _sp_path = _sp.get("_path", "")
+                        if _sp.get("guide"):
+                            print(c(GRAY, f"     guide: {_sp_path}/{_sp['guide']}"))
+                        if _sp.get("scripts"):
+                            print(c(GRAY, f"     scripts: {', '.join(_sp['scripts'])}"))
+
             # ── P1: 每轮迭代时间检查 ────────────────────
             _remaining = self._time_remaining()
             if _remaining <= 0:
