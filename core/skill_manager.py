@@ -71,7 +71,6 @@ class SkillScanner:
         for pack in packs:
             score = 0
             pack_name = pack.get("name", "").lower()
-            pack_desc = pack.get("description", "").lower()
             pack_keywords = [k.lower() for k in pack.get("keywords", [])]
             pack_triggers = [t.lower() for t in pack.get("triggers", [])]
 
@@ -80,7 +79,7 @@ class SkillScanner:
                 # name 命中
                 if kw_l in pack_name:
                     score += 5
-                # keywords 命中
+                # keywords 命中（双向匹配）
                 for pk in pack_keywords:
                     if kw_l in pk or pk in kw_l:
                         score += 3
@@ -90,11 +89,8 @@ class SkillScanner:
                     if kw_l in pt:
                         score += 2
                         break
-                # description 命中
-                if kw_l in pack_desc:
-                    score += 1
 
-            if score > 0:
+            if score >= 3:  # 至少命中 1 个 keyword 或多个 trigger
                 scored.append((score, pack))
 
         scored.sort(key=lambda x: -x[0])
@@ -141,10 +137,12 @@ class SkillScanner:
 
     @staticmethod
     def _extract_keywords(query: str) -> list[str]:
-        """从查询中提取关键词（英文按词，中文按字）。"""
+        """从查询中提取关键词（英文按词，中文按 2-gram）。"""
         words = []
-        # 英文单词
+        # 英文单词（至少 2 字符）
         words.extend(w.lower() for w in re.findall(r"[a-zA-Z_]+", query) if len(w) > 1)
-        # 中文字符
-        words.extend(c for c in query if "一" <= c <= "鿿")
+        # 中文字符 2-gram（避免单字误匹配）
+        cn_chars = [c for c in query if "一" <= c <= "鿿"]
+        for i in range(len(cn_chars) - 1):
+            words.append(cn_chars[i] + cn_chars[i + 1])
         return words
