@@ -339,9 +339,6 @@ _SEARCH_SKILLS_SCHEMA = {
 TOOL_MAP["search_skills"] = tool_search_skills
 TOOLS_SCHEMA.append(_SEARCH_SKILLS_SCHEMA)
 
-# search_skills 是只读检索，加入 plan 豁免名单
-_PLAN_EXEMPT_TOOLS.add("search_skills")
-
 def _try_load_delegate():
     try:
         from tools.delegate_tool import tool_delegate_task, DELEGATE_SCHEMA
@@ -399,8 +396,9 @@ _PLAN_MISSING_SIGNAL = (
 # ── 豁免名单：以下工具无副作用，允许跳过 <plan> 检查 ─────────────
 # 可减轻轻量模型在简单只读操作上的认知负担。
 _PLAN_EXEMPT_TOOLS = {
-    "pwn_env",   # 环境探测，无副作用
-    "list_dir",  # 目录列出，无副作用
+    "pwn_env",       # 环境探测，无副作用
+    "list_dir",      # 目录列出，无副作用
+    "search_skills", # P6: 技能包检索，只读操作
     # git_op 仅只读操作豁免（见 _is_plan_exempt）
 }
 
