@@ -6,14 +6,18 @@ PawnLogic 1.1 (Expert Edition) — main.py
 快速部署（WSL2 Ubuntu）:
   cp -r PawnLogic_1.1 ~/.local/share/pawnlogic
   chmod +x ~/.local/share/pawnlogic/main.py
-  ln -sf ~/.local/share/pawnlogic/main.py ~/.local/bin/pawn
+  ln -sf ~/.local/share/pawnlogic/pawn.sh ~/.local/bin/pawn
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
   source ~/.bashrc
   pawn   # 首次运行会自动进入 API Key 配置向导
 """
-import nest_asyncio
-nest_asyncio.apply()
 import os, sys, shutil, getpass, argparse, time, re
+try:
+    import nest_asyncio
+    nest_asyncio.apply()
+except ImportError:
+    print("\033[91m  ✗ 缺少 nest_asyncio，请执行: pip install nest_asyncio\033[0m")
+    sys.exit(1)
 try:
     import readline  # noqa  — Windows 原生无此模块，Tab 补全见 main() 内
 except ImportError:
