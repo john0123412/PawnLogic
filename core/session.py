@@ -278,6 +278,70 @@ _AUDIT_PAYLOAD_SCHEMA = {
 TOOL_MAP["audit_payload"] = tool_audit_payload
 TOOLS_SCHEMA.append(_AUDIT_PAYLOAD_SCHEMA)
 
+# ── ★ P6: search_skills 工具（自动化利用链检索）─────────────────────
+def tool_search_skills(args: dict) -> str:
+    """
+    根据探测到的目标指纹（如 'Fastjson', 'Shiro', 'Log4j'）搜索本地技能包。
+    返回匹配的技能包列表及脚本执行指引。
+    """
+    query = args.get("query", "").strip()
+    if not query:
+        return "ERROR: query 参数不能为空。请输入目标指纹或关键词，如 'Fastjson'、'Shiro'。"
+
+    try:
+        packs = _skill_scanner.match(query, top_k=int(args.get("top_k", 3)))
+    except Exception as e:
+        return f"ERROR: search_skills 异常: {e}"
+
+    if not packs:
+        return f"未找到与 '{query}' 匹配的技能包。可尝试：1. /skillpack rescan  2. 检查 skills/ 目录"
+
+    # 使用 format_for_prompt 获取完整指引（含脚本执行命令）
+    result = _skill_scanner.format_for_prompt(packs)
+
+    # USER_MODE 简洁输出
+    if USER_MODE:
+        names = [p.get("name", "?") for p in packs]
+        print(c(GREEN, f"  🚀 [P6] 已匹配 {len(packs)} 个技能包: {', '.join(names)}"))
+
+    return result
+
+
+_SEARCH_SKILLS_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "search_skills",
+        "description": (
+            "P6 自动化利用链：根据目标指纹搜索本地技能包。\n"
+            "在侦察阶段探测到 Web 框架指纹（如 Fastjson/Shiro/Log4j/Spring）后，\n"
+            "调用此工具检索对应的自动化利用脚本和指南。\n"
+            "返回结果包含：技能包名称、描述、guide.md 路径、可用脚本及执行命令。\n"
+            "你必须优先执行返回的脚本，禁止在未尝试脚本前自主编写长段 Payload。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type":        "string",
+                    "description": "目标指纹或关键词，如 'Fastjson', 'Shiro', 'log4j', 'spring', 'sql注入'",
+                },
+                "top_k": {
+                    "type":        "integer",
+                    "description": "返回的最大技能包数量（默认 3）",
+                    "default":     3,
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+TOOL_MAP["search_skills"] = tool_search_skills
+TOOLS_SCHEMA.append(_SEARCH_SKILLS_SCHEMA)
+
+# search_skills 是只读检索，加入 plan 豁免名单
+_PLAN_EXEMPT_TOOLS.add("search_skills")
+
 def _try_load_delegate():
     try:
         from tools.delegate_tool import tool_delegate_task, DELEGATE_SCHEMA
@@ -738,6 +802,7 @@ class AgentSession:
             "  CTF/Pwn  : pwn_env · inspect_binary · pwn_rop · pwn_cyclic · pwn_disasm\n"
             "             pwn_libc · pwn_debug · pwn_one_gadget · pwn_timed_debug\n"
             "  Advanced : delegate_task  (fresh context sub-agent)\n"
+            "  Skills   : search_skills (P6: 按目标指纹检索本地技能包)\n"
             "  History  : /chat list · /chat view · /chat find · /chat tag · /chat related\n\n"
 
             "=== Scrapling Web Penetration (WEB_PEN Phase) ===\n"
@@ -748,6 +813,28 @@ class AgentSession:
             "  · 所有浏览器下载文件必须存入 SAFE_WORKSPACE，禁止写入其他目录。\n"
             "  · 遇到 Cloudflare 5秒盾/人机验证 → 直接 web_fetch，Scrapling 自动处理。\n"
             "  · 需要交互式操作（登录/点击/表单）→ web_navigate → web_type → web_click → web_screenshot。\n\n"
+
+            "=== Auto-Exploit (P6) Protocol ===\n"
+            "当目标为 Web 应用时，遵循自动化利用链（Exploit Chain）：\n\n"
+            "  Step 1 — 侦察（RECON Phase）:\n"
+            "    web_fetch 获取目标页面指纹（Server Header, X-Powered-By, Cookie 名, HTML 特征）。\n"
+            "    识别框架：Fastjson / Shiro / Log4j / Spring / Struts / ThinkPHP / Laravel 等。\n\n"
+            "  Step 2 — 匹配（search_skills）:\n"
+            "    调用 search_skills(query='<框架名>') 检索本地技能包。\n"
+            "    若返回空结果，可尝试变体关键词（如 'shiro' → 'shiro550' / 'rememberme'）。\n\n"
+            "  Step 3 — 阅读（read_file）:\n"
+            "    读取技能包中的 guide.md / skill.md，理解利用条件和步骤。\n"
+            "    读取 manifest.json 了解脚本参数和触发条件。\n\n"
+            "  Step 4 — 执行（run_shell / run_code_docker）:\n"
+            "    优先执行技能包内的预置脚本（exploit.py / payload.sh）。\n"
+            "    命令格式: run_shell(command='python3 {pack_path}/{script} --url <target>')\n"
+            "    需要隔离环境时: run_code_docker(image='python', code='...')\n\n"
+            "  Step 5 — 验证（verify）:\n"
+            "    确认利用成功（回显 / Flag / Shell / 数据泄露）。\n"
+            "    成功后调用 bump_skill(skill_name=<技能名>) 提升技能权重。\n\n"
+            "  RULE: 禁止在未尝试 search_skills 前自主编写长段 Exploit 代码。\n"
+            "  RULE: 若技能包脚本执行失败，先阅读 guide.md 分析原因，修改参数后重试。\n"
+            "  RULE: 仅在技能包不存在或完全不匹配时，才允许从零编写 Payload。\n\n"
 
             f"Working dir : {self.cwd}\n"
             f"Time        : {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
@@ -1490,7 +1577,24 @@ class AgentSession:
 
                 preview  = ", ".join(f"{k}={repr(v)[:40]}" for k, v in fn_args.items())
                 iter_tag = c(GRAY, f"[{iteration+1}/{max_iter}]")
-                print(c(YELLOW, f"  🔧 {name}") + c(GRAY, f"({preview[:80]})") + f" {iter_tag}")
+
+                # P6: USER_MODE 下检测技能包脚本调用，简化输出
+                _is_skill_call = False
+                if USER_MODE and name == "run_shell":
+                    _cmd = fn_args.get("command", "") or fn_args.get("_raw_args", "")
+                    _skills_dir_str = str(SKILLS_DIR).replace("\\", "/")
+                    if _skills_dir_str in _cmd.replace("\\", "/") and any(
+                        _cmd.strip().endswith(ext) or f"python3 {_skills_dir_str}" in _cmd.replace("\\", "/")
+                        for ext in (".py", ".sh")
+                    ):
+                        _is_skill_call = True
+                        # 从命令中提取技能包名称
+                        _parts = _cmd.replace("\\", "/").split("/skills/")
+                        _pack_hint = _parts[1].split("/")[0] if len(_parts) > 1 else "unknown"
+                        print(c(GREEN, f"  🚀 [P6] 正在调用针对 {_pack_hint} 的自动化验证脚本...") + f" {iter_tag}")
+
+                if not _is_skill_call:
+                    print(c(YELLOW, f"  🔧 {name}") + c(GRAY, f"({preview[:80]})") + f" {iter_tag}")
 
                 # ── switch_phase 拦截（直接操作实例状态）────────
                 if name == "switch_phase":
