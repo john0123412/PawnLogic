@@ -115,16 +115,45 @@ def _ensure_page_url(url: str):
 
 
 def _get_stealthy_fetcher():
-    """获取或创建 StealthyFetcher 实例（Camoufox 反爬引擎）。"""
+    """获取或创建 StealthyFetcher 实例（Camoufox 反爬引擎）。
+    使用 StealthyFetcher.configure() 全局预热，避免首次 fetch 时的冷启动超时。
+    """
     global _stealthy_fetcher
     with _fetcher_lock:
         if _stealthy_fetcher is None:
             try:
                 from scrapling import StealthyFetcher
+                # 全局预热：configure() 会预加载 Camoufox 引擎配置，
+                # 后续 fetch() 调用直接复用，消除首次启动的 30s+ 超时
+                StealthyFetcher.configure()
                 _stealthy_fetcher = StealthyFetcher()
             except Exception as e:
                 _stealthy_fetcher = f"ERROR: {e}"
         return _stealthy_fetcher
+
+
+def _retry_fetch(fetcher, url: str, timeout_ms: int, max_retries: int = 3):
+    """带递增间隔的重试装饰器：Page.goto 超时自动重试。
+    间隔序列: 2s, 5s, 10s（共最多 3 次尝试）。
+    """
+    delays = [2, 5, 10]
+    last_exc = None
+    for attempt in range(max_retries):
+        try:
+            return fetcher.fetch(url, headless=True, timeout=timeout_ms)
+        except Exception as e:
+            last_exc = e
+            err_name = type(e).__name__
+            is_timeout = "timeout" in str(e).lower() or "Timeout" in err_name
+            if not is_timeout or attempt == max_retries - 1:
+                raise
+            delay = delays[min(attempt, len(delays) - 1)]
+            print(c(YELLOW,
+                f"  ⏳ [Retry {attempt+1}/{max_retries}] {err_name}，"
+                f"{delay}s 后重试..."
+            ))
+            time.sleep(delay)
+    raise last_exc
 
 
 def _safe_path(filename: str) -> str:
@@ -163,11 +192,8 @@ def tool_web_fetch(a: dict) -> str:
             return fetcher
 
         # StealthyFetcher 基于 Camoufox（反检测 Playwright），timeout 单位为毫秒
-        resp = fetcher.fetch(
-            url,
-            headless=True,
-            timeout=timeout * 1000,
-        )
+        # 超时自动重试：间隔 2s → 5s → 10s，最多 3 次
+        resp = _retry_fetch(fetcher, url, timeout * 1000, max_retries=3)
 
         _current_url = url  # 桥接：同步 URL 到全局状态
 
