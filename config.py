@@ -567,6 +567,7 @@ AGENT_PHASES: dict[str, list[str]] = {
         "pwn_env", "list_dir", "find_files", "read_file", "inspect_binary",
         "pwn_timed_debug",   # CTF 动态靶机随时可用
         "search_skills",     # P6: 指纹匹配技能包
+        "check_service",     # P6: 环境嗅探（端口→进程详情）
     ],
     # 漏洞开发阶段：定位偏移、反汇编、构建 ROP 链
     "VULN_DEV": [
@@ -590,6 +591,7 @@ AGENT_PHASES: dict[str, list[str]] = {
         "docker_prune_resources",              # P4.3: 资源回收
         "bump_skill",   # ★ GSA 反馈，全阶段可用
         "search_skills",  # P6: 指纹匹配技能包
+        "check_service",  # P6: 环境嗅探（端口→进程详情）
     ],
     # P5: Web 渗透阶段 — Scrapling 浏览器武器库
     "WEB_PEN": [
@@ -599,6 +601,7 @@ AGENT_PHASES: dict[str, list[str]] = {
         "run_shell",                 # 辅助命令
         "bump_skill",
         "search_skills",             # P6: 指纹匹配技能包
+        "check_service",             # P6: 环境嗅探（端口→进程详情）
     ],
 }
 

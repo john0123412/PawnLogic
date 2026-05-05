@@ -297,8 +297,10 @@ HELP_TEXT = f"""
 
 {c(BOLD,"── 技能包管理 ──")}
   {c(CYAN,"/skillpack [/sp]")}    列出本地技能包（skills/ 目录）
-  {c(CYAN,"/skillpack rescan")}   重新扫描 skills/ 目录
-  {c(CYAN,"/skillpack <名称>")}   查看指定技能包详情
+  {c(CYAN,"/sp rescan")}          重新扫描 skills/ 目录
+  {c(CYAN,"/sp sync")}            同步所有带 .git 的技能包（git pull）
+  {c(CYAN,"/sp install <url>")}   从远程仓库安装新技能包
+  {c(CYAN,"/sp <名称>")}          查看指定技能包详情
   {c(CYAN,"/skills")}             查看全局技能存档（GSA）
 
 {c(BOLD,"── 项目状态（GSD）──")}
@@ -1339,6 +1341,61 @@ def handle_slash(cmd: str, session: AgentSession):
                 print(c(BOLD, "\n  本地技能包："))
                 print(_skill_scanner.format_list())
 
+        elif sub == "sync":
+            # 全球同步：遍历所有带 .git 的技能包，git pull
+            from core.session import _skill_scanner
+            if config.USER_MODE:
+                print(c(CYAN, "  🔄 正在同步技能包..."))
+            else:
+                print(c(CYAN, "  🔄 正在同步所有带 .git 的技能包..."))
+            results = _skill_scanner.sync_packs()
+            if not results:
+                print(c(GRAY, "  没有发现带 .git 的技能包目录"))
+            else:
+                ok_count = sum(1 for r in results if r["status"] == "ok")
+                err_count = len(results) - ok_count
+                print(c(GREEN, f"  ✓ 同步完成: {ok_count} 成功, {err_count} 失败"))
+                for r in results:
+                    tag = c(GREEN, "✓") if r["status"] == "ok" else c(RED, "✗")
+                    detail = ""
+                    if not config.USER_MODE:
+                        detail = c(GRAY, f"  {r['detail']}")
+                    print(f"    {tag} {r['name']}{detail}")
+                if err_count > 0:
+                    print(c(GRAY, "  提示: 手动进入失败的目录执行 git pull 查看详细错误"))
+
+        elif sub == "install":
+            # 克隆远程技能仓库
+            repo_url = arg2.strip() if arg2 else ""
+            if not repo_url:
+                print(c(RED, "  用法: /sp install <repo_url>"))
+                print(c(GRAY, "  例: /sp install https://github.com/user/exploit-pack.git"))
+            else:
+                from core.session import _skill_scanner
+                if config.USER_MODE:
+                    print(c(CYAN, "  📥 正在安装技能包..."))
+                else:
+                    print(c(CYAN, f"  📥 正在克隆 {repo_url} ..."))
+                result = _skill_scanner.install_pack(repo_url)
+                if result["status"] == "ok":
+                    print(c(GREEN, f"  ✓ {result['detail']}"))
+                    # 显示安装后的包信息
+                    packs = _skill_scanner.scan_all()
+                    installed = [p for p in packs if result["name"] in p.get("_path", "").name]
+                    if installed:
+                        print(c(BOLD, f"\n  新安装的技能包:"))
+                        for p in installed:
+                            name = p.get("name", "?")
+                            desc = p.get("description", "")
+                            scripts = p.get("scripts", [])
+                            print(c(GREEN, f"    📦 {name}"))
+                            if desc:
+                                print(c(GRAY, f"       {desc[:60]}"))
+                            if scripts:
+                                print(c(GRAY, f"       scripts: {', '.join(scripts)}"))
+                else:
+                    print(c(RED, f"  ✗ 安装失败: {result['detail']}"))
+
         elif sub == "list" or sub == "":
             from core.session import _skill_scanner
             packs = _skill_scanner.scan_all()
@@ -1352,7 +1409,7 @@ def handle_slash(cmd: str, session: AgentSession):
                 print(c(BOLD, f"\n  📦 本地技能包（{len(packs)} 个）"))
                 print(c(GRAY,  f"  路径: {SKILLS_DIR}\n"))
                 print(_skill_scanner.format_list())
-                print(c(GRAY, "\n  /skillpack rescan → 重新扫描  |  /skillpack <名称> → 查看详情"))
+                print(c(GRAY, "\n  /sp rescan → 重新扫描  |  /sp sync → 同步更新  |  /sp install <url> → 安装新包  |  /sp <名称> → 查看详情"))
 
         else:
             # 按名称查看详情
@@ -1860,7 +1917,8 @@ def main():
         _all_words.append(_w)
         _all_meta[_w] = f"失败记录 {_sub}"
     _all_words.extend(["/worker auto", "/skills view", "/skills path", "/skills packs",
-                       "/skillpack list", "/skillpack rescan", "/sp list", "/sp rescan"])
+                       "/skillpack list", "/skillpack rescan", "/sp list", "/sp rescan",
+                       "/sp sync", "/sp install"])
     _all_meta["/worker auto"] = "恢复自动路由"
     _all_meta["/skills view"] = "查看完整技能文件"
     _all_meta["/skills path"] = "显示技能文件路径"
@@ -1869,6 +1927,8 @@ def main():
     _all_meta["/skillpack rescan"] = "重新扫描 skills/ 目录"
     _all_meta["/sp list"] = "列出所有本地技能包"
     _all_meta["/sp rescan"] = "重新扫描 skills/ 目录"
+    _all_meta["/sp sync"] = "同步所有带 .git 的技能包（git pull）"
+    _all_meta["/sp install"] = "从远程仓库安装新技能包"
     # Docker 子命令
     for _sub, _desc in [
         ("status", "查看 Docker 连接状态"),

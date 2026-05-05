@@ -86,6 +86,13 @@ except ImportError:
     tool_web_navigate   = None
     BROWSER_SCHEMAS     = []
 
+# P6: 环境嗅探工具（可选依赖，不可用时静默跳过）
+try:
+    from tools.recon_ops import tool_check_service, RECON_SCHEMAS
+except ImportError:
+    tool_check_service = None
+    RECON_SCHEMAS      = []
+
 TOOL_MAP: dict = {
     "read_file":           tool_read_file,
     "read_file_lines":     tool_read_file_lines,
@@ -134,10 +141,14 @@ if tool_web_type:
 if tool_web_navigate:
     TOOL_MAP["web_navigate"]   = tool_web_navigate
 
+# P6: 环境嗅探工具注册（可选）
+if tool_check_service:
+    TOOL_MAP["check_service"]  = tool_check_service
+
 TOOLS_SCHEMA: list = (
     FILE_SCHEMAS + WEB_SCHEMAS + SANDBOX_SCHEMAS
     + PWN_SCHEMAS + VISION_SCHEMAS + DOCKER_SCHEMAS
-    + BROWSER_SCHEMAS
+    + BROWSER_SCHEMAS + RECON_SCHEMAS
 )
 
 # ── switch_phase：全局路由工具（强制附加，不受 Phase 过滤）───────────
@@ -396,9 +407,10 @@ _PLAN_MISSING_SIGNAL = (
 # ── 豁免名单：以下工具无副作用，允许跳过 <plan> 检查 ─────────────
 # 可减轻轻量模型在简单只读操作上的认知负担。
 _PLAN_EXEMPT_TOOLS = {
-    "pwn_env",       # 环境探测，无副作用
-    "list_dir",      # 目录列出，无副作用
-    "search_skills", # P6: 技能包检索，只读操作
+    "pwn_env",        # 环境探测，无副作用
+    "list_dir",       # 目录列出，无副作用
+    "search_skills",  # P6: 技能包检索，只读操作
+    "check_service",  # P6: 环境嗅探，只读操作
     # git_op 仅只读操作豁免（见 _is_plan_exempt）
 }
 
@@ -799,6 +811,7 @@ class AgentSession:
             "  Vision   : analyze_local_image  (jpg/png/gif/webp — glm-4v / gpt-4o)\n"
             "  CTF/Pwn  : pwn_env · inspect_binary · pwn_rop · pwn_cyclic · pwn_disasm\n"
             "             pwn_libc · pwn_debug · pwn_one_gadget · pwn_timed_debug\n"
+            "  Recon    : check_service (port → PID/进程名/路径/环境变量/动态库)\n"
             "  Advanced : delegate_task  (fresh context sub-agent)\n"
             "  Skills   : search_skills (P6: 按目标指纹检索本地技能包)\n"
             "  History  : /chat list · /chat view · /chat find · /chat tag · /chat related\n\n"
@@ -817,19 +830,29 @@ class AgentSession:
             "  Step 1 — 侦察（RECON Phase）:\n"
             "    web_fetch 获取目标页面指纹（Server Header, X-Powered-By, Cookie 名, HTML 特征）。\n"
             "    识别框架：Fastjson / Shiro / Log4j / Spring / Struts / ThinkPHP / Laravel 等。\n\n"
-            "  Step 2 — 匹配（search_skills）:\n"
+            "  Step 2 — 环境确认（check_service）:\n"
+            "    调用 check_service(port=<目标端口>) 确认服务进程详情。\n"
+            "    获取：PID、进程名、运行路径、关键环境变量、引用的动态库。\n"
+            "    用于判断服务架构、运行用户、是否有 WAF/防护进程。\n\n"
+            "  Step 3 — 匹配（search_skills）:\n"
             "    调用 search_skills(query='<框架名>') 检索本地技能包。\n"
             "    若返回空结果，可尝试变体关键词（如 'shiro' → 'shiro550' / 'rememberme'）。\n\n"
-            "  Step 3 — 阅读（read_file）:\n"
+            "  Step 4 — 获取最新武器（/sp sync 或 /sp install）:\n"
+            "    若技能包存在但版本过旧，提醒用户执行 /sp sync 同步更新。\n"
+            "    若需要新的利用包，提醒用户执行 /sp install <repo_url> 安装。\n\n"
+            "  Step 5 — 阅读（read_file）:\n"
             "    读取技能包中的 guide.md / skill.md，理解利用条件和步骤。\n"
             "    读取 manifest.json 了解脚本参数和触发条件。\n\n"
-            "  Step 4 — 执行（run_shell / run_code_docker）:\n"
+            "  Step 6 — 执行（run_shell / run_code_docker）:\n"
             "    优先执行技能包内的预置脚本（exploit.py / payload.sh）。\n"
             "    命令格式: run_shell(command='python3 {pack_path}/{script} --url <target>')\n"
             "    需要隔离环境时: run_code_docker(image='python', code='...')\n\n"
-            "  Step 5 — 验证（verify）:\n"
+            "  Step 7 — 验证（verify）:\n"
             "    确认利用成功（回显 / Flag / Shell / 数据泄露）。\n"
             "    成功后调用 bump_skill(skill_name=<技能名>) 提升技能权重。\n\n"
+            "  === P6 本能流程（形成肌肉记忆）===\n"
+            "  侦察到指纹 → check_service 确认环境 → search_skills 检索武器包\n"
+            "  → install/sync 获取最新版 → 执行\n\n"
             "  RULE: 禁止在未尝试 search_skills 前自主编写长段 Exploit 代码。\n"
             "  RULE: 若技能包脚本执行失败，先阅读 guide.md 分析原因，修改参数后重试。\n"
             "  RULE: 仅在技能包不存在或完全不匹配时，才允许从零编写 Payload。\n\n"

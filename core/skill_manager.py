@@ -24,6 +24,7 @@ core/skill_manager.py — SkillScanner: 技能包扫描与匹配引擎
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -37,6 +38,106 @@ class SkillScanner:
     def invalidate_cache(self):
         """清除缓存，下次 scan_all() 时重新扫描磁盘。"""
         self._cache = None
+
+    def sync_packs(self) -> list[dict]:
+        """遍历 ./skills/ 下所有带 .git 的文件夹，调用 git pull 同步更新。
+        返回 [{"name": str, "status": "ok"|"error", "detail": str}, ...]
+        """
+        results = []
+        if not self.skills_dir.exists():
+            return results
+
+        for skill_dir in sorted(self.skills_dir.iterdir()):
+            if not skill_dir.is_dir():
+                continue
+            git_dir = skill_dir / ".git"
+            if not git_dir.exists():
+                continue
+
+            name = skill_dir.name
+            try:
+                proc = subprocess.run(
+                    ["git", "pull", "--ff-only"],
+                    cwd=str(skill_dir),
+                    capture_output=True, text=True,
+                    timeout=30, errors="ignore",
+                )
+                if proc.returncode == 0:
+                    detail = proc.stdout.strip().split("\n")[-1][:100]
+                    results.append({"name": name, "status": "ok", "detail": detail})
+                else:
+                    detail = proc.stderr.strip().split("\n")[-1][:100]
+                    results.append({"name": name, "status": "error", "detail": detail})
+            except subprocess.TimeoutExpired:
+                results.append({"name": name, "status": "error", "detail": "git pull 超时 (30s)"})
+            except Exception as e:
+                results.append({"name": name, "status": "error", "detail": str(e)[:80]})
+
+        self.invalidate_cache()
+        return results
+
+    def install_pack(self, repo_url: str) -> dict:
+        """将远程仓库 git clone 到 ./skills/ 子目录。
+        成功后自动 invalidate_cache()。
+        返回 {"status": "ok"|"error", "name": str, "detail": str}
+        """
+        if not self.skills_dir.exists():
+            self.skills_dir.mkdir(parents=True, exist_ok=True)
+
+        # 从 URL 提取仓库名作为目录名
+        # https://github.com/user/repo.git → repo
+        name = repo_url.rstrip("/").split("/")[-1]
+        if name.endswith(".git"):
+            name = name[:-4]
+        # 清理非法字符
+        name = re.sub(r"[^a-zA-Z0-9_\-.]", "_", name)
+
+        target_dir = self.skills_dir / name
+        if target_dir.exists():
+            return {
+                "status": "error",
+                "name": name,
+                "detail": f"目录已存在: {target_dir}",
+            }
+
+        try:
+            proc = subprocess.run(
+                ["git", "clone", "--depth=1", repo_url, str(target_dir)],
+                capture_output=True, text=True,
+                timeout=60, errors="ignore",
+            )
+            if proc.returncode != 0:
+                # 清理失败的克隆目录
+                import shutil
+                if target_dir.exists():
+                    shutil.rmtree(str(target_dir), ignore_errors=True)
+                detail = proc.stderr.strip().split("\n")[-1][:120]
+                return {"status": "error", "name": name, "detail": detail}
+
+            # 确保文件权限正确
+            subprocess.run(
+                ["chmod", "-R", "u+rwX,go+rX", str(target_dir)],
+                capture_output=True, timeout=10,
+            )
+
+            # 自动忽略非技能仓库的冗余文件
+            _IGNORE_PATTERNS = [".git", "__pycache__", "*.pyc", ".DS_Store", "node_modules"]
+            for pattern in _IGNORE_PATTERNS:
+                for p in target_dir.glob(pattern):
+                    if p.is_dir():
+                        import shutil
+                        shutil.rmtree(str(p), ignore_errors=True)
+
+            self.invalidate_cache()
+            return {"status": "ok", "name": name, "detail": f"已安装到 {target_dir}"}
+
+        except subprocess.TimeoutExpired:
+            import shutil
+            if target_dir.exists():
+                shutil.rmtree(str(target_dir), ignore_errors=True)
+            return {"status": "error", "name": name, "detail": "git clone 超时 (60s)"}
+        except Exception as e:
+            return {"status": "error", "name": name, "detail": str(e)[:120]}
 
     def scan_all(self) -> list[dict]:
         """扫描所有技能包，返回元数据列表。"""
