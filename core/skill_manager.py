@@ -194,7 +194,24 @@ class SkillScanner:
                 lines.append(f"  Follow the guide step by step.")
             if scripts:
                 lines.append(f"  Scripts: {', '.join(scripts)}")
-                lines.append(f"  Prefer running these scripts over writing new code.")
+                # P6: 明确的脚本执行指令
+                lines.append(f"  --- AUTO-EXECUTE DIRECTIVE (P6) ---")
+                lines.append(f"  该技能包含预置脚本，你必须优先执行，禁止在未尝试前自主编写 Payload。")
+                for script in scripts:
+                    script_path = pack_path / script
+                    if script.endswith(".py"):
+                        lines.append(
+                            f"  Execute: run_shell(command='python3 {script_path} --url <TARGET_URL>')"
+                        )
+                    elif script.endswith(".sh"):
+                        lines.append(
+                            f"  Execute: run_shell(command='bash {script_path} <TARGET_URL>')"
+                        )
+                    else:
+                        lines.append(
+                            f"  Execute: run_shell(command='{script_path} <args>')"
+                        )
+                lines.append(f"  若脚本执行失败，阅读 guide.md 分析原因后再修改，不要从零编写。")
 
             blocks.append("\n".join(lines))
 
