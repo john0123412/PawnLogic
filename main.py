@@ -78,12 +78,13 @@ def _install_proxy():
 
 PROXY_STATUS = _install_proxy()
 
-import config  # for config.QUIET_MODE mutation after argparse
+import config  # for config.QUIET_MODE / config.USER_MODE mutation after argparse
 from config import (
     VERSION, DYNAMIC_CONFIG, NORMAL_CONFIG,
     TIER_LOW, TIER_MID, TIER_DEEP,
     MODELS, DEFAULT_MODEL, DB_PATH, PROVIDERS,
     validate_api_key, list_vision_models,
+    user_friendly_error,
 )
 from utils.ansi       import c, cp, rl_wrap, BOLD, DIM, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
 from core.session     import AgentSession, _ctx_chars, STATE_FILENAME
@@ -264,6 +265,7 @@ HELP_TEXT = f"""
 {c(BOLD+CYAN, f"PawnLogic {VERSION} — Commands")}
 
 {c(BOLD,"── 对话控制 ──")}
+  {c(YELLOW,"/mode")}            切换 USER / DEV 输出模式
   {c(YELLOW,"/model [alias]")}   切换模型  支持: {", ".join(MODELS.keys())}
   {c(YELLOW,"/clear")}           清空上下文（保留 Pin 消息，State.md 持续注入）
   {c(YELLOW,"/context")}         上下文大小 / token 估算
@@ -780,6 +782,14 @@ def handle_slash(cmd: str, session: AgentSession):
                 print(c(GREEN, f"  ✓ 已切换到 {c(MODELS[arg]['color'], arg)}"))
         else:
             print(c(RED, f"  ✗ 未知模型 '{arg}'"))
+
+    # ── P6: 双模输出 /mode ─────────────────────────────────
+    elif verb == "/mode":
+        config.USER_MODE = not config.USER_MODE
+        if config.USER_MODE:
+            print(c(GREEN, "  ✓ 已切换到 USER 模式（简洁输出，屏蔽底层错误）"))
+        else:
+            print(c(CYAN, "  ✓ 已切换到 DEV 模式（极致透明，显示所有细节）"))
 
     # ── 上下文 ─────────────────────────────────────────
     elif verb == "/clear":
@@ -1594,7 +1604,7 @@ def main():
     # · QUIET_MODE 下终端只输出 WARNING 及以上，减少干扰
     # · 文件始终记录 DEBUG 级别，保留完整诊断信息
     setup_logger(
-        stderr_level="WARNING" if config.QUIET_MODE else "INFO",
+        stderr_level="WARNING" if (config.QUIET_MODE or config.USER_MODE) else "INFO",
         file_level="DEBUG",
     )
     logger.info(
@@ -1681,7 +1691,7 @@ def main():
 
     # ── 扁平命令列表 + 右侧灰色说明 ──────────────────────
     _all_cmd_words = [
-        "/model", "/clear", "/context", "/pin", "/unpin", "/cd", "/file",
+        "/mode", "/model", "/clear", "/context", "/pin", "/unpin", "/cd", "/file",
         "/history", "/setkey", "/keys", "/save", "/load", "/sessions", "/del",
         "/memorize", "/knowledge", "/forget", "/init_project", "/state",
         "/low", "/mid", "/deep", "/normal", "/limits",
@@ -1692,6 +1702,7 @@ def main():
     ]
 
     _cmd_meta = {
+        "/mode":          "切换 USER / DEV 输出模式",
         "/model":         "切换 AI 模型（/model ds-r1）",
         "/clear":         "清空上下文（保留 Pin 消息）",
         "/context":       "查看上下文大小 / token 估算",

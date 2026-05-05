@@ -22,6 +22,8 @@ VERSION = "1.1"
 SESSIONS_DIR       = Path.home() / ".pawnlogic" / "sessions"
 DB_PATH            = Path.home() / ".pawnlogic" / "pawn.db"
 GLOBAL_SKILLS_PATH = Path.home() / ".pawnlogic" / "global_skills.md"   # GSA 技能存档
+# ★ P6: 技能引擎 — 本地技能目录
+SKILLS_DIR         = Path(__file__).resolve().parent / "skills"
 # ★ 新增：日志存储目录，供 core/logger.py 读取
 LOG_DIR            = Path.home() / ".pawnlogic" / "logs"
 
@@ -501,6 +503,40 @@ USER_AGENTS = [
 # 集中定义以避免循环导入：main.py → session.py → main.py。
 
 QUIET_MODE: bool = False
+
+# ★ P6: 双模输出 — USER_MODE
+# USER_MODE = True  → 用户模式：屏蔽原始 Traceback、Tool Call JSON、底层日志
+# USER_MODE = False → 开发者模式：极致透明，显示所有底层细节
+USER_MODE: bool = False
+
+
+def user_friendly_error(raw_error: str) -> str:
+    """
+    USER_MODE 专用：将原始错误信息转为用户友好的简洁提示。
+    开发者模式下原样返回。
+    """
+    if not USER_MODE:
+        return raw_error
+    # 关键词 → 友好提示映射
+    _ERROR_MAP = {
+        "Traceback":            "❌ 系统忙，请稍后重试",
+        "ConnectionError":      "❌ 网络连接失败，请检查网络",
+        "TimeoutError":         "❌ 请求超时，请稍后重试",
+        "RateLimitError":       "❌ API 调用频率过高，请稍后重试",
+        "AuthenticationError":  "❌ API Key 无效，请用 /setkey 重新配置",
+        "PermissionError":      "❌ 权限不足，请检查文件权限",
+        "FileNotFoundError":    "❌ 文件未找到，请检查路径",
+        "ModuleNotFoundError":  "❌ 缺少依赖模块，请安装后重试",
+        "JSONDecodeError":      "❌ 数据解析失败，请稍后重试",
+        "API Error":            "❌ API 调用失败，请稍后重试",
+        "ERROR":                "❌ 操作失败，请稍后重试",
+    }
+    for keyword, friendly in _ERROR_MAP.items():
+        if keyword.lower() in raw_error.lower():
+            return friendly
+    # 兜底：截断到第一行，去除技术细节
+    first_line = raw_error.split("\n")[0][:80]
+    return f"❌ {first_line}"
 
 
 def smart_truncate(text: str, head: int = 30, tail: int = 30) -> str:
