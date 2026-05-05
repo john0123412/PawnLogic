@@ -11,7 +11,8 @@ PawnLogic 1.1 (Expert Edition) — main.py
   source ~/.bashrc
   pawn   # 首次运行会自动进入 API Key 配置向导
 """
-
+import nest_asyncio
+nest_asyncio.apply()
 import os, sys, shutil, getpass, argparse, time, re
 try:
     import readline  # noqa  — Windows 原生无此模块，Tab 补全见 main() 内
