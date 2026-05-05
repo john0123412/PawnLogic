@@ -49,4 +49,4 @@ htmlcov/
 logs/
 *.log
 temp/
-*.pyc
+*.pyc.claude/
