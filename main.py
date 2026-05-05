@@ -291,6 +291,12 @@ HELP_TEXT = f"""
   {c(MAGENTA,"/knowledge [query]")}  搜索/列出知识条目
   {c(MAGENTA,"/forget <id>")}        删除指定知识条目
 
+{c(BOLD,"── 技能包管理 ──")}
+  {c(CYAN,"/skillpack [/sp]")}    列出本地技能包（skills/ 目录）
+  {c(CYAN,"/skillpack rescan")}   重新扫描 skills/ 目录
+  {c(CYAN,"/skillpack <名称>")}   查看指定技能包详情
+  {c(CYAN,"/skills")}             查看全局技能存档（GSA）
+
 {c(BOLD,"── 项目状态（GSD）──")}
   {c(YELLOW,"/init_project [desc]")} 在当前目录生成 .pawn_state.md（项目大目标）
   {c(YELLOW,"/state")}               查看当前目录的 .pawn_state.md
@@ -1248,6 +1254,23 @@ def handle_slash(cmd: str, session: AgentSession):
         if sub == "path":
             print(c(GRAY, f"  {GLOBAL_SKILLS_PATH}"))
 
+        elif sub == "packs":
+            # 显示本地技能包列表
+            from core.session import _skill_scanner
+            from config import SKILLS_DIR
+            packs = _skill_scanner.scan_all()
+            if not packs:
+                print(c(GRAY,
+                    f"  skills/ 目录下暂无技能包。\n"
+                    f"  路径: {SKILLS_DIR}\n"
+                    "  创建: mkdir -p skills/my_skill && echo '# My Skill' > skills/my_skill/skill.md"
+                ))
+            else:
+                print(c(BOLD, f"\n  📦 本地技能包（{len(packs)} 个）"))
+                print(c(GRAY,  f"  路径: {SKILLS_DIR}\n"))
+                print(_skill_scanner.format_list())
+                print(c(GRAY, "\n  /skillpack rescan → 重新扫描  |  /skillpack <名称> → 查看详情"))
+
         elif sub == "view":
             if not GLOBAL_SKILLS_PATH.exists():
                 print(c(GRAY, "  global_skills.md 尚未创建。完成任务后由 AI 自动生成，或使用 /memo。"))
@@ -1294,7 +1317,73 @@ def handle_slash(cmd: str, session: AgentSession):
                     if line.startswith("# "):    print(c(CYAN + BOLD, f"  {line}"))
                     elif line.startswith("## "): print(c(YELLOW,      f"    {line}"))
                     else:                        print(c(GRAY,         f"  {line}"))
-                print(c(GRAY, "\n  /skills view → 完整内容  |  /memo → 手动存档"))
+                print(c(GRAY, "\n  /skills view → 完整内容  |  /skills packs → 本地技能包  |  /memo → 手动存档"))
+
+    # ── /skillpack：本地技能包管理 ──────────────────────────
+    elif verb in ("/skillpack", "/sp"):
+        from core.skill_manager import SkillScanner
+        from config import SKILLS_DIR
+        sub = arg.lower().strip() if arg else "list"
+
+        if sub == "rescan":
+            # 清除缓存并重新扫描
+            from core.session import _skill_scanner
+            _skill_scanner.invalidate_cache()
+            packs = _skill_scanner.scan_all()
+            print(c(GREEN, f"  ✓ 已重新扫描 skills/ 目录，发现 {len(packs)} 个技能包"))
+            if packs:
+                print(c(BOLD, "\n  本地技能包："))
+                print(_skill_scanner.format_list())
+
+        elif sub == "list" or sub == "":
+            from core.session import _skill_scanner
+            packs = _skill_scanner.scan_all()
+            if not packs:
+                print(c(GRAY,
+                    f"  skills/ 目录下暂无技能包。\n"
+                    f"  路径: {SKILLS_DIR}\n"
+                    "  创建: mkdir -p skills/my_skill && echo '# My Skill' > skills/my_skill/skill.md"
+                ))
+            else:
+                print(c(BOLD, f"\n  📦 本地技能包（{len(packs)} 个）"))
+                print(c(GRAY,  f"  路径: {SKILLS_DIR}\n"))
+                print(_skill_scanner.format_list())
+                print(c(GRAY, "\n  /skillpack rescan → 重新扫描  |  /skillpack <名称> → 查看详情"))
+
+        else:
+            # 按名称查看详情
+            from core.session import _skill_scanner
+            packs = _skill_scanner.scan_all()
+            matched = [p for p in packs if sub in p.get("name", "").lower()
+                       or sub in p.get("_path", "").name.lower()]
+            if not matched:
+                print(c(RED, f"  ✗ 未找到名为 '{sub}' 的技能包"))
+                print(c(GRAY, f"  用 /skillpack 查看所有可用技能包"))
+            else:
+                for pack in matched:
+                    name = pack.get("name", "?")
+                    desc = pack.get("description", "")
+                    ver  = pack.get("version", "1.0")
+                    kw   = pack.get("keywords", [])
+                    tr   = pack.get("triggers", [])
+                    scripts = pack.get("scripts", [])
+                    guide = pack.get("guide", "")
+                    pack_path = pack.get("_path", "")
+
+                    print(c(BOLD, f"\n  📦 {name} v{ver}"))
+                    if desc:
+                        print(f"  {desc}")
+                    print(c(GRAY, f"  路径: {pack_path}"))
+                    if kw:
+                        print(c(CYAN, f"  关键词: {', '.join(kw)}"))
+                    if tr:
+                        print(c(CYAN, f"  触发词: {', '.join(tr)}"))
+                    if guide:
+                        print(c(GREEN, f"  指南: {pack_path / guide}"))
+                        print(c(GRAY,  f"    → read_file(path='{pack_path / guide}')"))
+                    if scripts:
+                        print(c(GREEN, f"  脚本: {', '.join(scripts)}"))
+                        print(c(GRAY,  f"    → 优先运行脚本而非即兴编码"))
 
     elif verb == "/chat":
         _handle_chat(arg, arg2, session)
@@ -1697,7 +1786,7 @@ def main():
         "/low", "/mid", "/deep", "/normal", "/limits",
         "/tokens", "/ctx", "/iter", "/toolsize", "/fetchsize",
         "/webstatus", "/browserstatus", "/pwnenv", "/stats", "/time", "/docker",
-        "/worker", "/failures", "/memo", "/skills",
+        "/worker", "/failures", "/memo", "/skills", "/skillpack", "/sp",
         "/chat", "/help", "/exit",
     ]
 
@@ -1742,6 +1831,8 @@ def main():
         "/failures":      "查看 / 清空失败记录",
         "/memo":          "手动存档技能到 GSA",
         "/skills":        "查看全局技能存档目录",
+        "/skillpack":     "管理本地技能包（list/rescan/详情）",
+        "/sp":            "/skillpack 简写",
         "/chat":          "会话浏览器（list/view/find/tag/link）",
         "/help":          "显示帮助",
         "/exit":          "退出 PawnLogic",
@@ -1764,10 +1855,16 @@ def main():
         _w = f"/failures {_sub}"
         _all_words.append(_w)
         _all_meta[_w] = f"失败记录 {_sub}"
-    _all_words.extend(["/worker auto", "/skills view", "/skills path"])
+    _all_words.extend(["/worker auto", "/skills view", "/skills path", "/skills packs",
+                       "/skillpack list", "/skillpack rescan", "/sp list", "/sp rescan"])
     _all_meta["/worker auto"] = "恢复自动路由"
     _all_meta["/skills view"] = "查看完整技能文件"
     _all_meta["/skills path"] = "显示技能文件路径"
+    _all_meta["/skills packs"] = "列出本地技能包（skills/ 目录）"
+    _all_meta["/skillpack list"] = "列出所有本地技能包"
+    _all_meta["/skillpack rescan"] = "重新扫描 skills/ 目录"
+    _all_meta["/sp list"] = "列出所有本地技能包"
+    _all_meta["/sp rescan"] = "重新扫描 skills/ 目录"
     # Docker 子命令
     for _sub, _desc in [
         ("status", "查看 Docker 连接状态"),

@@ -673,13 +673,16 @@ class AgentSession:
                 except Exception:
                     pass   # 降级：无相关技能注入，不中断主流程
 
-                # ★ P6.5: 本地技能引擎检索（SkillScanner 文件夹包模式）
-                try:
-                    _matched_packs = _skill_scanner.match(knowledge_query, top_k=3)
-                    _local_skills_md = _skill_scanner.format_for_prompt(_matched_packs)
-                    self._loaded_skill_packs = _matched_packs
-                except Exception:
-                    pass   # 降级：无本地技能注入，不中断主流程
+            # ★ P6.5: 本地技能引擎检索（SkillScanner 文件夹包模式）
+            # 始终尝试匹配：knowledge_query 为空时按关键词匹配可能返回空，
+            # 但有 manifest.json triggers 的技能包仍可通过其他方式命中。
+            try:
+                _query = knowledge_query or ""
+                _matched_packs = _skill_scanner.match(_query, top_k=3)
+                _local_skills_md = _skill_scanner.format_for_prompt(_matched_packs)
+                self._loaded_skill_packs = _matched_packs
+            except Exception:
+                pass   # 降级：无本地技能注入，不中断主流程
 
         # ── MoE Phase 感知块 ──────────────────────────────
         phase_tools  = AGENT_PHASES.get(self.current_phase, [])

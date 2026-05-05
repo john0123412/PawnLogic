@@ -34,6 +34,10 @@ class SkillScanner:
         self.skills_dir = skills_dir
         self._cache: list[dict] | None = None
 
+    def invalidate_cache(self):
+        """清除缓存，下次 scan_all() 时重新扫描磁盘。"""
+        self._cache = None
+
     def scan_all(self) -> list[dict]:
         """扫描所有技能包，返回元数据列表。"""
         if self._cache is not None:
@@ -202,6 +206,29 @@ class SkillScanner:
             return ""
         names = [p.get("name", "?") for p in packs]
         return f"  ✓ 已加载技能: {', '.join(names)}"
+
+    def format_list(self) -> str:
+        """格式化所有已扫描的技能包列表（用于 /skillpack 命令）。"""
+        packs = self.scan_all()
+        if not packs:
+            return "(skills/ 目录下暂无技能包)"
+        lines = []
+        for i, p in enumerate(packs):
+            name = p.get("name", "?")
+            desc = p.get("description", "")
+            ver  = p.get("version", "1.0")
+            kw   = ", ".join(p.get("keywords", [])[:5])
+            scripts = p.get("scripts", [])
+            line = f"  [{i+1}] {name} v{ver}"
+            if desc:
+                line += f" — {desc[:60]}"
+            lines.append(line)
+            detail = f"       keywords: {kw}" if kw else ""
+            if scripts:
+                detail += f"  scripts: {', '.join(scripts)}"
+            if detail:
+                lines.append(detail)
+        return "\n".join(lines)
 
     # ── 内部辅助 ──────────────────────────────────────────
 
