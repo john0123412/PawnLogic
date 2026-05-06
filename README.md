@@ -23,6 +23,12 @@ PawnLogic 是一个专为极客和开发者打造的全能终端 AI 智能体。
 - `/chat unlink <id1> <id2>` — 取消关联
 - `/chat related <id|n>` — 查看关联会话
 
+### ✂️ CC 风格交互体验 (1.1 新增)
+
+- **Ctrl+C 回退编辑**：输入状态下按 Ctrl+C 不退出程序，自动撤回最后一轮对话并重新显示提示符（对齐 Claude Code 交互体验）
+- **Ctrl+D 退出**：使用 Ctrl+D（EOF）正常退出程序
+- **Agent 生成中断**：在 Agent 生成过程中按 Ctrl+C 立即停止，保留已产出内容
+
 ### 🏗️ 2. GSD 企业级工程架构
 
 - **规格驱动规划 (Spec-Driven)**：Agent 写代码前必须输出包含 `<action>` 和 `<verify>` 的 XML 计划
@@ -43,6 +49,13 @@ PawnLogic 是一个专为极客和开发者打造的全能终端 AI 智能体。
 - **Pwn/CTF 工具链**：GDB 批处理动态调试、ROPgadget、de Bruijn 溢出偏移计算、倒计时感知调试
 - **GSA 防御性审计**：工具调用失败自动记录，同类失败 ≥3 次自动沉淀到技能库
 - **时间感知调度**：`/time` 设置倒计时，剩余 30s 自动切换极速模式
+
+### 💰 成本微操工具集 (1.1 新增)
+
+- `/undo [n]` — 撤回最近 n 轮对话（默认 1），不影响已 Pin 的消息
+- `/compact` — 轻量模型总结当前进度 → 清空历史（保留 Pin）→ 以摘要作为新会话首条消息
+- `/think <prompt>` — 单次推理模式，自动切换至推理 Worker（ds-r1/qwq），用完恢复原模型
+- `/ping` — 极简保活请求，刷新 API 缓存 TTL
 
 ### 🧠 5. 结构化持久记忆
 
@@ -414,6 +427,10 @@ Local Ollama     LOCAL_API_KEY       ⬜ 无需 Key
 - `/clear` — 清空历史对话释放 Token（保留已 Pin 消息和项目 State）
 - `/cd <path>` — 切换 Agent 的工作目录
 - `/file ./test.py` — 将某个文件一次性载入到对话上下文
+- `/undo [n]` — 撤回最近 n 轮对话（默认 1）
+- `/compact` — 压缩上下文（轻量模型总结 + 清空历史）
+- `/think <prompt>` — 单次推理模式（自动切换推理 Worker）
+- `/ping` — 保活请求，刷新缓存 TTL
 
 ### 🧠 项目管理与 GSD 工作流
 
@@ -668,6 +685,15 @@ Agent 内置严格的软隔离保护：
 - ✅ P6 流程闭环：侦察 → check_service → search_skills → install/sync → 执行
 - ✅ `check_service` 注册到 RECON/GENERAL/WEB_PEN 阶段，只读操作跳过 plan 检查
 
+**P6 — CC 风格交互 & 成本微操**
+- ✅ Ctrl+C 回退编辑：输入状态下 Ctrl+C 撤回最后一轮对话（对齐 Claude Code 体验）
+- ✅ `/undo [n]` 物理删除尾部消息对，不影响 Pin
+- ✅ `/compact` 轻量模型总结 → 清空历史 → 摘要作首条消息
+- ✅ `/think <prompt>` 单次推理模式，自动切换推理 Worker（ds-r1/qwq）
+- ✅ `/ping` 极简保活请求，刷新 API 缓存 TTL
+- ✅ `utils/ansi.py` 新增 `Spinner` 类：USER_MODE 下 Loading 动画（braille 点阵旋转）
+- ✅ System Prompt 精简：P6 协议改为祈使句风格，技能注入格式压缩
+
 **基础改进**
 - ✅ 新增小米 MiMo 厂商接入（4 个模型）
 - ✅ `/worker` 子任务模型选择命令
@@ -721,6 +747,15 @@ A: 使用 `ubuntu18`（glibc 2.27）或 `ubuntu22`（glibc 2.35）镜像：`/doc
 
 **Q: USER 模式和 DEV 模式有什么区别？**
 A: `/mode` 切换。USER 模式屏蔽所有原始报错，只显示友好中文提示（如 `❌ 系统忙，请稍后重试`），适合演示和日常使用。DEV 模式显示完整 Traceback、Tool Call JSON 和底层日志，适合开发调试。
+
+**Q: 如何撤回上一轮对话？**
+A: 使用 `/undo` 撤回最近 1 轮，或 `/undo 3` 撤回最近 3 轮。在输入状态下按 Ctrl+C 也可快速撤回。
+
+**Q: 上下文快满了怎么办？**
+A: 使用 `/compact` 让轻量模型总结当前进度并清空历史，或 `/clear` 直接清空。`/compact` 会保留 Pin 消息和总结摘要。
+
+**Q: 如何让 Agent 深度推理？**
+A: 使用 `/think <你的问题>`，自动切换至推理模型（ds-r1/qwq），用完恢复原模型。
 
 **Q: 如何添加自定义技能？**
 A: 在 `./skills/` 目录下创建文件夹，放入 `skill.md`（或 `guide.md`），系统自动从文件名和标题提取关键词。也可添加 `manifest.json` 补充元数据。详见 `skills/README.md`。

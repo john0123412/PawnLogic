@@ -49,4 +49,7 @@ htmlcov/
 logs/
 *.log
 temp/
-*.pyc.claude/
+*.pyc
+.claude/
+pwn_debug.md
+iscc_work/

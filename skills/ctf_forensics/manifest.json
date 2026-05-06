@@ -1,0 +1,42 @@
+{
+  "name": "CTF Forensics",
+  "version": "1.0",
+  "description": "name: ctf-forensics",
+  "keywords": [
+    "__",
+    "access",
+    "account",
+    "accumulate",
+    "accumulation",
+    "ack",
+    "acoustic",
+    "across",
+    "active",
+    "activity",
+    "adc",
+    "add",
+    "added",
+    "additional",
+    "addresses",
+    "adjacent",
+    "advanced",
+    "aes",
+    "af",
+    "after",
+    "against",
+    "all",
+    "alphabet",
+    "alternating",
+    "alternative",
+    "amcacheparser",
+    "amp",
+    "analysis",
+    "analyzable",
+    "analyze"
+  ],
+  "triggers": [
+    "CTF ctf-forensics challenge",
+    "forensics exploit"
+  ],
+  "author": "MateoBogo/claude-skills-ctf"
+}

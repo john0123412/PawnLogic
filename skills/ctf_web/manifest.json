@@ -1,0 +1,42 @@
+{
+  "name": "CTF Web",
+  "version": "1.0",
+  "description": "name: ctf-web",
+  "keywords": [
+    "__dict__",
+    "__proto__",
+    "_decode",
+    "aaencode",
+    "abi",
+    "abuse",
+    "accepts",
+    "access",
+    "account",
+    "acl",
+    "across",
+    "action",
+    "actions",
+    "add",
+    "additional",
+    "address",
+    "admin",
+    "admins",
+    "advanced",
+    "affected",
+    "affine",
+    "after",
+    "ahttp",
+    "ai",
+    "alg",
+    "algorithm",
+    "alias",
+    "all",
+    "allows",
+    "alpine"
+  ],
+  "triggers": [
+    "CTF ctf-web challenge",
+    "web exploit"
+  ],
+  "author": "MateoBogo/claude-skills-ctf"
+}

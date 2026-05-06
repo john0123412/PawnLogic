@@ -1,0 +1,42 @@
+{
+  "name": "CTF Reverse",
+  "version": "1.0",
+  "description": "name: ctf-reverse",
+  "keywords": [
+    "__cstring",
+    "__data",
+    "__linkedit",
+    "__objc_methname",
+    "__text",
+    "aactor",
+    "abc",
+    "abi",
+    "access",
+    "accessible",
+    "action",
+    "ad",
+    "adapters",
+    "add",
+    "addition",
+    "additional",
+    "addiu",
+    "address",
+    "addresses",
+    "addressing",
+    "adds",
+    "advanced",
+    "aes",
+    "affect",
+    "after",
+    "alarm",
+    "algorithm",
+    "all",
+    "alloc",
+    "allocated"
+  ],
+  "triggers": [
+    "CTF ctf-reverse challenge",
+    "reverse exploit"
+  ],
+  "author": "MateoBogo/claude-skills-ctf"
+}

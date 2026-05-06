@@ -1,0 +1,42 @@
+{
+  "name": "CTF App System",
+  "version": "1.0",
+  "description": "name: ctf-app-system",
+  "keywords": [
+    "__libc_csu_init",
+    "__nr_rt_sigreturn",
+    "_eprocess",
+    "aapcs",
+    "aarch",
+    "absent",
+    "acc",
+    "accessible",
+    "actif",
+    "action",
+    "activeprocesslinks",
+    "adapt",
+    "adaptatif",
+    "add",
+    "addr",
+    "address",
+    "adresse",
+    "adresses",
+    "after",
+    "ajouter",
+    "alignement",
+    "alignment",
+    "allouer",
+    "alternative",
+    "amd",
+    "analyse",
+    "analyser",
+    "analysis",
+    "api",
+    "app"
+  ],
+  "triggers": [
+    "CTF ctf-app-system challenge",
+    "app-system exploit"
+  ],
+  "author": "MateoBogo/claude-skills-ctf"
+}

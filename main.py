@@ -90,8 +90,9 @@ from config import (
     validate_api_key, list_vision_models,
     user_friendly_error,
 )
-from utils.ansi       import c, cp, rl_wrap, BOLD, DIM, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
+from utils.ansi       import c, cp, rl_wrap, BOLD, DIM, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA, Spinner
 from core.session     import AgentSession, _ctx_chars, STATE_FILENAME
+from core.api_client  import stream_request
 from core.memory import (
     init_db, list_knowledge, delete_knowledge,
     search_knowledge, pin_message_by_seq,
@@ -276,6 +277,10 @@ HELP_TEXT = f"""
   {c(YELLOW,"/pin [n]")}         从尾部固定最近 n 条（默认 2）
   {c(YELLOW,"/pin msg <n>")}     精准 Pin：按 /history 中的序号固定
   {c(YELLOW,"/unpin")}           解除所有 Pin
+  {c(YELLOW,"/undo [n]")}        撤回最近 n 轮对话（默认 1）
+  {c(YELLOW,"/compact")}         压缩上下文（轻量模型总结 + 清空历史）
+  {c(YELLOW,"/think <prompt>")}  单次推理模式（自动切换推理 Worker）
+  {c(YELLOW,"/ping")}            保活请求，刷新缓存 TTL
   {c(YELLOW,"/cd <path>")}       切换工作目录
   {c(YELLOW,"/file <path>")}     载入文件到上下文
   {c(YELLOW,"/history")}         消息历史（含序号，用于精准 Pin）
@@ -854,6 +859,126 @@ def handle_slash(cmd: str, session: AgentSession):
         count = sum(1 for m in session.messages if m.pop("_pinned", None))
         print(c(GREEN, f"  ✓ 已解除 {count} 条 Pin"))
 
+    # ── 成本微操工具集 ───────────────────────────────────
+    elif verb == "/undo":
+        n = int(arg) if arg.isdigit() else 1
+        removed = session.undo(n)
+        if removed:
+            print(c(GREEN, f"  ↩ 已撤回 {removed} 条消息"))
+        else:
+            print(c(GRAY, "  ↩ 无可撤回的消息"))
+
+    elif verb == "/compact":
+        # 轻量模型总结 → 清空历史（保留 Pin）→ 总结作首条
+        _summary_prompt = (
+            "请用 3-5 句话总结以下对话的关键进展、已确认的结论和待办事项。"
+            "保持技术细节（如偏移量、地址、文件路径）。仅输出总结，不要寒暄。"
+        )
+        # 构建临时消息：system + 对话历史 + 总结指令
+        _compact_msgs = [
+            m for m in session.messages
+            if m.get("role") != "system" and not m.get("_pinned")
+        ]
+        if len(_compact_msgs) < 2:
+            print(c(GRAY, "  ↕ 上下文太短，无需压缩"))
+        else:
+            print(c(CYAN, "  🔄 正在压缩上下文..."))
+            _summarize_msgs = [
+                {"role": "system", "content": "你是一个对话摘要助手。"},
+                *_compact_msgs,
+                {"role": "user", "content": _summary_prompt},
+            ]
+            _summary_buf = ""
+            try:
+                for delta in stream_request(
+                    _summarize_msgs, session.model_alias,
+                    max_tokens=1024, tools_schema=None,
+                ):
+                    if "_error" in delta:
+                        print(c(RED, f"  ✗ 摘要生成失败: {delta['_error']}"))
+                        _summary_buf = ""
+                        break
+                    choices = delta.get("choices") or []
+                    if not choices:
+                        continue
+                    chunk = choices[0].get("delta", {}).get("content", "")
+                    if chunk:
+                        _summary_buf += chunk
+            except Exception as e:
+                print(c(RED, f"  ✗ 摘要异常: {e}"))
+                _summary_buf = ""
+
+            if _summary_buf:
+                pinned = [m for m in session.messages if m.get("_pinned")]
+                session.messages.clear()
+                session._reset_system_prompt()
+                session.messages.extend(pinned)
+                session.messages.append({
+                    "role": "assistant",
+                    "content": f"📝 [Compact Summary]\n{_summary_buf}",
+                    "_pinned": True,
+                })
+                _chars = _ctx_chars(session.messages)
+                print(c(GREEN,
+                    f"  ✓ 已压缩 | 保留 {len(pinned)} 条 Pin + 摘要 | "
+                    f"上下文: {_chars//4:,} tokens"
+                ))
+
+    elif verb == "/think":
+        if not arg:
+            print(c(RED, "  用法: /think <prompt>  (单次触发推理模式)"))
+        else:
+            # 单次触发：在本次请求中切换到推理 Worker 或增加 thinking 预算
+            _think_alias = None
+            for _candidate in ("ds-r1", "qwq", "ds-chat"):
+                _ok, _ = validate_api_key(_candidate)
+                if _ok:
+                    _think_alias = _candidate
+                    break
+            if _think_alias:
+                old_alias = session.model_alias
+                session.model_alias = _think_alias
+                print(c(MAGENTA, f"  🧠 推理模式: {old_alias} → {_think_alias}"))
+                try:
+                    session.run_turn(arg)
+                finally:
+                    session.model_alias = old_alias
+                    print(c(GRAY, f"  ↩ 已恢复模型: {old_alias}"))
+            else:
+                # 无推理 Worker，直接以当前模型执行（注入 thinking 指令）
+                _think_prefix = (
+                    "[THINKING MODE] 请逐步推理，展示完整思维链。\n\n"
+                )
+                session.run_turn(_think_prefix + arg)
+
+    elif verb == "/ping":
+        # 极简保活请求，刷新缓存 TTL
+        _ping_msgs = [
+            {"role": "system", "content": "respond with 'pong' only."},
+            {"role": "user", "content": "ping"},
+        ]
+        _ping_buf = ""
+        print(c(CYAN, "  🏓 ping..."), end="", flush=True)
+        try:
+            for delta in stream_request(
+                _ping_msgs, session.model_alias,
+                max_tokens=16, tools_schema=None,
+            ):
+                if "_error" in delta:
+                    print(c(RED, f" ✗ {delta['_error']}"))
+                    break
+                choices = delta.get("choices") or []
+                if not choices:
+                    continue
+                chunk = choices[0].get("delta", {}).get("content", "")
+                _ping_buf += chunk
+            if _ping_buf:
+                print(c(GREEN, f" {_ping_buf.strip()} ✓"))
+            else:
+                print(c(GREEN, " pong ✓"))
+        except Exception as e:
+            print(c(RED, f" ✗ {e}"))
+
     elif verb == "/cd":
         target = arg or "~"
         try:
@@ -1345,10 +1470,11 @@ def handle_slash(cmd: str, session: AgentSession):
             # 全球同步：遍历所有带 .git 的技能包，git pull
             from core.session import _skill_scanner
             if config.USER_MODE:
-                print(c(CYAN, "  🔄 正在同步技能包..."))
+                with Spinner("正在同步技能包"):
+                    results = _skill_scanner.sync_packs()
             else:
                 print(c(CYAN, "  🔄 正在同步所有带 .git 的技能包..."))
-            results = _skill_scanner.sync_packs()
+                results = _skill_scanner.sync_packs()
             if not results:
                 print(c(GRAY, "  没有发现带 .git 的技能包目录"))
             else:
@@ -1373,10 +1499,11 @@ def handle_slash(cmd: str, session: AgentSession):
             else:
                 from core.session import _skill_scanner
                 if config.USER_MODE:
-                    print(c(CYAN, "  📥 正在安装技能包..."))
+                    with Spinner("正在安装技能包"):
+                        result = _skill_scanner.install_pack(repo_url)
                 else:
                     print(c(CYAN, f"  📥 正在克隆 {repo_url} ..."))
-                result = _skill_scanner.install_pack(repo_url)
+                    result = _skill_scanner.install_pack(repo_url)
                 if result["status"] == "ok":
                     print(c(GREEN, f"  ✓ {result['detail']}"))
                     # 显示安装后的包信息
@@ -1842,6 +1969,7 @@ def main():
     # ── 扁平命令列表 + 右侧灰色说明 ──────────────────────
     _all_cmd_words = [
         "/mode", "/model", "/clear", "/context", "/pin", "/unpin", "/cd", "/file",
+        "/undo", "/compact", "/think", "/ping",
         "/history", "/setkey", "/keys", "/save", "/load", "/sessions", "/del",
         "/memorize", "/knowledge", "/forget", "/init_project", "/state",
         "/low", "/mid", "/deep", "/normal", "/limits",
@@ -1858,6 +1986,10 @@ def main():
         "/context":       "查看上下文大小 / token 估算",
         "/pin":           "固定最近 N 条消息（/pin msg 5 按序号）",
         "/unpin":         "解除所有 Pin",
+        "/undo":          "撤回最近 N 轮对话（默认 1）",
+        "/compact":       "压缩上下文（轻量模型总结 + 清空历史）",
+        "/think":         "单次推理模式（/think <prompt>）",
+        "/ping":          "保活请求，刷新缓存 TTL",
         "/cd":            "切换工作目录",
         "/file":          "载入文件到上下文",
         "/history":       "查看带序号的消息历史",
@@ -2072,8 +2204,16 @@ def main():
                 ).strip()
             else:
                 raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ")).strip()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
             print(c(CYAN, "\n  Goodbye! 👋")); break
+        except KeyboardInterrupt:
+            # CC 风格：Ctrl+C 回退最后一轮对话，而非退出
+            removed = session.undo(1)
+            if removed:
+                print(c(YELLOW, f"\n  ↩ 已撤回上一轮（{removed} 条消息）"))
+            else:
+                print(c(YELLOW, "\n  ↩ 无可撤回的消息"))
+            continue
         if not raw:
             continue
         if raw.startswith("/"):

@@ -1,0 +1,42 @@
+{
+  "name": "CTF Solve Challenge",
+  "version": "1.0",
+  "description": "name: solve-challenge",
+  "keywords": [
+    "auto",
+    "before",
+    "binary",
+    "categorize",
+    "category",
+    "challenge",
+    "common",
+    "connect",
+    "ctf",
+    "exploit",
+    "files",
+    "first",
+    "flag",
+    "for",
+    "formats",
+    "guessing",
+    "in",
+    "invoke",
+    "memory",
+    "output",
+    "patterns",
+    "pivot",
+    "python",
+    "quick",
+    "recon",
+    "reference",
+    "run",
+    "search",
+    "skill",
+    "solve"
+  ],
+  "triggers": [
+    "CTF solve-challenge challenge",
+    "solve-challenge exploit"
+  ],
+  "author": "MateoBogo/claude-skills-ctf"
+}

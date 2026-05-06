@@ -1,0 +1,42 @@
+{
+  "name": "CTF Osint",
+  "version": "1.0",
+  "description": "name: ctf-osint",
+  "keywords": [
+    "_bot",
+    "about",
+    "abuse",
+    "account",
+    "accounts",
+    "additional",
+    "advanced",
+    "all",
+    "also",
+    "always",
+    "an",
+    "analysis",
+    "and",
+    "api",
+    "api_key",
+    "architecture",
+    "archived",
+    "archives",
+    "as",
+    "asn",
+    "at",
+    "atms",
+    "attribution",
+    "author",
+    "available",
+    "basic",
+    "before",
+    "bgp",
+    "bluesky",
+    "bot"
+  ],
+  "triggers": [
+    "CTF ctf-osint challenge",
+    "osint exploit"
+  ],
+  "author": "MateoBogo/claude-skills-ctf"
+}

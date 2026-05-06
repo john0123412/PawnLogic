@@ -291,28 +291,18 @@ class SkillScanner:
             if desc:
                 lines.append(f"  {desc}")
             if guide:
-                lines.append(f"  Read: read_file(path='{pack_path / guide}')")
-                lines.append(f"  Follow the guide step by step.")
+                lines.append(f"  Read: read_file('{pack_path / guide}')")
             if scripts:
                 lines.append(f"  Scripts: {', '.join(scripts)}")
-                # P6: 明确的脚本执行指令
-                lines.append(f"  --- AUTO-EXECUTE DIRECTIVE (P6) ---")
-                lines.append(f"  该技能包含预置脚本，你必须优先执行，禁止在未尝试前自主编写 Payload。")
                 for script in scripts:
                     script_path = pack_path / script
                     if script.endswith(".py"):
-                        lines.append(
-                            f"  Execute: run_shell(command='python3 {script_path} --url <TARGET_URL>')"
-                        )
+                        lines.append(f"  Run: python3 {script_path} --url <TARGET>")
                     elif script.endswith(".sh"):
-                        lines.append(
-                            f"  Execute: run_shell(command='bash {script_path} <TARGET_URL>')"
-                        )
+                        lines.append(f"  Run: bash {script_path} <TARGET>")
                     else:
-                        lines.append(
-                            f"  Execute: run_shell(command='{script_path} <args>')"
-                        )
-                lines.append(f"  若脚本执行失败，阅读 guide.md 分析原因后再修改，不要从零编写。")
+                        lines.append(f"  Run: {script_path} <args>")
+                lines.append(f"  P6: 优先执行脚本，失败先读 guide.md，禁止跳过直接编写。")
 
             blocks.append("\n".join(lines))
 

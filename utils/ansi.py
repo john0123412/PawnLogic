@@ -12,6 +12,8 @@
   只有 input() 的 prompt 参数才用 cp() / rl_wrap()。
 """
 
+import sys
+import threading
 import re as _re
 
 # ── 基础颜色常量 ────────────────────────────────────────
@@ -67,3 +69,50 @@ def cp(col: str, txt: str) -> str:
         raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > "))
     """
     return rl_wrap(f"{col}{txt}{R}")
+
+
+# ── Loading 动画 ────────────────────────────────────────
+
+class Spinner:
+    """USER_MODE 专用 Loading 动画，在后台线程显示旋转字符。
+
+    用法:
+        with Spinner("正在同步技能包"):
+            do_long_running_work()
+    """
+    _FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def __init__(self, text: str = "Loading", col: str = CYAN):
+        self._text = text
+        self._col = col
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=1)
+        # 清除动画行
+        sys.stdout.write(f"\r\033[K")
+        sys.stdout.flush()
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *_):
+        self.stop()
+
+    def _run(self):
+        i = 0
+        while not self._stop.is_set():
+            frame = self._FRAMES[i % len(self._FRAMES)]
+            line = f"\r  {self._col}{frame}{R} {self._text}..."
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            i += 1
+            self._stop.wait(0.1)
