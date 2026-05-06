@@ -1,0 +1,42 @@
+{
+  "name": "CTF Pwn",
+  "version": "1.0",
+  "description": "name: ctf-pwn",
+  "keywords": [
+    "__call_tls_dtors",
+    "__doallocate",
+    "__free_hook",
+    "__io_vtable_check",
+    "__libc_csu_init",
+    "__libc_start_main",
+    "__malloc_hook",
+    "__start___libc_io_vt",
+    "__stop___libc_io_vta",
+    "_enable_sandbox",
+    "_flags",
+    "_harden",
+    "_io_",
+    "_io_buf_base",
+    "_io_helper_jumps",
+    "_io_list_all",
+    "_io_wdoallocate",
+    "_io_wfile_jumps",
+    "_io_wfile_overflow",
+    "_io_wide_data",
+    "_io_write_base",
+    "_io_write_end",
+    "_io_write_ptr",
+    "_rela",
+    "_stdout_",
+    "_sym",
+    "_wide_data",
+    "aar",
+    "aaw",
+    "ables"
+  ],
+  "triggers": [
+    "CTF ctf-pwn challenge",
+    "pwn exploit"
+  ],
+  "author": "MateoBogo/claude-skills-ctf"
+}

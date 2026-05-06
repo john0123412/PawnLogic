@@ -1,0 +1,42 @@
+{
+  "name": "CTF Automation",
+  "version": "1.0",
+  "description": "name: ctf-automation",
+  "keywords": [
+    "additions",
+    "ai_endpoint",
+    "all",
+    "and",
+    "automation",
+    "back",
+    "category",
+    "chain",
+    "challenge",
+    "challenges",
+    "codes",
+    "connection",
+    "ctf",
+    "ctfd",
+    "dir",
+    "directory",
+    "dispatch",
+    "download",
+    "entry",
+    "everything",
+    "example",
+    "exit",
+    "files",
+    "find",
+    "fingerprint",
+    "first",
+    "flag",
+    "hint",
+    "hints",
+    "if"
+  ],
+  "triggers": [
+    "CTF ctf-automation challenge",
+    "automation exploit"
+  ],
+  "author": "MateoBogo/claude-skills-ctf"
+}

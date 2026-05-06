@@ -1,0 +1,42 @@
+{
+  "name": "CTF Misc",
+  "version": "1.0",
+  "description": "name: ctf-misc",
+  "keywords": [
+    "__builtins__",
+    "__getitem__",
+    "__globals__",
+    "__import__",
+    "__init__",
+    "__loader__",
+    "__name__",
+    "__repr__",
+    "_wrap_close",
+    "abuse",
+    "access",
+    "accessing",
+    "acl",
+    "adapter",
+    "add",
+    "additional",
+    "admin",
+    "after",
+    "against",
+    "agent",
+    "agents",
+    "ah",
+    "ai",
+    "all",
+    "alternatives",
+    "analysis",
+    "and",
+    "angle",
+    "annealing",
+    "ansi"
+  ],
+  "triggers": [
+    "CTF ctf-misc challenge",
+    "misc exploit"
+  ],
+  "author": "MateoBogo/claude-skills-ctf"
+}

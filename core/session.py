@@ -713,6 +713,40 @@ class AgentSession:
         elapsed = time.monotonic() - self._turn_start_time
         return max(0.0, self._time_budget_sec - elapsed)
 
+    def undo(self, n: int = 1) -> int:
+        """物理删除 messages 尾部消息对（user+assistant），不影响 pinned。
+        返回实际删除的消息数。"""
+        removed = 0
+        for _ in range(n):
+            # 从尾部向前扫描，跳过 system 和 pinned
+            while self.messages:
+                tail = self.messages[-1]
+                if tail.get("role") == "system" or tail.get("_pinned"):
+                    break
+                self.messages.pop()
+                removed += 1
+                # 如果弹出的是 assistant，继续弹出对应的 user 消息
+                if tail.get("role") == "assistant":
+                    while self.messages:
+                        prev = self.messages[-1]
+                        if prev.get("role") == "system" or prev.get("_pinned"):
+                            break
+                        if prev.get("role") == "user":
+                            self.messages.pop()
+                            removed += 1
+                            break
+                        elif prev.get("role") == "assistant":
+                            # 连续 assistant（多轮工具调用），继续弹
+                            self.messages.pop()
+                            removed += 1
+                        else:
+                            break
+                    break
+                # 如果弹出的是 user，也结束这一轮
+                elif tail.get("role") == "user":
+                    break
+        return removed
+
     @property
     def model(self) -> dict:
         return MODELS[self.model_alias]
@@ -817,45 +851,24 @@ class AgentSession:
             "  History  : /chat list · /chat view · /chat find · /chat tag · /chat related\n\n"
 
             "=== Scrapling Web Penetration (WEB_PEN Phase) ===\n"
-            "若遇到 Cloudflare 拦截或动态网页，优先使用 Scrapling 提供的自适应定位能力：\n"
-            "  · web_fetch 默认开启 StealthyFetcher + solve_cloudflare=True，可穿透反爬。\n"
-            "  · web_select 使用 adaptive_select，自动应对 DOM 结构变化。\n"
-            "  · web_screenshot 截图强制存入 ~/.pawnlogic/workspace/screenshots/。\n"
-            "  · 所有浏览器下载文件必须存入 SAFE_WORKSPACE，禁止写入其他目录。\n"
-            "  · 遇到 Cloudflare 5秒盾/人机验证 → 直接 web_fetch，Scrapling 自动处理。\n"
-            "  · 需要交互式操作（登录/点击/表单）→ web_navigate → web_type → web_click → web_screenshot。\n\n"
+            "Cloudflare / 动态页面 → Scrapling 自适应穿透：\n"
+            "  · web_fetch 自动 StealthyFetcher + solve_cloudflare。\n"
+            "  · web_select 自适应 CSS 定位，应对 DOM 变化。\n"
+            "  · 截图/下载 → ~/.pawnlogic/workspace/screenshots/。\n"
+            "  · 交互操作: web_navigate → web_type → web_click → web_screenshot。\n\n"
 
             "=== Auto-Exploit (P6) Protocol ===\n"
-            "当目标为 Web 应用时，遵循自动化利用链（Exploit Chain）：\n\n"
-            "  Step 1 — 侦察（RECON Phase）:\n"
-            "    web_fetch 获取目标页面指纹（Server Header, X-Powered-By, Cookie 名, HTML 特征）。\n"
-            "    识别框架：Fastjson / Shiro / Log4j / Spring / Struts / ThinkPHP / Laravel 等。\n\n"
-            "  Step 2 — 环境确认（check_service）:\n"
-            "    调用 check_service(port=<目标端口>) 确认服务进程详情。\n"
-            "    获取：PID、进程名、运行路径、关键环境变量、引用的动态库。\n"
-            "    用于判断服务架构、运行用户、是否有 WAF/防护进程。\n\n"
-            "  Step 3 — 匹配（search_skills）:\n"
-            "    调用 search_skills(query='<框架名>') 检索本地技能包。\n"
-            "    若返回空结果，可尝试变体关键词（如 'shiro' → 'shiro550' / 'rememberme'）。\n\n"
-            "  Step 4 — 获取最新武器（/sp sync 或 /sp install）:\n"
-            "    若技能包存在但版本过旧，提醒用户执行 /sp sync 同步更新。\n"
-            "    若需要新的利用包，提醒用户执行 /sp install <repo_url> 安装。\n\n"
-            "  Step 5 — 阅读（read_file）:\n"
-            "    读取技能包中的 guide.md / skill.md，理解利用条件和步骤。\n"
-            "    读取 manifest.json 了解脚本参数和触发条件。\n\n"
-            "  Step 6 — 执行（run_shell / run_code_docker）:\n"
-            "    优先执行技能包内的预置脚本（exploit.py / payload.sh）。\n"
-            "    命令格式: run_shell(command='python3 {pack_path}/{script} --url <target>')\n"
-            "    需要隔离环境时: run_code_docker(image='python', code='...')\n\n"
-            "  Step 7 — 验证（verify）:\n"
-            "    确认利用成功（回显 / Flag / Shell / 数据泄露）。\n"
-            "    成功后调用 bump_skill(skill_name=<技能名>) 提升技能权重。\n\n"
-            "  === P6 本能流程（形成肌肉记忆）===\n"
-            "  侦察到指纹 → check_service 确认环境 → search_skills 检索武器包\n"
-            "  → install/sync 获取最新版 → 执行\n\n"
-            "  RULE: 禁止在未尝试 search_skills 前自主编写长段 Exploit 代码。\n"
-            "  RULE: 若技能包脚本执行失败，先阅读 guide.md 分析原因，修改参数后重试。\n"
-            "  RULE: 仅在技能包不存在或完全不匹配时，才允许从零编写 Payload。\n\n"
+            "Web 目标必走闭环：\n\n"
+            "  1. 侦察指纹 — web_fetch 提取 Server/X-Powered-By/Cookie/HTML 特征，识别框架。\n"
+            "  2. 确认环境 — check_service(port) 获取 PID/路径/环境变量/动态库。\n"
+            "  3. 检索武器 — search_skills(query='<框架名>')，空结果则尝试变体关键词。\n"
+            "  4. 同步更新 — /sp sync 拉取最新，/sp install <url> 安装新包。\n"
+            "  5. 阅读指南 — read_file(guide.md)，理解条件与参数。\n"
+            "  6. 执行脚本 — 优先 run_shell(pack_path/script)，隔离用 run_code_docker。\n"
+            "  7. 验证收尾 — 确认 Flag/Shell/回显，成功后 bump_skill 提升权重。\n\n"
+            "  ⚡ 肌肉记忆: 侦察 → check_service → search_skills → install/sync → 执行\n\n"
+            "  RULE: 禁止跳过 search_skills 直接编写 Exploit。\n"
+            "  RULE: 脚本失败先读 guide.md 改参数重试，仅无匹配时从零编写。\n\n"
 
             f"Working dir : {self.cwd}\n"
             f"Time        : {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"

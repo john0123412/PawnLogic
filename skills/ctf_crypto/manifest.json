@@ -1,0 +1,42 @@
+{
+  "name": "CTF Crypto",
+  "version": "1.0",
+  "description": "name: ctf-crypto",
+  "keywords": [
+    "_binary",
+    "_var",
+    "a_i",
+    "a_j",
+    "a_k",
+    "account",
+    "across",
+    "action",
+    "actually",
+    "additional",
+    "advanced",
+    "advances",
+    "aes",
+    "affects",
+    "affine",
+    "after",
+    "again",
+    "akctf",
+    "alcoholicvariety",
+    "alexander",
+    "algebra",
+    "algebraic",
+    "algorithm",
+    "alice",
+    "alice_priv",
+    "alice_pub",
+    "all",
+    "alpha",
+    "alter",
+    "amb"
+  ],
+  "triggers": [
+    "CTF ctf-crypto challenge",
+    "crypto exploit"
+  ],
+  "author": "MateoBogo/claude-skills-ctf"
+}
