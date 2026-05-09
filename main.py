@@ -862,7 +862,7 @@ def handle_slash(cmd: str, session: AgentSession):
     # ── 成本微操工具集 ───────────────────────────────────
     elif verb == "/undo":
         n = int(arg) if arg.isdigit() else 1
-        removed = session.undo(n)
+        removed, _last_text = session.undo(n)
         if removed:
             print(c(GREEN, f"  ↩ 已撤回 {removed} 条消息"))
         else:
@@ -2102,7 +2102,7 @@ def main():
                 f"  <b>Dir:</b> {session.cwd}"
                 f"  <b>Phase:</b> {session.current_phase}"
                 f"{_time_str}"
-                f"  <b>Ctrl-C</b>=exit"
+                f"  <b>Ctrl-C</b>=undo+re-edit"
             )
 
         # ── 样式：彻底透明化，无灰色方块 ──────────────────
@@ -2194,6 +2194,9 @@ def main():
                 print(c(YELLOW, f"     或重新安装: pip install -e ."))
 
     # ── 主循环 ────────────────────────────────────────────
+    _re_edit_default = ""   # Ctrl+C 回退后，上一条用户文本作为 prompt default
+    _in_generation   = False  # 区分输入阶段 vs Agent 生成阶段
+
     while True:
         try:
             print()  # 确保提示符在新行
@@ -2201,18 +2204,19 @@ def main():
                 raw = _pt_session.prompt(
                     [("class:prompt", "▶ "), ("class:you", "You > ")],
                     style=_pawn_style,
+                    default=_re_edit_default,
                 ).strip()
             else:
-                raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ")).strip()
+                _label = _re_edit_default if _re_edit_default else ""
+                raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ") + _label).strip()
+            _re_edit_default = ""  # 消费后清空
         except EOFError:
             print(c(CYAN, "\n  Goodbye! 👋")); break
         except KeyboardInterrupt:
-            # CC 风格：Ctrl+C 回退最后一轮对话，而非退出
-            removed = session.undo(1)
+            # CC 风格：Ctrl+C 撤回上一轮，将用户文本作为 default 重新编辑
+            removed, last_text = session.undo(1)
             if removed:
-                print(c(YELLOW, f"\n  ↩ 已撤回上一轮（{removed} 条消息）"))
-            else:
-                print(c(YELLOW, "\n  ↩ 无可撤回的消息"))
+                _re_edit_default = last_text
             continue
         if not raw:
             continue
@@ -2237,9 +2241,13 @@ def main():
             handle_slash(raw, session)
             continue
         try:
+            _in_generation = True
             session.run_turn(raw)
         except KeyboardInterrupt:
+            # 生成阶段 Ctrl+C：保留已产出内容，安全停止
             print(c(YELLOW, "\n  [已中断]"))
+        finally:
+            _in_generation = False
 
 if __name__ == "__main__":
     main()
