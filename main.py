@@ -85,7 +85,7 @@ PROXY_STATUS = _install_proxy()
 import config  # for config.QUIET_MODE / config.USER_MODE mutation after argparse
 from config import (
     VERSION, DYNAMIC_CONFIG, NORMAL_CONFIG,
-    TIER_LOW, TIER_MID, TIER_DEEP,
+    TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX,
     MODELS, DEFAULT_MODEL, DB_PATH, PROVIDERS,
     validate_api_key, list_vision_models,
     user_friendly_error,
@@ -1104,6 +1104,11 @@ def handle_slash(cmd: str, session: AgentSession):
         session._reset_system_prompt()
         print(c(BOLD+MAGENTA, "  🔥 /deep 全火力")); print(_fmt_config())
 
+    elif verb == "/max":
+        DYNAMIC_CONFIG.update(TIER_MAX)
+        session._reset_system_prompt()
+        print(c(BOLD+RED, "  💀 /max 极限火力（iter=100, ctx=600k, 60min）")); print(_fmt_config())
+
     elif verb == "/normal":
         DYNAMIC_CONFIG.update(NORMAL_CONFIG)
         session._reset_system_prompt()
@@ -1111,7 +1116,7 @@ def handle_slash(cmd: str, session: AgentSession):
 
     elif verb == "/limits":
         print(c(BOLD, "\n  当前运行时限制：")); print(_fmt_config())
-        print(c(GRAY, "  /low /mid /deep  |  /tokens /ctx /iter /toolsize /fetchsize"))
+        print(c(GRAY, "  /low /mid /deep /max  |  /tokens /ctx /iter /toolsize /fetchsize"))
 
     # ── 细粒度调节 ──────────────────────────────────────
     elif verb == "/tokens":
@@ -1955,7 +1960,7 @@ def main():
 {vision_line}
 {state_line}
 {proxy_line}
-  {c(YELLOW,'/help')} 命令  {c(GREEN,'/low')} {c(YELLOW,'/mid')} {c(MAGENTA,'/deep')}  {c(CYAN,'/save /load')}  {c(MAGENTA,'/memorize')}  {c(YELLOW,'/init_project')}
+  {c(YELLOW,'/help')} 命令  {c(GREEN,'/low')} {c(YELLOW,'/mid')} {c(MAGENTA,'/deep')} {c(RED,'/max')}  {c(CYAN,'/save /load')}  {c(MAGENTA,'/memorize')}  {c(YELLOW,'/init_project')}
 """)
     else:
         key_sym = "✓" if key_ok else "✗"
@@ -1972,7 +1977,7 @@ def main():
         "/undo", "/compact", "/think", "/ping",
         "/history", "/setkey", "/keys", "/save", "/load", "/sessions", "/del",
         "/memorize", "/knowledge", "/forget", "/init_project", "/state",
-        "/low", "/mid", "/deep", "/normal", "/limits",
+        "/low", "/mid", "/deep", "/max", "/normal", "/limits",
         "/tokens", "/ctx", "/iter", "/toolsize", "/fetchsize",
         "/webstatus", "/browserstatus", "/pwnenv", "/stats", "/time", "/docker",
         "/worker", "/failures", "/memo", "/skills", "/skillpack", "/sp",

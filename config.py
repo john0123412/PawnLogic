@@ -422,6 +422,17 @@ TIER_DEEP = {
     "time_budget_sec":  1800,     # 30 分钟
 }
 
+TIER_MAX = {
+    "max_tokens":      32_768,
+    "ctx_max_chars":   600_000,
+    "ctx_trim_to":     450_000,
+    "max_iter":        100,
+    "tool_max_chars":   30_000,
+    "fetch_max_chars":  40_000,
+    "preferred_worker": "auto",
+    "time_budget_sec":  3600,     # 60 分钟
+}
+
 DYNAMIC_CONFIG: dict = dict(TIER_MID)
 NORMAL_CONFIG:  dict = dict(TIER_MID)
 
