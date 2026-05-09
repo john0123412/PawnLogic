@@ -462,11 +462,12 @@ Local Ollama     LOCAL_API_KEY       ⬜ 无需 Key
 - `/chat unlink <id1> <id2>` — 取消关联
 - `/chat related <id|n>` — 查看与指定会话相关联的所有会话
 
-### 🧮 三档预设（算力调节）
+### 🧮 四档预设（算力调节）
 
 - `/low` — 日常闲聊/简单问答（tokens=4k, ctx=40k, iter=10）
 - `/mid` — 开发编程/脚本编写（tokens=8k, ctx=150k, iter=30）← 默认
 - `/deep` — 论文阅读/大型项目重构/复杂漏洞挖掘（tokens=32k, ctx=400k, iter=50）
+- `/max` — 极限火力：大规模自动化利用链/超长会话（tokens=32k, ctx=600k, iter=100, 60min）
 - `/normal` — 重置到 /mid
 
 ### 🔧 细粒度调节
@@ -702,6 +703,7 @@ Agent 内置严格的软隔离保护：
 - ✅ Shell 环境持久化：自动探测 HOST_IP、缓存代理变量，所有 shell 调用继承
 - ✅ 路径自动建议：文件未找到时提示 `find / -name`、`/proc/self/cwd`、`readlink -f`
 - ✅ 超时信号捕获：Popen + 进程组 → SIGTERM → 等待 → SIGKILL，收集部分输出
+- ✅ `/max` 极限档位：iter=100, ctx=600k, 60min 时间预算，适配大规模自动化利用链
 
 **基础改进**
 - ✅ 新增小米 MiMo 厂商接入（4 个模型）
