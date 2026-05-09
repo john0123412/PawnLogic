@@ -1,6 +1,6 @@
 # 🤖 PawnLogic 1.1
 
-> **GSD 工程外骨骼 · 多模态视觉 · 会话管理 · SQLite 记忆 · 动态沙箱 · CTF 逆向工具链 · 双模输出 · 技能引擎 · P6 自动化利用链**
+> **GSD 工程外骨骼 · 多模态视觉 · 会话管理 · SQLite 记忆 · 动态沙箱 · CTF 逆向工具链 · 双模输出 · 技能引擎 · P6 自动化利用链 · API 鲁棒性 · 逻辑刷新**
 
 PawnLogic 是一个专为极客和开发者打造的全能终端 AI 智能体。强大的会话管理系统，让您能够轻松浏览、搜索、标签化和关联历史对话，同时保留了所有强大功能。
 
@@ -686,13 +686,22 @@ Agent 内置严格的软隔离保护：
 - ✅ `check_service` 注册到 RECON/GENERAL/WEB_PEN 阶段，只读操作跳过 plan 检查
 
 **P6 — CC 风格交互 & 成本微操**
-- ✅ Ctrl+C 回退编辑：输入状态下 Ctrl+C 撤回最后一轮对话（对齐 Claude Code 体验）
+- ✅ Ctrl+C 回退编辑：输入状态下 Ctrl+C 撤回最后一轮对话，将用户文本作为 default 重新编辑（对齐 Claude Code 体验）
 - ✅ `/undo [n]` 物理删除尾部消息对，不影响 Pin
 - ✅ `/compact` 轻量模型总结 → 清空历史 → 摘要作首条消息
 - ✅ `/think <prompt>` 单次推理模式，自动切换推理 Worker（ds-r1/qwq）
 - ✅ `/ping` 极简保活请求，刷新 API 缓存 TTL
 - ✅ `utils/ansi.py` 新增 `Spinner` 类：USER_MODE 下 Loading 动画（braille 点阵旋转）
 - ✅ System Prompt 精简：P6 协议改为祈使句风格，技能注入格式压缩
+
+**P7 — API 鲁棒性与逻辑刷新**
+- ✅ API 空响应重试：自定义 `APIEmptyResponseError` + 指数退避（2s→4s→8s，最多 3 次），空响应不再静默退出
+- ✅ Logic Refresh 模块：每 20 轮自动触发阶段性总结，提炼关键发现与排除路径
+- ✅ 冗余数据清理：自动压缩重复的短报错信息（No such file / Permission denied 等）
+- ✅ Anti-Loop 检测：连续 3 次相同命令+相同错误 → 注入绕过提示（软链接/open_basedir/路径编码）
+- ✅ Shell 环境持久化：自动探测 HOST_IP、缓存代理变量，所有 shell 调用继承
+- ✅ 路径自动建议：文件未找到时提示 `find / -name`、`/proc/self/cwd`、`readlink -f`
+- ✅ 超时信号捕获：Popen + 进程组 → SIGTERM → 等待 → SIGKILL，收集部分输出
 
 **基础改进**
 - ✅ 新增小米 MiMo 厂商接入（4 个模型）
