@@ -17,6 +17,13 @@ import http.client
 from urllib.parse import urlparse
 from config import get_api_config, MODELS, DYNAMIC_CONFIG
 
+
+# ── 自定义异常 ──────────────────────────────────────────
+class APIEmptyResponseError(Exception):
+    """模型返回空响应（无文本、无工具调用、0 Token）。"""
+    pass
+
+
 # ── 断路器状态存储（per provider base_url） ──────────────
 _CB_LOCK      = threading.Lock()
 _CIRCUIT_BREAKERS: dict[str, dict] = {}

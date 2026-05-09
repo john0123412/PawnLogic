@@ -34,7 +34,7 @@ from config import (
     SKILLS_DIR,
 )
 from utils.ansi import c, BOLD, DIM, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
-from core.api_client import stream_request, ensure_tool_call_id
+from core.api_client import stream_request, ensure_tool_call_id, APIEmptyResponseError
 from core.memory import (
     init_db, _gen_id, save_messages,
     search_knowledge, format_knowledge_for_prompt,
@@ -713,16 +713,21 @@ class AgentSession:
         elapsed = time.monotonic() - self._turn_start_time
         return max(0.0, self._time_budget_sec - elapsed)
 
-    def undo(self, n: int = 1) -> int:
+    def undo(self, n: int = 1) -> tuple[int, str]:
         """物理删除 messages 尾部消息对（user+assistant），不影响 pinned。
-        返回实际删除的消息数。"""
+        返回 (实际删除的消息数, 被撤回的最后一条 user 文本)。
+        user 文本供 Ctrl+C 回退编辑时作为 prompt default 使用。"""
         removed = 0
+        last_user_text = ""
         for _ in range(n):
             # 从尾部向前扫描，跳过 system 和 pinned
             while self.messages:
                 tail = self.messages[-1]
                 if tail.get("role") == "system" or tail.get("_pinned"):
                     break
+                # 记录被弹出的 user 文本
+                if tail.get("role") == "user":
+                    last_user_text = str(tail.get("content") or "")
                 self.messages.pop()
                 removed += 1
                 # 如果弹出的是 assistant，继续弹出对应的 user 消息
@@ -732,6 +737,7 @@ class AgentSession:
                         if prev.get("role") == "system" or prev.get("_pinned"):
                             break
                         if prev.get("role") == "user":
+                            last_user_text = str(prev.get("content") or "")
                             self.messages.pop()
                             removed += 1
                             break
@@ -745,7 +751,7 @@ class AgentSession:
                 # 如果弹出的是 user，也结束这一轮
                 elif tail.get("role") == "user":
                     break
-        return removed
+        return removed, last_user_text
 
     @property
     def model(self) -> dict:
@@ -1337,6 +1343,12 @@ class AgentSession:
         _dir_search_count = 0
         _DIR_THRESHOLD    = 3
 
+        # ── Logic Refresh 模块状态 ─────────────────────────
+        _LOGIC_REFRESH_INTERVAL = 20   # 每 20 轮触发一次阶段性总结
+        _REPEAT_ERROR_THRESHOLD = 3    # 连续相同错误阈值
+        _recent_cmd_errors: list[tuple[str, str]] = []  # (cmd, error) 历史
+        _repeat_error_count   = 0      # 当前连续相同错误计数
+
         for iteration in range(max_iter):
             # ── P6.5: 首轮迭代显示技能包加载状态 ────────
             if iteration == 0 and self._loaded_skill_packs:
@@ -1402,115 +1414,241 @@ class AgentSession:
                             current_max_tokens = min(current_max_tokens, 4096)
                             break
 
-            text_buf = ""; tc_buf: dict = {}
+            # ════════════════════════════════════════════════
+            # Logic Refresh 模块：阶段性总结 + 冗余清理 + 错误检测
+            # ════════════════════════════════════════════════
 
-            for delta in stream_request(
-                self.messages, self.model_alias,
-                tools_schema=current_tools,
-                max_tokens=current_max_tokens,
-            ):
-                if "_error" in delta:
-                    _err_detail = delta["_error"]
-                    if USER_MODE:
-                        print(c(RED, f"\n  {user_friendly_error(_err_detail)}"))
-                    else:
-                        print(c(RED, f"\nAPI Error: {_err_detail}"))
-                    logger.error(
-                        "API stream error | model={} session={} iteration={} raw_error={}",
-                        self.model_alias, self.session_id[:8], iteration, _err_detail,
+            # ── 1. 阶段性总结（每 N 轮触发）────────────────
+            if iteration > 0 and iteration % _LOGIC_REFRESH_INTERVAL == 0:
+                # 收集最近的 tool observation
+                _recent_obs = []
+                for _m in self.messages[-20:]:
+                    if _m.get("role") == "tool" and _m.get("content"):
+                        _recent_obs.append(_m["content"][:200])
+                if _recent_obs:
+                    _obs_text = "\n".join(_recent_obs[-10:])
+                    _summary_prompt = (
+                        f"[Logic Refresh — Iteration {iteration}]\n"
+                        f"请对以下最近的探索路径进行简明总结（5 句话以内），"
+                        f"提炼关键发现、已排除的路径和当前最佳方向：\n\n{_obs_text}"
                     )
-                    self.messages.pop(); return
-
-                choices = delta.get("choices", [])
-                if not choices: continue
-                d     = choices[0].get("delta", {})
-                chunk = d.get("content") or ""
-
-                # ── Usage accounting (_usage injected by api_client) ──
-                if "_usage" in delta:
-                    u  = delta["_usage"]
-                    pt = u.get("prompt_tokens", 0) or u.get("input_tokens", 0)
-                    ct = u.get("completion_tokens", 0) or u.get("output_tokens", 0)
-                    self._turn_prompt_tokens     += pt
-                    self._turn_completion_tokens += ct
-                    self.total_prompt_tokens     += pt
-                    self.total_completion_tokens += ct
-
-                if chunk:
-                    printable = renderer.feed(chunk)
-                    if printable: sys.stdout.write(printable); sys.stdout.flush()
-                    text_buf += chunk
-
-                for tcd in (d.get("tool_calls") or []):
-                    idx = tcd.get("index", 0)
-                    if idx not in tc_buf:
-                        tc_buf[idx] = {
-                            "id": ensure_tool_call_id(tcd, iteration, idx),
-                            "name": "", "args": "",
-                        }
-                    fn = tcd.get("function", {})
-                    tc_buf[idx]["name"] += fn.get("name") or ""
-                    tc_buf[idx]["args"] += fn.get("arguments") or ""
-
-            leftover = renderer.flush()
-
-            # ── P2: rich Markdown 渲染（仅对非 plan 文本）──
-            if leftover:
-                _md_indicators = ("```", "**", "| ", "## ", "- ", "1. ", "> ")
-                _has_md = any(ind in leftover for ind in _md_indicators)
-                _rendered = False
-                if _has_md:
-                    try:
-                        from main import render_agent_output
-                        render_agent_output(leftover)
-                        _rendered = True
-                    except (ImportError, Exception):
-                        pass
-                if not _rendered:
-                    sys.stdout.write(leftover)
-                    sys.stdout.flush()
-            print()
-
-            # ── Hybrid v2 Parser：XML 优先，JSON 兜底 ─────────────
-            # 仅在 API 未通过 native tool_calls 返回结果时介入。
-            # XML 路径保证 content/query 等字段零转义直通执行器。
-            if not tc_buf and (
-                '<call name="' in text_buf or "<tool_call>" in text_buf
-            ):
-                extracted = self._extract_calls(text_buf)
-                for i, call in enumerate(extracted):
-                    source = call["_source"]
-                    call_id = (
-                        f"call_xml_{iteration}_{i}"
-                        if source == "xml"
-                        else f"call_fallback_{iteration}_{i}"
-                    )
-                    tc_buf[i] = {
-                        "id":           call_id,
-                        "name":         call["name"],
-                        # args 序列化为 JSON 字符串用于日志/display；
-                        # 执行路径通过 _args_parsed 直接拿 dict，跳过二次解析。
-                        "args":         json.dumps(call["args"], ensure_ascii=False),
-                        "_args_parsed": call["args"],   # 🔑 零转义透传
-                    }
-                    label = "XML" if source == "xml" else "JSON"
-                    print(c(GRAY,
-                        f"  ⚙ [Hybrid Parser/{label}] 拦截工具调用: {call['name']} "
-                        f"(params: {list(call['args'].keys())})"
+                    self.messages.append({"role": "user", "content": _summary_prompt})
+                    print(c(CYAN,
+                        f"  🔄 [Logic Refresh] 已触发阶段性总结（iteration={iteration}）"
                     ))
                     logger.info(
-                        "Hybrid Parser/{} intercepted | "
-                        "model={} session={} iteration={} tool={}",
-                        label, self.model_alias, self.session_id[:8],
-                        iteration, call["name"],
+                        "Logic Refresh: phase summary triggered | "
+                        "session={} iteration={} obs_count={}",
+                        self.session_id[:8], iteration, len(_recent_obs),
                     )
-                # 截断 text_buf 到第一个 <call 或 <tool_call> 之前，
-                # 避免将协议标签暴露给上下文。
-                import re as _re
-                _trim = _re.search(r'<call\s+name="|<tool_call>', text_buf)
-                if _trim and extracted:
-                    text_buf = text_buf[:_trim.start()]
-            # ─────────────────────────────────────────────────────────
+
+            # ── 2. 冗余数据清理（合并重复 ls/cat 报错）──────
+            _REDUNDANT_PATTERNS = (
+                "No such file or directory",
+                "Permission denied",
+                "command not found",
+                "is a directory",
+                "Not a directory",
+            )
+            _seen_errors: dict[str, int] = {}
+            _msgs_to_compact = []
+            for _mi, _m in enumerate(self.messages[1:], 1):  # skip system
+                if _m.get("role") != "tool":
+                    continue
+                _content = _m.get("content") or ""
+                for _rp in _REDUNDANT_PATTERNS:
+                    if _rp in _content and len(_content) < 300:
+                        _key = _rp
+                        _seen_errors[_key] = _seen_errors.get(_key, 0) + 1
+                        if _seen_errors[_key] > 3:
+                            _msgs_to_compact.append(_mi)
+                        break
+            # 将重复报错压缩为单行占位
+            for _mi in reversed(_msgs_to_compact):
+                _old = self.messages[_mi]
+                _old_content = _old.get("content") or ""
+                # 只压缩短报错（长输出保留原文）
+                if len(_old_content) < 300:
+                    self.messages[_mi]["content"] = (
+                        f"(已压缩: {_old_content[:60]}...) — 同类报错已出现 {_seen_errors.get(_REDUNDANT_PATTERNS[0], '?')} 次"
+                    )
+
+            # ── 3. 重复错误检测（连续 3 次相同命令+错误）───
+            if _repeat_error_count >= _REPEAT_ERROR_THRESHOLD:
+                _anti_loop_msg = (
+                    "[System] 当前路径似乎不通：检测到连续 "
+                    f"{_repeat_error_count} 次相同命令返回相同错误。"
+                    "请重新审视 exploit 逻辑，考虑以下绕过方向：\n"
+                    "  1. 软链接绕过（ln -s）\n"
+                    "  2. open_basedir 绕过（php -d open_basedir=/）\n"
+                    "  3. 路径编码绕过（../ ./ ..%2f）\n"
+                    "  4. 切换工具或攻击向量\n"
+                    "  5. 向用户确认目标环境信息"
+                )
+                self.messages.append({"role": "user", "content": _anti_loop_msg})
+                print(c(YELLOW,
+                    f"  🔁 [Anti-Loop] 检测到连续 {_repeat_error_count} 次相同错误，已注入绕过提示"
+                ))
+                logger.warning(
+                    "Anti-Loop: repeated error detected | "
+                    "session={} iteration={} count={}",
+                    self.session_id[:8], iteration, _repeat_error_count,
+                )
+                _repeat_error_count = 0  # 重置，避免反复注入
+
+            # ── API 调用 + 空响应重试（指数退避）─────────────
+            _api_retry = 0
+            _API_RETRY_MAX = 3
+            text_buf = ""; tc_buf = {}
+
+            while True:
+                text_buf = ""; tc_buf = {}
+                _tokens_before = self._turn_completion_tokens
+
+                for delta in stream_request(
+                    self.messages, self.model_alias,
+                    tools_schema=current_tools,
+                    max_tokens=current_max_tokens,
+                ):
+                    if "_error" in delta:
+                        _err_detail = delta["_error"]
+                        if USER_MODE:
+                            print(c(RED, f"\n  {user_friendly_error(_err_detail)}"))
+                        else:
+                            print(c(RED, f"\nAPI Error: {_err_detail}"))
+                        logger.error(
+                            "API stream error | model={} session={} iteration={} raw_error={}",
+                            self.model_alias, self.session_id[:8], iteration, _err_detail,
+                        )
+                        self.messages.pop(); return
+
+                    choices = delta.get("choices", [])
+                    if not choices: continue
+                    d     = choices[0].get("delta", {})
+                    chunk = d.get("content") or ""
+
+                    # ── Usage accounting (_usage injected by api_client) ──
+                    if "_usage" in delta:
+                        u  = delta["_usage"]
+                        pt = u.get("prompt_tokens", 0) or u.get("input_tokens", 0)
+                        ct = u.get("completion_tokens", 0) or u.get("output_tokens", 0)
+                        self._turn_prompt_tokens     += pt
+                        self._turn_completion_tokens += ct
+                        self.total_prompt_tokens     += pt
+                        self.total_completion_tokens += ct
+
+                    if chunk:
+                        printable = renderer.feed(chunk)
+                        if printable: sys.stdout.write(printable); sys.stdout.flush()
+                        text_buf += chunk
+
+                    for tcd in (d.get("tool_calls") or []):
+                        idx = tcd.get("index", 0)
+                        if idx not in tc_buf:
+                            tc_buf[idx] = {
+                                "id": ensure_tool_call_id(tcd, iteration, idx),
+                                "name": "", "args": "",
+                            }
+                        fn = tcd.get("function", {})
+                        tc_buf[idx]["name"] += fn.get("name") or ""
+                        tc_buf[idx]["args"] += fn.get("arguments") or ""
+
+                leftover = renderer.flush()
+
+                # ── P2: rich Markdown 渲染（仅对非 plan 文本）──
+                if leftover:
+                    _md_indicators = ("```", "**", "| ", "## ", "- ", "1. ", "> ")
+                    _has_md = any(ind in leftover for ind in _md_indicators)
+                    _rendered = False
+                    if _has_md:
+                        try:
+                            from main import render_agent_output
+                            render_agent_output(leftover)
+                            _rendered = True
+                        except (ImportError, Exception):
+                            pass
+                    if not _rendered:
+                        sys.stdout.write(leftover)
+                        sys.stdout.flush()
+                print()
+
+                # ── Hybrid v2 Parser：XML 优先，JSON 兜底 ─────────────
+                if not tc_buf and (
+                    '<call name="' in text_buf or "<tool_call>" in text_buf
+                ):
+                    extracted = self._extract_calls(text_buf)
+                    for i, call in enumerate(extracted):
+                        source = call["_source"]
+                        call_id = (
+                            f"call_xml_{iteration}_{i}"
+                            if source == "xml"
+                            else f"call_fallback_{iteration}_{i}"
+                        )
+                        tc_buf[i] = {
+                            "id":           call_id,
+                            "name":         call["name"],
+                            "args":         json.dumps(call["args"], ensure_ascii=False),
+                            "_args_parsed": call["args"],
+                        }
+                        label = "XML" if source == "xml" else "JSON"
+                        print(c(GRAY,
+                            f"  ⚙ [Hybrid Parser/{label}] 拦截工具调用: {call['name']} "
+                            f"(params: {list(call['args'].keys())})"
+                        ))
+                        logger.info(
+                            "Hybrid Parser/{} intercepted | "
+                            "model={} session={} iteration={} tool={}",
+                            label, self.model_alias, self.session_id[:8],
+                            iteration, call["name"],
+                        )
+                    import re as _re
+                    _trim = _re.search(r'<call\s+name="|<tool_call>', text_buf)
+                    if _trim and extracted:
+                        text_buf = text_buf[:_trim.start()]
+                # ─────────────────────────────────────────────────────────
+
+                # ── 空响应检测 + 指数退避重试 ────────────────────
+                _no_new_tokens = (self._turn_completion_tokens == _tokens_before)
+                _empty_response = (not text_buf.strip() and not tc_buf and _no_new_tokens)
+
+                if not _empty_response:
+                    break   # 有效响应，退出重试循环
+
+                _api_retry += 1
+                if _api_retry >= _API_RETRY_MAX:
+                    print(c(YELLOW,
+                        f"\n  ⚠ [API Recovery] 连续 {_api_retry} 次收到空响应，注入恢复提示继续任务..."
+                    ))
+                    logger.warning(
+                        "API empty response: retries exhausted | "
+                        "model={} session={} iteration={} retries={}",
+                        self.model_alias, self.session_id[:8], iteration, _api_retry,
+                    )
+                    self.messages.append({
+                        "role": "user",
+                        "content": (
+                            "[System] 收到无效响应（空内容/0 Token），请重新审视任务目标并继续。"
+                            "如果此问题反复出现，考虑切换模型（/model）或检查 API 密钥。"
+                        ),
+                    })
+                    break   # 退出重试循环，进入下一个 iteration
+
+                _wait = min(2 ** _api_retry, 8)
+                print(c(YELLOW,
+                    f"\n  ⚠ [API Recovery] 收到无效响应，正在尝试恢复... "
+                    f"({_api_retry}/{_API_RETRY_MAX}，等待 {_wait}s)"
+                ))
+                logger.warning(
+                    "API empty response detected, retrying | "
+                    "model={} session={} iteration={} attempt={} wait={}s",
+                    self.model_alias, self.session_id[:8], iteration, _api_retry, _wait,
+                )
+                time.sleep(_wait)
+                continue   # 重试 API 调用
+
+            # ── 如果重试耗尽仍为空响应，跳过工具执行 ─────────
+            if _empty_response and _api_retry >= _API_RETRY_MAX:
+                continue   # 进入下一个 iteration
 
             if not tc_buf:
                 self.messages.append({"role": "assistant", "content": text_buf})
@@ -1829,6 +1967,27 @@ class AgentSession:
                 self.messages.append({
                     "role": "tool", "tool_call_id": tc["id"], "content": result,
                 })
+
+                # ── Logic Refresh: 重复错误追踪 ──────────────
+                if name == "run_shell" and not _audit_ok:
+                    _cmd_key = fn_args.get("command", "") or preview[:80]
+                    _err_sig = ""
+                    for _sig in ("ERROR:", "Permission denied", "No such file",
+                                 "command not found", "Segmentation fault",
+                                 "timeout", "超时"):
+                        if _sig in str(result):
+                            _err_sig = _sig
+                            break
+                    if _err_sig:
+                        _pair = (_cmd_key[:60], _err_sig)
+                        if _recent_cmd_errors and _recent_cmd_errors[-1] == _pair:
+                            _repeat_error_count += 1
+                        else:
+                            _repeat_error_count = 1
+                        _recent_cmd_errors.append(_pair)
+                        # 保留最近 20 条
+                        if len(_recent_cmd_errors) > 20:
+                            _recent_cmd_errors = _recent_cmd_errors[-20:]
 
             # ════════════════════════════════════════════════
             # ★ 改动 [3b]：所有工具结果追加完毕后，
