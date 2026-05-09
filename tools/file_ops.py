@@ -10,7 +10,7 @@ tools/file_ops.py — 文件读写、目录列出、文件搜索
     例："Your SEARCH line 1 is 90% similar to file line 145. Please check indentation."
 """
 
-import os, re, difflib, subprocess
+import os, re, difflib, subprocess, signal, threading
 from pathlib import Path
 from config import DYNAMIC_CONFIG, READ_BLACKLIST, WRITE_BLACKLIST, DANGEROUS_PATTERNS
 from utils.ansi import c, YELLOW, BLUE, GRAY, RED
@@ -18,6 +18,46 @@ from core.logger import logger
 
 # ── 全局 cwd 引用 ─────────────────────────────────────────
 _session_cwd = [os.getcwd()]
+
+# ── 环境变量持久化缓存 ─────────────────────────────────────
+_env_cache: dict = {}
+_env_cache_initialized = False
+
+
+def _init_env_cache():
+    """首次 shell 调用时探测 HOST_IP 和代理状态，缓存到 _env_cache。"""
+    global _env_cache_initialized, _env_cache
+    if _env_cache_initialized:
+        return
+    _env_cache_initialized = True
+    _env_cache = dict(os.environ)  # 继承当前进程环境
+
+    # 探测 HOST_IP（容器/渗透场景常用）
+    try:
+        _ip_res = subprocess.run(
+            ["hostname", "-I"], capture_output=True, text=True,
+            timeout=3, errors="ignore",
+        )
+        _ip = _ip_res.stdout.strip().split()[0] if _ip_res.stdout.strip() else ""
+        if _ip:
+            _env_cache["HOST_IP"] = _ip
+            logger.debug(f"[env_cache] HOST_IP detected: {_ip}")
+    except Exception:
+        pass
+
+    # 缓存代理设置
+    for _proxy_key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        _val = os.environ.get(_proxy_key, "")
+        if _val:
+            _env_cache[_proxy_key] = _val
+
+    logger.debug(f"[env_cache] initialized with {len(_env_cache)} vars")
+
+
+def _get_shell_env() -> dict:
+    """返回带缓存的环境变量字典。"""
+    _init_env_cache()
+    return _env_cache
 
 # ════════════════════════════════════════════════════════
 # 安全检查
@@ -45,12 +85,15 @@ def _run(cmd: str, timeout: int = 15, cwd: str = None, env=None) -> str:
     """
     执行 Shell 命令的底层实现。
 
-    防阻塞加固（v1.1）：
+    防阻塞加固（v1.2）：
       · stdin=DEVNULL  —— 切断键盘输入，防止交互式程序挂起（SIGTTIN）
       · timeout=15s    —— 默认超时熔断，防止大模型逻辑死锁
-      · logger         —— 记录执行轨迹，便于调试和审计
+      · env 缓存       —— 自动注入 HOST_IP / proxy 等持久化环境变量
+      · 路径自动建议   —— 文件未找到时提示 find / -name 和 /proc/self/cwd
+      · 超时信号捕获   —— SIGTERM → 等待 → SIGKILL，收集已输出的部分内容
     """
     work_dir = cwd or _session_cwd[0]
+    exec_env = env or _get_shell_env()   # ★ 使用持久化环境缓存
 
     # ── 安全检查 ────────────────────────────────────────────
     for pat in DANGEROUS_PATTERNS:
@@ -61,43 +104,89 @@ def _run(cmd: str, timeout: int = 15, cwd: str = None, env=None) -> str:
     logger.debug(f"[run_shell] 开始执行: {cmd!r}  (timeout={timeout}s, cwd={work_dir})")
     print(c(YELLOW, f"  ⚡ $ {cmd[:120]}"))
 
+    proc = None
     try:
-        res = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             shell=True,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="ignore",            # ★ 编码清洗：丢弃非 UTF-8 字符
-            stdin=subprocess.DEVNULL,   # ★ 核心防阻塞：切断标准输入
-            timeout=timeout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
             cwd=work_dir,
-            env=env,
+            env=exec_env,
+            preexec_fn=os.setsid,   # 新进程组，便于超时时杀整棵树
         )
-        out   = res.stdout + res.stderr
+        stdout, stderr = proc.communicate(timeout=timeout)
+        out = stdout.decode("utf-8", errors="ignore") + stderr.decode("utf-8", errors="ignore")
+
         limit = DYNAMIC_CONFIG["tool_max_chars"]
         if len(out) > limit:
             half = limit // 2
             out  = out[:half] + f"\n...[共{len(out)}字符，截断至{limit}]...\n" + out[-half // 4:]
 
-        if res.returncode != 0:
+        if proc.returncode != 0:
             logger.warning(
-                f"[run_shell] 命令返回非零退出码 {res.returncode}: {cmd!r}\n"
-                f"  stderr: {res.stderr[:300]!r}"
+                f"[run_shell] 命令返回非零退出码 {proc.returncode}: {cmd!r}\n"
+                f"  stderr: {stderr[:300]!r}"
             )
+
+        # ── 路径自动建议（realpath 失败 / 文件未找到）──────
+        if out and "No such file or directory" in out:
+            # 从命令中提取可能的文件名
+            _fname_match = re.search(r'(?:/|^)([a-zA-Z0-9_.\-]+)(?:\s|$)', cmd)
+            _fname = _fname_match.group(1) if _fname_match else ""
+            _suggestions = (
+                "\n💡 [Path Hint] 文件未找到，建议尝试：\n"
+                f"  · find / -name '{_fname}' 2>/dev/null   # 全局搜索\n"
+                "  · ls -la /proc/self/cwd                  # 确认当前工作目录\n"
+                "  · readlink -f /proc/self/exe              # 确认二进制位置\n"
+            ) if _fname else (
+                "\n💡 [Path Hint] 文件未找到，建议尝试：\n"
+                "  · ls -la /proc/self/cwd                  # 确认当前工作目录\n"
+                "  · find / -name '<filename>' 2>/dev/null   # 全局搜索\n"
+            )
+            out += _suggestions
 
         return out or "(no output)"
 
     except subprocess.TimeoutExpired:
-        # ★ 超时熔断：给大模型明确的行动指引
+        # ★ 超时熔断：SIGTERM → 等待 → SIGKILL，收集部分输出
+        _partial = ""
+        if proc:
+            try:
+                # 尝试收集已输出的部分内容
+                proc.terminate()   # SIGTERM
+                try:
+                    _stdout, _stderr = proc.communicate(timeout=3)
+                    _partial = _stdout.decode("utf-8", errors="ignore")
+                    if _stderr:
+                        _partial += _stderr.decode("utf-8", errors="ignore")
+                except subprocess.TimeoutExpired:
+                    proc.kill()    # SIGKILL
+                    _stdout, _stderr = proc.communicate()
+                    _partial = _stdout.decode("utf-8", errors="ignore")
+                    if _stderr:
+                        _partial += _stderr.decode("utf-8", errors="ignore")
+            except Exception:
+                pass
+
+        _partial_hint = ""
+        if _partial.strip():
+            _partial_hint = f"\n\n[部分输出（超时前已接收）]:\n{_partial[:500]}"
+
         msg = (
-            f"ERROR: 命令执行超时（>{timeout}s），进程已被终止。\n"
+            f"ERROR: 命令执行超时（>{timeout}s），进程已被终止。{_partial_hint}\n\n"
             "你是否运行了交互式程序（如 gdb、python、vim、nc）？\n"
             "  · 如果是 GDB，请务必加 -batch 参数，例如：gdb -batch -ex 'run' ./binary\n"
-            "  · 如果需要与进程交互，请改用 run_interactive 工具并通过 inputs 传入脚本化输入。"
+            "  · 如果需要与进程交互，请改用 run_interactive 工具并通过 inputs 传入脚本化输入。\n"
+            f"  · 如果命令确实耗时，可增大 timeout（当前: {timeout}s）。"
         )
         logger.warning(f"[run_shell] 超时 ({timeout}s): {cmd!r}")
         return msg
+
+    except Exception as e:
+        logger.error(f"[run_shell] 执行异常: {cmd!r} — {type(e).__name__}: {e}")
+        return f"ERROR: {type(e).__name__}: {e}"
 
     except Exception as e:
         logger.error(f"[run_shell] 执行异常: {cmd!r} — {type(e).__name__}: {e}")
