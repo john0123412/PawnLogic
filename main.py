@@ -46,7 +46,19 @@ except Exception as _e:
 try:
     from rich.console import Console as _RichConsole
     from rich.markdown import Markdown as _RichMarkdown
-    _rich_console = _RichConsole(force_terminal=True, highlight=False)
+    from rich.theme import Theme
+    _pawn_rich_theme = Theme({
+        "markdown.code": "dim cyan",
+        "markdown.code_block": "dim cyan",
+        "markdown.link": "underline cyan",
+        "markdown.link_url": "dim blue",
+    })
+    _rich_console = _RichConsole(
+        force_terminal=True,
+        highlight=True,
+        theme=_pawn_rich_theme,
+        soft_wrap=True,
+    )
     _HAS_RICH = True
 except Exception as _e:
     _RICH_IMPORT_ERROR = str(_e)
@@ -2084,12 +2096,12 @@ def render_agent_output(text: str) -> None:
         return
 
     # 检测是否包含 Markdown 结构
-    _md_indicators = ("```", "**", "| ", "## ", "- ", "1. ", "> ")
+    _md_indicators = ("```", "**", "| ", "## ", "- ", "1. ", "> ", "---", "===", "~~")
     has_md = any(indicator in text for indicator in _md_indicators)
 
     if has_md:
         try:
-            _rich_console.print(_RichMarkdown(text))
+            _rich_console.print(_RichMarkdown(text, code_theme="monokai"))
             return
         except Exception:
             pass  # 渲染失败降级
@@ -2565,6 +2577,22 @@ def main():
     _re_edit_default = ""   # Ctrl+C 回退后，上一条用户文本作为 prompt default
     _in_generation   = False  # 区分输入阶段 vs Agent 生成阶段
 
+    # ── prompt_toolkit 会话工厂（Ctrl+C 后重建会话用）────
+    def _create_pt_session():
+        """创建新的 PromptSession，确保干净的 asyncio 事件循环状态。"""
+        return PromptSession(
+            completer=_pawn_completer,
+            key_bindings=_kb,
+            auto_suggest=AutoSuggestFromHistory(),
+            history=_pt_history,
+            complete_while_typing=True,
+            complete_in_thread=False,
+            complete_style=CompleteStyle.COLUMN,
+            mouse_support=False,
+            bottom_toolbar=_bottom_toolbar,
+            reserve_space_for_menu=10,
+        )
+
     while True:
         try:
             print()  # 确保提示符在新行
@@ -2581,6 +2609,15 @@ def main():
         except EOFError:
             print(c(CYAN, "\n  Goodbye! 👋")); break
         except KeyboardInterrupt:
+            # ── 修复：Ctrl+C 打断 prompt_toolkit 后，其内部 asyncio
+            #    事件循环残留 pending Future，下次 prompt() 会崩溃。
+            #    解决方案：重建 PromptSession 以获取干净的事件循环。
+            #    若重建失败，降级到 readline 模式避免死循环。
+            if _HAS_PROMPT_TOOLKIT:
+                try:
+                    _pt_session = _create_pt_session()
+                except Exception:
+                    _HAS_PROMPT_TOOLKIT = False  # 降级到 readline
             # CC 风格：Ctrl+C 撤回上一轮，将用户文本作为 default 重新编辑
             removed, last_text = session.undo(1)
             if removed:
@@ -2618,4 +2655,9 @@ def main():
             _in_generation = False
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(c(CYAN, "\n\n  Goodbye! 👋"))
+    except SystemExit:
+        pass

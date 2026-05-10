@@ -27,6 +27,8 @@ GLOBAL_SKILLS_PATH = Path.home() / ".pawnlogic" / "global_skills.md"   # GSA 技
 SKILLS_DIR         = Path(__file__).resolve().parent / "skills"
 # ★ 新增：日志存储目录，供 core/logger.py 读取
 LOG_DIR            = Path.home() / ".pawnlogic" / "logs"
+# ★ 文件写入沙箱：所有工具产出的文件自动重定向到此目录
+WORKSPACE_DIR      = str(Path.home() / ".pawnlogic" / "workspace")
 
 # ════════════════════════════════════════════════════════
 # 厂商注册表

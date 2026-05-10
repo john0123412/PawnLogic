@@ -70,6 +70,24 @@ def _check_read(path: str):
             return False, f"SECURITY BLOCK: '{path}' 含有敏感凭证，拒绝读取。"
     return True, ""
 
+def _resolve_write_path(path: str) -> tuple:
+    """将写入路径重定向到 WORKSPACE_DIR。
+    返回 (resolved_abs_path, error_msg)。error_msg 为空表示允许写入。"""
+    from config import WORKSPACE_DIR
+    p = Path(path).expanduser()
+
+    # 绝对路径：检查是否在 workspace 内
+    if p.is_absolute():
+        abs_p = str(p.resolve())
+        if not abs_p.startswith(WORKSPACE_DIR):
+            return "", f"SECURITY BLOCK: '{path}' 不在 workspace 内。请写入 {WORKSPACE_DIR}/ 下。"
+        return abs_p, ""
+
+    # 相对路径：重定向到 workspace
+    redirected = Path(WORKSPACE_DIR) / p
+    redirected.parent.mkdir(parents=True, exist_ok=True)
+    return str(redirected.resolve()), ""
+
 def _check_write(path: str):
     abs_p = str(Path(path).expanduser().resolve())
     for bl in WRITE_BLACKLIST:
@@ -228,13 +246,15 @@ def tool_read_file_lines(a: dict) -> str:
         return f"ERROR: {e}"
 
 def tool_write_file(a: dict) -> str:
-    ok, reason = _check_write(a["path"])
+    resolved, err = _resolve_write_path(a["path"])
+    if err: return err
+    ok, reason = _check_write(resolved)
     if not ok: return reason
     try:
-        p = Path(a["path"]).expanduser()
+        p = Path(resolved)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(a["content"], encoding="utf-8")
-        return f"OK: 已写入 {len(a['content'])} 字符 → {a['path']}"
+        return f"OK: 已写入 {len(a['content'])} 字符 → {resolved}"
     except Exception as e:
         return f"ERROR: {e}"
 

@@ -173,6 +173,51 @@ cp .env.example .env
 python main.py
 ```
 
+### 🌐 全局 `pawn` 命令部署（推荐）
+
+通过 `pawn.sh` 启动器 + 符号链接，可在任意目录下直接输入 `pawn` 启动 PawnLogic，无需 `cd` 到项目目录。
+
+#### `pawn.sh` 工作原理
+
+`pawn.sh` 是一个智能启动器，每次执行时：
+
+1. **追踪真实路径**：通过 `readlink -f` 解析自身真实位置（即使通过符号链接调用），定位到项目根目录
+2. **激活虚拟环境**：自动查找并激活 `venv/` 或 `.venv/`（优先 `venv/`），确保所有 Python 依赖可用
+3. **环境检查**：若无 venv 且系统缺少 `nest_asyncio`，给出明确安装指引
+4. **启动主程序**：使用 `exec python3 main.py "$@"` 替换当前进程，透传所有命令行参数
+
+由于每次运行都重新解析路径和读取源文件，**在项目目录中修改代码后立即生效**，无需重新部署。
+
+#### 部署步骤
+
+```bash
+# 1. 确保 pawn.sh 有执行权限
+chmod +x /home/johnny/scripts/agent/pawnlogic_1.0/pawn.sh
+
+# 2. 创建全局符号链接（~/.local/bin 需已在 PATH 中）
+ln -sf /home/johnny/scripts/agent/pawnlogic_1.0/pawn.sh ~/.local/bin/pawn
+
+# 3. 验证：在任意目录下执行
+cd /tmp && pawn --help
+```
+
+#### 调用链
+
+```
+任意目录输入 pawn
+  → ~/.local/bin/pawn（符号链接）
+    → /home/johnny/scripts/agent/pawnlogic_1.0/pawn.sh
+      → readlink -f 定位项目根目录
+      → source venv/bin/activate
+      → exec python3 main.py "$@"
+```
+
+#### 注意事项
+
+- 修改 `scripts/agent/pawnlogic_1.0/` 下的任何文件（`main.py`、`config.py`、`core/*` 等）后，下次运行 `pawn` 即使用最新代码
+- 符号链接只需创建一次，之后无需重复操作
+- 若 `~/.local/bin` 不在 PATH 中，需先添加：`export PATH="$HOME/.local/bin:$PATH"`（加入 `~/.bashrc` 持久化）
+
 ### 🪟 Windows 部署（基础体验）
 
 *注意：Windows 缺乏原生 Linux 命令，仅支持 Python 沙箱、网页搜索、文件修改和对话。不建议用于 Pwn 题或编译 C 语言。*
