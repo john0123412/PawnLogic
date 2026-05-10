@@ -1349,6 +1349,11 @@ class AgentSession:
         _recent_cmd_errors: list[tuple[str, str]] = []  # (cmd, error) 历史
         _repeat_error_count   = 0      # 当前连续相同错误计数
 
+        # ── 连续相同代码检测 ──────────────────────────────
+        _REPEAT_CODE_THRESHOLD = 3     # 连续相同代码阈值
+        _recent_code_outputs: list[str] = []   # 最近的工具输出哈希
+        _repeat_code_count    = 0      # 当前连续相同代码计数
+
         for iteration in range(max_iter):
             # ── P6.5: 首轮迭代显示技能包加载状态 ────────
             if iteration == 0 and self._loaded_skill_packs:
@@ -1554,6 +1559,18 @@ class AgentSession:
                         tc_buf[idx]["args"] += fn.get("arguments") or ""
 
                 leftover = renderer.flush()
+
+                # ── P7: 原始 tool_call 参数日志（驱动层转义诊断）──
+                if tc_buf and not USER_MODE:
+                    for _idx, _tc in tc_buf.items():
+                        _raw_name = _tc["name"]
+                        _raw_args = _tc["args"]
+                        logger.debug(
+                            "RAW tool_call | session={} iter={} idx={} "
+                            "name={!r} args_preview={!r}",
+                            self.session_id[:8], iteration, _idx,
+                            _raw_name, _raw_args[:200],
+                        )
 
                 # ── P2: rich Markdown 渲染（仅对非 plan 文本）──
                 if leftover:
@@ -1988,6 +2005,40 @@ class AgentSession:
                         # 保留最近 20 条
                         if len(_recent_cmd_errors) > 20:
                             _recent_cmd_errors = _recent_cmd_errors[-20:]
+
+                # ── 连续相同代码检测（防止逻辑死循环）──────
+                if name in ("run_shell", "run_code", "write_file", "patch_file"):
+                    import hashlib
+                    _result_hash = hashlib.md5(
+                        str(result)[:500].encode("utf-8", errors="ignore")
+                    ).hexdigest()[:12]
+                    if _recent_code_outputs and _recent_code_outputs[-1] == _result_hash:
+                        _repeat_code_count += 1
+                    else:
+                        _repeat_code_count = 1
+                    _recent_code_outputs.append(_result_hash)
+                    if len(_recent_code_outputs) > 10:
+                        _recent_code_outputs = _recent_code_outputs[-10:]
+
+                    if _repeat_code_count >= _REPEAT_CODE_THRESHOLD:
+                        _anti_code_loop = (
+                            f"[System] 检测到连续 {_repeat_code_count} 次工具输出几乎相同。"
+                            "当前路径可能陷入循环，请立即停止并重新审视思路：\n"
+                            "  1. 是否在重复执行已知会失败的命令？\n"
+                            "  2. 是否需要换个攻击向量或工具？\n"
+                            "  3. 是否应该向用户确认目标环境？\n"
+                            "请在 <plan> 中说明你的新思路后再继续。"
+                        )
+                        self.messages.append({"role": "user", "content": _anti_code_loop})
+                        print(c(YELLOW,
+                            f"  🔁 [Anti-Code-Loop] 连续 {_repeat_code_count} 次相同输出，已注入重思提示"
+                        ))
+                        logger.warning(
+                            "Anti-Code-Loop: repeated output | "
+                            "session={} iteration={} count={} tool={}",
+                            self.session_id[:8], iteration, _repeat_code_count, name,
+                        )
+                        _repeat_code_count = 0
 
             # ════════════════════════════════════════════════
             # ★ 改动 [3b]：所有工具结果追加完毕后，
