@@ -312,10 +312,11 @@ HELP_TEXT = f"""
   {c(YELLOW,"/init_project [desc]")} 在当前目录生成 .pawn_state.md（项目大目标）
   {c(YELLOW,"/state")}               查看当前目录的 .pawn_state.md
 
-{c(BOLD,"── 三档预设 ──")}
+{c(BOLD,"── 四档预设 ──")}
   {c(GREEN,  "/low")}     日常/算法 · tokens=4k  ctx=40k  iter=10
   {c(YELLOW, "/mid")}     开发/Pwn  · tokens=8k  ctx=150k iter=30  ← 默认
   {c(MAGENTA,"/deep")}    全火力    · tokens=32k ctx=400k iter=50
+  {c(RED,    "/max")}     极限火力  · tokens=32k ctx=600k iter=100 60min
   {c(GRAY,   "/normal")}  重置到 /mid
 
 {c(BOLD,"── 细粒度调节 ──")}
