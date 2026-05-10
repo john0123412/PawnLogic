@@ -221,6 +221,15 @@ def delete_session(session_id: str):
     with get_conn() as conn:
         conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
 
+def rename_session(session_id: str, new_name: str) -> bool:
+    """重命名会话。"""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE sessions SET name=?, updated_at=? WHERE id=?",
+            (new_name, _now(), session_id),
+        )
+        return cur.rowcount > 0
+
 # ════════════════════════════════════════════════════════
 # 标签管理
 # ════════════════════════════════════════════════════════
