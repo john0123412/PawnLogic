@@ -670,6 +670,8 @@ def stream_request(
             if attempt < _RETRY_MAX - 1:
                 continue
             yield {"_error": str(e)}
+        except KeyboardInterrupt:
+            raise  # 干净传播；finally 处理 conn 清理
         except Exception as e:
             yield {"_error": str(e)}
             return

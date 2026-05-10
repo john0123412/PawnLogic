@@ -874,7 +874,10 @@ class AgentSession:
             "  7. 验证收尾 — 确认 Flag/Shell/回显，成功后 bump_skill 提升权重。\n\n"
             "  ⚡ 肌肉记忆: 侦察 → check_service → search_skills → install/sync → 执行\n\n"
             "  RULE: 禁止跳过 search_skills 直接编写 Exploit。\n"
-            "  RULE: 脚本失败先读 guide.md 改参数重试，仅无匹配时从零编写。\n\n"
+            "  RULE: 脚本失败先读 guide.md 改参数重试，仅无匹配时从零编写。\n"
+            "  RULE: write_file 的所有输出文件必须写入 ~/.pawnlogic/workspace/ 下。\n"
+            "       相对路径会自动重定向，绝对路径必须在 workspace 内。\n"
+            "       例: write_file(path='exploit.py', content=...) → 实际写入 ~/.pawnlogic/workspace/exploit.py\n\n"
 
             f"Working dir : {self.cwd}\n"
             f"Time        : {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
@@ -977,6 +980,9 @@ class AgentSession:
             "  ✗  NEVER read a file > 2MB in one call. Use read_file_lines for large files.\n\n"
             "  ✗  NEVER use write_file to overwrite existing code files.\n"
             "       Use patch_file with SEARCH/REPLACE blocks for ALL code modifications.\n\n"
+            "  ✗  NEVER write generated files to the project source directory.\n"
+            "       All artifacts (exploits, scripts, configs) go to ~/.pawnlogic/workspace/.\n"
+            "       Relative paths are auto-redirected. Absolute paths outside workspace are blocked.\n\n"
             "  ✗  NEVER call more than 3 tools concurrently. Plan them sequentially.\n\n"
             "  ✗  If list_dir or find_files has been called 2+ times without finding the target,\n"
             "       STOP and use /chat find <keyword> to check if you solved it in a past session.\n\n"
@@ -1355,707 +1361,706 @@ class AgentSession:
         _repeat_code_count    = 0      # 当前连续相同代码计数
 
         for iteration in range(max_iter):
-            # ── P6.5: 首轮迭代显示技能包加载状态 ────────
-            if iteration == 0 and self._loaded_skill_packs:
-                if USER_MODE:
-                    print(c(GREEN, _skill_scanner.format_user_message(self._loaded_skill_packs)))
-                else:
-                    for _sp in self._loaded_skill_packs:
-                        print(c(CYAN, f"  📦 [Skill Pack] {_sp.get('name', '?')} v{_sp.get('version', '1.0')}"))
-                        _sp_path = _sp.get("_path", "")
-                        if _sp.get("guide"):
-                            print(c(GRAY, f"     guide: {_sp_path}/{_sp['guide']}"))
-                        if _sp.get("scripts"):
-                            print(c(GRAY, f"     scripts: {', '.join(_sp['scripts'])}"))
+            try:
+                # ── P6.5: 首轮迭代显示技能包加载状态 ────────
+                if iteration == 0 and self._loaded_skill_packs:
+                    if USER_MODE:
+                        print(c(GREEN, _skill_scanner.format_user_message(self._loaded_skill_packs)))
+                    else:
+                        for _sp in self._loaded_skill_packs:
+                            print(c(CYAN, f"  📦 [Skill Pack] {_sp.get('name', '?')} v{_sp.get('version', '1.0')}"))
+                            _sp_path = _sp.get("_path", "")
+                            if _sp.get("guide"):
+                                print(c(GRAY, f"     guide: {_sp_path}/{_sp['guide']}"))
+                            if _sp.get("scripts"):
+                                print(c(GRAY, f"     scripts: {', '.join(_sp['scripts'])}"))
 
-            # ── P1: 每轮迭代时间检查 ────────────────────
-            _remaining = self._time_remaining()
-            if _remaining <= 0:
-                print(c(RED,
-                    f"\n  ⏰ [Time Budget] 预算已耗尽（{self._time_budget_sec}s），任务终止。"
-                ))
-                logger.warning(
-                    "Time budget exhausted | session={} budget={}s",
-                    self.session_id[:8], self._time_budget_sec,
-                )
-                break
-
-            if not self._urgent_mode and _remaining < _URGENT_THRESHOLD_SEC:
-                # ── 触发 URGENT_MODE ──────────────────────
-                self._urgent_mode = True
-                print(c(RED,
-                    f"  🚨 [URGENT_MODE] 剩余 {_remaining:.0f}s — "
-                    f"切换至极速模式"
-                ))
-                logger.info(
-                    "URGENT_MODE activated | session={} remaining={:.1f}s",
-                    self.session_id[:8], _remaining,
-                )
-
-                # 注入 URGENT 信号到上下文
-                self.messages.append({
-                    "role": "user",
-                    "content": _URGENT_SIGNAL,
-                })
-
-                # 自动切换到极速模型
-                for _u_alias in _URGENT_MODEL_CANDIDATES:
-                    if _u_alias in MODELS:
-                        _u_ok, _ = validate_api_key(_u_alias)
-                        if _u_ok and _u_alias != self.model_alias:
-                            old_model = self.model_alias
-                            self.model_alias = _u_alias
-                            print(c(MAGENTA,
-                                f"  🚨 [URGENT] 模型已切换: "
-                                f"{old_model} → {_u_alias}（极速响应）"
-                            ))
-                            # 重建工具列表
-                            phase_whitelist = set(AGENT_PHASES.get(self.current_phase, []))
-                            current_tools = [
-                                s for s in TOOLS_SCHEMA
-                                if s.get("function", {}).get("name") in phase_whitelist
-                                or s.get("function", {}).get("name") in ("switch_phase", "bump_skill")
-                            ]
-                            current_max_tokens = min(current_max_tokens, 4096)
-                            break
-
-            # ════════════════════════════════════════════════
-            # Logic Refresh 模块：阶段性总结 + 冗余清理 + 错误检测
-            # ════════════════════════════════════════════════
-
-            # ── 1. 阶段性总结（每 N 轮触发）────────────────
-            if iteration > 0 and iteration % _LOGIC_REFRESH_INTERVAL == 0:
-                # 收集最近的 tool observation
-                _recent_obs = []
-                for _m in self.messages[-20:]:
-                    if _m.get("role") == "tool" and _m.get("content"):
-                        _recent_obs.append(_m["content"][:200])
-                if _recent_obs:
-                    _obs_text = "\n".join(_recent_obs[-10:])
-                    _summary_prompt = (
-                        f"[Logic Refresh — Iteration {iteration}]\n"
-                        f"请对以下最近的探索路径进行简明总结（5 句话以内），"
-                        f"提炼关键发现、已排除的路径和当前最佳方向：\n\n{_obs_text}"
+                # ── P1: 每轮迭代时间检查 ────────────────────
+                _remaining = self._time_remaining()
+                if _remaining <= 0:
+                    print(c(RED,
+                        f"\n  ⏰ [Time Budget] 预算已耗尽（{self._time_budget_sec}s），任务终止。"
+                    ))
+                    logger.warning(
+                        "Time budget exhausted | session={} budget={}s",
+                        self.session_id[:8], self._time_budget_sec,
                     )
-                    self.messages.append({"role": "user", "content": _summary_prompt})
-                    print(c(CYAN,
-                        f"  🔄 [Logic Refresh] 已触发阶段性总结（iteration={iteration}）"
+                    break
+
+                if not self._urgent_mode and _remaining < _URGENT_THRESHOLD_SEC:
+                    # ── 触发 URGENT_MODE ──────────────────────
+                    self._urgent_mode = True
+                    print(c(RED,
+                        f"  🚨 [URGENT_MODE] 剩余 {_remaining:.0f}s — "
+                        f"切换至极速模式"
                     ))
                     logger.info(
-                        "Logic Refresh: phase summary triggered | "
-                        "session={} iteration={} obs_count={}",
-                        self.session_id[:8], iteration, len(_recent_obs),
+                        "URGENT_MODE activated | session={} remaining={:.1f}s",
+                        self.session_id[:8], _remaining,
                     )
 
-            # ── 2. 冗余数据清理（合并重复 ls/cat 报错）──────
-            _REDUNDANT_PATTERNS = (
-                "No such file or directory",
-                "Permission denied",
-                "command not found",
-                "is a directory",
-                "Not a directory",
-            )
-            _seen_errors: dict[str, int] = {}
-            _msgs_to_compact = []
-            for _mi, _m in enumerate(self.messages[1:], 1):  # skip system
-                if _m.get("role") != "tool":
-                    continue
-                _content = _m.get("content") or ""
-                for _rp in _REDUNDANT_PATTERNS:
-                    if _rp in _content and len(_content) < 300:
-                        _key = _rp
-                        _seen_errors[_key] = _seen_errors.get(_key, 0) + 1
-                        if _seen_errors[_key] > 3:
-                            _msgs_to_compact.append(_mi)
-                        break
-            # 将重复报错压缩为单行占位
-            for _mi in reversed(_msgs_to_compact):
-                _old = self.messages[_mi]
-                _old_content = _old.get("content") or ""
-                # 只压缩短报错（长输出保留原文）
-                if len(_old_content) < 300:
-                    self.messages[_mi]["content"] = (
-                        f"(已压缩: {_old_content[:60]}...) — 同类报错已出现 {_seen_errors.get(_REDUNDANT_PATTERNS[0], '?')} 次"
+                    # 注入 URGENT 信号到上下文
+                    self.messages.append({
+                        "role": "user",
+                        "content": _URGENT_SIGNAL,
+                    })
+
+                    # 自动切换到极速模型
+                    for _u_alias in _URGENT_MODEL_CANDIDATES:
+                        if _u_alias in MODELS:
+                            _u_ok, _ = validate_api_key(_u_alias)
+                            if _u_ok and _u_alias != self.model_alias:
+                                old_model = self.model_alias
+                                self.model_alias = _u_alias
+                                print(c(MAGENTA,
+                                    f"  🚨 [URGENT] 模型已切换: "
+                                    f"{old_model} → {_u_alias}（极速响应）"
+                                ))
+                                # 重建工具列表
+                                phase_whitelist = set(AGENT_PHASES.get(self.current_phase, []))
+                                current_tools = [
+                                    s for s in TOOLS_SCHEMA
+                                    if s.get("function", {}).get("name") in phase_whitelist
+                                    or s.get("function", {}).get("name") in ("switch_phase", "bump_skill")
+                                ]
+                                current_max_tokens = min(current_max_tokens, 4096)
+                                break
+
+                # ════════════════════════════════════════════════
+                # Logic Refresh 模块：阶段性总结 + 冗余清理 + 错误检测
+                # ════════════════════════════════════════════════
+
+                # ── 1. 阶段性总结（每 N 轮触发）────────────────
+                if iteration > 0 and iteration % _LOGIC_REFRESH_INTERVAL == 0:
+                    # 收集最近的 tool observation
+                    _recent_obs = []
+                    for _m in self.messages[-20:]:
+                        if _m.get("role") == "tool" and _m.get("content"):
+                            _recent_obs.append(_m["content"][:200])
+                    if _recent_obs:
+                        _obs_text = "\n".join(_recent_obs[-10:])
+                        _summary_prompt = (
+                            f"[Logic Refresh — Iteration {iteration}]\n"
+                            f"请对以下最近的探索路径进行简明总结（5 句话以内），"
+                            f"提炼关键发现、已排除的路径和当前最佳方向：\n\n{_obs_text}"
+                        )
+                        self.messages.append({"role": "user", "content": _summary_prompt})
+                        print(c(CYAN,
+                            f"  🔄 [Logic Refresh] 已触发阶段性总结（iteration={iteration}）"
+                        ))
+                        logger.info(
+                            "Logic Refresh: phase summary triggered | "
+                            "session={} iteration={} obs_count={}",
+                            self.session_id[:8], iteration, len(_recent_obs),
+                        )
+
+                # ── 2. 冗余数据清理（合并重复 ls/cat 报错）──────
+                _REDUNDANT_PATTERNS = (
+                    "No such file or directory",
+                    "Permission denied",
+                    "command not found",
+                    "is a directory",
+                    "Not a directory",
+                )
+                _seen_errors: dict[str, int] = {}
+                _msgs_to_compact = []
+                for _mi, _m in enumerate(self.messages[1:], 1):  # skip system
+                    if _m.get("role") != "tool":
+                        continue
+                    _content = _m.get("content") or ""
+                    for _rp in _REDUNDANT_PATTERNS:
+                        if _rp in _content and len(_content) < 300:
+                            _key = _rp
+                            _seen_errors[_key] = _seen_errors.get(_key, 0) + 1
+                            if _seen_errors[_key] > 3:
+                                _msgs_to_compact.append(_mi)
+                            break
+                # 将重复报错压缩为单行占位
+                for _mi in reversed(_msgs_to_compact):
+                    _old = self.messages[_mi]
+                    _old_content = _old.get("content") or ""
+                    # 只压缩短报错（长输出保留原文）
+                    if len(_old_content) < 300:
+                        self.messages[_mi]["content"] = (
+                            f"(已压缩: {_old_content[:60]}...) — 同类报错已出现 {_seen_errors.get(_REDUNDANT_PATTERNS[0], '?')} 次"
+                        )
+
+                # ── 3. 重复错误检测（连续 3 次相同命令+错误）───
+                if _repeat_error_count >= _REPEAT_ERROR_THRESHOLD:
+                    _anti_loop_msg = (
+                        "[System] 当前路径似乎不通：检测到连续 "
+                        f"{_repeat_error_count} 次相同命令返回相同错误。"
+                        "请重新审视 exploit 逻辑，考虑以下绕过方向：\n"
+                        "  1. 软链接绕过（ln -s）\n"
+                        "  2. open_basedir 绕过（php -d open_basedir=/）\n"
+                        "  3. 路径编码绕过（../ ./ ..%2f）\n"
+                        "  4. 切换工具或攻击向量\n"
+                        "  5. 向用户确认目标环境信息"
                     )
+                    self.messages.append({"role": "user", "content": _anti_loop_msg})
+                    print(c(YELLOW,
+                        f"  🔁 [Anti-Loop] 检测到连续 {_repeat_error_count} 次相同错误，已注入绕过提示"
+                    ))
+                    logger.warning(
+                        "Anti-Loop: repeated error detected | "
+                        "session={} iteration={} count={}",
+                        self.session_id[:8], iteration, _repeat_error_count,
+                    )
+                    _repeat_error_count = 0  # 重置，避免反复注入
 
-            # ── 3. 重复错误检测（连续 3 次相同命令+错误）───
-            if _repeat_error_count >= _REPEAT_ERROR_THRESHOLD:
-                _anti_loop_msg = (
-                    "[System] 当前路径似乎不通：检测到连续 "
-                    f"{_repeat_error_count} 次相同命令返回相同错误。"
-                    "请重新审视 exploit 逻辑，考虑以下绕过方向：\n"
-                    "  1. 软链接绕过（ln -s）\n"
-                    "  2. open_basedir 绕过（php -d open_basedir=/）\n"
-                    "  3. 路径编码绕过（../ ./ ..%2f）\n"
-                    "  4. 切换工具或攻击向量\n"
-                    "  5. 向用户确认目标环境信息"
-                )
-                self.messages.append({"role": "user", "content": _anti_loop_msg})
-                print(c(YELLOW,
-                    f"  🔁 [Anti-Loop] 检测到连续 {_repeat_error_count} 次相同错误，已注入绕过提示"
-                ))
-                logger.warning(
-                    "Anti-Loop: repeated error detected | "
-                    "session={} iteration={} count={}",
-                    self.session_id[:8], iteration, _repeat_error_count,
-                )
-                _repeat_error_count = 0  # 重置，避免反复注入
-
-            # ── API 调用 + 空响应重试（指数退避）─────────────
-            _api_retry = 0
-            _API_RETRY_MAX = 3
-            text_buf = ""; tc_buf = {}
-
-            while True:
+                # ── API 调用 + 空响应重试（指数退避）─────────────
+                _api_retry = 0
+                _API_RETRY_MAX = 3
                 text_buf = ""; tc_buf = {}
-                _tokens_before = self._turn_completion_tokens
 
-                for delta in stream_request(
-                    self.messages, self.model_alias,
-                    tools_schema=current_tools,
-                    max_tokens=current_max_tokens,
-                ):
-                    if "_error" in delta:
-                        _err_detail = delta["_error"]
-                        if USER_MODE:
-                            print(c(RED, f"\n  {user_friendly_error(_err_detail)}"))
-                        else:
-                            print(c(RED, f"\nAPI Error: {_err_detail}"))
-                        logger.error(
-                            "API stream error | model={} session={} iteration={} raw_error={}",
-                            self.model_alias, self.session_id[:8], iteration, _err_detail,
-                        )
-                        self.messages.pop(); return
+                while True:
+                    text_buf = ""; tc_buf = {}
+                    _tokens_before = self._turn_completion_tokens
 
-                    choices = delta.get("choices", [])
-                    if not choices: continue
-                    d     = choices[0].get("delta", {})
-                    chunk = d.get("content") or ""
+                    for delta in stream_request(
+                        self.messages, self.model_alias,
+                        tools_schema=current_tools,
+                        max_tokens=current_max_tokens,
+                    ):
+                        if "_error" in delta:
+                            _err_detail = delta["_error"]
+                            if USER_MODE:
+                                print(c(RED, f"\n  {user_friendly_error(_err_detail)}"))
+                            else:
+                                print(c(RED, f"\nAPI Error: {_err_detail}"))
+                            logger.error(
+                                "API stream error | model={} session={} iteration={} raw_error={}",
+                                self.model_alias, self.session_id[:8], iteration, _err_detail,
+                            )
+                            self.messages.pop(); return
 
-                    # ── Usage accounting (_usage injected by api_client) ──
-                    if "_usage" in delta:
-                        u  = delta["_usage"]
-                        pt = u.get("prompt_tokens", 0) or u.get("input_tokens", 0)
-                        ct = u.get("completion_tokens", 0) or u.get("output_tokens", 0)
-                        self._turn_prompt_tokens     += pt
-                        self._turn_completion_tokens += ct
-                        self.total_prompt_tokens     += pt
-                        self.total_completion_tokens += ct
+                        choices = delta.get("choices", [])
+                        if not choices: continue
+                        d     = choices[0].get("delta", {})
+                        chunk = d.get("content") or ""
 
-                    if chunk:
-                        printable = renderer.feed(chunk)
-                        if printable: sys.stdout.write(printable); sys.stdout.flush()
-                        text_buf += chunk
+                        # ── Usage accounting (_usage injected by api_client) ──
+                        if "_usage" in delta:
+                            u  = delta["_usage"]
+                            pt = u.get("prompt_tokens", 0) or u.get("input_tokens", 0)
+                            ct = u.get("completion_tokens", 0) or u.get("output_tokens", 0)
+                            self._turn_prompt_tokens     += pt
+                            self._turn_completion_tokens += ct
+                            self.total_prompt_tokens     += pt
+                            self.total_completion_tokens += ct
 
-                    for tcd in (d.get("tool_calls") or []):
-                        idx = tcd.get("index", 0)
-                        if idx not in tc_buf:
-                            tc_buf[idx] = {
-                                "id": ensure_tool_call_id(tcd, iteration, idx),
-                                "name": "", "args": "",
-                            }
-                        fn = tcd.get("function", {})
-                        tc_buf[idx]["name"] += fn.get("name") or ""
-                        tc_buf[idx]["args"] += fn.get("arguments") or ""
+                        if chunk:
+                            printable = renderer.feed(chunk)
+                            if printable: sys.stdout.write(printable); sys.stdout.flush()
+                            text_buf += chunk
 
-                leftover = renderer.flush()
+                        for tcd in (d.get("tool_calls") or []):
+                            idx = tcd.get("index", 0)
+                            if idx not in tc_buf:
+                                tc_buf[idx] = {
+                                    "id": ensure_tool_call_id(tcd, iteration, idx),
+                                    "name": "", "args": "",
+                                }
+                            fn = tcd.get("function", {})
+                            tc_buf[idx]["name"] += fn.get("name") or ""
+                            tc_buf[idx]["args"] += fn.get("arguments") or ""
 
-                # ── P7: 原始 tool_call 参数日志（驱动层转义诊断）──
-                if tc_buf and not USER_MODE:
-                    for _idx, _tc in tc_buf.items():
-                        _raw_name = _tc["name"]
-                        _raw_args = _tc["args"]
-                        logger.debug(
-                            "RAW tool_call | session={} iter={} idx={} "
-                            "name={!r} args_preview={!r}",
-                            self.session_id[:8], iteration, _idx,
-                            _raw_name, _raw_args[:200],
-                        )
+                    leftover = renderer.flush()
 
-                # ── P2: rich Markdown 渲染（仅对非 plan 文本）──
-                if leftover:
-                    _md_indicators = ("```", "**", "| ", "## ", "- ", "1. ", "> ")
-                    _has_md = any(ind in leftover for ind in _md_indicators)
-                    _rendered = False
-                    if _has_md:
+                    # ── P7: 原始 tool_call 参数日志（驱动层转义诊断）──
+                    if tc_buf and not USER_MODE:
+                        for _idx, _tc in tc_buf.items():
+                            _raw_name = _tc["name"]
+                            _raw_args = _tc["args"]
+                            logger.debug(
+                                "RAW tool_call | session={} iter={} idx={} "
+                                "name={!r} args_preview={!r}",
+                                self.session_id[:8], iteration, _idx,
+                                _raw_name, _raw_args[:200],
+                            )
+
+                    # ── P2: rich Markdown 渲染（仅对非 plan 文本）──
+                    if leftover:
                         try:
                             from main import render_agent_output
                             render_agent_output(leftover)
-                            _rendered = True
                         except (ImportError, Exception):
-                            pass
-                    if not _rendered:
-                        sys.stdout.write(leftover)
-                        sys.stdout.flush()
-                print()
+                            sys.stdout.write(leftover)
+                            sys.stdout.flush()
+                    print()
 
-                # ── Hybrid v2 Parser：XML 优先，JSON 兜底 ─────────────
-                if not tc_buf and (
-                    '<call name="' in text_buf or "<tool_call>" in text_buf
-                ):
-                    extracted = self._extract_calls(text_buf)
-                    for i, call in enumerate(extracted):
-                        source = call["_source"]
-                        call_id = (
-                            f"call_xml_{iteration}_{i}"
-                            if source == "xml"
-                            else f"call_fallback_{iteration}_{i}"
-                        )
-                        tc_buf[i] = {
-                            "id":           call_id,
-                            "name":         call["name"],
-                            "args":         json.dumps(call["args"], ensure_ascii=False),
-                            "_args_parsed": call["args"],
-                        }
-                        label = "XML" if source == "xml" else "JSON"
-                        print(c(GRAY,
-                            f"  ⚙ [Hybrid Parser/{label}] 拦截工具调用: {call['name']} "
-                            f"(params: {list(call['args'].keys())})"
-                        ))
-                        logger.info(
-                            "Hybrid Parser/{} intercepted | "
-                            "model={} session={} iteration={} tool={}",
-                            label, self.model_alias, self.session_id[:8],
-                            iteration, call["name"],
-                        )
-                    import re as _re
-                    _trim = _re.search(r'<call\s+name="|<tool_call>', text_buf)
-                    if _trim and extracted:
-                        text_buf = text_buf[:_trim.start()]
-                # ─────────────────────────────────────────────────────────
-
-                # ── 空响应检测 + 指数退避重试 ────────────────────
-                _no_new_tokens = (self._turn_completion_tokens == _tokens_before)
-                _empty_response = (not text_buf.strip() and not tc_buf and _no_new_tokens)
-
-                if not _empty_response:
-                    break   # 有效响应，退出重试循环
-
-                _api_retry += 1
-                if _api_retry >= _API_RETRY_MAX:
-                    print(c(YELLOW,
-                        f"\n  ⚠ [API Recovery] 连续 {_api_retry} 次收到空响应，注入恢复提示继续任务..."
-                    ))
-                    logger.warning(
-                        "API empty response: retries exhausted | "
-                        "model={} session={} iteration={} retries={}",
-                        self.model_alias, self.session_id[:8], iteration, _api_retry,
-                    )
-                    self.messages.append({
-                        "role": "user",
-                        "content": (
-                            "[System] 收到无效响应（空内容/0 Token），请重新审视任务目标并继续。"
-                            "如果此问题反复出现，考虑切换模型（/model）或检查 API 密钥。"
-                        ),
-                    })
-                    break   # 退出重试循环，进入下一个 iteration
-
-                _wait = min(2 ** _api_retry, 8)
-                print(c(YELLOW,
-                    f"\n  ⚠ [API Recovery] 收到无效响应，正在尝试恢复... "
-                    f"({_api_retry}/{_API_RETRY_MAX}，等待 {_wait}s)"
-                ))
-                logger.warning(
-                    "API empty response detected, retrying | "
-                    "model={} session={} iteration={} attempt={} wait={}s",
-                    self.model_alias, self.session_id[:8], iteration, _api_retry, _wait,
-                )
-                time.sleep(_wait)
-                continue   # 重试 API 调用
-
-            # ── 如果重试耗尽仍为空响应，跳过工具执行 ─────────
-            if _empty_response and _api_retry >= _API_RETRY_MAX:
-                continue   # 进入下一个 iteration
-
-            if not tc_buf:
-                self.messages.append({"role": "assistant", "content": text_buf})
-                self._print_turn_summary()
-                self._autosave(); return
-
-            # ════════════════════════════════════════════════
-            # ★ 改动 [3]：CoT Guard 重构 — 教练模式
-            #
-            # 判断次序：
-            #   1. 豁免检查（只读工具无需 plan）
-            #   2. 软拦截 × MAX_SOFT_CORRECTIONS（工具照常执行，追加信号）
-            #   3. 硬终止 × 1（软拦截耗尽后才触发）
-            #
-            # 信号注入：
-            #   · 不阻断工具执行，让模型先看到结果
-            #   · 信号以 "user" 角色追加在工具结果之后（attention 贴近推理层）
-            # ════════════════════════════════════════════════
-            has_plan    = "<plan>" in text_buf.lower()
-            is_exempt   = _is_plan_exempt(tc_buf)
-            # P1.7: URGENT_MODE 跳过 CoT Guard
-            need_plan   = not has_plan and not is_exempt and not self._urgent_mode
-
-            _plan_signal_injected = False
-
-            if _plan_rejected > _MAX_SOFT_CORRECTIONS:
-                # ── 硬终止：软拦截已耗尽 ──────────────────
-                print(c(RED,
-                        f"  ⛔ [CoT Guard] 连续 {_plan_rejected} 次未提供 <plan>，任务已终止。"
-                        ))
-                print(c(GRAY,
-                        "  建议：1. 简化指令  2. 切换更强模型（/model ds-chat）"
-                        ))
-                logger.warning(
-                    "CoT Guard: hard kill triggered | "
-                    "model={} session={} iteration={} plan_rejected={}",
-                    self.model_alias, self.session_id[:8],
-                    iteration, _plan_rejected,
-                )
-                if self.messages and self.messages[-1]["role"] == "user":
-                    self.messages.pop()  # 撤销上一条 user 消息，保持上下文干净
-                return
-
-                # ── 软拦截：工具仍执行，计划注入信号 ──────────
-                print(c(YELLOW,
-                    f"  💭 [CoT Soft #{_plan_rejected}/{_MAX_SOFT_CORRECTIONS}] "
-                    "检测到缺失 <plan>，工具已执行，修正信号将在结果后注入..."
-                ))
-                logger.debug(
-                    "CoT Guard: soft intercept #{} | model={} session={} iteration={}",
-                    _plan_rejected, self.model_alias, self.session_id[:8], iteration,
-                )
-                _plan_signal_injected = True
-
-            else:
-                _plan_rejected = 0   # 成功输出 <plan>，重置计数
-
-            # ── 模块 1B：并发截断 ──────────────────────────
-            if len(tc_buf) > _MAX_CONCURRENT_TOOLS:
-                orig = len(tc_buf)
-                kept = sorted(tc_buf.keys())[:_MAX_CONCURRENT_TOOLS]
-                tc_buf = {k: tc_buf[k] for k in kept}
-                print(c(YELLOW, f"  ✂ [并发限制] {orig} 个工具调用已截断至前 {_MAX_CONCURRENT_TOOLS} 个。"))
-                logger.warning(
-                    "Concurrent tool limit | model={} session={} original={} kept={}",
-                    self.model_alias, self.session_id[:8], orig, _MAX_CONCURRENT_TOOLS,
-                )
-
-
-            self.messages.append({
-                "role":    "assistant",
-                "content": text_buf or None,
-                "tool_calls": [
-                    {"id": tc_buf[i]["id"], "type": "function",
-                     "function": {"name": tc_buf[i]["name"], "arguments": tc_buf[i]["args"]}}
-                    for i in sorted(tc_buf)
-                ],
-            })
-
-            # ── 执行所有工具 ───────────────────────────────
-            for i in sorted(tc_buf):
-                tc = tc_buf[i];
-                name = tc["name"]
-
-                # 🔑 优先使用 XML/Hybrid Parser 透传的零转义字典
-                if "_args_parsed" in tc:
-                    fn_args = tc["_args_parsed"]
-                else:
-                    fn_args = {}
-                    if tc["args"].strip():
-                        try:
-                            fn_args = json.loads(tc["args"])
-                        except json.JSONDecodeError:
-                            try:
-                                fn_args = json.loads(tc["args"].strip().lstrip("\ufeff"))
-                            except:
-                                fn_args = {"_raw_args": tc["args"]}
-
-                preview  = ", ".join(f"{k}={repr(v)[:40]}" for k, v in fn_args.items())
-                iter_tag = c(GRAY, f"[{iteration+1}/{max_iter}]")
-
-                # P6: USER_MODE 下检测技能包脚本调用，简化输出
-                _is_skill_call = False
-                if USER_MODE and name == "run_shell":
-                    _cmd = fn_args.get("command", "") or fn_args.get("_raw_args", "")
-                    _skills_dir_str = str(SKILLS_DIR).replace("\\", "/")
-                    if _skills_dir_str in _cmd.replace("\\", "/") and any(
-                        _cmd.strip().endswith(ext) or f"python3 {_skills_dir_str}" in _cmd.replace("\\", "/")
-                        for ext in (".py", ".sh")
+                    # ── Hybrid v2 Parser：XML 优先，JSON 兜底 ─────────────
+                    if not tc_buf and (
+                        '<call name="' in text_buf or "<tool_call>" in text_buf
                     ):
-                        _is_skill_call = True
-                        # 从命令中提取技能包名称
-                        _parts = _cmd.replace("\\", "/").split("/skills/")
-                        _pack_hint = _parts[1].split("/")[0] if len(_parts) > 1 else "unknown"
-                        print(c(GREEN, f"  🚀 [P6] 正在调用针对 {_pack_hint} 的自动化验证脚本...") + f" {iter_tag}")
-
-                if not _is_skill_call:
-                    print(c(YELLOW, f"  🔧 {name}") + c(GRAY, f"({preview[:80]})") + f" {iter_tag}")
-
-                # ── switch_phase 拦截（直接操作实例状态）────────
-                if name == "switch_phase":
-                    target = fn_args.get("phase", "").upper()
-                    reason = fn_args.get("reason", "（未说明原因）")
-                    if target in AGENT_PHASES:
-                        old_phase = self.current_phase
-                        self.current_phase = target
-                        # 重建动态工具列表（下一轮迭代生效）
-                        phase_whitelist = set(AGENT_PHASES[target])
-                        current_tools = [
-                            s for s in TOOLS_SCHEMA
-                            if s.get("function", {}).get("name") in phase_whitelist
-                            or s.get("function", {}).get("name") in ("switch_phase", "bump_skill")  # ★
-                        ]
-                        result = (
-                            f"[Phase Switch] {old_phase} → {target}\n"
-                            f"Reason: {reason}\n"
-                            f"Now available: {', '.join(phase_whitelist)}\n"
-                            f"switch_phase is always available.\n"
-                            f"Reload: {len(current_tools)} tools active."
-                        )
-                        print(c(MAGENTA,
-                            f"  🔀 [Phase Switch] {old_phase} → {target}  ({reason[:60]})"
-                        ))
-                        logger.info(
-                            "Phase switch | model={} session={} {} → {} reason={}",
-                            self.model_alias, self.session_id[:8],
-                            old_phase, target, reason,
-                        )
-                        # 刷新系统提示词中的 Phase 感知块
-                        self._reset_system_prompt()
-                    else:
-                        result = (
-                            f"ERROR: 未知阶段 '{target}'。"
-                            f"可用: {', '.join(AGENT_PHASES.keys())}"
-                        )
-
-                else:
-                    _VERBOSE_TOOLS = {
-                        "read_file", "read_file_lines",
-                        "run_shell", "run_code",
-                        "pwn_debug", "pwn_rop", "pwn_disasm", "pwn_cyclic", "pwn_libc",
-                        "inspect_binary", "web_search", "fetch_url", "find_refs",
-                    }
-
-                    # ── P0.6: 投前失败审计（危险工具自动检查）───
-                    _failure_warning = ""
-                    if name in _AUDITED_TOOLS:
-                        try:
-                            _fail_rows = check_failure(name, args_keywords=preview[:200], limit=3)
-                            if _fail_rows:
-                                _failure_warning = format_failures_for_prompt(_fail_rows)
-                                print(c(YELLOW,
-                                    f"  ⚠ [Anti-Pattern] {name} 存在 "
-                                    f"{len(_fail_rows)} 条历史失败记录"
-                                ))
-                        except Exception:
-                            pass
-
-                    # ── 审计计时 ────────────────────────────
-                    _t0 = time.monotonic()
-                    _audit_ok = True
-                    try:
-                        result = TOOL_MAP[name](fn_args) if name in TOOL_MAP else f"ERROR: 未知工具 '{name}'"
-
-                        # ★ P0.7 增强：语义级失败判定
-                        # 工具本身没抛异常，但 result 内容表明执行失败
-                        _SEMANTIC_FAILURE_SIGNALS = (
-                            "ERROR:", "Traceback", "Segmentation fault", "SIGSEGV",
-                            "NameError", "SyntaxError", "TypeError", "AttributeError",
-                            "ImportError", "ModuleNotFoundError", "FileNotFoundError",
-                            "PermissionError", "RuntimeError", "ValueError",
-                            "panic", "FATAL", "core dumped", "Aborted",
-                            "编译失败", "exit 1", "exit 2", "exit 126", "exit 127",
-                            "exit 134", "exit 139", "command not found",
-                        )
-                        if any(sig in str(result) for sig in _SEMANTIC_FAILURE_SIGNALS):
-                            _audit_ok = False
-
-                    except Exception as _tool_exc:
-                        _raw_err = f"ERROR: {type(_tool_exc).__name__}: {_tool_exc}"
-                        result = user_friendly_error(_raw_err) if USER_MODE else _raw_err
-                        _audit_ok = False
-                    _elapsed_ms = int((time.monotonic() - _t0) * 1000)
-
-                    # ── P0.7: 失败自动记录 ──────────────────
-                    if not _audit_ok and name in _AUDITED_TOOLS:
-                        try:
-                            _error_type = ""
-                            _r = str(result)
-                            _rl = _r.lower()
-                            if "timeoutexpired" in _rl or "超时" in _r:
-                                _error_type = "Timeout"
-                            elif "segmentation fault" in _rl or "sigsegv" in _rl or "core dumped" in _rl:
-                                _error_type = "Segfault"
-                            elif "编译失败" in _r or "compileerror" in _rl:
-                                _error_type = "CompileError"
-                            elif "memoryerror" in _rl or "内存超限" in _r:
-                                _error_type = "MemoryError"
-                            elif "syntaxerror" in _rl or "indentationerror" in _rl:
-                                _error_type = "SyntaxError"
-                            elif "nameerror" in _rl or "attributeerror" in _rl or "typeerror" in _rl:
-                                _error_type = "LogicError"
-                            elif "importerror" in _rl or "modulenotfounderror" in _rl:
-                                _error_type = "MissingModule"
-                            elif "filenotfounderror" in _rl or "command not found" in _rl:
-                                _error_type = "NotFound"
-                            elif "permissionerror" in _rl:
-                                _error_type = "Permission"
-                            elif "panic" in _rl or "fatal" in _rl:
-                                _error_type = "Panic"
-                            elif "exit 139" in _r or "aborted" in _rl:
-                                _error_type = "Crash"
-                            elif "traceback" in _rl:
-                                _error_type = "PythonError"
-                            elif "ERROR" in _r:
-                                _error_type = "RuntimeError"
-                            else:
-                                _error_type = "UnknownFailure"
-
-                            _fid = write_failure(
-                                tool_name    = name,
-                                args_summary = preview[:200],
-                                error_msg    = result[:500],
-                                error_type   = _error_type,
-                                session_id   = self.session_id,
+                        extracted = self._extract_calls(text_buf)
+                        for i, call in enumerate(extracted):
+                            source = call["_source"]
+                            call_id = (
+                                f"call_xml_{iteration}_{i}"
+                                if source == "xml"
+                                else f"call_fallback_{iteration}_{i}"
                             )
-
-                            # ── P0.9: 同类失败 ≥ 3 次自动沉淀到 GSA ──
-                            if _error_type:
-                                _fail_count = count_failure(name, _error_type)
-                                if _fail_count >= 3:
-                                    _ok, _msg = sink_failure_to_gsa(
-                                        tool_name   = name,
-                                        error_type  = _error_type,
-                                        error_msg   = result[:300],
-                                        args_preview= preview[:200],
-                                    )
-                                    if _ok:
-                                        print(c(YELLOW, f"  📝 [GSA Sink] {_msg}"))
-                        except Exception:
-                            pass  # 失败记录不应阻断主流程
-
-                    # ── 将投前审计警告追加到 tool result ─────
-                    if _failure_warning:
-                        result = result + "\n\n" + _failure_warning
-
-                    # ── 写入审计日志 ────────────────────────
-                    try:
-                        audit_tool_call(
-                            tool_name    = name,
-                            args_summary = preview[:200],
-                            result_len   = len(result),
-                            elapsed_ms   = _elapsed_ms,
-                            session_id   = self.session_id,
-                            model_alias  = self.model_alias,
-                            iteration    = iteration,
-                            success      = _audit_ok,
-                        )
-                    except Exception:
-                        pass  # 审计日志不应阻断主流程
-
-                    if QUIET_MODE or name in _VERBOSE_TOOLS:
-                        result = smart_truncate(result, head=30, tail=30)
-                    else:
-                        limit = DYNAMIC_CONFIG["tool_max_chars"]
-                        if len(result) > limit:
-                            result = result[:limit//2] + f"\n...[截断至{limit}字符]...\n" + result[-limit//4:]
-
-                # Audit counter
-                self._turn_tool_calls  += 1
-                self.total_tool_calls  += 1
-
-                # ── 目录搜索计数 & 自动直觉检索 ───────────
-                if name in ("list_dir", "find_files"):
-                    _dir_search_count += 1
-                    if _dir_search_count >= _DIR_THRESHOLD:
-                        search_query = (
-                            fn_args.get("pattern") or fn_args.get("path") or ""
-                        ).strip().strip("*./")
-                        auto_result = ""
-                        if search_query:
+                            tc_buf[i] = {
+                                "id":           call_id,
+                                "name":         call["name"],
+                                "args":         json.dumps(call["args"], ensure_ascii=False),
+                                "_args_parsed": call["args"],
+                            }
+                            label = "XML" if source == "xml" else "JSON"
                             print(c(GRAY,
-                                f"  🧠 [Auto-Intuition] 目录搜索 {_dir_search_count} 次，"
-                                f"检索历史: '{search_query}'"
+                                f"  ⚙ [Hybrid Parser/{label}] 拦截工具调用: {call['name']} "
+                                f"(params: {list(call['args'].keys())})"
                             ))
-                            auto_result = self._auto_intuitive_search(search_query)
-                        hint = (
-                            f"\n[System hint — 目录搜索已连续 {_dir_search_count} 次] "
-                            "建议切换策略：/chat find <关键词> 检索历史，"
-                            "或直接告知用户文件路径未知。"
-                        )
-                        result = result + hint + auto_result
-                else:
-                    _dir_search_count = 0
+                            logger.info(
+                                "Hybrid Parser/{} intercepted | "
+                                "model={} session={} iteration={} tool={}",
+                                label, self.model_alias, self.session_id[:8],
+                                iteration, call["name"],
+                            )
+                        import re as _re
+                        _trim = _re.search(r'<call\s+name="|<tool_call>', text_buf)
+                        if _trim and extracted:
+                            text_buf = text_buf[:_trim.start()]
+                    # ─────────────────────────────────────────────────────────
 
-                self.messages.append({
-                    "role": "tool", "tool_call_id": tc["id"], "content": result,
-                })
+                    # ── 空响应检测 + 指数退避重试 ────────────────────
+                    _no_new_tokens = (self._turn_completion_tokens == _tokens_before)
+                    _empty_response = (not text_buf.strip() and not tc_buf and _no_new_tokens)
 
-                # ── Logic Refresh: 重复错误追踪 ──────────────
-                if name == "run_shell" and not _audit_ok:
-                    _cmd_key = fn_args.get("command", "") or preview[:80]
-                    _err_sig = ""
-                    for _sig in ("ERROR:", "Permission denied", "No such file",
-                                 "command not found", "Segmentation fault",
-                                 "timeout", "超时"):
-                        if _sig in str(result):
-                            _err_sig = _sig
-                            break
-                    if _err_sig:
-                        _pair = (_cmd_key[:60], _err_sig)
-                        if _recent_cmd_errors and _recent_cmd_errors[-1] == _pair:
-                            _repeat_error_count += 1
-                        else:
-                            _repeat_error_count = 1
-                        _recent_cmd_errors.append(_pair)
-                        # 保留最近 20 条
-                        if len(_recent_cmd_errors) > 20:
-                            _recent_cmd_errors = _recent_cmd_errors[-20:]
+                    if not _empty_response:
+                        break   # 有效响应，退出重试循环
 
-                # ── 连续相同代码检测（防止逻辑死循环）──────
-                if name in ("run_shell", "run_code", "write_file", "patch_file"):
-                    import hashlib
-                    _result_hash = hashlib.md5(
-                        str(result)[:500].encode("utf-8", errors="ignore")
-                    ).hexdigest()[:12]
-                    if _recent_code_outputs and _recent_code_outputs[-1] == _result_hash:
-                        _repeat_code_count += 1
-                    else:
-                        _repeat_code_count = 1
-                    _recent_code_outputs.append(_result_hash)
-                    if len(_recent_code_outputs) > 10:
-                        _recent_code_outputs = _recent_code_outputs[-10:]
-
-                    if _repeat_code_count >= _REPEAT_CODE_THRESHOLD:
-                        _anti_code_loop = (
-                            f"[System] 检测到连续 {_repeat_code_count} 次工具输出几乎相同。"
-                            "当前路径可能陷入循环，请立即停止并重新审视思路：\n"
-                            "  1. 是否在重复执行已知会失败的命令？\n"
-                            "  2. 是否需要换个攻击向量或工具？\n"
-                            "  3. 是否应该向用户确认目标环境？\n"
-                            "请在 <plan> 中说明你的新思路后再继续。"
-                        )
-                        self.messages.append({"role": "user", "content": _anti_code_loop})
+                    _api_retry += 1
+                    if _api_retry >= _API_RETRY_MAX:
                         print(c(YELLOW,
-                            f"  🔁 [Anti-Code-Loop] 连续 {_repeat_code_count} 次相同输出，已注入重思提示"
+                            f"\n  ⚠ [API Recovery] 连续 {_api_retry} 次收到空响应，注入恢复提示继续任务..."
                         ))
                         logger.warning(
-                            "Anti-Code-Loop: repeated output | "
-                            "session={} iteration={} count={} tool={}",
-                            self.session_id[:8], iteration, _repeat_code_count, name,
+                            "API empty response: retries exhausted | "
+                            "model={} session={} iteration={} retries={}",
+                            self.model_alias, self.session_id[:8], iteration, _api_retry,
                         )
-                        _repeat_code_count = 0
+                        self.messages.append({
+                            "role": "user",
+                            "content": (
+                                "[System] 收到无效响应（空内容/0 Token），请重新审视任务目标并继续。"
+                                "如果此问题反复出现，考虑切换模型（/model）或检查 API 密钥。"
+                            ),
+                        })
+                        break   # 退出重试循环，进入下一个 iteration
 
-            # ════════════════════════════════════════════════
-            # ★ 改动 [3b]：所有工具结果追加完毕后，
-            #   若触发了软拦截，注入 PLAN_MISSING 信号。
-            #   · 使用 "user" 角色（attention 贴近推理层）
-            #   · 工具已执行完毕，模型看到结果再修正，
-            #     避免结果丢失导致的重复调用。
-            # ════════════════════════════════════════════════
-            if _plan_signal_injected:
+                    _wait = min(2 ** _api_retry, 8)
+                    print(c(YELLOW,
+                        f"\n  ⚠ [API Recovery] 收到无效响应，正在尝试恢复... "
+                        f"({_api_retry}/{_API_RETRY_MAX}，等待 {_wait}s)"
+                    ))
+                    logger.warning(
+                        "API empty response detected, retrying | "
+                        "model={} session={} iteration={} attempt={} wait={}s",
+                        self.model_alias, self.session_id[:8], iteration, _api_retry, _wait,
+                    )
+                    time.sleep(_wait)
+                    continue   # 重试 API 调用
+
+                # ── 如果重试耗尽仍为空响应，跳过工具执行 ─────────
+                if _empty_response and _api_retry >= _API_RETRY_MAX:
+                    continue   # 进入下一个 iteration
+
+                if not tc_buf:
+                    self.messages.append({"role": "assistant", "content": text_buf})
+                    self._print_turn_summary()
+                    self._autosave(); return
+
+                # ════════════════════════════════════════════════
+                # ★ 改动 [3]：CoT Guard 重构 — 教练模式
+                #
+                # 判断次序：
+                #   1. 豁免检查（只读工具无需 plan）
+                #   2. 软拦截 × MAX_SOFT_CORRECTIONS（工具照常执行，追加信号）
+                #   3. 硬终止 × 1（软拦截耗尽后才触发）
+                #
+                # 信号注入：
+                #   · 不阻断工具执行，让模型先看到结果
+                #   · 信号以 "user" 角色追加在工具结果之后（attention 贴近推理层）
+                # ════════════════════════════════════════════════
+                has_plan    = "<plan>" in text_buf.lower()
+                is_exempt   = _is_plan_exempt(tc_buf)
+                # P1.7: URGENT_MODE 跳过 CoT Guard
+                need_plan   = not has_plan and not is_exempt and not self._urgent_mode
+
+                _plan_signal_injected = False
+
+                if _plan_rejected > _MAX_SOFT_CORRECTIONS:
+                    # ── 硬终止：软拦截已耗尽 ──────────────────
+                    print(c(RED,
+                            f"  ⛔ [CoT Guard] 连续 {_plan_rejected} 次未提供 <plan>，任务已终止。"
+                            ))
+                    print(c(GRAY,
+                            "  建议：1. 简化指令  2. 切换更强模型（/model ds-chat）"
+                            ))
+                    logger.warning(
+                        "CoT Guard: hard kill triggered | "
+                        "model={} session={} iteration={} plan_rejected={}",
+                        self.model_alias, self.session_id[:8],
+                        iteration, _plan_rejected,
+                    )
+                    if self.messages and self.messages[-1]["role"] == "user":
+                        self.messages.pop()  # 撤销上一条 user 消息，保持上下文干净
+                    return
+
+                    # ── 软拦截：工具仍执行，计划注入信号 ──────────
+                    print(c(YELLOW,
+                        f"  💭 [CoT Soft #{_plan_rejected}/{_MAX_SOFT_CORRECTIONS}] "
+                        "检测到缺失 <plan>，工具已执行，修正信号将在结果后注入..."
+                    ))
+                    logger.debug(
+                        "CoT Guard: soft intercept #{} | model={} session={} iteration={}",
+                        _plan_rejected, self.model_alias, self.session_id[:8], iteration,
+                    )
+                    _plan_signal_injected = True
+
+                else:
+                    _plan_rejected = 0   # 成功输出 <plan>，重置计数
+
+                # ── 模块 1B：并发截断 ──────────────────────────
+                if len(tc_buf) > _MAX_CONCURRENT_TOOLS:
+                    orig = len(tc_buf)
+                    kept = sorted(tc_buf.keys())[:_MAX_CONCURRENT_TOOLS]
+                    tc_buf = {k: tc_buf[k] for k in kept}
+                    print(c(YELLOW, f"  ✂ [并发限制] {orig} 个工具调用已截断至前 {_MAX_CONCURRENT_TOOLS} 个。"))
+                    logger.warning(
+                        "Concurrent tool limit | model={} session={} original={} kept={}",
+                        self.model_alias, self.session_id[:8], orig, _MAX_CONCURRENT_TOOLS,
+                    )
+
+
                 self.messages.append({
-                    "role":    "user",
-                    "content": _PLAN_MISSING_SIGNAL,
+                    "role":    "assistant",
+                    "content": text_buf or None,
+                    "tool_calls": [
+                        {"id": tc_buf[i]["id"], "type": "function",
+                         "function": {"name": tc_buf[i]["name"], "arguments": tc_buf[i]["args"]}}
+                        for i in sorted(tc_buf)
+                    ],
                 })
-                print(c(GRAY,
-                    "  🔄 [CoT Self-Correction] 已注入 PLAN_MISSING 修正信号，"
-                    "模型将在下一轮自我修正。"
-                ))
+
+                # ── 执行所有工具 ───────────────────────────────
+                for i in sorted(tc_buf):
+                    tc = tc_buf[i];
+                    name = tc["name"]
+
+                    # 🔑 优先使用 XML/Hybrid Parser 透传的零转义字典
+                    if "_args_parsed" in tc:
+                        fn_args = tc["_args_parsed"]
+                    else:
+                        fn_args = {}
+                        if tc["args"].strip():
+                            try:
+                                fn_args = json.loads(tc["args"])
+                            except json.JSONDecodeError:
+                                try:
+                                    fn_args = json.loads(tc["args"].strip().lstrip("\ufeff"))
+                                except:
+                                    fn_args = {"_raw_args": tc["args"]}
+
+                    preview  = ", ".join(f"{k}={repr(v)[:40]}" for k, v in fn_args.items())
+                    iter_tag = c(GRAY, f"[{iteration+1}/{max_iter}]")
+
+                    # P6: USER_MODE 下检测技能包脚本调用，简化输出
+                    _is_skill_call = False
+                    if USER_MODE and name == "run_shell":
+                        _cmd = fn_args.get("command", "") or fn_args.get("_raw_args", "")
+                        _skills_dir_str = str(SKILLS_DIR).replace("\\", "/")
+                        if _skills_dir_str in _cmd.replace("\\", "/") and any(
+                            _cmd.strip().endswith(ext) or f"python3 {_skills_dir_str}" in _cmd.replace("\\", "/")
+                            for ext in (".py", ".sh")
+                        ):
+                            _is_skill_call = True
+                            # 从命令中提取技能包名称
+                            _parts = _cmd.replace("\\", "/").split("/skills/")
+                            _pack_hint = _parts[1].split("/")[0] if len(_parts) > 1 else "unknown"
+                            print(c(GREEN, f"  🚀 [P6] 正在调用针对 {_pack_hint} 的自动化验证脚本...") + f" {iter_tag}")
+
+                    if not _is_skill_call:
+                        print(c(YELLOW, f"  🔧 {name}") + c(GRAY, f"({preview[:80]})") + f" {iter_tag}")
+
+                    # ── switch_phase 拦截（直接操作实例状态）────────
+                    if name == "switch_phase":
+                        target = fn_args.get("phase", "").upper()
+                        reason = fn_args.get("reason", "（未说明原因）")
+                        if target in AGENT_PHASES:
+                            old_phase = self.current_phase
+                            self.current_phase = target
+                            # 重建动态工具列表（下一轮迭代生效）
+                            phase_whitelist = set(AGENT_PHASES[target])
+                            current_tools = [
+                                s for s in TOOLS_SCHEMA
+                                if s.get("function", {}).get("name") in phase_whitelist
+                                or s.get("function", {}).get("name") in ("switch_phase", "bump_skill")  # ★
+                            ]
+                            result = (
+                                f"[Phase Switch] {old_phase} → {target}\n"
+                                f"Reason: {reason}\n"
+                                f"Now available: {', '.join(phase_whitelist)}\n"
+                                f"switch_phase is always available.\n"
+                                f"Reload: {len(current_tools)} tools active."
+                            )
+                            print(c(MAGENTA,
+                                f"  🔀 [Phase Switch] {old_phase} → {target}  ({reason[:60]})"
+                            ))
+                            logger.info(
+                                "Phase switch | model={} session={} {} → {} reason={}",
+                                self.model_alias, self.session_id[:8],
+                                old_phase, target, reason,
+                            )
+                            # 刷新系统提示词中的 Phase 感知块
+                            self._reset_system_prompt()
+                        else:
+                            result = (
+                                f"ERROR: 未知阶段 '{target}'。"
+                                f"可用: {', '.join(AGENT_PHASES.keys())}"
+                            )
+
+                    else:
+                        _VERBOSE_TOOLS = {
+                            "read_file", "read_file_lines",
+                            "run_shell", "run_code",
+                            "pwn_debug", "pwn_rop", "pwn_disasm", "pwn_cyclic", "pwn_libc",
+                            "inspect_binary", "web_search", "fetch_url", "find_refs",
+                        }
+
+                        # ── P0.6: 投前失败审计（危险工具自动检查）───
+                        _failure_warning = ""
+                        if name in _AUDITED_TOOLS:
+                            try:
+                                _fail_rows = check_failure(name, args_keywords=preview[:200], limit=3)
+                                if _fail_rows:
+                                    _failure_warning = format_failures_for_prompt(_fail_rows)
+                                    print(c(YELLOW,
+                                        f"  ⚠ [Anti-Pattern] {name} 存在 "
+                                        f"{len(_fail_rows)} 条历史失败记录"
+                                    ))
+                            except Exception:
+                                pass
+
+                        # ── 审计计时 ────────────────────────────
+                        _t0 = time.monotonic()
+                        _audit_ok = True
+                        try:
+                            result = TOOL_MAP[name](fn_args) if name in TOOL_MAP else f"ERROR: 未知工具 '{name}'"
+
+                            # ★ P0.7 增强：语义级失败判定
+                            # 工具本身没抛异常，但 result 内容表明执行失败
+                            _SEMANTIC_FAILURE_SIGNALS = (
+                                "ERROR:", "Traceback", "Segmentation fault", "SIGSEGV",
+                                "NameError", "SyntaxError", "TypeError", "AttributeError",
+                                "ImportError", "ModuleNotFoundError", "FileNotFoundError",
+                                "PermissionError", "RuntimeError", "ValueError",
+                                "panic", "FATAL", "core dumped", "Aborted",
+                                "编译失败", "exit 1", "exit 2", "exit 126", "exit 127",
+                                "exit 134", "exit 139", "command not found",
+                            )
+                            if any(sig in str(result) for sig in _SEMANTIC_FAILURE_SIGNALS):
+                                _audit_ok = False
+
+                        except Exception as _tool_exc:
+                            _raw_err = f"ERROR: {type(_tool_exc).__name__}: {_tool_exc}"
+                            result = user_friendly_error(_raw_err) if USER_MODE else _raw_err
+                            _audit_ok = False
+                        _elapsed_ms = int((time.monotonic() - _t0) * 1000)
+
+                        # ── P0.7: 失败自动记录 ──────────────────
+                        if not _audit_ok and name in _AUDITED_TOOLS:
+                            try:
+                                _error_type = ""
+                                _r = str(result)
+                                _rl = _r.lower()
+                                if "timeoutexpired" in _rl or "超时" in _r:
+                                    _error_type = "Timeout"
+                                elif "segmentation fault" in _rl or "sigsegv" in _rl or "core dumped" in _rl:
+                                    _error_type = "Segfault"
+                                elif "编译失败" in _r or "compileerror" in _rl:
+                                    _error_type = "CompileError"
+                                elif "memoryerror" in _rl or "内存超限" in _r:
+                                    _error_type = "MemoryError"
+                                elif "syntaxerror" in _rl or "indentationerror" in _rl:
+                                    _error_type = "SyntaxError"
+                                elif "nameerror" in _rl or "attributeerror" in _rl or "typeerror" in _rl:
+                                    _error_type = "LogicError"
+                                elif "importerror" in _rl or "modulenotfounderror" in _rl:
+                                    _error_type = "MissingModule"
+                                elif "filenotfounderror" in _rl or "command not found" in _rl:
+                                    _error_type = "NotFound"
+                                elif "permissionerror" in _rl:
+                                    _error_type = "Permission"
+                                elif "panic" in _rl or "fatal" in _rl:
+                                    _error_type = "Panic"
+                                elif "exit 139" in _r or "aborted" in _rl:
+                                    _error_type = "Crash"
+                                elif "traceback" in _rl:
+                                    _error_type = "PythonError"
+                                elif "ERROR" in _r:
+                                    _error_type = "RuntimeError"
+                                else:
+                                    _error_type = "UnknownFailure"
+
+                                _fid = write_failure(
+                                    tool_name    = name,
+                                    args_summary = preview[:200],
+                                    error_msg    = result[:500],
+                                    error_type   = _error_type,
+                                    session_id   = self.session_id,
+                                )
+
+                                # ── P0.9: 同类失败 ≥ 3 次自动沉淀到 GSA ──
+                                if _error_type:
+                                    _fail_count = count_failure(name, _error_type)
+                                    if _fail_count >= 3:
+                                        _ok, _msg = sink_failure_to_gsa(
+                                            tool_name   = name,
+                                            error_type  = _error_type,
+                                            error_msg   = result[:300],
+                                            args_preview= preview[:200],
+                                        )
+                                        if _ok:
+                                            print(c(YELLOW, f"  📝 [GSA Sink] {_msg}"))
+                            except Exception:
+                                pass  # 失败记录不应阻断主流程
+
+                        # ── 将投前审计警告追加到 tool result ─────
+                        if _failure_warning:
+                            result = result + "\n\n" + _failure_warning
+
+                        # ── 写入审计日志 ────────────────────────
+                        try:
+                            audit_tool_call(
+                                tool_name    = name,
+                                args_summary = preview[:200],
+                                result_len   = len(result),
+                                elapsed_ms   = _elapsed_ms,
+                                session_id   = self.session_id,
+                                model_alias  = self.model_alias,
+                                iteration    = iteration,
+                                success      = _audit_ok,
+                            )
+                        except Exception:
+                            pass  # 审计日志不应阻断主流程
+
+                        if QUIET_MODE or name in _VERBOSE_TOOLS:
+                            result = smart_truncate(result, head=30, tail=30)
+                        else:
+                            limit = DYNAMIC_CONFIG["tool_max_chars"]
+                            if len(result) > limit:
+                                result = result[:limit//2] + f"\n...[截断至{limit}字符]...\n" + result[-limit//4:]
+
+                    # Audit counter
+                    self._turn_tool_calls  += 1
+                    self.total_tool_calls  += 1
+
+                    # ── 目录搜索计数 & 自动直觉检索 ───────────
+                    if name in ("list_dir", "find_files"):
+                        _dir_search_count += 1
+                        if _dir_search_count >= _DIR_THRESHOLD:
+                            search_query = (
+                                fn_args.get("pattern") or fn_args.get("path") or ""
+                            ).strip().strip("*./")
+                            auto_result = ""
+                            if search_query:
+                                print(c(GRAY,
+                                    f"  🧠 [Auto-Intuition] 目录搜索 {_dir_search_count} 次，"
+                                    f"检索历史: '{search_query}'"
+                                ))
+                                auto_result = self._auto_intuitive_search(search_query)
+                            hint = (
+                                f"\n[System hint — 目录搜索已连续 {_dir_search_count} 次] "
+                                "建议切换策略：/chat find <关键词> 检索历史，"
+                                "或直接告知用户文件路径未知。"
+                            )
+                            result = result + hint + auto_result
+                    else:
+                        _dir_search_count = 0
+
+                    self.messages.append({
+                        "role": "tool", "tool_call_id": tc["id"], "content": result,
+                    })
+
+                    # ── Logic Refresh: 重复错误追踪 ──────────────
+                    if name == "run_shell" and not _audit_ok:
+                        _cmd_key = fn_args.get("command", "") or preview[:80]
+                        _err_sig = ""
+                        for _sig in ("ERROR:", "Permission denied", "No such file",
+                                     "command not found", "Segmentation fault",
+                                     "timeout", "超时"):
+                            if _sig in str(result):
+                                _err_sig = _sig
+                                break
+                        if _err_sig:
+                            _pair = (_cmd_key[:60], _err_sig)
+                            if _recent_cmd_errors and _recent_cmd_errors[-1] == _pair:
+                                _repeat_error_count += 1
+                            else:
+                                _repeat_error_count = 1
+                            _recent_cmd_errors.append(_pair)
+                            # 保留最近 20 条
+                            if len(_recent_cmd_errors) > 20:
+                                _recent_cmd_errors = _recent_cmd_errors[-20:]
+
+                    # ── 连续相同代码检测（防止逻辑死循环）──────
+                    if name in ("run_shell", "run_code", "write_file", "patch_file"):
+                        import hashlib
+                        _result_hash = hashlib.md5(
+                            str(result)[:500].encode("utf-8", errors="ignore")
+                        ).hexdigest()[:12]
+                        if _recent_code_outputs and _recent_code_outputs[-1] == _result_hash:
+                            _repeat_code_count += 1
+                        else:
+                            _repeat_code_count = 1
+                        _recent_code_outputs.append(_result_hash)
+                        if len(_recent_code_outputs) > 10:
+                            _recent_code_outputs = _recent_code_outputs[-10:]
+
+                        if _repeat_code_count >= _REPEAT_CODE_THRESHOLD:
+                            _anti_code_loop = (
+                                f"[System] 检测到连续 {_repeat_code_count} 次工具输出几乎相同。"
+                                "当前路径可能陷入循环，请立即停止并重新审视思路：\n"
+                                "  1. 是否在重复执行已知会失败的命令？\n"
+                                "  2. 是否需要换个攻击向量或工具？\n"
+                                "  3. 是否应该向用户确认目标环境？\n"
+                                "请在 <plan> 中说明你的新思路后再继续。"
+                            )
+                            self.messages.append({"role": "user", "content": _anti_code_loop})
+                            print(c(YELLOW,
+                                f"  🔁 [Anti-Code-Loop] 连续 {_repeat_code_count} 次相同输出，已注入重思提示"
+                            ))
+                            logger.warning(
+                                "Anti-Code-Loop: repeated output | "
+                                "session={} iteration={} count={} tool={}",
+                                self.session_id[:8], iteration, _repeat_code_count, name,
+                            )
+                            _repeat_code_count = 0
+
+                # ════════════════════════════════════════════════
+                # ★ 改动 [3b]：所有工具结果追加完毕后，
+                #   若触发了软拦截，注入 PLAN_MISSING 信号。
+                #   · 使用 "user" 角色（attention 贴近推理层）
+                #   · 工具已执行完毕，模型看到结果再修正，
+                #     避免结果丢失导致的重复调用。
+                # ════════════════════════════════════════════════
+                if _plan_signal_injected:
+                    self.messages.append({
+                        "role":    "user",
+                        "content": _PLAN_MISSING_SIGNAL,
+                    })
+                    print(c(GRAY,
+                        "  🔄 [CoT Self-Correction] 已注入 PLAN_MISSING 修正信号，"
+                        "模型将在下一轮自我修正。"
+                    ))
+
+            except KeyboardInterrupt:
+                print(c(YELLOW, "\n  [已中断]"))
+                self._autosave()
+                return
 
         print(c(RED, f"\n[达到 max_iter={max_iter}，用 /mid /deep 或 /iter <n> 提升]"))
         logger.warning(
