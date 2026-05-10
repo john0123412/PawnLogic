@@ -9,7 +9,7 @@ import urllib.request, urllib.error
 from config import DYNAMIC_CONFIG, DEFAULT_MODEL, get_api_config
 from core.memory import (
     init_db, upsert_session, list_sessions, get_session, delete_session,
-    save_messages, load_messages, pin_message_by_seq,
+    rename_session, save_messages, load_messages, pin_message_by_seq,
     add_knowledge, search_knowledge, format_knowledge_for_prompt, _gen_id,
 )
 from utils.ansi import c, CYAN, GRAY, GREEN, RED, YELLOW, BOLD
@@ -38,22 +38,7 @@ def session_load(session, query: str) -> str:
     if not rows:
         return "ERROR: 数据库中没有已保存的会话。"
 
-    query = query.strip()
-    matched = None
-
-    # 按序号（1-indexed）
-    try:
-        idx     = int(query) - 1
-        matched = rows[idx] if 0 <= idx < len(rows) else None
-    except ValueError:
-        pass
-
-    # 按名称子串
-    if not matched:
-        for r in rows:
-            if query.lower() in (r["name"] or "").lower() or query.lower() in r["id"]:
-                matched = r; break
-
+    matched = _resolve_session(rows, query)
     if not matched:
         listing = "\n".join(
             f"  [{i+1}] {r['id']}  {r['name'] or '(unnamed)'}  {r['updated_at'][:16]}"
@@ -83,6 +68,9 @@ def session_load(session, query: str) -> str:
     session.messages.extend(msgs)
     session.session_id = sid
 
+    # 显示对话历史
+    _display_session_history(msgs)
+
     return f"OK: 已加载 [{sid}] {matched['name']} ({len(msgs)} 条消息)"
 
 def session_list() -> str:
@@ -102,13 +90,93 @@ def session_list() -> str:
 
 def session_delete(session, query: str) -> str:
     rows = list_sessions(50)
-    try:    idx = int(query) - 1; sid = rows[idx]["id"]
-    except (ValueError, IndexError):
-        matched = next((r for r in rows if query.lower() in r["id"]), None)
-        if not matched: return f"ERROR: 找不到 '{query}'"
-        sid = matched["id"]
-    delete_session(sid)
-    return f"OK: 已删除会话 {sid}"
+    matched = _resolve_session(rows, query)
+    if not matched: return f"ERROR: 找不到 '{query}'"
+    delete_session(matched["id"])
+    return f"OK: 已删除会话 {matched['id']}"
+
+
+def _resolve_session(rows, query: str):
+    """从 list_sessions 结果中按序号或名称子串查找会话。返回 Row 或 None。"""
+    query = query.strip()
+    try:
+        idx = int(query) - 1
+        if 0 <= idx < len(rows):
+            return rows[idx]
+    except ValueError:
+        pass
+    q = query.lower()
+    return next(
+        (r for r in rows if q in (r["name"] or "").lower() or q in r["id"]),
+        None,
+    )
+
+
+def session_rename(session, query: str, new_name: str) -> str:
+    """按序号或名称子串找到会话并重命名。"""
+    init_db()
+    rows = list_sessions(50)
+    matched = _resolve_session(rows, query)
+    if not matched:
+        return f"ERROR: 找不到匹配 '{query}' 的会话"
+    rename_session(matched["id"], new_name.strip())
+    return f"OK: 已重命名 [{matched['id']}] → '{new_name.strip()}'"
+
+
+def _display_session_history(msgs: list, show_recent: int = 6):
+    """在终端显示会话对话历史。最近 show_recent 条完整显示，更早的折叠。"""
+    from config import smart_truncate
+
+    # 过滤出 user/assistant 消息用于显示
+    displayable = []
+    for i, m in enumerate(msgs):
+        role = m.get("role", "")
+        if role in ("user", "assistant", "tool"):
+            displayable.append((i, m))
+
+    total = len(displayable)
+    if total == 0:
+        print(c(GRAY, "\n  (空会话)\n"))
+        return
+
+    sep = "─" * 44
+    print(c(GRAY, f"\n  ── 对话历史 ({total} 条) {sep}"))
+
+    # 分割：折叠部分 + 显示部分
+    if total > show_recent:
+        folded_count = total - show_recent
+        print(c(GRAY, f"  │ ... 更早 {folded_count} 条消息 ..."))
+        display_slice = displayable[-show_recent:]
+    else:
+        display_slice = displayable
+
+    for j, (orig_idx, m) in enumerate(display_slice):
+        role = m.get("role", "")
+        content = m.get("content") or ""
+        is_last = (j == len(display_slice) - 1)
+        branch = "└" if is_last else "├"
+
+        if role == "user":
+            preview = content[:120].replace("\n", " ")
+            print(f"  {branch} {c(CYAN, '[user]'):14} {preview}")
+
+        elif role == "assistant":
+            tool_calls = m.get("tool_calls")
+            if tool_calls and not content:
+                names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
+                print(f"  {branch} {c(GREEN, '[assistant]'):14} {c(GRAY, f'[调用工具: {chr(44).join(names)}]')}")
+            elif content:
+                preview = content[:150].replace("\n", " ")
+                print(f"  {branch} {c(GREEN, '[assistant]'):14} {preview}")
+            else:
+                print(f"  {branch} {c(GREEN, '[assistant]'):14} {c(GRAY, '(空)')}")
+
+        elif role == "tool":
+            preview = content[:100].replace("\n", " ")
+            print(f"  {branch} {c(YELLOW, '[tool]'):14} {c(GRAY, f'[工具结果] {preview}')}")
+
+    print(c(GRAY, f"  {sep}\n"))
+
 
 # ════════════════════════════════════════════════════════
 # /memorize — AI 摘要 → knowledge 表

@@ -89,6 +89,9 @@ from config import (
     MODELS, DEFAULT_MODEL, DB_PATH, PROVIDERS,
     validate_api_key, list_vision_models,
     user_friendly_error,
+    get_api_format, get_provider_config,
+    save_custom_provider, remove_custom_provider,
+    CUSTOM_PROVIDERS_PATH,
 )
 from utils.ansi       import c, cp, rl_wrap, BOLD, DIM, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA, Spinner
 from core.session     import AgentSession, _ctx_chars, STATE_FILENAME
@@ -105,7 +108,7 @@ from core.memory import (
     list_failures, clear_failures,
 )
 from core.persistence import (session_save, session_load, session_list,
-                               session_delete, memorize)
+                               session_delete, session_rename, memorize)
 from tools.web_ops    import web_tool_status
 from tools.pwn_chain  import tool_pwn_env
 from tools.file_ops   import _session_cwd, tool_read_file
@@ -124,7 +127,8 @@ _WIZARD_PROVIDERS = [
     ("4", "SILICON_API_KEY",    "SiliconFlow",    "ds-coder · qwen 等国产模型",            False),
     ("5", "ZHIPU_API_KEY",      "ZhipuAI 智谱",  "glm-4v-plus 视觉识图（国内直连）",      False),
     ("6", "XIAOMI_API_KEY",     "Xiaomi MiMo",   "mimo-v2.5-pro · mimo-v2-omni",       False),
-    ("7", None,                 "本地 Ollama",    "需先运行 ollama serve，无需 Key",        True),
+    ("7", "ANTHROPIC_API_KEY",  "Anthropic",      "claude-opus-4-7 · claude-sonnet-4-6", False),
+    ("8", None,                 "本地 Ollama",    "需先运行 ollama serve，无需 Key",        True),
 ]
 
 def _detect_shell_config() -> Path | None:
@@ -228,6 +232,7 @@ def _run_key_wizard() -> bool:
                 "SILICON_API_KEY":    "https://cloud.siliconflow.cn/account/ak",
                 "ZHIPU_API_KEY":      "https://open.bigmodel.cn/usercenter/apikeys",
                 "XIAOMI_API_KEY":     "https://token-plan-cn.xiaomimimo.com",
+                "ANTHROPIC_API_KEY":  "https://console.anthropic.com/settings/keys",
             }
             url = _KEY_URLS.get(env_var, "")
             if url:
@@ -289,11 +294,20 @@ HELP_TEXT = f"""
   {c(CYAN,"/setkey")}            重新运行 Key 配置向导
   {c(CYAN,"/keys")}              显示各 Provider Key 配置状态
 
+{c(BOLD,"── API Provider 管理 ──")}
+  {c(CYAN,"/provider")}            Provider 管理面板（查看/添加/删除/测试）
+  {c(CYAN,"/provider list")}       列出所有 Provider 状态
+  {c(CYAN,"/provider add")}        添加自定义 Provider（支持 OpenAI / Anthropic 格式）
+  {c(CYAN,"/provider remove <n>")} 删除自定义 Provider
+  {c(CYAN,"/provider test <model>")} 测试 Provider 连通性
+
 {c(BOLD,"── 会话持久化（SQLite）──")}
   {c(CYAN,"/save [name]")}   保存当前会话 → ~/.pawnlogic/pawn.db
   {c(CYAN,"/load <name|n>")} 加载历史会话（名称子串/序号）
   {c(CYAN,"/sessions")}      列出所有会话
   {c(CYAN,"/del <name|n>")}  删除指定会话
+  {c(CYAN,"/rename <n> <name>")} 重命名已保存会话
+  {c(CYAN,"/resume [n]")}    恢复会话并显示对话历史
 
 {c(BOLD,"── 知识库 RAG ──")}
   {c(MAGENTA,"/memorize [topic]")}   AI 总结对话 → 存入知识库（每次新 session 自动召回）
@@ -731,6 +745,261 @@ def _handle_chat(arg: str, arg2: str, session):
 
 
 # ════════════════════════════════════════════════════════
+# /provider 命令处理
+# ════════════════════════════════════════════════════════
+
+def _handle_provider_cmd(sub: str, sub_arg: str, session):
+    """处理 /provider 子命令。"""
+    import getpass
+
+    # ── /provider 无参数 — 交互式面板 ─────────────────
+    if not sub:
+        print(f"""
+{c(BOLD+CYAN, "  ╔══════════════════════════════════════════╗")}
+{c(BOLD+CYAN, "  ║")}  {c(BOLD, "Provider 管理面板")}                      {c(BOLD+CYAN, "║")}
+{c(BOLD+CYAN, "  ╚══════════════════════════════════════════╝")}
+
+  {c(CYAN, "[1]")} 查看所有 Provider
+  {c(CYAN, "[2]")} 添加自定义 Provider
+  {c(CYAN, "[3]")} 删除自定义 Provider
+  {c(CYAN, "[4]")} 测试连通性
+  {c(GRAY, "[0]")} 返回
+""")
+        try:
+            choice = input(cp(BOLD, "  请输入序号: ")).strip()
+        except (EOFError, KeyboardInterrupt):
+            print(); return
+        if choice == "1":
+            _provider_list()
+        elif choice == "2":
+            _provider_add()
+        elif choice == "3":
+            _provider_remove()
+        elif choice == "4":
+            _provider_test(session)
+        return
+
+    # ── /provider list ────────────────────────────────
+    if sub == "list":
+        _provider_list()
+    elif sub == "add":
+        _provider_add()
+    elif sub == "remove":
+        _provider_remove(sub_arg)
+    elif sub == "test":
+        _provider_test(session, sub_arg)
+    else:
+        print(c(RED, f"  ✗ 未知子命令 '{sub}'。可用: list · add · remove · test"))
+
+
+def _provider_list():
+    """列出所有 Provider 状态。"""
+    print(c(BOLD, "\n  Provider 列表："))
+    for pname, pinfo in PROVIDERS.items():
+        fmt   = pinfo.get("api_format", "openai")
+        label = pinfo.get("label", pname)
+        env   = pinfo.get("api_key_env", "")
+        val   = os.environ.get(env, "") if env else ""
+        if val:
+            masked = val[:8] + "..." + val[-4:] if len(val) > 12 else "***"
+            ktag = c(GREEN, f"✓ ({masked})")
+        elif not env:
+            ktag = c(GRAY, "无需 Key")
+        else:
+            ktag = c(RED, "✗ 未配置")
+        fmt_tag = c(MAGENTA, "[Anthropic]") if fmt == "anthropic" else c(GRAY, "[OpenAI]")
+        hint = pinfo.get("models_hint", "")
+        print(f"  {c(CYAN, f'{pname:16}')}{fmt_tag:14} {label:24} {ktag}")
+        if hint:
+            print(f"  {'':16}{c(GRAY, hint)}")
+    print(c(GRAY, f"\n  自定义配置: {CUSTOM_PROVIDERS_PATH}"))
+    print()
+
+
+def _provider_add():
+    """交互式添加自定义 Provider。"""
+    print(c(BOLD, "\n  添加自定义 Provider"))
+    print(c(GRAY, "  （Key 存入 .env，配置存入 ~/.pawnlogic/custom_providers.json）\n"))
+
+    try:
+        name = input(cp(BOLD, "  Provider 名称 (短ID，如 my_relay): ")).strip()
+    except (EOFError, KeyboardInterrupt):
+        print(); return
+    if not name or name in PROVIDERS:
+        print(c(RED, f"  ✗ 名称无效或已存在: {name}"))
+        return
+
+    # API 格式选择
+    print(f"\n  {c(BOLD, 'API 格式:')}")
+    print(f"    {c(CYAN, '[1]')} OpenAI Chat Completions 格式")
+    print(f"    {c(CYAN, '[2]')} Anthropic Messages 格式")
+    try:
+        fmt_choice = input(cp(BOLD, "  选择 [1/2]: ")).strip()
+    except (EOFError, KeyboardInterrupt):
+        print(); return
+    api_format = "anthropic" if fmt_choice == "2" else "openai"
+
+    # Base URL
+    default_path = "/v1/messages" if api_format == "anthropic" else "/v1/chat/completions"
+    try:
+        base_url = input(cp(BOLD, f"  Base URL (如 https://my-relay.com{default_path}): ")).strip()
+    except (EOFError, KeyboardInterrupt):
+        print(); return
+    if not base_url:
+        print(c(RED, "  ✗ URL 不能为空"))
+        return
+    # 自动补全 path
+    if not base_url.endswith(default_path) and not base_url.endswith("/"):
+        base_url = base_url.rstrip("/") + default_path
+
+    # API Key
+    env_var_name = f"{name.upper().replace('-', '_')}_API_KEY"
+    try:
+        key = getpass.getpass(c(BOLD, f"  API Key (输入时不显示，存入 .env → {env_var_name}): ")).strip()
+    except (EOFError, KeyboardInterrupt):
+        print(); return
+
+    # 模型 ID
+    try:
+        model_id = input(cp(BOLD, "  模型 ID (如 gpt-4o / claude-sonnet-4-6): ")).strip()
+    except (EOFError, KeyboardInterrupt):
+        print(); return
+    if not model_id:
+        print(c(RED, "  ✗ 模型 ID 不能为空"))
+        return
+
+    # 别名
+    default_alias = model_id.split("/")[-1]
+    try:
+        alias = input(cp(BOLD, f"  模型别名 (用于 /model，默认 {default_alias}): ")).strip()
+    except (EOFError, KeyboardInterrupt):
+        print(); return
+    if not alias:
+        alias = default_alias
+
+    # 写入 .env
+    if key:
+        env_path = Path(__file__).resolve().parent / ".env"
+        env_line = f'\n{env_var_name}="{key}"\n'
+        try:
+            existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+            if env_var_name not in existing:
+                env_path.write_text(existing + env_line, encoding="utf-8")
+            os.environ[env_var_name] = key
+        except Exception:
+            os.environ[env_var_name] = key
+        # 同时写入 shell config
+        _write_key_to_shell(env_var_name, key)
+        print(c(GREEN, f"  ✓ Key 已保存 → .env ({env_var_name})"))
+
+    # 构建配置
+    prov_cfg = {
+        "base_url":    base_url,
+        "api_key_env": env_var_name,
+        "label":       f"Custom ({name})",
+        "api_format":  api_format,
+    }
+    models_cfg = {
+        alias: {
+            "id":       model_id,
+            "provider": name,
+            "desc":     f"Custom {model_id} via {name}",
+            "color":    "\033[37m",
+            "vision":   False,
+        }
+    }
+
+    # 保存到 JSON
+    save_custom_provider(name, prov_cfg, models_cfg)
+
+    # 热加载到内存
+    PROVIDERS[name] = prov_cfg
+    MODELS[alias] = models_cfg[alias]
+
+    print(c(GREEN, f"\n  ✓ Provider '{name}' 已添加"))
+    print(c(GRAY,  f"    格式: {api_format}"))
+    print(c(GRAY,  f"    URL:  {base_url}"))
+    print(c(GRAY,  f"    模型: {alias} → {model_id}"))
+    print(c(GRAY,  f"    配置: {CUSTOM_PROVIDERS_PATH}"))
+    print(c(CYAN,  f"    使用: /model {alias}"))
+    print()
+
+
+def _provider_remove(name: str = ""):
+    """删除自定义 Provider。"""
+    if not name:
+        # 列出自定义 provider 供选择
+        if not CUSTOM_PROVIDERS_PATH.exists():
+            print(c(GRAY, "\n  没有自定义 Provider。"))
+            return
+        try:
+            data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            print(c(RED, "\n  ✗ 读取配置文件失败"))
+            return
+        custom = list(data.get("providers", {}).keys())
+        if not custom:
+            print(c(GRAY, "\n  没有自定义 Provider。"))
+            return
+        print(c(BOLD, "\n  自定义 Provider:"))
+        for i, n in enumerate(custom, 1):
+            print(f"    {c(CYAN, f'[{i}]')} {n}")
+        try:
+            choice = input(cp(BOLD, "  输入序号或名称: ")).strip()
+        except (EOFError, KeyboardInterrupt):
+            print(); return
+        if choice.isdigit() and 1 <= int(choice) <= len(custom):
+            name = custom[int(choice) - 1]
+        elif choice in custom:
+            name = choice
+        else:
+            print(c(RED, f"  ✗ 无效选择: {choice}"))
+            return
+
+    if remove_custom_provider(name):
+        # 从内存中移除
+        if name in PROVIDERS:
+            del PROVIDERS[name]
+        to_remove = [a for a, m in MODELS.items() if m.get("provider") == name]
+        for a in to_remove:
+            del MODELS[a]
+        print(c(GREEN, f"  ✓ 已删除 Provider '{name}'"))
+    else:
+        print(c(RED, f"  ✗ 未找到自定义 Provider: {name}"))
+
+
+def _provider_test(session, model_alias: str = ""):
+    """测试 Provider 连通性。"""
+    if not model_alias:
+        try:
+            model_alias = input(cp(BOLD, "  输入要测试的模型别名: ")).strip()
+        except (EOFError, KeyboardInterrupt):
+            print(); return
+    if model_alias not in MODELS:
+        print(c(RED, f"  ✗ 未知模型: {model_alias}"))
+        return
+
+    ok, env = validate_api_key(model_alias)
+    if not ok:
+        print(c(RED, f"  ✗ {env} 未配置。用 /setkey 或 /provider add 配置。"))
+        return
+
+    cfg = get_provider_config(model_alias)
+    print(c(GRAY, f"  测试 {model_alias} ({cfg['api_format']}) → {cfg['base_url']} ..."))
+    print(c(GRAY, f"  发送 max_tokens=1 测试请求..."))
+
+    from core.api_client import call_once
+    text, err = call_once(
+        [{"role": "user", "content": "Say OK"}],
+        model_alias, max_tokens=1,
+    )
+    if err:
+        print(c(RED, f"  ✗ 测试失败: {err}"))
+    else:
+        print(c(GREEN, f"  ✓ 连通成功！响应: {text[:80]}"))
+
+
+# ════════════════════════════════════════════════════════
 # Slash 命令
 # ════════════════════════════════════════════════════════
 
@@ -766,6 +1035,10 @@ def handle_slash(cmd: str, session: AgentSession):
             print(f"  {c(CYAN, f'{pname:14}')}{env:28} {tag}")
         print(c(GRAY, "\n  视觉模型: " + ", ".join(list_vision_models())))
 
+    # ── Provider 管理 ──────────────────────────────────
+    elif verb == "/provider":
+        _handle_provider_cmd(arg, arg2, session)
+
     # ── 模型 ────────────────────────────────────────────
     elif verb == "/model":
         if not arg:
@@ -789,8 +1062,10 @@ def handle_slash(cmd: str, session: AgentSession):
                     ok, _  = validate_api_key(alias)
                     ktag   = c(GREEN, "[key✓]") if ok else c(RED, "[key✗]")
                     vtag   = c(CYAN,  " 📷")    if cfg_m.get("vision") else ""
-                    print(f"    {c(cfg_m['color'], f'{alias:14}')}{cfg_m['desc']:30} {ktag}{vtag}{tick}")
-                print(c(GRAY, "\n  用法: /model <alias>  📷=支持视觉"))
+                    fmt    = get_api_format(alias)
+                    ftag   = c(MAGENTA, " [A]")  if fmt == "anthropic" else ""
+                    print(f"    {c(cfg_m['color'], f'{alias:14}')}{cfg_m['desc']:30} {ktag}{vtag}{ftag}{tick}")
+                print(c(GRAY, "\n  用法: /model <alias>  📷=支持视觉  [A]=Anthropic 格式"))
         elif arg in MODELS:
             session.model_alias = arg
             ok, env = validate_api_key(arg)
@@ -1027,6 +1302,42 @@ def handle_slash(cmd: str, session: AgentSession):
             result = session_load(session, arg)
             print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
 
+    elif verb == "/resume":
+        if arg:
+            # /resume <n> — 直接恢复指定序号
+            result = session_load(session, arg)
+            print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
+        else:
+            # /resume — 显示最近会话列表并交互选择
+            from core.memory import list_sessions as _ls
+            rows = _ls(10)
+            if not rows:
+                print(c(GRAY, "  暂无已保存会话"))
+            else:
+                print(c(BOLD, "\n  最近会话："))
+                for i, r in enumerate(rows):
+                    name = r["name"] or "(未命名)"
+                    ts   = str(r["updated_at"])[:16] if r["updated_at"] else ""
+                    msgs = r["msg_count"] if r["msg_count"] else 0
+                    model = r["model"] if r["model"] else ""
+                    print(
+                        c(GRAY, f"  [{i+1:2d}] ") +
+                        c(CYAN, name) +
+                        c(GRAY, f"  {ts}  {msgs}条  model={model}")
+                    )
+                print(c(GRAY, "\n  输入序号恢复，或 Enter 取消"))
+                try:
+                    pick = input(cp(BOLD, "  选择 [1-" + str(len(rows)) + "]: ")).strip()
+                    if pick.isdigit():
+                        idx = int(pick) - 1
+                        if 0 <= idx < len(rows):
+                            result = session_load(session, str(idx + 1))
+                            print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
+                        else:
+                            print(c(RED, "  序号超出范围"))
+                except (EOFError, KeyboardInterrupt):
+                    print()
+
     elif verb == "/sessions":
         print(c(BOLD, f"\n  已保存会话 (DB: {DB_PATH})："))
         print(session_list())
@@ -1035,6 +1346,13 @@ def handle_slash(cmd: str, session: AgentSession):
         if not arg: print(c(RED, "  用法: /del <name 或 序号>"))
         else:
             result = session_delete(session, arg)
+            print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
+
+    elif verb == "/rename":
+        if not arg or not arg2:
+            print(c(RED, "  用法: /rename <序号或名称> <新名称>"))
+        else:
+            result = session_rename(session, arg, arg2)
             print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
 
     # ── 知识库 ─────────────────────────────────────────
@@ -1969,6 +2287,46 @@ def main():
         print(c(GRAY, f"PawnLogic {VERSION}  model={session.model_alias}  key{key_sym}{prx_sym}  /help"))
 
     # ════════════════════════════════════════════════════════
+    # 启动时会话恢复提示
+    # ════════════════════════════════════════════════════════
+    _startup_resume_done = False
+    try:
+        from core.memory import list_sessions as _list_sessions_startup
+        _recent_sessions = _list_sessions_startup(5)
+        if _recent_sessions:
+            print(c(BOLD, "\n  最近会话："))
+            for _i, _r in enumerate(_recent_sessions):
+                _name = _r["name"] or "(未命名)"
+                _ts   = str(_r["updated_at"])[:16] if _r["updated_at"] else ""
+                _msgs = _r["msg_count"] if _r["msg_count"] else 0
+                _model = _r["model"] if _r["model"] else ""
+                print(
+                    c(GRAY, f"  [{_i+1}] ") +
+                    c(CYAN, _name) +
+                    c(GRAY, f"  {_ts}  {_msgs}条  model={_model}")
+                )
+            print(c(GRAY, "  [Enter] 开始新会话"))
+            try:
+                _resume_choice = input(cp(BOLD, "  恢复会话 [1-5/Enter]: ")).strip()
+                if _resume_choice.isdigit():
+                    _idx = int(_resume_choice) - 1
+                    if 0 <= _idx < len(_recent_sessions):
+                        _sid = _recent_sessions[_idx]["id"]
+                        _result = session_load(session, str(_idx + 1))
+                        if _result.startswith("OK"):
+                            print(c(GREEN, f"  ✓ {_result}"))
+                            _startup_resume_done = True
+                        else:
+                            print(c(RED, f"  ✗ {_result}"))
+                    else:
+                        print(c(YELLOW, "  序号超出范围，开始新会话"))
+                # Enter 或其他输入 → 新会话
+            except (EOFError, KeyboardInterrupt):
+                pass
+    except Exception:
+        pass
+
+    # ════════════════════════════════════════════════════════
     # P2: CLI UX — FuzzyCompleter + WordCompleter + Bottom Toolbar
     # ════════════════════════════════════════════════════════
 
@@ -1976,7 +2334,7 @@ def main():
     _all_cmd_words = [
         "/mode", "/model", "/clear", "/context", "/pin", "/unpin", "/cd", "/file",
         "/undo", "/compact", "/think", "/ping",
-        "/history", "/setkey", "/keys", "/save", "/load", "/sessions", "/del",
+        "/history", "/setkey", "/keys", "/save", "/load", "/resume", "/sessions", "/del",
         "/memorize", "/knowledge", "/forget", "/init_project", "/state",
         "/low", "/mid", "/deep", "/max", "/normal", "/limits",
         "/tokens", "/ctx", "/iter", "/toolsize", "/fetchsize",
@@ -2003,6 +2361,7 @@ def main():
         "/keys":          "显示各厂商 Key 配置状态",
         "/save":          "保存当前会话到 SQLite",
         "/load":          "加载历史会话",
+        "/resume":        "恢复最近会话（交互选择或 /resume n）",
         "/sessions":      "列出所有已保存会话",
         "/del":           "删除指定会话",
         "/memorize":      "AI 总结对话 → 存入知识库",
@@ -2013,6 +2372,7 @@ def main():
         "/low":           "日常模式（tokens=4k, ctx=40k）",
         "/mid":           "开发模式（tokens=8k, ctx=150k）← 默认",
         "/deep":          "全火力模式（tokens=32k, ctx=400k）",
+        "/max":           "极限火力模式（tokens=32k, ctx=600k, iter=100, 60min）",
         "/normal":        "重置到 /mid",
         "/limits":        "查看所有运行时限制",
         "/tokens":        "设置 max_tokens",
@@ -2098,6 +2458,8 @@ def main():
             _tier = "MID"
             if DYNAMIC_CONFIG["max_tokens"] <= 4096:
                 _tier = "LOW"
+            elif DYNAMIC_CONFIG["max_iter"] >= 100:
+                _tier = "MAX"
             elif DYNAMIC_CONFIG["max_tokens"] >= 32768:
                 _tier = "DEEP"
             _tb = DYNAMIC_CONFIG.get("time_budget_sec", 0)

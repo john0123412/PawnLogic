@@ -1,21 +1,16 @@
 """
-core/api_client.py — 底层流式 API 客户端（重构版）
+core/api_client.py — 底层流式 API 客户端（双格式原生支持）
 
-核心改动（修复卡死 + 降低资源消耗）：
-  ① 彻底抛弃 read(1024)：改用 http.client 逐行 readline()
-      → SSE 每帧只有几十字节，read(1024) 会永久等待凑齐缓冲区
-  ② 代理显式处理：HTTP proxy + HTTPS CONNECT 隧道 + SSL 手动包裹
-      → 不依赖 urllib 全局 opener，本模块独立可用
-  ③ per-read timeout = 30s：每次 readline() 独立计时
-      → 避免 300s 全局超时导致连接僵死无法中断
-  ④ 连接 finally 确保关闭，防止 fd 泄漏
-  ⑤ 健壮 SSE 解析器保留（兼容国产模型非标格式）
+原生支持 OpenAI Chat Completions 和 Anthropic Messages 两种 API 格式。
+每种格式有独立的请求构建和响应解析路径，不做格式转换。
+
+共享基础设施：连接管理、代理隧道、断路器、指数退避。
 """
 
 import json, re, os, ssl, socket, time, threading
 import http.client
 from urllib.parse import urlparse
-from config import get_api_config, MODELS, DYNAMIC_CONFIG
+from config import get_api_config, get_api_format, get_provider_config, MODELS, DYNAMIC_CONFIG
 
 
 # ── 自定义异常 ──────────────────────────────────────────
@@ -240,6 +235,236 @@ def ensure_tool_call_id(tcd: dict, iteration: int, idx: int) -> str:
     _call_counter[0] += 1
     return f"call_{iteration}_{idx}_{_call_counter[0]}"
 
+
+# ════════════════════════════════════════════════════════
+# Anthropic 原生路径 — 请求构建
+# ════════════════════════════════════════════════════════
+
+def _anthropic_convert_tools(tools_schema: list) -> list:
+    """OpenAI tool schema → Anthropic input_schema 格式。"""
+    result = []
+    for tool in (tools_schema or []):
+        fn = tool.get("function", {})
+        result.append({
+            "name":        fn.get("name", ""),
+            "description": fn.get("description", ""),
+            "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
+        })
+    return result
+
+
+def _anthropic_convert_messages(messages: list) -> tuple[list, str | None]:
+    """
+    OpenAI messages → Anthropic messages。
+    返回 (converted_messages, system_prompt)。
+    - system 提取为顶层字段
+    - tool 角色 → user + tool_result content block
+    - assistant tool_calls → tool_use content block
+    - 合并连续同角色消息（Anthropic 要求交替）
+    """
+    system_prompt = None
+    converted = []
+
+    for msg in messages:
+        role = msg.get("role")
+
+        if role == "system":
+            system_prompt = msg.get("content", "")
+            continue
+
+        if role == "tool":
+            converted.append({
+                "role": "user",
+                "content": [{
+                    "type":         "tool_result",
+                    "tool_use_id":  msg.get("tool_call_id", ""),
+                    "content":      msg.get("content", ""),
+                }],
+            })
+            continue
+
+        if role == "assistant":
+            content = msg.get("content") or ""
+            tool_calls = msg.get("tool_calls") or []
+            if not tool_calls:
+                converted.append({"role": "assistant", "content": content or "."})
+            else:
+                blocks = []
+                if content:
+                    blocks.append({"type": "text", "text": content})
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    args_str = fn.get("arguments", "{}")
+                    try:
+                        args = json.loads(args_str) if isinstance(args_str, str) else args_str
+                    except json.JSONDecodeError:
+                        args = {"_raw": args_str}
+                    blocks.append({
+                        "type":  "tool_use",
+                        "id":    tc.get("id", ""),
+                        "name":  fn.get("name", ""),
+                        "input": args,
+                    })
+                converted.append({"role": "assistant", "content": blocks})
+            continue
+
+        if role == "user":
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                converted.append({"role": "user", "content": content})
+            else:
+                converted.append(msg)
+            continue
+
+    # Anthropic 要求 user/assistant 交替，合并连续同角色
+    merged = []
+    for msg in converted:
+        if merged and merged[-1]["role"] == msg["role"]:
+            prev = merged[-1]["content"]
+            curr = msg["content"]
+            if isinstance(prev, str) and isinstance(curr, str):
+                merged[-1]["content"] = prev + "\n\n" + curr
+            elif isinstance(prev, list) and isinstance(curr, list):
+                merged[-1]["content"] = prev + curr
+            elif isinstance(prev, str) and isinstance(curr, list):
+                merged[-1]["content"] = [{"type": "text", "text": prev}] + curr
+            elif isinstance(prev, list) and isinstance(curr, str):
+                merged[-1]["content"] = prev + [{"type": "text", "text": curr}]
+        else:
+            merged.append(msg)
+
+    return merged, system_prompt
+
+
+def _anthropic_build_payload(
+    messages: list, model_id: str, max_tokens: int,
+    tools_schema: list | None,
+) -> dict:
+    """构建 Anthropic Messages API 原生请求体。"""
+    conv_msgs, system_prompt = _anthropic_convert_messages(messages)
+    payload: dict = {
+        "model":      model_id,
+        "max_tokens": max_tokens or DYNAMIC_CONFIG["max_tokens"],
+        "messages":   conv_msgs,
+        "stream":     True,
+    }
+    if system_prompt:
+        payload["system"] = system_prompt
+    if tools_schema:
+        payload["tools"] = _anthropic_convert_tools(tools_schema)
+    return payload
+
+
+def _anthropic_build_headers(api_key: str, body_len: int) -> dict:
+    """Anthropic 原生请求头。"""
+    return {
+        "x-api-key":         api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type":      "application/json",
+        "Accept":            "text/event-stream",
+        "Cache-Control":     "no-cache",
+        "Content-Length":    str(body_len),
+    }
+
+
+# ════════════════════════════════════════════════════════
+# Anthropic 原生路径 — SSE 解析
+# ════════════════════════════════════════════════════════
+
+def _anthropic_parse_sse(event_type: str, data_raw: str, state: dict) -> dict | None:
+    """
+    解析单个 Anthropic SSE 事件，yield 统一 delta dict。
+    state 追踪: {"tool_blocks": {idx: {id, name, args}}}
+    """
+    try:
+        data = json.loads(data_raw)
+    except json.JSONDecodeError:
+        return None
+
+    etype = data.get("type", event_type)
+
+    if etype == "message_start":
+        usage = data.get("message", {}).get("usage", {})
+        if usage:
+            return {"_usage": usage}
+        return None
+
+    if etype == "content_block_start":
+        block = data.get("content_block", {})
+        idx = data.get("index", 0)
+        if block.get("type") == "tool_use":
+            state.setdefault("tool_blocks", {})[idx] = {
+                "id":   block.get("id", ""),
+                "name": block.get("name", ""),
+                "args": "",
+            }
+        return None
+
+    if etype == "content_block_delta":
+        delta = data.get("delta", {})
+        idx = data.get("index", 0)
+        delta_type = delta.get("type", "")
+
+        if delta_type == "text_delta":
+            return {
+                "choices": [{
+                    "delta":          {"content": delta.get("text", "")},
+                    "finish_reason":  None,
+                }],
+            }
+
+        if delta_type == "input_json_delta":
+            partial = delta.get("partial_json", "")
+            tb = state.get("tool_blocks", {}).get(idx, {})
+            tb["args"] = tb.get("args", "") + partial
+            return {
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": idx,
+                            "id":     tb.get("id", ""),
+                            "function": {
+                                "name":      tb.get("name", ""),
+                                "arguments": partial,
+                            },
+                        }],
+                    },
+                    "finish_reason": None,
+                }],
+            }
+        return None
+
+    if etype == "content_block_stop":
+        return None
+
+    if etype == "message_delta":
+        usage = data.get("usage", {})
+        result = {}
+        if usage:
+            result["_usage"] = usage
+        stop = data.get("delta", {}).get("stop_reason")
+        if stop:
+            result["choices"] = [{"delta": {}, "finish_reason": stop}]
+        return result if result else None
+
+    if etype == "message_stop":
+        return None
+
+    return None
+
+
+def _anthropic_parse_response(raw_bytes: bytes) -> tuple[str, str | None]:
+    """Anthropic 非流式响应解析。返回 (text, error)。"""
+    try:
+        data = json.loads(raw_bytes)
+        parts = []
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return "".join(parts).strip(), None
+    except Exception as e:
+        return "", str(e)
+
 # ════════════════════════════════════════════════════════
 # 流式请求生成器（核心重写）
 # ════════════════════════════════════════════════════════
@@ -253,23 +478,32 @@ def stream_request(
 ):
     """
     流式 SSE 生成器（含断路器 + 指数退避 + 局部流恢复）。
+    根据 api_format 自动选择 OpenAI 或 Anthropic 原生路径。
     yields: 已解析的 delta dict，或 {"_error": "..."}。
     """
-    base_url, api_key = get_api_config(model_alias)
-    model_id          = MODELS[model_alias]["id"]
-    provider          = base_url   # 用 base_url 作熔断器 key
-    clean = [{k: v for k, v in m.items() if not k.startswith("_")} for m in messages]
+    cfg       = get_provider_config(model_alias)
+    base_url  = cfg["base_url"]
+    api_key   = cfg["api_key"]
+    api_fmt   = cfg["api_format"]
+    model_id  = MODELS[model_alias]["id"]
+    provider  = base_url   # 用 base_url 作熔断器 key
+    _max_tok  = max_tokens or DYNAMIC_CONFIG["max_tokens"]
 
-    payload: dict = {
-        "model":      model_id,
-        "messages":   clean,
-        "max_tokens": max_tokens or DYNAMIC_CONFIG["max_tokens"],
-        "stream":     True,
-    }
-    if tools_schema:
-        payload["tools"]       = tools_schema
-        payload["tool_choice"] = tool_choice
-    payload["stream_options"] = {"include_usage": True}
+    # ── 按格式构建 payload 和 headers ────────────────────
+    if api_fmt == "anthropic":
+        payload = _anthropic_build_payload(messages, model_id, _max_tok, tools_schema)
+    else:
+        clean = [{k: v for k, v in m.items() if not k.startswith("_")} for m in messages]
+        payload = {
+            "model":      model_id,
+            "messages":   clean,
+            "max_tokens": _max_tok,
+            "stream":     True,
+        }
+        if tools_schema:
+            payload["tools"]       = tools_schema
+            payload["tool_choice"] = tool_choice
+        payload["stream_options"] = {"include_usage": True}
 
     proxy = _detect_proxy()
 
@@ -289,13 +523,16 @@ def stream_request(
             conn, path = _open_connection(base_url, proxy, timeout=_CONN_TIMEOUT)
 
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            hdrs = {
-                "Authorization":  f"Bearer {api_key}",
-                "Content-Type":   "application/json",
-                "Accept":         "text/event-stream",
-                "Cache-Control":  "no-cache",
-                "Content-Length": str(len(body)),
-            }
+            if api_fmt == "anthropic":
+                hdrs = _anthropic_build_headers(api_key, len(body))
+            else:
+                hdrs = {
+                    "Authorization":  f"Bearer {api_key}",
+                    "Content-Type":   "application/json",
+                    "Accept":         "text/event-stream",
+                    "Cache-Control":  "no-cache",
+                    "Content-Length": str(len(body)),
+                }
             conn.request("POST", path, body=body, headers=hdrs)
 
             if conn.sock:
@@ -312,9 +549,8 @@ def stream_request(
                         time.sleep(min(float(retry_after), 60))
                     except ValueError:
                         pass
-                # 读空 body 避免连接污染
                 resp.read(200)
-                continue   # 进入下一次 attempt
+                continue
 
             if resp.status != 200:
                 _cb_record_failure(provider)
@@ -325,50 +561,95 @@ def stream_request(
             # ── 成功建立连接，重置断路器 ───────────────────
             _cb_record_success(provider)
 
-            # ── 逐行读取 SSE（含流中断局部恢复）─────────────
+            # ── 逐行读取 SSE ─────────────────────────────
             partial_text = ""
-            while True:
-                try:
-                    raw_line = resp.readline()
-                except socket.timeout:
-                    yield {"_error": f"读取超时 ({_READ_TIMEOUT}s)，检查代理/网络"}
-                    return
-                except (BrokenPipeError, ConnectionResetError) as e:
-                    # 流中断：已有部分内容则通知上层
-                    if partial_text:
-                        yield {"_partial_end": True,
-                               "_error": f"流中断（已接收部分内容）: {e}"}
-                    else:
-                        _cb_record_failure(provider)
-                        if attempt < _RETRY_MAX - 1:
-                            break   # 进入重试
-                        yield {"_error": f"连接断开: {e}"}
-                    return
 
-                if not raw_line:
-                    return   # EOF 正常结束
+            if api_fmt == "anthropic":
+                # ── Anthropic 原生 SSE 解析 ──────────────
+                current_event = ""
+                state: dict = {"tool_blocks": {}}
+                while True:
+                    try:
+                        raw_line = resp.readline()
+                    except socket.timeout:
+                        yield {"_error": f"读取超时 ({_READ_TIMEOUT}s)，检查代理/网络"}
+                        return
+                    except (BrokenPipeError, ConnectionResetError) as e:
+                        if partial_text:
+                            yield {"_partial_end": True,
+                                   "_error": f"流中断（已接收部分内容）: {e}"}
+                        else:
+                            _cb_record_failure(provider)
+                            if attempt < _RETRY_MAX - 1:
+                                break
+                            yield {"_error": f"连接断开: {e}"}
+                        return
 
-                line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
-                if not line.startswith("data: "):
-                    continue
+                    if not raw_line:
+                        return
 
-                data_raw = line[6:].strip()
-                if data_raw == "[DONE]":
-                    return
+                    line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
 
-                parsed = parse_sse_delta(data_raw)
-                if parsed is not None:
-                    # 追踪已收到的文本内容（用于流中断恢复判断）
-                    choices = parsed.get("choices", [])
-                    if choices:
-                        partial_text += choices[0].get("delta", {}).get("content") or ""
-                    usage = parsed.get("usage")
-                    if usage and isinstance(usage, dict):
-                        yield {"_usage": usage}
-                    yield parsed
+                    if line.startswith("event: "):
+                        current_event = line[7:].strip()
+                        continue
 
-            # 如果 break 出来是因为连接断开要重试，继续 attempt 循环
-            continue
+                    if not line.startswith("data: "):
+                        continue
+
+                    data_raw = line[6:].strip()
+                    parsed = _anthropic_parse_sse(current_event, data_raw, state)
+                    if parsed is not None:
+                        if "_usage" in parsed:
+                            yield {"_usage": parsed["_usage"]}
+                        if "choices" in parsed:
+                            choices = parsed["choices"]
+                            if choices:
+                                partial_text += choices[0].get("delta", {}).get("content") or ""
+                            yield parsed
+                continue
+
+            else:
+                # ── OpenAI 原生 SSE 解析 ──────────────────
+                while True:
+                    try:
+                        raw_line = resp.readline()
+                    except socket.timeout:
+                        yield {"_error": f"读取超时 ({_READ_TIMEOUT}s)，检查代理/网络"}
+                        return
+                    except (BrokenPipeError, ConnectionResetError) as e:
+                        if partial_text:
+                            yield {"_partial_end": True,
+                                   "_error": f"流中断（已接收部分内容）: {e}"}
+                        else:
+                            _cb_record_failure(provider)
+                            if attempt < _RETRY_MAX - 1:
+                                break
+                            yield {"_error": f"连接断开: {e}"}
+                        return
+
+                    if not raw_line:
+                        return
+
+                    line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+                    if not line.startswith("data: "):
+                        continue
+
+                    data_raw = line[6:].strip()
+                    if data_raw == "[DONE]":
+                        return
+
+                    parsed = parse_sse_delta(data_raw)
+                    if parsed is not None:
+                        choices = parsed.get("choices", [])
+                        if choices:
+                            partial_text += choices[0].get("delta", {}).get("content") or ""
+                        usage = parsed.get("usage")
+                        if usage and isinstance(usage, dict):
+                            yield {"_usage": usage}
+                        yield parsed
+
+                continue
 
         except socket.timeout:
             _cb_record_failure(provider)
@@ -396,7 +677,7 @@ def stream_request(
             if conn:
                 try: conn.close()
                 except Exception: pass
-        return   # 非 continue 路径到这里说明已 yield error，退出
+        return
 
 # ════════════════════════════════════════════════════════
 # 单次非流式调用（视觉工具 / memorize 使用）
@@ -409,14 +690,20 @@ def call_once(
     vision_payload_override: dict | None = None,
 ) -> tuple[str, str | None]:
     """非流式调用。返回 (text, error)，error=None 表示成功。"""
-    base_url, api_key = get_api_config(model_alias)
-    model_id          = MODELS[model_alias]["id"]
+    cfg       = get_provider_config(model_alias)
+    base_url  = cfg["base_url"]
+    api_key   = cfg["api_key"]
+    api_fmt   = cfg["api_format"]
+    model_id  = MODELS[model_alias]["id"]
 
     if vision_payload_override:
         payload = vision_payload_override
         payload.setdefault("model",      model_id)
         payload.setdefault("max_tokens", max_tokens)
         payload.setdefault("stream",     False)
+    elif api_fmt == "anthropic":
+        payload = _anthropic_build_payload(messages, model_id, max_tokens, None)
+        payload["stream"] = False
     else:
         clean = [{k: v for k, v in m.items() if not k.startswith("_")} for m in messages]
         payload = {
@@ -433,14 +720,17 @@ def call_once(
         conn, path = _open_connection(base_url, proxy, timeout=60)
 
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        hdrs = {
-            "Authorization":  f"Bearer {api_key}",
-            "Content-Type":   "application/json",
-            "Content-Length": str(len(body)),
-        }
+        if api_fmt == "anthropic":
+            hdrs = _anthropic_build_headers(api_key, len(body))
+        else:
+            hdrs = {
+                "Authorization":  f"Bearer {api_key}",
+                "Content-Type":   "application/json",
+                "Content-Length": str(len(body)),
+            }
         conn.request("POST", path, body=body, headers=hdrs)
         if conn.sock:
-            conn.sock.settimeout(90)   # 视觉推理较慢
+            conn.sock.settimeout(90)
 
         resp = conn.getresponse()
         raw  = resp.read()
@@ -448,9 +738,12 @@ def call_once(
         if resp.status != 200:
             return "", f"HTTP {resp.status}: {raw[:300].decode('utf-8', errors='replace')}"
 
-        data = json.loads(raw)
-        text = data["choices"][0]["message"]["content"].strip()
-        return text, None
+        if api_fmt == "anthropic":
+            return _anthropic_parse_response(raw)
+        else:
+            data = json.loads(raw)
+            text = data["choices"][0]["message"]["content"].strip()
+            return text, None
 
     except socket.timeout:
         return "", "非流式调用超时"

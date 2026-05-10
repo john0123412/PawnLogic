@@ -7,6 +7,7 @@ PawnLogic 1.1 (GitHub Release) — config.py
 """
 import os
 import re
+import json
 from pathlib import Path
 
 # python-dotenv 可选：存在则自动加载项目根 .env
@@ -29,7 +30,7 @@ LOG_DIR            = Path.home() / ".pawnlogic" / "logs"
 
 # ════════════════════════════════════════════════════════
 # 厂商注册表
-# 所有厂商均兼容 OpenAI Chat Completions 接口格式。
+# api_format: "openai"（默认）或 "anthropic"，决定请求构建和响应解析路径。
 # api_key_env：从环境变量读取 Key，绝不硬编码。
 # ════════════════════════════════════════════════════════
 PROVIDERS: dict[str, dict] = {
@@ -39,6 +40,7 @@ PROVIDERS: dict[str, dict] = {
         "api_key_env": "PAWN_API_KEY",
         "label":       "PawnLogic Engine (Nous Research)",
         "models_hint": "hermes, hermes405",
+        "api_format":  "openai",
     },
     # ── OpenAI ─────────────────────────────────────────
     "openai": {
@@ -46,6 +48,7 @@ PROVIDERS: dict[str, dict] = {
         "api_key_env": "OPENAI_API_KEY",
         "label":       "OpenAI",
         "models_hint": "gpt-4o, gpt-4o-mini, gpt-4-turbo",
+        "api_format":  "openai",
     },
     # ── DeepSeek ────────────────────────────────────────
     "deepseek": {
@@ -53,6 +56,7 @@ PROVIDERS: dict[str, dict] = {
         "api_key_env": "DEEPSEEK_API_KEY",
         "label":       "DeepSeek",
         "models_hint": "deepseek-chat (V3), deepseek-reasoner (R1), deepseek-v4-pro, deepseek-v4-flash",
+        "api_format":  "openai",
     },
     # ── 通义千问 Qwen (阿里云百炼) ──────────────────────
     "qwen": {
@@ -60,6 +64,7 @@ PROVIDERS: dict[str, dict] = {
         "api_key_env": "QWEN_API_KEY",
         "label":       "Alibaba Qwen (通义千问)",
         "models_hint": "qwen-max, qwen-plus, qwen-turbo, qwen-3.0-max",
+        "api_format":  "openai",
     },
     # ── 智谱 GLM ────────────────────────────────────────
     "zhipuai": {
@@ -67,6 +72,7 @@ PROVIDERS: dict[str, dict] = {
         "api_key_env": "ZHIPU_API_KEY",
         "label":       "ZhipuAI (智谱)",
         "models_hint": "glm-5.1, glm-4.7-plus, glm-4.5-air, glm-4v-plus（视觉）",
+        "api_format":  "openai",
     },
     # ── 硅基流动 SiliconFlow ────────────────────────────
     "siliconflow": {
@@ -74,6 +80,7 @@ PROVIDERS: dict[str, dict] = {
         "api_key_env": "SILICON_API_KEY",
         "label":       "SiliconFlow (硅基流动)",
         "models_hint": "deepseek-ai/DeepSeek-V3, Qwen/Qwen2.5-72B-Instruct",
+        "api_format":  "openai",
     },
     # ── OpenRouter（多模型聚合网关）─────────────────────
     "openrouter": {
@@ -81,6 +88,7 @@ PROVIDERS: dict[str, dict] = {
         "api_key_env": "OPENROUTER_API_KEY",
         "label":       "OpenRouter",
         "models_hint": "openai/gpt-4o, anthropic/claude-3.5-sonnet, …",
+        "api_format":  "openai",
     },
     # ── Moonshot (Kimi) ─────────────────────────────────
     "moonshot": {
@@ -88,6 +96,7 @@ PROVIDERS: dict[str, dict] = {
         "api_key_env": "MOONSHOT_API_KEY",
         "label":       "Moonshot (Kimi)",
         "models_hint": "moonshot-v1-128k, moonshot-v1-32k",
+        "api_format":  "openai",
     },
     # ── MiniMax (海螺) ──────────────────────────────────
     "minimax": {
@@ -95,6 +104,7 @@ PROVIDERS: dict[str, dict] = {
         "api_key_env": "MINIMAX_API_KEY",
         "label":       "MiniMax (海螺)",
         "models_hint": "abab6.5s-chat, abab6.5-chat",
+        "api_format":  "openai",
     },
     # ── Groq（极速推理）────────────────────────────────
     "groq": {
@@ -102,6 +112,7 @@ PROVIDERS: dict[str, dict] = {
         "api_key_env": "GROQ_API_KEY",
         "label":       "Groq (Ultra-Fast)",
         "models_hint": "llama-3.3-70b-versatile, mixtral-8x7b-32768",
+        "api_format":  "openai",
     },
     # ── 小米 MiMo ────────────────────────────────────────
     "xiaomi": {
@@ -109,6 +120,7 @@ PROVIDERS: dict[str, dict] = {
         "api_key_env": "XIAOMI_API_KEY",
         "label":       "Xiaomi MiMo (小米)",
         "models_hint": "MiMo-V2.5-Pro, MiMo-V2.5, MiMo-V2-Pro, MiMo-V2-Omni",
+        "api_format":  "openai",
     },
     # ── 本地 Ollama ─────────────────────────────────────
     "local": {
@@ -117,6 +129,15 @@ PROVIDERS: dict[str, dict] = {
         "api_key_env": "LOCAL_API_KEY",   # Ollama 通常无需 Key；留空即可
         "label":       "本地 Ollama",
         "models_hint": "无需 Key，需先执行 ollama serve",
+        "api_format":  "openai",
+    },
+    # ── Anthropic (Claude) ──────────────────────────────
+    "anthropic": {
+        "base_url":    "https://api.anthropic.com/v1/messages",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "label":       "Anthropic (Claude)",
+        "models_hint": "claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5",
+        "api_format":  "anthropic",
     },
 }
 
@@ -320,6 +341,28 @@ MODELS: dict[str, dict] = {
         "color":    "\033[90m",
         "vision":   False,
     },
+    # ── Anthropic Claude ─────────────────────────────────
+    "claude-opus": {
+        "id":       "claude-opus-4-7",
+        "provider": "anthropic",
+        "desc":     "Claude Opus 4.7 — 旗舰推理",
+        "color":    "\033[91m",
+        "vision":   True,
+    },
+    "claude-sonnet": {
+        "id":       "claude-sonnet-4-6",
+        "provider": "anthropic",
+        "desc":     "Claude Sonnet 4.6 — 均衡性能",
+        "color":    "\033[95m",
+        "vision":   True,
+    },
+    "claude-haiku": {
+        "id":       "claude-haiku-4-5",
+        "provider": "anthropic",
+        "desc":     "Claude Haiku 4.5 — 极速响应",
+        "color":    "\033[35m",
+        "vision":   True,
+    },
 }
 
 DEFAULT_MODEL = "hermes"
@@ -337,6 +380,26 @@ def get_api_config(model_alias: str) -> tuple[str, str]:
     prov = PROVIDERS.get(m["provider"], PROVIDERS["pawn"])
     key  = os.getenv(prov["api_key_env"], "")
     return prov["base_url"], key
+
+
+def get_api_format(model_alias: str) -> str:
+    """返回 API 格式: 'openai' 或 'anthropic'。"""
+    m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
+    prov = PROVIDERS.get(m["provider"], {})
+    return prov.get("api_format", "openai")
+
+
+def get_provider_config(model_alias: str) -> dict:
+    """返回完整 provider 配置 {base_url, api_key, api_format, label}。"""
+    m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
+    prov = PROVIDERS.get(m["provider"], PROVIDERS["pawn"])
+    key  = os.getenv(prov["api_key_env"], "")
+    return {
+        "base_url":   prov["base_url"],
+        "api_key":    key,
+        "api_format": prov.get("api_format", "openai"),
+        "label":      prov.get("label", ""),
+    }
 
 
 def validate_api_key(model_alias: str) -> tuple[bool, str]:
@@ -366,7 +429,7 @@ def list_configured_models() -> list[str]:
 # ════════════════════════════════════════════════════════
 
 # 视觉模型优先级（按推荐顺序，需已配置对应 Key）
-VISION_PRIORITY = ["glm-4v", "gpt-4o", "gpt-4o-mini"]
+VISION_PRIORITY = ["glm-4v", "gpt-4o", "gpt-4o-mini", "claude-sonnet", "claude-opus"]
 
 
 def get_best_vision_model() -> tuple[str | None, str | None, str | None]:
@@ -387,6 +450,74 @@ def get_best_vision_model() -> tuple[str | None, str | None, str | None]:
 def list_vision_models() -> list[str]:
     """返回所有标记了 vision=True 的模型别名。"""
     return [alias for alias, m in MODELS.items() if m.get("vision")]
+
+
+# ════════════════════════════════════════════════════════
+# 自定义 Provider 加载
+# 从 ~/.pawnlogic/custom_providers.json 读取（不含 Key）。
+# Key 通过 api_key_env 引用 .env 中的环境变量。
+# ════════════════════════════════════════════════════════
+CUSTOM_PROVIDERS_PATH = Path.home() / ".pawnlogic" / "custom_providers.json"
+
+
+def load_custom_providers() -> None:
+    """加载自定义 provider/model，合并进 PROVIDERS/MODELS。"""
+    if not CUSTOM_PROVIDERS_PATH.exists():
+        return
+    try:
+        data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    for name, prov in data.get("providers", {}).items():
+        if name not in PROVIDERS:
+            prov.setdefault("api_format", "openai")
+            PROVIDERS[name] = prov
+    for alias, model in data.get("models", {}).items():
+        if alias not in MODELS:
+            model.setdefault("color", "\033[37m")
+            model.setdefault("vision", False)
+            MODELS[alias] = model
+
+
+def save_custom_provider(name: str, prov_cfg: dict, models_cfg: dict) -> None:
+    """保存自定义 provider 到 JSON 文件（不含 Key）。"""
+    data = {"providers": {}, "models": {}}
+    if CUSTOM_PROVIDERS_PATH.exists():
+        try:
+            data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    data["providers"][name] = prov_cfg
+    data["models"].update(models_cfg)
+    CUSTOM_PROVIDERS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CUSTOM_PROVIDERS_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def remove_custom_provider(name: str) -> bool:
+    """从 JSON 文件删除自定义 provider。返回是否成功。"""
+    if not CUSTOM_PROVIDERS_PATH.exists():
+        return False
+    try:
+        data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if name not in data.get("providers", {}):
+        return False
+    del data["providers"][name]
+    # 删除关联的 models
+    to_remove = [a for a, m in data.get("models", {}).items() if m.get("provider") == name]
+    for a in to_remove:
+        del data["models"][a]
+    CUSTOM_PROVIDERS_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return True
+
+
+# 模块加载时自动读取自定义 provider
+load_custom_providers()
 
 # ════════════════════════════════════════════════════════
 # 三档预设
