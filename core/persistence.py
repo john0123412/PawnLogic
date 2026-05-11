@@ -12,6 +12,7 @@ from core.memory import (
     rename_session, save_messages, load_messages, pin_message_by_seq,
     add_knowledge, search_knowledge, format_knowledge_for_prompt, _gen_id,
 )
+from core.naming import stable_workspace_dir
 from utils.ansi import c, CYAN, GRAY, GREEN, RED, YELLOW, BOLD
 
 # ════════════════════════════════════════════════════════
@@ -21,12 +22,15 @@ from utils.ansi import c, CYAN, GRAY, GREEN, RED, YELLOW, BOLD
 def session_save(session, name: str = "") -> str:
     """将当前 session 写入 SQLite。返回 session_id。"""
     init_db()
+    manual_name = name.strip()
     upsert_session(
         session_id  = session.session_id,
-        name        = name.strip() or session.session_id,
+        name        = manual_name,
         model       = session.model_alias,
         cwd         = session.cwd,
         config_dict = dict(DYNAMIC_CONFIG),
+        workspace_dir = getattr(session, "workspace_dir", ""),
+        name_source = "manual" if manual_name else "",
     )
     save_messages(session.session_id, session.messages)
     return session.session_id
@@ -41,7 +45,7 @@ def session_load(session, query: str) -> str:
     matched = _resolve_session(rows, query)
     if not matched:
         listing = "\n".join(
-            f"  [{i+1}] {r['id']}  {r['name'] or '(unnamed)'}  {r['updated_at'][:16]}"
+            f"  [{i+1}] {r['id']}  {r['name'] or r['auto_name'] or r['workspace_alias'] or '(unnamed)'}  {r['updated_at'][:16]}"
             for i, r in enumerate(rows[:10])
         )
         return f"ERROR: 找不到匹配 '{query}' 的会话。\n已有:\n{listing}"
@@ -56,22 +60,38 @@ def session_load(session, query: str) -> str:
     session.messages.clear()
     session.model_alias = full["model"]
     session.cwd         = full["cwd"]
+    session.workspace_dir = full["workspace_dir"] or stable_workspace_dir(sid)
+    if not full["workspace_dir"]:
+        upsert_session(
+            session_id=sid,
+            name="",
+            model=session.model_alias,
+            cwd=session.cwd,
+            config_dict=dict(DYNAMIC_CONFIG),
+            workspace_dir=session.workspace_dir,
+        )
     try:
         cfg = json.loads(full["config"])
         DYNAMIC_CONFIG.update(cfg)
     except Exception:
         pass
 
-    from tools.file_ops import _session_cwd
+    from tools.file_ops import _session_cwd, _session_workspace_dir
     _session_cwd[0] = session.cwd
+    _session_workspace_dir[0] = session.workspace_dir
     session._reset_system_prompt()
     session.messages.extend(msgs)
     session.session_id = sid
+    if hasattr(session, "_naming_done"):
+        session._naming_done = bool(full["auto_name"])
+    if hasattr(session, "_naming_attempted_at"):
+        session._naming_attempted_at = 0.0
 
     # 显示对话历史
     _display_session_history(msgs)
 
-    return f"OK: 已加载 [{sid}] {matched['name']} ({len(msgs)} 条消息)"
+    display_name = full["name"] or full["auto_name"] or matched["name"] or sid
+    return f"OK: 已加载 [{sid}] {display_name} ({len(msgs)} 条消息)"
 
 def session_list() -> str:
     init_db()
@@ -80,10 +100,11 @@ def session_list() -> str:
         return "  (暂无已保存会话)"
     lines = []
     for i, r in enumerate(rows):
+        display_name = r["name"] or r["auto_name"] or r["workspace_alias"] or "(unnamed)"
         lines.append(
             c(GRAY, f"  [{i+1:2d}] ") +
             c(CYAN, f"{r['id']}") +
-            c(GRAY, f"  '{r['name'] or '(unnamed)'}'  "
+            c(GRAY, f"  '{display_name}'  "
                     f"{r['updated_at'][:16]}  {r['msg_count']}msgs  model={r['model']}")
         )
     return "\n".join(lines)
@@ -107,7 +128,11 @@ def _resolve_session(rows, query: str):
         pass
     q = query.lower()
     return next(
-        (r for r in rows if q in (r["name"] or "").lower() or q in r["id"]),
+        (r for r in rows if
+         q in (r["name"] or "").lower() or
+         q in (r["auto_name"] or "").lower() or
+         q in (r["workspace_alias"] or "").lower() or
+         q in r["id"]),
         None,
     )
 

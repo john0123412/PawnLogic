@@ -544,7 +544,8 @@ def _handle_chat(arg: str, arg2: str, session):
         print(c(BOLD, f"\n  对话历史（最近 {len(rows)} 条）："))
         for i, r in enumerate(rows):
             tags_str = c(CYAN, f"  [{r['tags']}]") if r["tags"] else ""
-            name_str = c(YELLOW, r["name"]) if r["name"] else c(GRAY, "(未命名)")
+            display_name = r["name"] or r["auto_name"] or r["workspace_alias"]
+            name_str = c(YELLOW, display_name) if display_name else c(GRAY, "(未命名)")
             print(
                 c(GRAY, f"  [{i + 1:2d}] ") +
                 c(CYAN, f"{r['id'][:24]}") +
@@ -563,8 +564,9 @@ def _handle_chat(arg: str, arg2: str, session):
             return
         meta = get_session(sid)
         msgs = get_session_messages_pretty(sid)
+        display_name = meta["name"] or meta["auto_name"] or meta["workspace_alias"] or "(未命名)"
         print(c(BOLD, f"\n  ╔ 会话 {sid}"))
-        print(c(GRAY, f"  ║ 名称  : {meta['name'] or '(未命名)'}"))
+        print(c(GRAY, f"  ║ 名称  : {display_name}"))
         print(c(GRAY, f"  ║ 模型  : {meta['model']}"))
         print(c(GRAY, f"  ║ 目录  : {meta['cwd']}"))
         print(c(GRAY, f"  ║ 标签  : {meta['tags'] or '-'}"))
@@ -2192,6 +2194,7 @@ class PawnCompleter(Completer):
 
 
 def main():
+    prompt_toolkit_enabled = _HAS_PROMPT_TOOLKIT
     # ── CLI 参数解析 ─────────────────────────────────────
     parser = argparse.ArgumentParser(
         prog="pawn",
@@ -2454,7 +2457,7 @@ def main():
     # ── readline 历史文件路径 ─────────────────────────────
     _history_path = str(Path.home() / ".pawnlogic" / ".input_history")
 
-    if _HAS_PROMPT_TOOLKIT:
+    if prompt_toolkit_enabled:
         # ── 直接使用 PawnCompleter，内置模糊匹配，无需 FuzzyCompleter ──
         _pawn_completer = PawnCompleter(_all_words, meta_dict=_all_meta)
 
@@ -2596,7 +2599,7 @@ def main():
     while True:
         try:
             print()  # 确保提示符在新行
-            if _HAS_PROMPT_TOOLKIT:
+            if prompt_toolkit_enabled:
                 raw = _pt_session.prompt(
                     [("class:prompt", "▶ "), ("class:you", "You > ")],
                     style=_pawn_style,
@@ -2613,11 +2616,11 @@ def main():
             #    事件循环残留 pending Future，下次 prompt() 会崩溃。
             #    解决方案：重建 PromptSession 以获取干净的事件循环。
             #    若重建失败，降级到 readline 模式避免死循环。
-            if _HAS_PROMPT_TOOLKIT:
+            if prompt_toolkit_enabled:
                 try:
                     _pt_session = _create_pt_session()
                 except Exception:
-                    _HAS_PROMPT_TOOLKIT = False  # 降级到 readline
+                    prompt_toolkit_enabled = False  # 降级到 readline
             # CC 风格：Ctrl+C 撤回上一轮，将用户文本作为 default 重新编辑
             removed, last_text = session.undo(1)
             if removed:

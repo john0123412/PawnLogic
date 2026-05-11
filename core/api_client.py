@@ -475,6 +475,7 @@ def stream_request(
     tools_schema: list | None = None,
     max_tokens: int | None = None,
     tool_choice: str = "auto",
+    response_format: dict | None = None,
 ):
     """
     流式 SSE 生成器（含断路器 + 指数退避 + 局部流恢复）。
@@ -503,6 +504,8 @@ def stream_request(
         if tools_schema:
             payload["tools"]       = tools_schema
             payload["tool_choice"] = tool_choice
+        if response_format:
+            payload["response_format"] = response_format
         payload["stream_options"] = {"include_usage": True}
 
     proxy = _detect_proxy()

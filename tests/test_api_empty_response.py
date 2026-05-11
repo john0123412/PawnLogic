@@ -38,6 +38,12 @@ mock_config.DANGEROUS_PATTERNS = []
 mock_config.SKILLS_DIR = "/tmp/skills"
 mock_config.user_friendly_error = lambda e: f"[User Error] {e}"
 mock_config.get_api_config = lambda m: ("http://localhost:8080", "sk-test")
+mock_config.get_api_format = lambda m: "openai"
+mock_config.get_provider_config = lambda m: {
+    "base_url": "http://localhost:8080",
+    "api_key": "sk-test",
+    "api_format": "openai",
+}
 sys.modules["config"] = mock_config
 
 # ── Mock 其他依赖 ──────────────────────────────────────
