@@ -71,6 +71,10 @@ def _create_core_tables():
             cwd        TEXT NOT NULL,
             config     TEXT NOT NULL,
             tags       TEXT DEFAULT '',
+            auto_name  TEXT DEFAULT '',
+            workspace_dir TEXT DEFAULT '',
+            workspace_alias TEXT DEFAULT '',
+            name_source TEXT DEFAULT 'auto',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -143,11 +147,19 @@ def _create_core_tables():
         except sqlite3.OperationalError:
             pass  # FTS5 不可用时静默降级
 
-    # 迁移旧库：给 sessions 表加 tags 列（若不存在）
+    # 迁移旧库：SQLite 不支持 ADD COLUMN IF NOT EXISTS，必须先查列。
     with get_conn() as conn:
         cols = [row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()]
-        if "tags" not in cols:
-            conn.execute("ALTER TABLE sessions ADD COLUMN tags TEXT DEFAULT ''")
+        migrations = {
+            "tags": "ALTER TABLE sessions ADD COLUMN tags TEXT DEFAULT ''",
+            "auto_name": "ALTER TABLE sessions ADD COLUMN auto_name TEXT DEFAULT ''",
+            "workspace_dir": "ALTER TABLE sessions ADD COLUMN workspace_dir TEXT DEFAULT ''",
+            "workspace_alias": "ALTER TABLE sessions ADD COLUMN workspace_alias TEXT DEFAULT ''",
+            "name_source": "ALTER TABLE sessions ADD COLUMN name_source TEXT DEFAULT 'auto'",
+        }
+        for col, ddl in migrations.items():
+            if col not in cols:
+                conn.execute(ddl)
 
 # init_facts_table is defined later; init_db calls it after both are loaded.
 
@@ -185,24 +197,69 @@ def _build_rows(session_id: str, messages: list) -> list[tuple]:
 # Sessions CRUD
 # ════════════════════════════════════════════════════════
 
-def upsert_session(session_id: str, name: str, model: str, cwd: str, config_dict: dict,
-                   tags: str = ""):
+def upsert_session(
+    session_id: str,
+    name: str,
+    model: str,
+    cwd: str,
+    config_dict: dict,
+    tags: str = "",
+    auto_name: str = "",
+    workspace_dir: str = "",
+    workspace_alias: str = "",
+    name_source: str = "",
+):
     now = _now()
     with get_conn() as conn:
-        existing = conn.execute("SELECT created_at, tags FROM sessions WHERE id=?", (session_id,)).fetchone()
+        existing = conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
         created  = existing["created_at"] if existing else now
-        old_tags = existing["tags"] if existing else tags
-        # 保留已有 tags
+        old_tags = existing["tags"] if existing else ""
         final_tags = old_tags if old_tags else tags
-        conn.execute("""
-            INSERT OR REPLACE INTO sessions (id, name, model, cwd, config, tags, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, name, model, cwd, json.dumps(config_dict), final_tags, created, now))
+
+        old_name = existing["name"] if existing else ""
+        old_source = existing["name_source"] if existing and "name_source" in existing.keys() else ""
+        requested_source = (name_source or "").strip()
+
+        final_name = (name or "").strip()
+        final_source = requested_source or old_source or "auto"
+        if not final_name:
+            final_name = old_name or ""
+            final_source = old_source or final_source
+        elif old_source == "manual" and requested_source != "manual":
+            final_name = old_name
+            final_source = "manual"
+
+        final_auto = (auto_name or "").strip() or (existing["auto_name"] if existing else "")
+        final_workspace = (workspace_dir or "").strip() or (existing["workspace_dir"] if existing else "")
+        final_alias = (workspace_alias or "").strip() or (existing["workspace_alias"] if existing else "")
+
+        if existing:
+            conn.execute("""
+                UPDATE sessions
+                SET name=?, model=?, cwd=?, config=?, tags=?, auto_name=?,
+                    workspace_dir=?, workspace_alias=?, name_source=?, updated_at=?
+                WHERE id=?
+            """, (
+                final_name, model, cwd, json.dumps(config_dict), final_tags, final_auto,
+                final_workspace, final_alias, final_source, now, session_id,
+            ))
+        else:
+            conn.execute("""
+                INSERT INTO sessions
+                    (id, name, model, cwd, config, tags, auto_name, workspace_dir,
+                     workspace_alias, name_source, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                session_id, final_name, model, cwd, json.dumps(config_dict), final_tags,
+                final_auto, final_workspace, final_alias, final_source, created, now,
+            ))
 
 def list_sessions(limit: int = 20) -> list[sqlite3.Row]:
     with get_conn() as conn:
         return conn.execute("""
-            SELECT s.id, s.name, s.model, s.cwd, s.tags, s.created_at, s.updated_at,
+            SELECT s.id, s.name, s.model, s.cwd, s.tags, s.auto_name,
+                   s.workspace_dir, s.workspace_alias, s.name_source,
+                   s.created_at, s.updated_at,
                    COUNT(m.id) AS msg_count
             FROM sessions s
             LEFT JOIN messages m ON s.id = m.session_id
@@ -221,13 +278,47 @@ def delete_session(session_id: str):
     with get_conn() as conn:
         conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
 
-def rename_session(session_id: str, new_name: str) -> bool:
+def rename_session(session_id: str, new_name: str, name_source: str = "manual") -> bool:
     """重命名会话。"""
     with get_conn() as conn:
         cur = conn.execute(
-            "UPDATE sessions SET name=?, updated_at=? WHERE id=?",
-            (new_name, _now(), session_id),
+            "UPDATE sessions SET name=?, name_source=?, updated_at=? WHERE id=?",
+            (new_name, name_source, _now(), session_id),
         )
+        return cur.rowcount > 0
+
+def update_session_naming(
+    session_id: str,
+    *,
+    title: str = "",
+    auto_name: str = "",
+    workspace_dir: str = "",
+    workspace_alias: str = "",
+    name_source: str = "auto",
+) -> bool:
+    """Update generated naming metadata without overriding manual names."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT name, name_source FROM sessions WHERE id=?", (session_id,)).fetchone()
+        if not row:
+            return False
+        current_source = row["name_source"] or ""
+        current_name = row["name"] or ""
+        final_name = current_name
+        final_source = current_source or name_source
+        if current_source != "manual" and title.strip():
+            final_name = title.strip()
+            final_source = name_source
+        cur = conn.execute("""
+            UPDATE sessions
+            SET name=?, auto_name=COALESCE(NULLIF(?, ''), auto_name),
+                workspace_dir=COALESCE(NULLIF(?, ''), workspace_dir),
+                workspace_alias=COALESCE(NULLIF(?, ''), workspace_alias),
+                name_source=?, updated_at=?
+            WHERE id=?
+        """, (
+            final_name, auto_name.strip(), workspace_dir.strip(), workspace_alias.strip(),
+            final_source or "auto", _now(), session_id,
+        ))
         return cur.rowcount > 0
 
 # ════════════════════════════════════════════════════════
@@ -480,7 +571,7 @@ def export_session_to_markdown(session_id: str) -> str:
         f"| 字段 | 值 |",
         f"|------|----|",
         f"| session_id | `{session_id}` |",
-        f"| 名称 | {meta['name'] or '(未命名)'} |",
+        f"| 名称 | {meta['name'] or meta['auto_name'] or meta['workspace_alias'] or '(未命名)'} |",
         f"| 模型 | {meta['model']} |",
         f"| 目录 | `{meta['cwd']}` |",
         f"| 标签 | {meta['tags'] or '-'} |",

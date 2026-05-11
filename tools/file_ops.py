@@ -12,12 +12,13 @@ tools/file_ops.py — 文件读写、目录列出、文件搜索
 
 import os, re, difflib, subprocess, signal, threading
 from pathlib import Path
-from config import DYNAMIC_CONFIG, READ_BLACKLIST, WRITE_BLACKLIST, DANGEROUS_PATTERNS
+from config import DYNAMIC_CONFIG, READ_BLACKLIST, WRITE_BLACKLIST, DANGEROUS_PATTERNS, WORKSPACE_DIR
 from utils.ansi import c, YELLOW, BLUE, GRAY, RED
 from core.logger import logger
 
 # ── 全局 cwd 引用 ─────────────────────────────────────────
 _session_cwd = [os.getcwd()]
+_session_workspace_dir = [WORKSPACE_DIR]
 
 # ── 环境变量持久化缓存 ─────────────────────────────────────
 _env_cache: dict = {}
@@ -73,18 +74,24 @@ def _check_read(path: str):
 def _resolve_write_path(path: str) -> tuple:
     """将写入路径重定向到 WORKSPACE_DIR。
     返回 (resolved_abs_path, error_msg)。error_msg 为空表示允许写入。"""
-    from config import WORKSPACE_DIR
     p = Path(path).expanduser()
+    workspace_root = str(Path(WORKSPACE_DIR).expanduser().resolve())
+    session_workspace = Path(_session_workspace_dir[0] or workspace_root).expanduser().resolve()
+    session_workspace.mkdir(parents=True, exist_ok=True)
 
     # 绝对路径：检查是否在 workspace 内
     if p.is_absolute():
         abs_p = str(p.resolve())
-        if not abs_p.startswith(WORKSPACE_DIR):
+        try:
+            common = os.path.commonpath([abs_p, workspace_root])
+        except ValueError:
+            common = ""
+        if common != workspace_root:
             return "", f"SECURITY BLOCK: '{path}' 不在 workspace 内。请写入 {WORKSPACE_DIR}/ 下。"
         return abs_p, ""
 
-    # 相对路径：重定向到 workspace
-    redirected = Path(WORKSPACE_DIR) / p
+    # 相对路径：重定向到当前会话 workspace
+    redirected = session_workspace / p
     redirected.parent.mkdir(parents=True, exist_ok=True)
     return str(redirected.resolve()), ""
 
