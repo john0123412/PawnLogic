@@ -54,6 +54,8 @@ PawnLogic 是一个专为极客和开发者打造的全能终端 AI 智能体。
 - **Docker 容器化执行**：`run_code_docker`（一次性容器）+ `pwn_container`（持久化容器），默认断网隔离
 - **智能 Web 爬虫**：Jina Reader → Pandoc → 正则兜底（三级降级策略）
 - **Pwn/CTF 工具链**：GDB 批处理动态调试、ROPgadget、de Bruijn 溢出偏移计算、倒计时感知调试
+- **Pwn 自动分析流**：`inspect_binary` 执行后自动将 checksec/file 结果写入 `.pawn_state.md`，Agent 始终拥有最新二进制快照
+- **GDB 崩溃自动回溯**：检测到 SIGSEGV/SIGABRT/SIGBUS 时自动追加 `bt full`，获取含局部变量的完整堆栈回溯
 - **GSA 防御性审计**：工具调用失败自动记录，同类失败 ≥3 次自动沉淀到技能库
 - **时间感知调度**：`/time` 设置倒计时，剩余 30s 自动切换极速模式
 
@@ -87,6 +89,7 @@ PawnLogic 是一个专为极客和开发者打造的全能终端 AI 智能体。
 
 - `./skills/` 目录存放领域专属技能文件夹（零配置：放一个 `.md` 即可）
 - Agent 执行任务前自动扫描技能目录，按文件名 + 内容关键词匹配评分
+- **智能阈值过滤**：`min_score=3` 确保仅在检测到相关意图时才注入技能（如提到 "Heap Overflow" 才加载堆利用指南），普通聊天零注入，保持 System Prompt 精简
 - 匹配到的技能全文注入系统提示词，Agent 按技能指令执行任务
 - 与 GSA 全局技能存档互补：GSA 管理跨会话经验，本地技能管理项目级模板
 
@@ -800,7 +803,8 @@ Agent 内置严格的软隔离保护：
 - ✅ `prompt_toolkit` 集成：FuzzyCompleter 模糊匹配 + Fish-style 灰色内联提示
 - ✅ CC 风格内联模型选择器（上下键 + Enter 确认 + Esc 取消 + 数字键跳转）
 - ✅ `rich` Markdown 渲染（代码块高亮 + 表格对齐）
-- ✅ 底部状态栏（模型 / 档位 / 目录 / Phase 实时显示）
+- ✅ 底部状态栏（模型 / 档位 / Token 消耗 / Ctx% 上下文占比 / 目录 / Phase 实时显示）
+- ✅ Ctx% 三色阈值：绿色(<70%) / 黄色(70-90%) / 红色(≥90%)，提醒及时 `/save` 或 `/compact`
 - ✅ 模糊命令修正（`/modle` → `/model`，相似度 ≥0.7 自动修正）
 - ✅ Windows 兼容（readline / prompt_toolkit 安全导入）
 
@@ -847,6 +851,15 @@ Agent 内置严格的软隔离保护：
 - ✅ 路径自动建议：文件未找到时提示 `find / -name`、`/proc/self/cwd`、`readlink -f`
 - ✅ 超时信号捕获：Popen + 进程组 → SIGTERM → 等待 → SIGKILL，收集部分输出
 - ✅ `/max` 极限档位：iter=100, ctx=600k, 60min 时间预算，适配大规模自动化利用链
+
+**P8 — 状态栏增强 + Pwn 工具链深化 + 技能引擎优化**
+- ✅ 底部状态栏新增 Token 累计消耗 + Ctx% 上下文占比实时显示
+- ✅ Ctx% 三色阈值：绿色(<70%) / 黄色(70-90%) / 红色(≥90%)
+- ✅ `inspect_binary` 自动写入 `.pawn_state.md`：Agent 始终拥有最新二进制快照
+- ✅ GDB 崩溃自动 `bt full`：检测 SIGSEGV/SIGABRT/SIGBUS 后自动追加完整回溯（含局部变量）
+- ✅ 技能包 `min_score=3` 阈值过滤：普通聊天零注入，仅相关意图触发技能加载
+- ✅ 推理模型 deepcopy 隔离：跨模型切换时 `session.messages` 零污染
+- ✅ Rich Markup 转义：shell 输出含 `[/path]` / `[^]` 等字符不再触发 MarkupError
 
 **基础改进**
 - ✅ 新增小米 MiMo 厂商接入（4 个模型）

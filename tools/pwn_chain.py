@@ -153,6 +153,19 @@ def tool_inspect_binary(a: dict) -> str:
     res.append("\n=== ldd ===");           res.append(_run(f"ldd '{path}' 2>/dev/null").strip())
     result = "\n".join(res)
     _cache_set(path, cache_slot, result)
+
+    # ★ 自动写入 .pawn_state.md（若存在于工作目录）
+    try:
+        from tools.file_ops import _session_cwd
+        _state_path = Path(_session_cwd[0]) / ".pawn_state.md"
+        if _state_path.exists():
+            _header = f"\n\n## Binary: {Path(path).name}\n"
+            _body = f"```\n{result[:2000]}\n```\n"
+            with open(_state_path, "a", encoding="utf-8") as _sf:
+                _sf.write(_header + _body)
+    except Exception:
+        pass  # 非关键路径，静默降级
+
     return result
 
 # ════════════════════════════════════════════════════════
@@ -381,6 +394,27 @@ def tool_pwn_debug(a: dict) -> str:
         except: pass
         if tmp_input:
             try: os.unlink(tmp_input)
+            except: pass
+
+    # ★ 检测 SIGSEGV → 自动追加 bt full 获取完整回溯（含局部变量）
+    if re.search(r"SIGSEGV|SIGABRT|SIGBUS", result):
+        _bt_script = script_path + ".bt"
+        try:
+            _bt_cmds = list(script_lines[:-2])  # 去掉原 commands + quit
+            _bt_cmds.extend(["bt full", "quit"])
+            with open(_bt_script, "w") as _bf:
+                _bf.write("\n".join(_bt_cmds) + "\n")
+            _bt_cmd = f"gdb -batch -x '{_bt_script}' '{path}' 2>&1"
+            if input_file:
+                pass  # input_file 已在脚本中通过 run < 指定
+            _bt_out = _run(_bt_cmd, timeout=timeout, cwd=_session_cwd[0])
+            # 提取 bt full 输出部分
+            if "bt full" in _bt_out.lower() or "#0" in _bt_out:
+                result += "\n\n=== bt full (auto-triggered by signal) ===\n" + _bt_out
+        except Exception:
+            pass
+        finally:
+            try: os.unlink(_bt_script)
             except: pass
 
     # ── 关键信息高亮提取 ──────────────────────────────

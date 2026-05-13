@@ -2611,7 +2611,7 @@ async def main():
             from prompt_toolkit.history import InMemoryHistory
             _pt_history = InMemoryHistory()
 
-        # ── Bottom Toolbar：显示当前模型 / 档位 / 目录 ────
+        # ── Bottom Toolbar：显示当前模型 / 档位 / 目录 / Token / Ctx% ────
         def _bottom_toolbar():
             _m = session.model_alias
             _tier = "MID"
@@ -2623,13 +2623,25 @@ async def main():
                 _tier = "DEEP"
             _tb = DYNAMIC_CONFIG.get("time_budget_sec", 0)
             _time_str = f"  ⏱ {_tb}s" if _tb > 0 else ""
+            # ★ Token 计数 + Ctx% 带颜色阈值
+            _tk = session.total_prompt_tokens + session.total_completion_tokens
+            _ctx_used = sum(len(str(m.get("content", ""))) for m in session.messages)
+            _ctx_max = DYNAMIC_CONFIG["ctx_max_chars"]
+            _ctx_pct = min(100, int(_ctx_used * 100 / _ctx_max)) if _ctx_max else 0
+            if _ctx_pct >= 90:
+                _ctx_color = "ansired"
+            elif _ctx_pct >= 70:
+                _ctx_color = "ansiyellow"
+            else:
+                _ctx_color = "ansigreen"
             return HTML(
                 f" <b>Model:</b> {_m}"
                 f"  <b>Tier:</b> {_tier}"
+                f"  <b>Tk:</b> {_tk:,}"
+                f"  <b>Ctx:</b> <{_ctx_color}>{_ctx_pct}%</{_ctx_color}>"
                 f"  <b>Dir:</b> {session.cwd}"
                 f"  <b>Phase:</b> {session.current_phase}"
                 f"{_time_str}"
-                f"  <b>Ctrl-C</b>=undo+re-edit"
             )
 
         # ── 样式：彻底透明化，无灰色方块 ──────────────────
