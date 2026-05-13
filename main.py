@@ -373,6 +373,12 @@ HELP_TEXT = f"""
   {c(CYAN,"/chat link <id1> <id2> [备注]")}  关联两个会话
   {c(CYAN,"/chat unlink <id1> <id2>")}  取消关联
   {c(CYAN,"/chat related <id|n>")} 查看与指定会话相关联的所有会话
+
+{c(BOLD,"── Workspace 维护 ──")}
+  {c(CYAN,"/workspace status")}             查看 workspace 概览（大小/文件数/DB 一致性）
+  {c(CYAN,"/workspace cleanup")}            生成清理清单（=plan，只读 + 自动备份）
+  {c(CYAN,"/workspace cleanup execute")}    按清单归档 + DB workspace_dir 补写
+  {c(CYAN,"/workspace cleanup restore")}    从最近 tar 备份回滚整个 workspace
   
 {c(BOLD,"── 典型任务 ──")}
   # 视觉：直接告知图片路径
@@ -509,6 +515,116 @@ def _memo_to_skills(session, content: str, verbose: bool = True) -> str:
         topic_hint  = "",
     )
     return msg
+
+
+def _handle_workspace_cmd(arg: str, arg2: str, session):
+    """``/workspace`` 子命令分派器。
+
+    支持：
+        /workspace                         — 等价 status
+        /workspace status                  — 概览
+        /workspace cleanup                 — 等价 cleanup plan
+        /workspace cleanup plan            — 生成清理清单（只读 + 备份）
+        /workspace cleanup execute         — 按清单归档 + DB 同步
+        /workspace cleanup restore [path]  — 从备份回滚
+    """
+    from core import workspace_cleanup as wc
+
+    sub  = (arg or "status").strip().lower()
+    sub2 = (arg2 or "").strip().lower()
+
+    # ── status ─────────────────────────────────────────
+    if sub == "status":
+        info = wc.workspace_status()
+        if not info.get("exists"):
+            print(c(RED, "  workspace 目录不存在"))
+            return
+        print(c(BOLD, "\n  Workspace 状态:"))
+        print(f"  路径        : {c(CYAN, info['path'])}")
+        print(f"  总大小      : {c(GREEN, info['size_human'])}")
+        print(f"  文件数      : {info['n_files']}")
+        print(f"  子目录      : {info['n_dirs']}（其中 session_*: {info['session_dirs']}）")
+        print(f"  symlinks   : {info['n_symlinks']}")
+        print(c(GRAY, f"  DB 会话数  : {info['db_sessions']}（workspace_dir 为空: {info['db_empty']}）"))
+        if info["last_backup"]:
+            print(c(GRAY, f"  最近备份   : {info['last_backup']}"))
+        print()
+        return
+
+    # ── cleanup ────────────────────────────────────────
+    if sub == "cleanup":
+        action = sub2 or "plan"
+
+        if action == "plan":
+            print(c(YELLOW, "  ▶ Phase 0: 生成全量备份..."))
+            try:
+                bak = wc.make_backup()
+                print(c(GREEN, f"    ✓ 备份: {bak.name} ({bak.stat().st_size // 1024} KB)"))
+            except Exception as exc:
+                print(c(RED, f"    ✗ 备份失败: {exc}"))
+                return
+
+            print(c(YELLOW, "  ▶ Phase 1: 扫描 + 分类 (只读)..."))
+            rows, db = wc.scan()
+            plan_path = wc.render_plan(rows, db)
+            stats = {}
+            for r in rows:
+                stats[r["confidence"]] = stats.get(r["confidence"], 0) + 1
+            print(c(GREEN, f"    ✓ 清单: {plan_path}"))
+            print(c(BOLD, "\n  扫描结果:"))
+            for k in ("LOCKED", "SAFE", "MID", "HIGH", "SENSITIVE"):
+                cnt = stats.get(k, 0)
+                if cnt:
+                    print(f"    {wc._CONF_ICON[k]} {k:10} {cnt}")
+            print(c(GRAY, "\n  审阅清单后，使用 /workspace cleanup execute 按建议归档"))
+            print(c(GRAY, "  或编辑清单文件后再 execute（人工确认 SENSITIVE 项）"))
+            return
+
+        elif action == "execute":
+            print(c(YELLOW, "  ▶ 重新扫描以获取最新状态..."))
+            rows, db = wc.scan()
+            plan_action_count = sum(1 for r in rows if r["action"] == "ARCHIVE")
+            if plan_action_count == 0:
+                print(c(GREEN, "  ✓ 没有可归档项，workspace 已经整洁"))
+                return
+            print(c(YELLOW, f"  ▶ 即将归档 {plan_action_count} 项 + DB workspace_dir 补写..."))
+            try:
+                result = wc.execute_cleanup(rows, db)
+                print(c(GREEN, f"    ✓ 归档: {len(result['moved'])} 项"))
+                print(c(GRAY,  f"      跳过: {len(result['skipped'])} 项"))
+                print(c(GREEN, f"    ✓ DB 补写: {result['db_updated']} 条会话"))
+                print(c(GRAY,  f"    归档目录: {result['archive_root']}"))
+                print(c(GRAY,  f"    Manifest: {result['manifest']}"))
+            except Exception as exc:
+                logger.error("cleanup execute failed | exc={!r}", exc)
+                print(c(RED, f"    ✗ 失败: {exc}"))
+            return
+
+        elif action == "restore":
+            backup_arg = parts[3].strip() if (parts := arg2.split(None, 1)) and len(parts) > 1 else ""
+            backup_path = Path(backup_arg).expanduser() if backup_arg else None
+            print(c(YELLOW, "  ⚠ 即将从备份回滚 workspace（当前内容会被重命名为 _replaced_<ts>/）"))
+            try:
+                from core.workspace_cleanup import restore_from_backup
+                result = restore_from_backup(backup_path)
+                if result["ok"]:
+                    print(c(GREEN, f"    ✓ 已回滚: {result['restored_from']}"))
+                    if result.get("old_workspace_renamed_to"):
+                        print(c(GRAY, f"      旧 workspace 备份: {result['old_workspace_renamed_to']}"))
+                else:
+                    print(c(RED, f"    ✗ {result.get('error')}"))
+            except Exception as exc:
+                logger.error("cleanup restore failed | exc={!r}", exc)
+                print(c(RED, f"    ✗ 失败: {exc}"))
+            return
+
+        else:
+            print(c(RED, f"  未知子命令 'cleanup {action}'"))
+            print(c(GRAY, "  可用: plan / execute / restore"))
+            return
+
+    print(c(RED, f"  未知子命令 'workspace {sub}'"))
+    print(c(GRAY, "  可用: status | cleanup [plan|execute|restore]"))
 
 
 def _handle_chat(arg: str, arg2: str, session):
@@ -1913,6 +2029,10 @@ def handle_slash(cmd: str, session: AgentSession):
 
     elif verb == "/chat":
         _handle_chat(arg, arg2, session)
+
+    elif verb == "/workspace":
+        _handle_workspace_cmd(arg, arg2, session)
+
     else:
         print(c(GRAY, f"  未知命令 '{verb}'，输入 /help"))
 
@@ -2408,6 +2528,7 @@ def main():
         "/skillpack":     "管理本地技能包（list/rescan/详情）",
         "/sp":            "/skillpack 简写",
         "/chat":          "会话浏览器（list/view/find/tag/link）",
+        "/workspace":     "Workspace 维护工具（status/cleanup）",
         "/help":          "显示帮助",
         "/exit":          "退出 PawnLogic",
     }
@@ -2431,7 +2552,10 @@ def main():
         _all_meta[_w] = f"失败记录 {_sub}"
     _all_words.extend(["/worker auto", "/skills view", "/skills path", "/skills packs",
                        "/skillpack list", "/skillpack rescan", "/sp list", "/sp rescan",
-                       "/sp sync", "/sp install"])
+                       "/sp sync", "/sp install",
+                       "/workspace status", "/workspace cleanup",
+                       "/workspace cleanup plan", "/workspace cleanup execute",
+                       "/workspace cleanup restore"])
     _all_meta["/worker auto"] = "恢复自动路由"
     _all_meta["/skills view"] = "查看完整技能文件"
     _all_meta["/skills path"] = "显示技能文件路径"
@@ -2442,6 +2566,11 @@ def main():
     _all_meta["/sp rescan"] = "重新扫描 skills/ 目录"
     _all_meta["/sp sync"] = "同步所有带 .git 的技能包（git pull）"
     _all_meta["/sp install"] = "从远程仓库安装新技能包"
+    _all_meta["/workspace status"]            = "查看 workspace 概览"
+    _all_meta["/workspace cleanup"]           = "生成清理清单（plan）"
+    _all_meta["/workspace cleanup plan"]      = "Phase 0+1: 备份+扫描，输出清单"
+    _all_meta["/workspace cleanup execute"]   = "Phase 2+3: 按清单归档+DB同步"
+    _all_meta["/workspace cleanup restore"]   = "从最近 tar 备份回滚 workspace"
     # Docker 子命令
     for _sub, _desc in [
         ("status", "查看 Docker 连接状态"),

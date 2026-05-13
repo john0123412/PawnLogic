@@ -7,13 +7,35 @@ import os
 import re
 from pathlib import Path
 
-from config import WORKSPACE_DIR, get_api_format
+from config import WORKSPACE_DIR, get_api_format, NAMING_MODEL_CHAIN, MODELS, validate_api_key
 from core.api_client import stream_request
 from core.logger import logger
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9_-]+")
 _WEAK_USER_MESSAGES = {"hi", "hello", "hey", "你好", "您好", "在吗", "test", "测试"}
+
+
+def pick_naming_model(fallback: str) -> str:
+    """Return the first alias in NAMING_MODEL_CHAIN with a valid API key.
+
+    Falls back to ``fallback`` (usually ``session.model_alias``) when no
+    candidate model has credentials available. This keeps auto-naming
+    non-blocking for users who have not configured Anthropic / DeepSeek etc.
+
+    Silently skips candidates that are not registered in MODELS (avoids
+    crashes when config.py diverges from naming chain during refactor).
+    """
+    for alias in NAMING_MODEL_CHAIN:
+        if not alias or alias not in MODELS:
+            continue
+        try:
+            ok, _ = validate_api_key(alias)
+        except Exception:
+            ok = False
+        if ok:
+            return alias
+    return fallback
 
 
 def stable_workspace_dir(session_id: str) -> str:
@@ -152,7 +174,7 @@ def generate_session_name(
             raise RuntimeError(delta["_error"])
         choices = delta.get("choices") or []
         if choices:
-            text += choices[0].get("delta", {}).get("content", "")
+            text += choices[0].get("delta", {}).get("content", "") or ""
 
     data = _extract_json(text)
     title = str(data.get("title") or "").strip()
