@@ -11,17 +11,14 @@ PawnLogic 1.1 (Expert Edition) — main.py
   source ~/.bashrc
   pawn   # 首次运行会自动进入 API Key 配置向导
 """
-import os, sys, shutil, getpass, argparse, time, re
+import os, sys, shutil, getpass, argparse, time, re, asyncio
 
-class ExitCommand(Exception):
-    """Raised by handle_slash when user types /q, /quit, /exit."""
-    pass
-try:
-    import nest_asyncio
-    nest_asyncio.apply()
-except ImportError:
-    print("\033[91m  ✗ 缺少 nest_asyncio，请执行: pip install nest_asyncio\033[0m")
-    sys.exit(1)
+# ── 退出哨兵值（handle_slash 返回此值表示用户请求退出）────
+_EXIT_SENTINEL = "__PAWN_EXIT__"
+
+# ── 延迟渲染队列：handle_slash 设置此值，主循环在 prompt_async 前消费 ──
+_deferred_history: list | None = None
+
 try:
     import readline  # noqa  — Windows 原生无此模块，Tab 补全见 main() 内
 except ImportError:
@@ -42,10 +39,12 @@ try:
     from prompt_toolkit.styles import Style as _PTStyle
     from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.shortcuts import CompleteStyle
+    from prompt_toolkit.patch_stdout import patch_stdout as _patch_stdout
     _HAS_PROMPT_TOOLKIT = True
 except Exception as _e:
     _PT_IMPORT_ERROR = str(_e)
     PromptSession = None
+    _patch_stdout = None
 
 try:
     from rich.console import Console as _RichConsole
@@ -124,7 +123,8 @@ from core.memory import (
     list_failures, clear_failures,
 )
 from core.persistence import (session_save, session_load, session_list,
-                               session_delete, session_rename, memorize)
+                               session_delete, session_rename, memorize,
+                               _display_session_history)
 from tools.web_ops    import web_tool_status
 from tools.pwn_chain  import tool_pwn_env
 from tools.file_ops   import _session_cwd, tool_read_file
@@ -1137,7 +1137,8 @@ def _provider_test(session, model_alias: str = ""):
 # Slash 命令
 # ════════════════════════════════════════════════════════
 
-def handle_slash(cmd: str, session: AgentSession):
+async def handle_slash(cmd: str, session: AgentSession):
+    global _deferred_history
     parts = cmd.strip().split(None, 2)
     verb  = parts[0].lower()
     arg   = parts[1].strip() if len(parts) > 1 else ""
@@ -1148,7 +1149,7 @@ def handle_slash(cmd: str, session: AgentSession):
         print(HELP_TEXT)
 
     elif verb in ("/exit", "/quit", "/q"):
-        raise ExitCommand()
+        return _EXIT_SENTINEL
 
     # ── 模块 2：Key 管理 ────────────────────────────────
     elif verb == "/setkey":
@@ -1178,7 +1179,7 @@ def handle_slash(cmd: str, session: AgentSession):
         if not arg:
             # ── CC 风格内联选择器 ──────────────────────────
             if _HAS_PROMPT_TOOLKIT:
-                result = cc_style_model_selector(MODELS, session.model_alias)
+                result = await cc_style_model_selector(MODELS, session.model_alias)
                 if result:
                     session.model_alias = result
                     ok, env = validate_api_key(result)
@@ -1435,12 +1436,18 @@ def handle_slash(cmd: str, session: AgentSession):
         else:
             result = session_load(session, arg)
             print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
+            if result.startswith("OK"):
+                logger.debug("session_load OK, msgs to display: {}", len(session.messages))
+                _deferred_history = list(session.messages)
 
     elif verb == "/resume":
         if arg:
             # /resume <n> — 直接恢复指定序号
             result = session_load(session, arg)
             print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
+            if result.startswith("OK"):
+                logger.debug("session_load OK (resume), msgs to display: {}", len(session.messages))
+                _deferred_history = list(session.messages)
         else:
             # /resume — 显示最近会话列表并交互选择
             from core.memory import list_sessions as _ls
@@ -1467,6 +1474,8 @@ def handle_slash(cmd: str, session: AgentSession):
                         if 0 <= idx < len(rows):
                             result = session_load(session, str(idx + 1))
                             print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
+                            if result.startswith("OK"):
+                                _deferred_history = list(session.messages)
                         else:
                             print(c(RED, "  序号超出范围"))
                 except (EOFError, KeyboardInterrupt):
@@ -2057,7 +2066,7 @@ def _safe_write_history(path: str) -> None:
 # P2.6: CC 风格内联模型选择器（替代 radiolist_dialog）
 # ════════════════════════════════════════════════════════
 
-def cc_style_model_selector(
+async def cc_style_model_selector(
     models: dict, current_alias: str
 ) -> str | None:
     """
@@ -2204,7 +2213,7 @@ def cc_style_model_selector(
         full_screen=False,
     )
 
-    return app.run()
+    return await app.run_async()
 
 
 # ════════════════════════════════════════════════════════
@@ -2317,7 +2326,8 @@ class PawnCompleter(Completer):
             )
 
 
-def main():
+async def main():
+    global _deferred_history
     prompt_toolkit_enabled = _HAS_PROMPT_TOOLKIT
     # ── CLI 参数解析 ─────────────────────────────────────
     parser = argparse.ArgumentParser(
@@ -2454,6 +2464,7 @@ def main():
                         _result = session_load(session, str(_idx + 1))
                         if _result.startswith("OK"):
                             print(c(GREEN, f"  ✓ {_result}"))
+                            _deferred_history = list(session.messages)
                             _startup_resume_done = True
                         else:
                             print(c(RED, f"  ✗ {_result}"))
@@ -2665,7 +2676,7 @@ def main():
             complete_style=CompleteStyle.COLUMN,
             mouse_support=False,
             bottom_toolbar=_bottom_toolbar,
-            reserve_space_for_menu=10,
+            reserve_space_for_menu=4,
         )
 
         if not config.QUIET_MODE:
@@ -2710,38 +2721,42 @@ def main():
                 print(c(YELLOW, f"     或重新安装: pip install -e ."))
 
     # ── 主循环 ────────────────────────────────────────────
-    _re_edit_default = ""   # Ctrl+C 回退后，上一条用户文本作为 prompt default
-    _in_generation   = False  # 区分输入阶段 vs Agent 生成阶段
-
-    # ── prompt_toolkit 会话工厂（Ctrl+C 后重建会话用）────
-    def _create_pt_session():
-        """创建新的 PromptSession，确保干净的 asyncio 事件循环状态。"""
-        return PromptSession(
-            completer=_pawn_completer,
-            key_bindings=_kb,
-            auto_suggest=AutoSuggestFromHistory(),
-            history=_pt_history,
-            complete_while_typing=True,
-            complete_in_thread=False,
-            complete_style=CompleteStyle.COLUMN,
-            mouse_support=False,
-            bottom_toolbar=_bottom_toolbar,
-            reserve_space_for_menu=10,
-        )
+    _re_edit_default = ""     # Ctrl+C 回退后，上一条用户文本作为 prompt default
+    _last_sigint_time = 0.0   # 双击 Ctrl+C 退出计时
+    _sigint_pending   = False # 第一次 Ctrl+C 已触发，等待第二次确认
 
     while True:
         try:
-            print()  # 确保提示符在新行
+            # ════════════════════════════════════════════════════════
+            # 【隐形历史修复】预渲染策略（Pre-Render Strategy）
+            # 必须在调用任何 prompt_toolkit API 之前完成：
+            #   [1] _display_session_history 内部 print_ptk(ANSI) + flush
+            #   [2] sys.stdout.flush() 二次强制物理写入
+            #   [3] print("\n") 撑开空白行，把 prompt_async 的接管点
+            #       压到历史内容下方，避免初始化重绘吞掉历史
+            # ════════════════════════════════════════════════════════
+            if _deferred_history is not None:
+                _hist_msgs, _deferred_history = _deferred_history, None
+                logger.debug("pre-render history: {} msgs", len(_hist_msgs))
+                _display_session_history(_hist_msgs, show_recent=len(_hist_msgs))
+                print("─" * 20 + " 以上为历史上下文 " + "─" * 20)
+                sys.stdout.flush()
+                print("\n")  # 强行撑开一行空间
+
             if prompt_toolkit_enabled:
-                raw = _pt_session.prompt(
-                    [("class:prompt", "▶ "), ("class:you", "You > ")],
-                    style=_pawn_style,
-                    default=_re_edit_default,
-                ).strip()
+                # ── 原生异步：patch_stdout 接管 stdout，避免 Agent 异步输出与输入行错乱 ──
+                with _patch_stdout(raw=True):
+                    raw = (await _pt_session.prompt_async(
+                        [("class:prompt", "▶ "), ("class:you", "You > ")],
+                        style=_pawn_style,
+                        default=_re_edit_default,
+                    )).strip()
             else:
                 _label = _re_edit_default if _re_edit_default else ""
                 raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ") + _label).strip()
-            _re_edit_default = ""  # 消费后清空
+
+            _re_edit_default = ""    # 消费后清空
+            _sigint_pending  = False # 成功输入立即重置双击退出状态
             if not raw:
                 continue
             if raw.startswith("/"):
@@ -2758,32 +2773,47 @@ def main():
                         _corrected = _close[0]
                         raw = f"{_corrected} {_cmd_rest}".strip() if _cmd_rest else _corrected
                         print(c(YELLOW, f"  ✔ 已自动修正: {_cmd_verb} → {_corrected}"))
-                handle_slash(raw, session)
+                result = await handle_slash(raw, session)
+                if result is _EXIT_SENTINEL:
+                    print(c(CYAN, "\n  Goodbye! 👋"))
+                    break
                 continue
-            _in_generation = True
             try:
                 session.run_turn(raw)
             except KeyboardInterrupt:
                 print(c(YELLOW, "\n  [已中断]"))
-            finally:
-                _in_generation = False
 
-        except ExitCommand:
-            print(c(CYAN, "\n  Goodbye! 👋"))
-            break
-        except (KeyboardInterrupt, EOFError):
-            # Ctrl+C：撤回上一轮，将用户文本作为 default 重新编辑
+        except KeyboardInterrupt:
+            # ── 双击 Ctrl+C 退出（5 秒内第二次触发）──────────
+            _now = time.monotonic()
+            if _sigint_pending and (_now - _last_sigint_time < 5.0):
+                print(c(CYAN, "\n  Goodbye! 👋"))
+                break
+            _last_sigint_time = _now
+            _sigint_pending   = True
             removed, last_text = session.undo(1)
             if removed:
                 _re_edit_default = last_text
+            print(c(YELLOW, "\n  [提醒] 再按一次 Ctrl+C 退出应用"))
             continue
+        except EOFError:
+            # ── Ctrl+D 直接退出 ─────────────────────────────
+            print(c(CYAN, "\n  Goodbye! 👋"))
+            break
         except Exception as _loop_exc:
             logger.error("Main loop error: {!r}", _loop_exc)
             continue
 
+    # ── 优雅退出：收割所有存活的 asyncio tasks ────────────
+    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
+    for t in pending:
+        t.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
 if __name__ == "__main__":
     try:
-        main()
+        asyncio.run(main())
     except KeyboardInterrupt:
         print(c(CYAN, "\n\n  Goodbye! 👋"))
     except SystemExit:

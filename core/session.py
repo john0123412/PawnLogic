@@ -796,36 +796,42 @@ class AgentSession:
         Returns ``(final_dirname, new_absolute_path)``. On failure, keeps
         the old state intact and returns ``("", "")``.
         """
-        from config import WORKSPACE_DIR
+        from config import WORKSPACE_DIR, WORKSPACE_ROOT
 
         with self._workspace_swap_lock:
-            workspace_root = Path(WORKSPACE_DIR).expanduser().resolve()
-            workspace_root.mkdir(parents=True, exist_ok=True)
+            # 🔑 边界检查 root（宽）与落位 target（窄）拆分：
+            #   · boundary_root = ~/.pawnlogic —— 允许 archive/、workspace/ 等
+            #     兄弟目录下的 session 通过 relative_to 校验
+            #   · workspace_target = ~/.pawnlogic/workspace —— 新 slug 最终落位
+            #     始终回归沙箱，避免 session 永久滞留 archive
+            boundary_root    = Path(WORKSPACE_ROOT).expanduser().resolve()
+            workspace_target = Path(WORKSPACE_DIR).expanduser().resolve()
+            workspace_target.mkdir(parents=True, exist_ok=True)
 
             current_path = Path(self.workspace_dir).expanduser().resolve()
-            # 防御：当前 workspace 必须在 workspace_root 下才允许 swap
+            # 防御：当前 workspace 必须在 ~/.pawnlogic 下（含 archive/）才允许 swap
             try:
-                current_path.relative_to(workspace_root)
+                current_path.relative_to(boundary_root)
             except ValueError:
                 logger.warning(
-                    "Workspace swap aborted: current_path outside root | "
-                    "current={} root={}",
-                    current_path, workspace_root,
+                    "Workspace swap aborted: current_path outside boundary | "
+                    "current={} boundary={}",
+                    current_path, boundary_root,
                 )
                 return "", ""
 
-            # 若已是 slug 名（重复触发），直接返回现状
-            if current_path.name == slug:
+            # 若已是 slug 名且已在目标 workspace/ 下（重复触发），直接返回现状
+            if current_path.name == slug and current_path.parent == workspace_target:
                 return current_path.name, str(current_path)
 
-            # 冲突探测：slug → slug-<id_tail> → slug-<id_tail>-N
+            # 冲突探测：slug → slug-<id_tail> → slug-<id_tail>-N（均落位 workspace_target）
             id_tail = self.session_id[-4:] if len(self.session_id) >= 4 else self.session_id
             candidates = [slug, f"{slug}-{id_tail}"]
             candidates.extend(f"{slug}-{id_tail}-{i}" for i in range(2, 100))
 
             final_name = ""
             for cand in candidates:
-                target = workspace_root / cand
+                target = workspace_target / cand
                 if not target.exists() and not target.is_symlink():
                     final_name = cand
                     break
@@ -836,9 +842,9 @@ class AgentSession:
                 )
                 return "", ""
 
-            new_path = workspace_root / final_name
+            new_path = workspace_target / final_name
             try:
-                # 1. rename 实体目录（POSIX 下同 FS 内原子）
+                # 1. rename 实体目录（同 FS 内 POSIX 原子；跨 FS 时自动走复制+删除）
                 os.rename(str(current_path), str(new_path))
             except OSError as exc:
                 logger.warning(
@@ -847,13 +853,16 @@ class AgentSession:
                 )
                 return "", ""
 
-            # 2. 反向兜底 symlink：原 session_<id> → 新 <slug>
+            # 2. 反向兜底 symlink：原路径 → 新 <slug>（仅当原路径在 workspace_target 下时可用）
             try:
                 old_name = current_path.name
-                old_link = workspace_root / old_name
-                if not old_link.exists() and not old_link.is_symlink():
-                    # 相对 symlink，workspace 整体可迁移
-                    os.symlink(final_name, str(old_link))
+                if current_path.parent == workspace_target:
+                    old_link = workspace_target / old_name
+                    if not old_link.exists() and not old_link.is_symlink():
+                        # 相对 symlink，workspace 整体可迁移
+                        os.symlink(final_name, str(old_link))
+                # 跨 archive→workspace 迁移时，原路径已不在 workspace/ 下，
+                # 反向 symlink 没有意义，直接跳过
             except OSError as exc:
                 # 反向 symlink 失败不致命（rename 已成功），只是 pre-swap 路径
                 # 解析可能变悬。记录后继续。
@@ -903,7 +912,9 @@ class AgentSession:
 
     @property
     def model(self) -> dict:
-        return MODELS[self.model_alias]
+        # 防御性 .get()：如果 self.model_alias 是已失效的旧名（例如从旧会话
+        # 恢复时 DB 残留 "mimo"），降级到 DEFAULT_MODEL 而非抛 KeyError 崩溃。
+        return MODELS.get(self.model_alias, MODELS[DEFAULT_MODEL])
 
     def _reset_system_prompt(self, knowledge_query: str = ""):
         cfg = DYNAMIC_CONFIG

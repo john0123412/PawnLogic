@@ -29,6 +29,11 @@ SKILLS_DIR         = Path(__file__).resolve().parent / "skills"
 LOG_DIR            = Path.home() / ".pawnlogic" / "logs"
 # ★ 文件写入沙箱：所有工具产出的文件自动重定向到此目录
 WORKSPACE_DIR      = str(Path.home() / ".pawnlogic" / "workspace")
+# ★ Workspace swap 合法性边界：比 WORKSPACE_DIR 更宽一层（含 archive/、
+#   workspace/ 等兄弟目录），允许从 archive 恢复的 session 合法迁回 workspace。
+#   注意：此常量仅用于 _swap_workspace_dir 的 relative_to 边界校验，
+#   绝不作为写入沙箱根——否则 Agent 会写到 ~/.pawnlogic 顶层与 DB/技能档混淆。
+WORKSPACE_ROOT     = str(Path.home() / ".pawnlogic")
 
 # ════════════════════════════════════════════════════════
 # 厂商注册表
@@ -318,6 +323,15 @@ MODELS: dict[str, dict] = {
         "id":       "mimo-v2.5",
         "provider": "xiaomi",
         "desc":     "小米 MiMo V2.5 — 高性价比主力",
+        "color":    "\033[36m",
+        "vision":   False,
+    },
+    # ── Legacy alias：DB 历史里残留的 "mimo" 旧名 → 映射到 mimo-v2.5 ──
+    # （保留此项确保 /chat load 历史会话时不会 KeyError）
+    "mimo": {
+        "id":       "mimo-v2.5",
+        "provider": "xiaomi",
+        "desc":     "小米 MiMo (legacy alias → mimo-v2.5)",
         "color":    "\033[36m",
         "vision":   False,
     },
