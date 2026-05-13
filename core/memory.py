@@ -80,15 +80,16 @@ def _create_core_tables():
         );
 
         CREATE TABLE IF NOT EXISTS messages (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id   TEXT    NOT NULL,
-            seq          INTEGER NOT NULL,
-            role         TEXT    NOT NULL,
-            content      TEXT,
-            tool_calls   TEXT,
-            tool_call_id TEXT,
-            is_pinned    INTEGER DEFAULT 0,
-            created_at   TEXT    NOT NULL,
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id        TEXT    NOT NULL,
+            seq               INTEGER NOT NULL,
+            role              TEXT    NOT NULL,
+            content           TEXT,
+            tool_calls        TEXT,
+            tool_call_id      TEXT,
+            is_pinned         INTEGER DEFAULT 0,
+            reasoning_content TEXT,
+            created_at        TEXT    NOT NULL,
             UNIQUE (session_id, seq),
             FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
         );
@@ -161,6 +162,22 @@ def _create_core_tables():
             if col not in cols:
                 conn.execute(ddl)
 
+    # ── ★ thinking-mode 修复：messages 表新增 reasoning_content 列 ──
+    # 旧 pawn.db 没有此列，需要自动 ALTER 追加；否则加载会话后
+    # mimo-v2.5 等推理模型会因缺失 reasoning_content 返回 HTTP 400。
+    with get_conn() as conn:
+        msg_cols = [row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()]
+        msg_migrations = {
+            "reasoning_content": "ALTER TABLE messages ADD COLUMN reasoning_content TEXT",
+        }
+        for col, ddl in msg_migrations.items():
+            if col not in msg_cols:
+                try:
+                    conn.execute(ddl)
+                except sqlite3.OperationalError:
+                    # 极端场景：其他进程并发已加列，静默忽略
+                    pass
+
 # init_facts_table is defined later; init_db calls it after both are loaded.
 
 # ════════════════════════════════════════════════════════
@@ -188,7 +205,11 @@ def _build_rows(session_id: str, messages: list) -> list[tuple]:
         rows.append((
             session_id, seq, m.get("role",""), m.get("content") or "",
             json.dumps(m["tool_calls"]) if m.get("tool_calls") else None,
-            m.get("tool_call_id"), 1 if m.get("_pinned") else 0, now,
+            m.get("tool_call_id"), 1 if m.get("_pinned") else 0,
+            # ★ thinking-mode 修复：reasoning_content 必须持久化，
+            # 否则 /chat load 后再次对话会触发 mimo-v2.5 HTTP 400。
+            m.get("reasoning_content"),
+            now,
         ))
         seq += 1
     return rows
@@ -638,16 +659,18 @@ def save_messages(session_id: str, messages: list):
                 if all_rows:
                     conn.executemany("""
                         INSERT INTO messages
-                            (session_id, seq, role, content, tool_calls, tool_call_id, is_pinned, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            (session_id, seq, role, content, tool_calls, tool_call_id,
+                             is_pinned, reasoning_content, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, all_rows)
             else:
                 new_rows = [r for r in all_rows if r[1] > last_seq]
                 if new_rows:
                     conn.executemany("""
                         INSERT OR REPLACE INTO messages
-                            (session_id, seq, role, content, tool_calls, tool_call_id, is_pinned, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            (session_id, seq, role, content, tool_calls, tool_call_id,
+                             is_pinned, reasoning_content, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, new_rows)
                 cur_pins = {r[1]: r[6] for r in all_rows}
                 for seq_idx, pinned in cur_pins.items():
@@ -674,6 +697,14 @@ def load_messages(session_id: str) -> list[dict]:
             except: pass
         if r["tool_call_id"]: m["tool_call_id"] = r["tool_call_id"]
         if r["is_pinned"]:    m["_pinned"] = True
+        # ★ thinking-mode 修复：还原 reasoning_content 字段。
+        # 旧 DB 无此列时 sqlite3.Row 会抛 IndexError，捕获后降级。
+        try:
+            rc = r["reasoning_content"]
+            if rc:
+                m["reasoning_content"] = rc
+        except (IndexError, KeyError):
+            pass
         result.append(m)
     _last_saved_seq[session_id]  = len(result) - 1
     _pinned_snapshot[session_id] = {}

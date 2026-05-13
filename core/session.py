@@ -51,7 +51,7 @@ from tools.file_ops  import (tool_read_file, tool_read_file_lines, tool_write_fi
                               FILE_SCHEMAS)
 from core.naming import (
     stable_workspace_dir, should_name_session, generate_session_name,
-    create_workspace_alias,
+    create_workspace_alias, pick_naming_model,
 )
 from tools.web_ops   import tool_web_search, tool_fetch_url, tool_git_op, WEB_SCHEMAS
 from tools.sandbox   import tool_run_code, SANDBOX_SCHEMAS
@@ -467,7 +467,12 @@ def _load_skills_toc() -> str:
 # ════════════════════════════════════════════════════════
 
 def _ctx_chars(msgs: list) -> int:
-    return sum(len(str(m.get("content") or "")) for m in msgs)
+    # ★ thinking-mode 修复：reasoning_content 也必须计入上下文预算
+    # 否则小米 MiMo 等推理模型返回的 reasoning 块会让真实 token 远超预期
+    return sum(
+        len(str(m.get("content") or "")) + len(str(m.get("reasoning_content") or ""))
+        for m in msgs
+    )
 
 def _trim_and_compact_context(msgs: list) -> int:
     """
@@ -704,6 +709,11 @@ class AgentSession:
         self._naming_lock = threading.Lock()
         self._naming_done = False
         self._naming_attempted_at = 0.0
+        # ★ 会话自动命名：累计完成的 turn 数，门槛 = 2
+        self._turn_count = 0
+        # ★ 动态工作区 swap：保护 rename + 反向 symlink + 指针切换三步原子性
+        # （短锁：临界区内只做本地 FS 操作，不含网络/DB）
+        self._workspace_swap_lock = threading.Lock()
         # ── Usage & audit counters (cumulative across all turns) ──
         self.total_prompt_tokens     = 0
         self.total_completion_tokens = 0
@@ -763,6 +773,133 @@ class AgentSession:
                 elif tail.get("role") == "user":
                     break
         return removed, last_user_text
+
+    # ════════════════════════════════════════════════════
+    # 动态工作区 swap（rename + 反向 symlink + 原子指针切换）
+    # ════════════════════════════════════════════════════
+
+    def _swap_workspace_dir(self, slug: str) -> tuple[str, str]:
+        """Rename ``session_<id>/`` → ``<slug>/`` under ``~/.pawnlogic/workspace``,
+        create a reverse symlink so pre-swap absolute paths still resolve,
+        then atomically update ``_session_workspace_dir[0]`` and
+        ``self.workspace_dir``.
+
+        Collision handling mirrors ``create_workspace_alias``:
+        try ``<slug>``, then ``<slug>-<id_tail>``, then ``<slug>-<id_tail>-N``.
+
+        Concurrency: the whole operation is guarded by
+        ``self._workspace_swap_lock`` — no other thread can interleave a
+        second swap. File writes on other threads read the pointer atomically
+        (CPython list-index assignment) and paths resolve through the reverse
+        symlink even if they captured the pre-swap path.
+
+        Returns ``(final_dirname, new_absolute_path)``. On failure, keeps
+        the old state intact and returns ``("", "")``.
+        """
+        from config import WORKSPACE_DIR
+
+        with self._workspace_swap_lock:
+            workspace_root = Path(WORKSPACE_DIR).expanduser().resolve()
+            workspace_root.mkdir(parents=True, exist_ok=True)
+
+            current_path = Path(self.workspace_dir).expanduser().resolve()
+            # 防御：当前 workspace 必须在 workspace_root 下才允许 swap
+            try:
+                current_path.relative_to(workspace_root)
+            except ValueError:
+                logger.warning(
+                    "Workspace swap aborted: current_path outside root | "
+                    "current={} root={}",
+                    current_path, workspace_root,
+                )
+                return "", ""
+
+            # 若已是 slug 名（重复触发），直接返回现状
+            if current_path.name == slug:
+                return current_path.name, str(current_path)
+
+            # 冲突探测：slug → slug-<id_tail> → slug-<id_tail>-N
+            id_tail = self.session_id[-4:] if len(self.session_id) >= 4 else self.session_id
+            candidates = [slug, f"{slug}-{id_tail}"]
+            candidates.extend(f"{slug}-{id_tail}-{i}" for i in range(2, 100))
+
+            final_name = ""
+            for cand in candidates:
+                target = workspace_root / cand
+                if not target.exists() and not target.is_symlink():
+                    final_name = cand
+                    break
+            if not final_name:
+                logger.warning(
+                    "Workspace swap aborted: 100 candidates exhausted | slug={}",
+                    slug,
+                )
+                return "", ""
+
+            new_path = workspace_root / final_name
+            try:
+                # 1. rename 实体目录（POSIX 下同 FS 内原子）
+                os.rename(str(current_path), str(new_path))
+            except OSError as exc:
+                logger.warning(
+                    "Workspace rename failed | from={} to={} exc={!r}",
+                    current_path, new_path, exc,
+                )
+                return "", ""
+
+            # 2. 反向兜底 symlink：原 session_<id> → 新 <slug>
+            try:
+                old_name = current_path.name
+                old_link = workspace_root / old_name
+                if not old_link.exists() and not old_link.is_symlink():
+                    # 相对 symlink，workspace 整体可迁移
+                    os.symlink(final_name, str(old_link))
+            except OSError as exc:
+                # 反向 symlink 失败不致命（rename 已成功），只是 pre-swap 路径
+                # 解析可能变悬。记录后继续。
+                logger.warning(
+                    "Reverse symlink failed (non-fatal) | old={} new={} exc={!r}",
+                    current_path.name, final_name, exc,
+                )
+
+            # 3. 原子指针切换（list-index 赋值在 CPython 下是字节码原子）
+            new_abs = str(new_path.resolve())
+            _session_workspace_dir[0] = new_abs
+            self.workspace_dir = new_abs
+
+            logger.info(
+                "Workspace swapped | session={} {} → {} | path={}",
+                self.session_id[:8], current_path.name, final_name, new_abs,
+            )
+            return final_name, new_abs
+
+    def _print_naming_banner(
+        self, title: str, slug: str, final_dirname: str, new_abs: str,
+    ) -> None:
+        """Pretty-print the auto-naming result to stdout.
+
+        USER_MODE  → 单行简洁；DEV → 完整路径便于开发调试。
+        Any error is swallowed (UI never blocks naming persistence).
+        """
+        try:
+            if USER_MODE:
+                if final_dirname:
+                    print(c(CYAN, f"  🏷  会话已自动命名 → {title} · 工作区: {final_dirname}/"))
+                else:
+                    print(c(CYAN, f"  🏷  会话已自动命名 → {title}"))
+            else:
+                id_tail = self.session_id[-8:] if len(self.session_id) >= 8 else self.session_id
+                if final_dirname and new_abs:
+                    print(c(MAGENTA, f"\n  🏷  [Auto-Name] session_{id_tail} → {final_dirname}"))
+                    print(c(GRAY,    f"      title      : {title}"))
+                    print(c(GRAY,    f"      slug       : {slug}"))
+                    print(c(GRAY,    f"      workspace  : {new_abs}"))
+                else:
+                    print(c(YELLOW,  f"\n  ⚠ [Auto-Name] 命名入库成功但目录 swap 失败（保留 session_{id_tail}/）"))
+                    print(c(GRAY,    f"      title      : {title}"))
+                    print(c(GRAY,    f"      slug       : {slug}"))
+        except Exception:
+            pass
 
     @property
     def model(self) -> dict:
@@ -836,6 +973,8 @@ class AgentSession:
             "  Phase 3 — Weaponize: pwn_rop (find gadgets) → pwn_libc (leak & resolve) → build payload\n"
             "  Phase 4 — Exploit  : run_code (use_venv=true, install_deps='pwntools') → test\n\n"
             "RULE: ALL pwntools code MUST run inside run_code sandbox with use_venv=true.\n"
+            "RULE: If process() or any binary execution fails with PermissionError / 'Permission denied' / exit code 126, "
+            "IMMEDIATELY run_shell('chmod +x <binary_path>') to fix permissions, then retry. Do NOT ask the user.\n"
             "RULE: NEVER skip a phase. If Phase 2 gives no offset, debug before proceeding.\n"
             "RULE: You MUST NOT guess the overflow vector. Always confirm it with pwn_cyclic + pwn_debug.\n"
             "RULE: If tool 'inspect_binary' shows 'NX enabled', do NOT attempt shellcode injection on "
@@ -1526,6 +1665,13 @@ class AgentSession:
 
                 while True:
                     text_buf = ""; tc_buf = {}
+                    # ★ thinking-mode 修复：独立累积 reasoning_content
+                    #   · mimo-v2.5 / deepseek-reasoner / qwen-qwq 等推理模型
+                    #     会在 delta 中返回 reasoning_content 字段
+                    #   · 必须原样累积并回传给 API（否则 MiMo 返回 HTTP 400）
+                    #   · USER_MODE 下完全隐藏，DEV 模式下灰色前缀流式打印
+                    reasoning_buf = ""
+                    _reasoning_printed = False   # 是否已输出 "🧠 [thinking]" 前缀
                     _tokens_before = self._turn_completion_tokens
 
                     for delta in stream_request(
@@ -1550,6 +1696,18 @@ class AgentSession:
                         d     = choices[0].get("delta", {})
                         chunk = d.get("content") or ""
 
+                        # ★ thinking-mode: 捕获 reasoning_content delta
+                        r_chunk = d.get("reasoning_content") or ""
+                        if r_chunk:
+                            reasoning_buf += r_chunk
+                            # 只在 DEV 模式（非 USER_MODE）下流式显示
+                            if not USER_MODE:
+                                if not _reasoning_printed:
+                                    sys.stdout.write(c(GRAY + DIM, "\n  🧠 [thinking] "))
+                                    _reasoning_printed = True
+                                sys.stdout.write(c(GRAY + DIM, r_chunk))
+                                sys.stdout.flush()
+
                         # ── Usage accounting (_usage injected by api_client) ──
                         if "_usage" in delta:
                             u  = delta["_usage"]
@@ -1561,6 +1719,11 @@ class AgentSession:
                             self.total_completion_tokens += ct
 
                         if chunk:
+                            # thinking 块结束切换到正式输出前补一个换行
+                            if _reasoning_printed and not USER_MODE:
+                                sys.stdout.write("\n")
+                                sys.stdout.flush()
+                                _reasoning_printed = False   # 只换行一次
                             printable = renderer.feed(chunk)
                             if printable: sys.stdout.write(printable); sys.stdout.flush()
                             text_buf += chunk
@@ -1679,7 +1842,12 @@ class AgentSession:
                     continue   # 进入下一个 iteration
 
                 if not tc_buf:
-                    self.messages.append({"role": "assistant", "content": text_buf})
+                    # ★ thinking-mode 修复：若本轮捕获到 reasoning_content，
+                    # 必须随 assistant 消息一同入库，下一轮才能原样回传给 API。
+                    _asst_msg: dict = {"role": "assistant", "content": text_buf}
+                    if reasoning_buf:
+                        _asst_msg["reasoning_content"] = reasoning_buf
+                    self.messages.append(_asst_msg)
                     self._print_turn_summary()
                     self._autosave(); return
 
@@ -1746,7 +1914,10 @@ class AgentSession:
                     )
 
 
-                self.messages.append({
+                # ★ thinking-mode 修复：若本轮捕获到 reasoning_content，
+                # 必须随 assistant 消息一同入库，下一轮才能原样回传给 API
+                # （mimo-v2.5 等推理模型对此做严格校验，缺失会返回 HTTP 400）。
+                _asst_msg: dict = {
                     "role":    "assistant",
                     "content": text_buf or None,
                     "tool_calls": [
@@ -1754,7 +1925,10 @@ class AgentSession:
                          "function": {"name": tc_buf[i]["name"], "arguments": tc_buf[i]["args"]}}
                         for i in sorted(tc_buf)
                     ],
-                })
+                }
+                if reasoning_buf:
+                    _asst_msg["reasoning_content"] = reasoning_buf
+                self.messages.append(_asst_msg)
 
                 # ── 执行所有工具 ───────────────────────────────
                 for i in sorted(tc_buf):
@@ -2119,6 +2293,9 @@ class AgentSession:
 
     # ── 后台异步自动保存 ──────────────────────────────────
     def _autosave(self):
+        # ★ Turn 计数：每次调用累加（无论成功/中断/耗尽 max_iter），
+        # 用于自动命名门槛判断（_maybe_autoname 要求 >=2）
+        self._turn_count += 1
         msgs_snapshot = [dict(m) for m in self.messages]
         sid, model_alias, cwd, workspace_dir, cfg_snap = (
             self.session_id, self.model_alias, self.cwd, self.workspace_dir,
@@ -2148,6 +2325,10 @@ class AgentSession:
     def _maybe_autoname(self, msgs_snapshot: list):
         if self._naming_done:
             return
+        # ★ Turn 门槛：首轮后不命名（上下文太薄，slug 质量低）。
+        # 从第 2 轮结束起才尝试，与 should_name_session 的启发式叠加使用。
+        if self._turn_count < 2:
+            return
         if not should_name_session(msgs_snapshot):
             return
         now = time.monotonic()
@@ -2159,28 +2340,101 @@ class AgentSession:
         )
 
         def _do():
+            # ★ 顶层异常护城河：不论 API 超时、模型崩溃、SQLite 写锁超时、
+            # rename IO 错误 —— 任何失败都不得逃逸到 daemon 线程外杀主进程。
+            # 整个过程以"best-effort"精神执行：成功则命名+swap+入库；
+            # 失败则记 warning，保留旧 session_<id>/ 目录结构，下次继续尝试。
             if not self._naming_lock.acquire(blocking=False):
                 return
             try:
+                # 1. 选轻量模型（全链不可用时降级到原会话模型）
+                try:
+                    naming_alias = pick_naming_model(model_alias)
+                except Exception as exc:
+                    logger.warning(
+                        "pick_naming_model fallback | session={} exc={!r}",
+                        sid[:8], exc,
+                    )
+                    naming_alias = model_alias
+
+                # 2. 调用 LLM 生成 {title, slug}
                 result = generate_session_name(
                     messages=msgs_snapshot,
-                    model_alias=model_alias,
+                    model_alias=naming_alias,
                     session_id=sid,
                     cwd=cwd,
                 )
-                alias = create_workspace_alias(sid, result["slug"], workspace_dir)
-                update_session_naming(
-                    sid,
-                    title=result["title"],
-                    auto_name=result["slug"],
-                    workspace_dir=workspace_dir,
-                    workspace_alias=alias,
-                    name_source="auto",
-                )
+                title = result.get("title", "").strip()
+                slug  = result.get("slug", "").strip()
+                if not slug:
+                    logger.warning(
+                        "Auto naming produced empty slug | session={} model={}",
+                        sid[:8], naming_alias,
+                    )
+                    return
+
+                # 3. 切换实体工作区（rename + 反向 symlink + 原子指针）
+                try:
+                    final_dirname, new_abs = self._swap_workspace_dir(slug)
+                except Exception as exc:
+                    logger.warning(
+                        "Workspace swap threw unexpected | session={} exc={!r}",
+                        sid[:8], exc,
+                    )
+                    final_dirname, new_abs = "", ""
+
+                # 4. 决定入库的 workspace 元数据：
+                #    · swap 成功 → 用新路径 + final_dirname 作为 alias
+                #    · swap 失败 → 用旧路径，仍建 by-name/<slug> 兼容软链
+                if new_abs:
+                    persist_workspace_dir = new_abs
+                    persist_alias = final_dirname
+                else:
+                    persist_workspace_dir = workspace_dir
+                    try:
+                        persist_alias = create_workspace_alias(sid, slug, workspace_dir)
+                    except Exception as exc:
+                        logger.warning(
+                            "create_workspace_alias fallback failed | exc={!r}", exc,
+                        )
+                        persist_alias = slug
+
+                # 5. 写 pawn.db（单独保护，即使 DB 短暂写锁也不影响前面的文件系统改动）
+                try:
+                    update_session_naming(
+                        sid,
+                        title=title,
+                        auto_name=slug,
+                        workspace_dir=persist_workspace_dir,
+                        workspace_alias=persist_alias,
+                        name_source="auto",
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "update_session_naming failed | session={} exc={!r}",
+                        sid[:8], exc,
+                    )
+
+                # 6. 标记完成（即便 DB 写入失败也标记 done，避免后续重复改名；
+                # 下一次 autosave 的 upsert_session 会用最新的 self.workspace_dir 补写）
                 self._naming_done = True
+
+                # 7. 终端 UX 反馈
+                try:
+                    self._print_naming_banner(title, slug, final_dirname, new_abs)
+                except Exception:
+                    pass   # UI 反馈失败不关键，绝不抛
+
             except Exception as exc:
-                logger.warning("Auto naming failed | session={} exc={!r}", sid[:8], exc)
+                # 顶层兜底：任何未预期的异常都吞掉，只记 warning
+                logger.warning(
+                    "Auto naming top-level failure (non-fatal) | session={} exc={!r}",
+                    sid[:8], exc,
+                )
             finally:
-                self._naming_lock.release()
+                try:
+                    self._naming_lock.release()
+                except Exception:
+                    pass   # 极端情况下锁已被释放，忽略
 
         threading.Thread(target=_do, daemon=True, name=f"name-{sid[:8]}").start()
