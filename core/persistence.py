@@ -170,7 +170,7 @@ def _display_session_history(msgs: list, show_recent: int = 6):
     # 分割：折叠部分 + 显示部分
     if total > show_recent:
         folded_count = total - show_recent
-        print(c(GRAY, f"  │ ... 更早 {folded_count} 条消息 ..."))
+        print(c(GRAY, f"  │ ... 更早 {folded_count} 条消息（数据已完整加载，共 {total} 条）..."))
         display_slice = displayable[-show_recent:]
     else:
         display_slice = displayable

@@ -1144,7 +1144,7 @@ def handle_slash(cmd: str, session: AgentSession):
         print(HELP_TEXT)
 
     elif verb in ("/exit", "/quit", "/q"):
-        print(c(CYAN, "\n  Goodbye! 👋")); sys.exit(0)
+        print(c(CYAN, "\n  Goodbye! 👋")); return "EXIT"
 
     # ── 模块 2：Key 管理 ────────────────────────────────
     elif verb == "/setkey":
@@ -2741,16 +2741,8 @@ def main():
         except EOFError:
             print(c(CYAN, "\n  Goodbye! 👋")); break
         except KeyboardInterrupt:
-            # ── 修复：Ctrl+C 打断 prompt_toolkit 后，其内部 asyncio
-            #    事件循环残留 pending Future，下次 prompt() 会崩溃。
-            #    解决方案：重建 PromptSession 以获取干净的事件循环。
-            #    若重建失败，降级到 readline 模式避免死循环。
-            if prompt_toolkit_enabled:
-                try:
-                    _pt_session = _create_pt_session()
-                except Exception:
-                    prompt_toolkit_enabled = False  # 降级到 readline
             # CC 风格：Ctrl+C 撤回上一轮，将用户文本作为 default 重新编辑
+            # prompt_toolkit 自身在 KeyboardInterrupt 后状态是干净的，无需重建 session
             removed, last_text = session.undo(1)
             if removed:
                 _re_edit_default = last_text
@@ -2775,7 +2767,8 @@ def main():
                         _corrected_full = _corrected
                     print(c(YELLOW, f"  ✔ 已自动修正: {_cmd_verb} → {_corrected}"))
                     raw = _corrected_full
-            handle_slash(raw, session)
+            if handle_slash(raw, session) == "EXIT":
+                break
             continue
         try:
             _in_generation = True
