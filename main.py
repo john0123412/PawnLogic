@@ -12,6 +12,10 @@ PawnLogic 1.1 (Expert Edition) — main.py
   pawn   # 首次运行会自动进入 API Key 配置向导
 """
 import os, sys, shutil, getpass, argparse, time, re
+
+class ExitCommand(Exception):
+    """Raised by handle_slash when user types /q, /quit, /exit."""
+    pass
 try:
     import nest_asyncio
     nest_asyncio.apply()
@@ -1144,9 +1148,7 @@ def handle_slash(cmd: str, session: AgentSession):
         print(HELP_TEXT)
 
     elif verb in ("/exit", "/quit", "/q"):
-        print(c(CYAN, "\n  Goodbye! 👋"))
-        import builtins; builtins._pawn_run_loop = False
-        return "EXIT"
+        raise ExitCommand()
 
     # ── 模块 2：Key 管理 ────────────────────────────────
     elif verb == "/setkey":
@@ -2727,10 +2729,9 @@ def main():
             reserve_space_for_menu=10,
         )
 
-    import builtins; builtins._pawn_run_loop = True
-    while getattr(builtins, "_pawn_run_loop", True):
-        print()  # 确保提示符在新行
+    while True:
         try:
+            print()  # 确保提示符在新行
             if prompt_toolkit_enabled:
                 raw = _pt_session.prompt(
                     [("class:prompt", "▶ "), ("class:you", "You > ")],
@@ -2741,47 +2742,44 @@ def main():
                 _label = _re_edit_default if _re_edit_default else ""
                 raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ") + _label).strip()
             _re_edit_default = ""  # 消费后清空
-        except EOFError:
+            if not raw:
+                continue
+            if raw.startswith("/"):
+                # ── 模糊命令修正（typo correction）──────────────
+                _cmd_parts = raw.split(None, 1)
+                _cmd_verb  = _cmd_parts[0]
+                _cmd_rest  = _cmd_parts[1] if len(_cmd_parts) > 1 else ""
+                if _cmd_verb not in _all_cmd_words and len(_cmd_verb) >= 3:
+                    import difflib
+                    _close = difflib.get_close_matches(
+                        _cmd_verb, _all_cmd_words, n=1, cutoff=0.7
+                    )
+                    if _close:
+                        _corrected = _close[0]
+                        raw = f"{_corrected} {_cmd_rest}".strip() if _cmd_rest else _corrected
+                        print(c(YELLOW, f"  ✔ 已自动修正: {_cmd_verb} → {_corrected}"))
+                handle_slash(raw, session)
+                continue
+            _in_generation = True
+            try:
+                session.run_turn(raw)
+            except KeyboardInterrupt:
+                print(c(YELLOW, "\n  [已中断]"))
+            finally:
+                _in_generation = False
+
+        except ExitCommand:
             print(c(CYAN, "\n  Goodbye! 👋"))
-            builtins._pawn_run_loop = False
             break
-        except KeyboardInterrupt:
-            # CC 风格：Ctrl+C 撤回上一轮，将用户文本作为 default 重新编辑
+        except (KeyboardInterrupt, EOFError):
+            # Ctrl+C：撤回上一轮，将用户文本作为 default 重新编辑
             removed, last_text = session.undo(1)
             if removed:
                 _re_edit_default = last_text
             continue
-        if not raw:
+        except Exception as _loop_exc:
+            logger.error("Main loop error: {!r}", _loop_exc)
             continue
-        if raw.startswith("/"):
-            # ── 模糊命令修正（typo correction）──────────────
-            _cmd_parts = raw.split(None, 1)
-            _cmd_verb  = _cmd_parts[0]
-            _cmd_rest  = _cmd_parts[1] if len(_cmd_parts) > 1 else ""
-            if _cmd_verb not in _all_cmd_words and len(_cmd_verb) >= 3:
-                import difflib
-                _close = difflib.get_close_matches(
-                    _cmd_verb, _all_cmd_words, n=1, cutoff=0.7
-                )
-                if _close:
-                    _corrected = _close[0]
-                    if _cmd_rest:
-                        _corrected_full = f"{_corrected} {_cmd_rest}"
-                    else:
-                        _corrected_full = _corrected
-                    print(c(YELLOW, f"  ✔ 已自动修正: {_cmd_verb} → {_corrected}"))
-                    raw = _corrected_full
-            if handle_slash(raw, session) == "EXIT":
-                break
-            continue
-        try:
-            _in_generation = True
-            session.run_turn(raw)
-        except KeyboardInterrupt:
-            # 生成阶段 Ctrl+C：保留已产出内容，安全停止
-            print(c(YELLOW, "\n  [已中断]"))
-        finally:
-            _in_generation = False
 
 if __name__ == "__main__":
     try:
