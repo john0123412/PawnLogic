@@ -7,16 +7,89 @@ core/api_client.py — 底层流式 API 客户端（双格式原生支持）
 共享基础设施：连接管理、代理隧道、断路器、指数退避。
 """
 
+import copy
 import json, re, os, ssl, socket, time, threading
 import http.client
 from urllib.parse import urlparse
-from config import get_api_config, get_api_format, get_provider_config, MODELS, DYNAMIC_CONFIG
+from config import get_api_config, get_api_format, get_provider_config, MODELS, DEFAULT_MODEL, DYNAMIC_CONFIG
 
 
 # ── 自定义异常 ──────────────────────────────────────────
 class APIEmptyResponseError(Exception):
     """模型返回空响应（无文本、无工具调用、0 Token）。"""
     pass
+
+
+# ════════════════════════════════════════════════════════
+# ★ thinking-mode 支持：reasoning_content 字段处理
+#
+# 推理模型（mimo / ds-r1 / qwq 等）在响应中返回 reasoning_content，
+# 并且严格校验下一轮请求里对应 assistant 消息必须原样回传此字段，
+# 否则返回 HTTP 400 "The reasoning_content in the thinking mode
+# must be passed back to the API."
+#
+# 非推理模型（gpt-4o-mini / ds-chat 等）对未知字段态度不一：
+#   · 部分 API 忽略 unknown field
+#   · 部分 API 返回 400 unknown parameter
+# 为避免误伤，对非推理模型一律 strip reasoning_content。
+# ════════════════════════════════════════════════════════
+
+# 推理模型特征：model_alias 或 model_id 包含任一关键词即视为推理模型
+_REASONING_MODEL_PATTERNS = (
+    "mimo",        # 小米 MiMo 全系（含 legacy alias）
+    "reasoner",    # DeepSeek Reasoner (deepseek-reasoner)
+    "qwq",         # 阿里 QwQ 推理系列
+    "r1",          # DeepSeek R1 通用别名 (ds-r1 / deepseek-r1)
+)
+
+
+def _is_reasoning_model(model_alias: str, model_id: str = "") -> bool:
+    """判断是否为支持 reasoning_content 字段的推理模型。"""
+    combo = f"{(model_alias or '').lower()}|{(model_id or '').lower()}"
+    return any(p in combo for p in _REASONING_MODEL_PATTERNS)
+
+
+def _sanitize_messages_for_model(
+    messages: list,
+    model_alias: str,
+    model_id: str = "",
+) -> list:
+    """
+    针对目标模型构造干净的 OpenAI 格式 messages 列表。
+
+    签名兼容性：
+      · 简化调用 _sanitize_messages_for_model(messages, model_alias) 即可
+      · model_id 可选，仅在识别自定义 provider 时提升判准精度
+
+    处理逻辑：
+      · 🔑 第一步（深度拷贝隔离）：copy.deepcopy(messages) —— 绝不在原始
+        session.messages 上原地修改，避免跨模型切换时污染嵌套结构。
+      · 第二步（识别）：_is_reasoning_model 用 'mimo' / 'r1' / 'qwq' /
+        'reasoner' 四个关键词匹配 model_alias 和 model_id 的组合字串。
+      · 第三步（裁剪）：
+          - 私有字段（键以 '_' 开头，例 _pinned / _args_parsed）一律剥离
+          - 空 reasoning_content（"" / None / 0 / 空列表）→ del 键，避免
+            发送 null 导致推理模型 400
+          - 非推理模型 → 强制 del reasoning_content 键，避免未定义字段 400
+          - 推理模型且非空 → 原样保留，满足 mimo-v2.5 回传校验
+    """
+    is_reasoning = _is_reasoning_model(model_alias, model_id)
+    # 🔑 deepcopy：割断对 session 原始消息列表与嵌套结构（tool_calls 列表、
+    # dict 值等）的引用。切换模型时非推理模型会 strip reasoning_content，
+    # 若无深拷贝会污染原始 session.messages，导致切回推理模型后思考内容丢失。
+    cloned_msgs = copy.deepcopy(messages)
+    out: list[dict] = []
+    for m in cloned_msgs:
+        clean = {
+            k: v for k, v in m.items()
+            if not (isinstance(k, str) and k.startswith("_"))
+        }
+        rc = clean.get("reasoning_content")
+        # 空值（None / "" / 0 / 空列表）或非推理模型 → 移除字段
+        if not rc or not is_reasoning:
+            clean.pop("reasoning_content", None)
+        out.append(clean)
+    return out
 
 
 # ── 断路器状态存储（per provider base_url） ──────────────
@@ -486,7 +559,7 @@ def stream_request(
     base_url  = cfg["base_url"]
     api_key   = cfg["api_key"]
     api_fmt   = cfg["api_format"]
-    model_id  = MODELS[model_alias]["id"]
+    model_id  = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])["id"]
     provider  = base_url   # 用 base_url 作熔断器 key
     _max_tok  = max_tokens or DYNAMIC_CONFIG["max_tokens"]
 
@@ -494,7 +567,9 @@ def stream_request(
     if api_fmt == "anthropic":
         payload = _anthropic_build_payload(messages, model_id, _max_tok, tools_schema)
     else:
-        clean = [{k: v for k, v in m.items() if not k.startswith("_")} for m in messages]
+        # ★ thinking-mode: 推理模型保留 reasoning_content 回传，
+        # 非推理模型 strip 掉，避免 mimo/ds-r1 的 HTTP 400 严格校验。
+        clean = _sanitize_messages_for_model(messages, model_alias, model_id)
         payload = {
             "model":      model_id,
             "messages":   clean,
@@ -699,7 +774,7 @@ def call_once(
     base_url  = cfg["base_url"]
     api_key   = cfg["api_key"]
     api_fmt   = cfg["api_format"]
-    model_id  = MODELS[model_alias]["id"]
+    model_id  = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])["id"]
 
     if vision_payload_override:
         payload = vision_payload_override
@@ -710,7 +785,8 @@ def call_once(
         payload = _anthropic_build_payload(messages, model_id, max_tokens, None)
         payload["stream"] = False
     else:
-        clean = [{k: v for k, v in m.items() if not k.startswith("_")} for m in messages]
+        # ★ thinking-mode: 与 stream_request 使用相同的 sanitizer
+        clean = _sanitize_messages_for_model(messages, model_alias, model_id)
         payload = {
             "model":      model_id,
             "messages":   clean,

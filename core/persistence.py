@@ -5,15 +5,40 @@ core/persistence.py — 会话持久化对外接口
 """
 
 import json
+import sys
 import urllib.request, urllib.error
-from config import DYNAMIC_CONFIG, DEFAULT_MODEL, get_api_config
+from config import DYNAMIC_CONFIG, DEFAULT_MODEL, MODELS, get_api_config
 from core.memory import (
     init_db, upsert_session, list_sessions, get_session, delete_session,
     rename_session, save_messages, load_messages, pin_message_by_seq,
     add_knowledge, search_knowledge, format_knowledge_for_prompt, _gen_id,
 )
 from core.naming import stable_workspace_dir
-from utils.ansi import c, CYAN, GRAY, GREEN, RED, YELLOW, BOLD
+from utils.ansi import c, CYAN, GRAY, GREEN, RED, YELLOW, BOLD, DIM
+
+# ── 优先使用 prompt_toolkit 的渲染通道（绕过可能被接管的 stdout）──
+try:
+    from prompt_toolkit import print_formatted_text as _print_ptk
+    from prompt_toolkit.formatted_text import ANSI as _ANSI
+    _HAS_PTK = True
+except Exception:
+    _print_ptk = None
+    _ANSI = None
+    _HAS_PTK = False
+
+# ── rich 渲染：Markdown + Panel 高保真历史回放 ────────────
+try:
+    from rich.console import Console as _RichConsole
+    from rich.markdown import Markdown as _RichMarkdown
+    from rich.panel import Panel as _RichPanel
+    from rich.text import Text as _RichText
+    from rich.markup import escape as _rich_escape
+    _HAS_RICH = True
+except Exception:
+    _HAS_RICH = False
+    # 兜底：rich 不可用时 escape 退化为 str 转换
+    def _rich_escape(text):
+        return str(text) if text is not None else ""
 
 # ════════════════════════════════════════════════════════
 # Session 保存 / 加载
@@ -58,7 +83,18 @@ def session_load(session, query: str) -> str:
     # 还原 messages
     msgs = load_messages(sid)
     session.messages.clear()
-    session.model_alias = full["model"]
+
+    # ── 模型别名归一化：若 DB 中残留已失效的旧名（如 "mimo"），
+    #    降级到 DEFAULT_MODEL 并打印警告，避免下游 MODELS[...] 崩溃。──
+    loaded_alias = full["model"]
+    if loaded_alias in MODELS:
+        session.model_alias = loaded_alias
+    else:
+        print(c(YELLOW,
+            f"  ⚠ 会话中的模型别名 '{loaded_alias}' 已失效，"
+            f"降级到默认模型 '{DEFAULT_MODEL}'"))
+        session.model_alias = DEFAULT_MODEL
+
     session.cwd         = full["cwd"]
     session.workspace_dir = full["workspace_dir"] or stable_workspace_dir(sid)
     if not full["workspace_dir"]:
@@ -87,8 +123,7 @@ def session_load(session, query: str) -> str:
     if hasattr(session, "_naming_attempted_at"):
         session._naming_attempted_at = 0.0
 
-    # 显示对话历史
-    _display_session_history(msgs)
+    # 显示对话历史（恢复时显示全部）— 延迟到调用方打印，避免被 prompt_toolkit 滚动覆盖
 
     display_name = full["name"] or full["auto_name"] or matched["name"] or sid
     return f"OK: 已加载 [{sid}] {display_name} ({len(msgs)} 条消息)"
@@ -148,59 +183,155 @@ def session_rename(session, query: str, new_name: str) -> str:
     return f"OK: 已重命名 [{matched['id']}] → '{new_name.strip()}'"
 
 
-def _display_session_history(msgs: list, show_recent: int = 50):
-    """在终端显示会话对话历史。最近 show_recent 条完整显示，更早的折叠。"""
-    from config import smart_truncate
+def _display_session_history(msgs: list, show_recent: int = 0) -> None:
+    """
+    打印会话历史到终端（副作用函数，无返回值）。
 
-    # 过滤出 user/assistant 消息用于显示
-    displayable = []
-    for i, m in enumerate(msgs):
-        role = m.get("role", "")
-        if role in ("user", "assistant", "tool"):
-            displayable.append((i, m))
+    渲染通道（按优先级）：
+      · rich: Markdown + Panel 高保真回放，不截断
+          - user     : [bold green]▶ You > [/bold green]<content>
+          - assistant: reasoning_content → Panel(title="🧠 Thinking", dim)；
+                       content → Markdown 渲染
+          - tool     : [yellow]└─ [tool][/yellow] 完整结果
+      · prompt_toolkit (降级): ANSI 行级输出
+      · print (兜底): 纯文本
 
+    参数 show_recent:
+      · 0  或 >= total → 全量显示（不截断）
+      · 1..total-1    → 仅显示最新 N 条，其余折叠提示
+
+    末尾显式 sys.stdout.flush() 强制刷新，衔接主循环"预渲染策略"。
+    """
+    displayable = [m for m in msgs if m.get("role") in ("user", "assistant", "tool")]
     total = len(displayable)
+
     if total == 0:
-        print(c(GRAY, "\n  (空会话)\n"))
+        print("  (空会话)")
+        sys.stdout.flush()
         return
 
-    sep = "─" * 44
-    print(c(GRAY, f"\n  ── 对话历史 ({total} 条) {sep}"))
+    folded = 0
+    if show_recent and 0 < show_recent < total:
+        folded = total - show_recent
+        displayable = displayable[-show_recent:]
 
-    # 分割：折叠部分 + 显示部分
-    if total > show_recent:
-        folded_count = total - show_recent
-        print(c(GRAY, f"  │ ... 更早 {folded_count} 条消息（数据已完整加载，共 {total} 条）..."))
-        display_slice = displayable[-show_recent:]
+    if _HAS_RICH:
+        _rich_render_history(displayable, total, folded)
     else:
-        display_slice = displayable
+        _fallback_render_history(displayable, total, folded)
 
-    for j, (orig_idx, m) in enumerate(display_slice):
-        role = m.get("role", "")
+    sys.stdout.flush()
+
+
+def _rich_render_history(msgs: list, total: int, folded: int) -> None:
+    """
+    rich 路径：Markdown + Panel 完整渲染，不截断。
+
+    Markup 转义策略：
+      · f-string 里直接插值的用户/工具内容统一用 _rich_escape() 转义，
+        避免 shell 输出的 [/path] / [^] / [tool] 被误认为关闭标签
+        引发 MarkupError 崩溃。
+      · 字面量 "[tool]" 需用反斜杠转义 "\\[tool\\]" 才能显示为文本。
+      · Markdown / Text 构造器走独立解析路径，不重解析 rich 标签，
+        无需手工 escape。
+    """
+    console = _RichConsole(force_terminal=True, soft_wrap=True)
+    console.rule(f"[bold]对话历史 ({total} 条)[/bold]")
+    if folded:
+        console.print(f"[dim]... 已折叠 {folded} 条较早消息 ...[/dim]")
+
+    for m in msgs:
+        role    = m.get("role", "")
         content = m.get("content") or ""
-        is_last = (j == len(display_slice) - 1)
-        branch = "└" if is_last else "├"
 
         if role == "user":
-            preview = content[:120].replace("\n", " ")
-            print(f"  {branch} {c(CYAN, '[user]'):14} {preview}")
+            # 🛡 转义 content：用户输入可能含 [path] 等误伤 rich 解析器的字符
+            console.print(f"[bold green]▶ You > [/bold green]{_rich_escape(content)}")
 
         elif role == "assistant":
+            # ★ 先渲染 reasoning_content（若存在）→ 独立 Panel 折叠展示
+            # _RichText 构造器不解析 markup，天然安全，无需 escape
+            reasoning = m.get("reasoning_content")
+            if reasoning:
+                console.print(_RichPanel(
+                    _RichText(str(reasoning), style="dim"),
+                    title="🧠 Thinking",
+                    title_align="left",
+                    border_style="dim",
+                ))
+
             tool_calls = m.get("tool_calls")
             if tool_calls and not content:
                 names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
-                print(f"  {branch} {c(GREEN, '[assistant]'):14} {c(GRAY, f'[调用工具: {chr(44).join(names)}]')}")
+                # 🛡 转义工具名（防御性，正常函数名不含 []）
+                names_safe = _rich_escape(", ".join(names))
+                console.print(
+                    f"[bold cyan]🤖 A:[/bold cyan] [dim]调用工具: {names_safe}[/dim]"
+                )
             elif content:
-                preview = content[:150].replace("\n", " ")
-                print(f"  {branch} {c(GREEN, '[assistant]'):14} {preview}")
+                console.print("[bold cyan]🤖 A:[/bold cyan]")
+                # _RichMarkdown 走独立解析路径，不重解析 rich 标签，天然安全
+                try:
+                    console.print(_RichMarkdown(str(content)))
+                except Exception:
+                    # 极端输入（未闭合 Markdown 等）→ 降级为无 markup 纯文本
+                    console.print(str(content), markup=False)
             else:
-                print(f"  {branch} {c(GREEN, '[assistant]'):14} {c(GRAY, '(空)')}")
+                console.print("[bold cyan]🤖 A:[/bold cyan] [dim](空)[/dim]")
 
         elif role == "tool":
-            preview = content[:100].replace("\n", " ")
-            print(f"  {branch} {c(YELLOW, '[tool]'):14} {c(GRAY, f'[工具结果] {preview}')}")
+            # 🛡 **主犯修复点**：shell 工具输出最常含 [/home/...] / [~] / [^]
+            # 等字符。字面量 "[tool]" 用反斜杠转义 "[" 避免被当作 rich 标签
+            # （rich markup 中 "]" 不需要转义，只需转义 "["）。
+            console.print(
+                f"[yellow]└─ \\[tool][/yellow] {_rich_escape(content)}"
+            )
 
-    print(c(GRAY, f"  {sep}\n"))
+    console.rule()
+
+
+def _fallback_render_history(msgs: list, total: int, folded: int) -> None:
+    """rich 不可用时：走 prompt_toolkit ANSI 输出（保留向后兼容）。"""
+    def _emit(line: str) -> None:
+        if _HAS_PTK:
+            try:
+                _print_ptk(_ANSI(line))
+                return
+            except Exception:
+                pass
+        print(line)
+
+    sep = "─" * 44
+    _emit(f"  ── 对话历史 ({total} 条) {sep}")
+    if folded:
+        _emit(f"  │ ... 已折叠 {folded} 条较早消息 ...")
+
+    for j, m in enumerate(msgs):
+        role = m.get("role", "")
+        content = m.get("content") or ""
+        is_last = (j == len(msgs) - 1)
+        branch = "└" if is_last else "├"
+
+        if role == "user":
+            _emit(f"  {branch} [user]      {content}")
+        elif role == "assistant":
+            reasoning = m.get("reasoning_content")
+            thinking_tag = ""
+            if reasoning:
+                thinking_tag = c(GRAY + DIM, f" 🧠[{len(str(reasoning))}字思考]")
+
+            tool_calls = m.get("tool_calls")
+            if tool_calls and not content:
+                names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
+                _emit(f"  {branch} [assistant]{thinking_tag} [调用工具: {','.join(names)}]")
+            elif content:
+                _emit(f"  {branch} [assistant]{thinking_tag} {content}")
+            else:
+                _emit(f"  {branch} [assistant]{thinking_tag} (空)")
+        elif role == "tool":
+            _emit(f"  {branch} [tool]      [结果] {content}")
+
+    _emit(f"  {sep}")
 
 
 # ════════════════════════════════════════════════════════
