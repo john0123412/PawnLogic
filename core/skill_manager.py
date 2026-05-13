@@ -221,8 +221,10 @@ class SkillScanner:
             "_md_file": md_file,
         }
 
-    def match(self, query: str, top_k: int = 3) -> list[dict]:
-        """按查询匹配技能包，返回排序后的列表。"""
+    def match(self, query: str, top_k: int = 3, min_score: int = 3) -> list[dict]:
+        """按查询匹配技能包，返回排序后的列表。
+        min_score: 最低分阈值，低于此分数的技能包不返回（避免噪音注入）。
+        """
         packs = self.scan_all()
         if not packs or not query.strip():
             return []
@@ -268,7 +270,7 @@ class SkillScanner:
                     except OSError:
                         pass
 
-            if score >= 2:
+            if score >= min_score:
                 scored.append((score, pack))
 
         scored.sort(key=lambda x: -x[0])
