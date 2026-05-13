@@ -1144,7 +1144,9 @@ def handle_slash(cmd: str, session: AgentSession):
         print(HELP_TEXT)
 
     elif verb in ("/exit", "/quit", "/q"):
-        print(c(CYAN, "\n  Goodbye! 👋")); return "EXIT"
+        print(c(CYAN, "\n  Goodbye! 👋"))
+        import builtins; builtins._pawn_run_loop = False
+        return "EXIT"
 
     # ── 模块 2：Key 管理 ────────────────────────────────
     elif verb == "/setkey":
@@ -2725,9 +2727,10 @@ def main():
             reserve_space_for_menu=10,
         )
 
-    while True:
+    import builtins; builtins._pawn_run_loop = True
+    while getattr(builtins, "_pawn_run_loop", True):
+        print()  # 确保提示符在新行
         try:
-            print()  # 确保提示符在新行
             if prompt_toolkit_enabled:
                 raw = _pt_session.prompt(
                     [("class:prompt", "▶ "), ("class:you", "You > ")],
@@ -2739,10 +2742,11 @@ def main():
                 raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ") + _label).strip()
             _re_edit_default = ""  # 消费后清空
         except EOFError:
-            print(c(CYAN, "\n  Goodbye! 👋")); break
+            print(c(CYAN, "\n  Goodbye! 👋"))
+            builtins._pawn_run_loop = False
+            break
         except KeyboardInterrupt:
             # CC 风格：Ctrl+C 撤回上一轮，将用户文本作为 default 重新编辑
-            # prompt_toolkit 自身在 KeyboardInterrupt 后状态是干净的，无需重建 session
             removed, last_text = session.undo(1)
             if removed:
                 _re_edit_default = last_text

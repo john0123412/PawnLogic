@@ -148,7 +148,7 @@ def session_rename(session, query: str, new_name: str) -> str:
     return f"OK: 已重命名 [{matched['id']}] → '{new_name.strip()}'"
 
 
-def _display_session_history(msgs: list, show_recent: int = 6):
+def _display_session_history(msgs: list, show_recent: int = 50):
     """在终端显示会话对话历史。最近 show_recent 条完整显示，更早的折叠。"""
     from config import smart_truncate
 
