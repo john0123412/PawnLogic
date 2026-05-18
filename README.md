@@ -1,10 +1,60 @@
 # 🤖 PawnLogic 1.1
 
-> **GSD 工程外骨骼 · 多模态视觉 · 会话管理 · SQLite 记忆 · 动态沙箱 · CTF 逆向工具链 · 双模输出 · 技能引擎 · P6 自动化利用链 · API 鲁棒性 · 逻辑刷新 · 双格式 API 原生支持 · 自定义 Provider**
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个专为极客和开发者打造的全能终端 AI 智能体。强大的会话管理系统，让您能够轻松浏览、搜索、标签化和关联历史对话，同时保留了所有强大功能。
+> **A fully autonomous terminal AI agent** — multi-model routing, persistent memory, tool execution, and session management. Built for developers and security researchers.
 
-> ✅ 完美支持 **WSL2** 及其环境下的本地工具链调用
+## What is PawnLogic?
+
+PawnLogic is a terminal-native AI agent that **actually does things**: runs code, browses the web, edits files, debugs binaries, and remembers everything across sessions — all from your terminal.
+
+```bash
+# Install
+git clone https://github.com/john0123412/PawnLogic.git && cd PawnLogic
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env  # add your API key
+python main.py
+```
+
+**Key capabilities at a glance:**
+- 🔀 **12 LLM providers** — DeepSeek, Claude, GPT-4o, Qwen, GLM, Groq, MiMo, Ollama and more, hot-switchable with `/model`
+- 🧠 **Persistent memory** — SQLite-backed session history, RAG knowledge base, cross-session search
+- 🛠️ **Real tool execution** — shell, code sandbox (8 languages), web fetch, file ops, Docker containers
+- 👁️ **Vision** — feed screenshots directly to `glm-4v` or `gpt-4o` for analysis
+- 📋 **Spec-driven planning** — agent outputs `<plan>` XML before every action, no blind execution
+- 💬 **Session management** — tag, search, link, and export conversations with `/chat` commands
+- 🗜️ **Sliding-window context** — auto-summarizes old history to prevent API timeouts on long tasks
+
+> ✅ Full **WSL2** support with native Linux toolchain integration
+
+---
+
+<details>
+<summary>🔐 CTF / Security Research Toolchain (click to expand)</summary>
+
+PawnLogic includes a dedicated Pwn/CTF pipeline:
+
+- **Binary analysis**: `inspect_binary` → auto-writes checksec/file results to `.pawn_state.md`
+- **Offset finding**: `pwn_cyclic` generates de Bruijn patterns → `pwn_debug` reads crash offset
+- **ROP chain building**: `pwn_rop` (ROPgadget wrapper) + `pwn_libc` (libc leak resolver) + `pwn_one_gadget`
+- **GDB automation**: batch-mode GDB scripts, auto `bt full` on SIGSEGV/SIGABRT/SIGBUS
+- **Docker isolation**: `pwn_container` for persistent CTF environments with specific libc versions
+- **Timed debugging**: `pwn_timed_debug` with countdown-aware mode switching
+- **Skill packs**: `./skills/ctf_pwn/`, `./skills/ctf_web/`, etc. — auto-injected when relevant keywords detected
+
+**Recommended model combos for CTF:**
+| Task | Model |
+|------|-------|
+| Pwn exploit dev | `ds-r1` or `ds-v4-pro` (deep reasoning) |
+| Web code audit | `ds-chat` or `glm-5.1` |
+| Screenshot / stego | `glm-4v` or `gpt-4o` |
+| Fast script gen | `groq-llama3` |
+| Offline / air-gapped | `qwen-local` (Ollama) |
+
+</details>
 
 ---
 
