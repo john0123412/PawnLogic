@@ -112,6 +112,10 @@ def _extract_json(text: str) -> dict:
     text = (text or "").strip()
     if not text:
         raise ValueError("empty naming response")
+    # 剥离 Markdown 代码块（```json ... ``` 或 ``` ... ```）
+    md = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if md:
+        text = md.group(1)
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -131,19 +135,29 @@ def generate_session_name(
 ) -> dict:
     fallback_slug = f"task_{session_id[:8]}"
     snippets = []
+    # 优先收集有实质文本的 user/assistant 消息，跳过系统注入信号和纯工具调用
     for msg in messages:
-        if msg.get("role") == "system":
-            continue
         role = msg.get("role", "")
+        if role in ("system", "tool"):
+            continue
         content = str(msg.get("content") or "").strip()
-        if not content and msg.get("tool_calls"):
-            content = "tool_calls: " + ", ".join(
-                tc.get("function", {}).get("name", "?") for tc in msg.get("tool_calls", [])
-            )
-        if content:
-            snippets.append(f"[{role}] {content[:600]}")
-        if len(snippets) >= 8:
+        if content.startswith("[SYSTEM:") or content.startswith("[System]"):
+            continue
+        if content and role in ("user", "assistant"):
+            snippets.append(f"[{role}] {content[:400]}")
+        if len(snippets) >= 6:
             break
+    # 有效文本不足 2 条时，补充工具调用名称作为上下文
+    if len(snippets) < 2:
+        for msg in messages:
+            if msg.get("tool_calls"):
+                names = ", ".join(
+                    tc.get("function", {}).get("name", "?")
+                    for tc in msg.get("tool_calls", [])
+                )
+                snippets.append(f"[tool_calls] {names}")
+            if len(snippets) >= 6:
+                break
 
     prompt = (
         "你是会话命名器。根据下面的 CLI agent 对话，为该任务生成便于归类检索的名称。\n"
@@ -161,7 +175,9 @@ def generate_session_name(
 
     text = ""
     kwargs = {}
-    if get_api_format(model_alias) != "anthropic":
+    # 只对明确支持 json_object 的 OpenAI 官方模型传 response_format
+    _SUPPORTS_JSON_FORMAT = {"gpt-4o", "gpt-4o-mini", "gpt-4-turbo"}
+    if model_alias in _SUPPORTS_JSON_FORMAT:
         kwargs["response_format"] = {"type": "json_object"}
     for delta in stream_request(
         req_messages,
