@@ -560,6 +560,8 @@ TIER_LOW = {
     "fetch_max_chars":  8_000,
     "preferred_worker": "auto",
     "time_budget_sec":  300,      # 5 分钟
+    "ctx_sliding_turns": 4,       # 滚动窗口保留的完整迭代轮次
+    "ctx_summary_threshold": 6,   # 超过此轮次时触发历史摘要
 }
 TIER_MID = {
     "max_tokens":      8_192,
@@ -570,6 +572,8 @@ TIER_MID = {
     "fetch_max_chars":  20_000,
     "preferred_worker": "auto",
     "time_budget_sec":  600,      # 10 分钟
+    "ctx_sliding_turns": 5,       # 滚动窗口保留的完整迭代轮次
+    "ctx_summary_threshold": 8,   # 超过此轮次时触发历史摘要
 }
 TIER_DEEP = {
     "max_tokens":      32_768,
@@ -580,6 +584,8 @@ TIER_DEEP = {
     "fetch_max_chars":  30_000,
     "preferred_worker": "auto",
     "time_budget_sec":  1800,     # 30 分钟
+    "ctx_sliding_turns": 8,       # 深度模式保留更多轮次
+    "ctx_summary_threshold": 12,
 }
 
 TIER_MAX = {
@@ -591,6 +597,8 @@ TIER_MAX = {
     "fetch_max_chars":  40_000,
     "preferred_worker": "auto",
     "time_budget_sec":  3600,     # 60 分钟
+    "ctx_sliding_turns": 10,
+    "ctx_summary_threshold": 15,
 }
 
 DYNAMIC_CONFIG: dict = dict(TIER_MID)

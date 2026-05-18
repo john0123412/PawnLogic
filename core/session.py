@@ -724,6 +724,9 @@ class AgentSession:
         self._turn_tool_calls        = 0
         # ★ P6.5: 技能包匹配结果缓存
         self._loaded_skill_packs: list = []
+        # ★ 滚动窗口 + 历史摘要状态
+        self._history_summary: str = ""          # 当前有效的历史摘要文本
+        self._summary_turn_count: int = 0        # 上次生成摘要时的迭代轮次数
         # 最后调用，因为它依赖上面所有属性
         self._reset_system_prompt()
 
@@ -1272,6 +1275,178 @@ class AgentSession:
             self.messages.insert(0, {"role": "system", "content": prompt})
 
     # ════════════════════════════════════════════════════
+    # 滚动窗口上下文构建（Sliding Window + History Summary）
+    # ════════════════════════════════════════════════════
+
+    def _count_turns(self, msgs: list) -> list[tuple[int, int]]:
+        """将 msgs[1:] 按迭代单元分组，返回 [(start_idx, end_idx), ...]。
+        一个迭代单元 = 一条 user 消息 + 其后所有 assistant/tool 消息（直到下一条 user）。
+        system 消息（index 0）不参与分组。
+        """
+        turns: list[tuple[int, int]] = []
+        i = 1  # skip system
+        while i < len(msgs):
+            if msgs[i].get("role") == "user":
+                start = i
+                i += 1
+                # 吸收紧跟的 assistant + tool 消息，直到下一条 user 或结束
+                while i < len(msgs) and msgs[i].get("role") != "user":
+                    i += 1
+                turns.append((start, i))
+            else:
+                i += 1
+        return turns
+
+    def _maybe_update_summary(self, msgs: list, current_turn_count: int) -> None:
+        """若迭代轮次超过阈值且距上次摘要已过半个阈值，同步生成历史摘要。
+        摘要只覆盖滚动窗口之外的旧历史，不包含最近 N 轮。
+        """
+        cfg = DYNAMIC_CONFIG
+        threshold   = cfg.get("ctx_summary_threshold", 8)
+        sliding     = cfg.get("ctx_sliding_turns", 5)
+        refresh_gap = max(threshold // 2, 3)
+
+        if current_turn_count < threshold:
+            return
+        if current_turn_count - self._summary_turn_count < refresh_gap:
+            return
+
+        turns = self._count_turns(msgs)
+        # 只摘要滚动窗口之外的旧轮次
+        old_turns = turns[:-sliding] if len(turns) > sliding else []
+        if not old_turns:
+            return
+
+        # 收集待摘要的消息文本
+        lines: list[str] = []
+        for start, end in old_turns:
+            for m in msgs[start:end]:
+                role    = m.get("role", "")
+                content = str(m.get("content") or "")[:600]
+                if role == "tool":
+                    lines.append(f"[Tool Output]: {content}")
+                elif role == "assistant":
+                    # 只保留非 plan 的文本部分（去掉 XML 标签）
+                    import re as _re
+                    clean = _re.sub(r"<[^>]+>", " ", content).strip()[:400]
+                    if clean:
+                        lines.append(f"[Assistant]: {clean}")
+                elif role == "user" and not content.startswith("[SYSTEM:") and not content.startswith("[System]"):
+                    lines.append(f"[User]: {content[:200]}")
+
+        if not lines:
+            return
+
+        history_text = "\n".join(lines)
+
+        summary_prompt = (
+            "You are a security research assistant. Summarize the following agent conversation history "
+            "into a concise background context (≤400 words). "
+            "You MUST preserve ALL of the following if present:\n"
+            "  • Stack overflow offset / buffer size (e.g. offset=72)\n"
+            "  • Canary status and bypass method\n"
+            "  • PIE/ASLR status, libc base address, binary base address\n"
+            "  • PLT/GOT addresses of key functions (e.g. puts@plt=0x401030)\n"
+            "  • Vulnerability type and location (e.g. gets() in vuln() → stack overflow)\n"
+            "  • ROP gadgets found (e.g. pop rdi; ret @ 0x4011ab)\n"
+            "  • Paths already tried and ruled out (e.g. shellcode injection failed due to NX)\n"
+            "  • Current exploit stage and what remains\n"
+            "Output ONLY the summary text, no headers, no markdown.\n\n"
+            f"--- HISTORY ---\n{history_text}\n--- END ---"
+        )
+
+        # 选轻量摘要模型（复用 NAMING_MODEL_CHAIN）
+        from core.naming import pick_naming_model
+        try:
+            summary_alias = pick_naming_model(self.model_alias)
+        except Exception:
+            summary_alias = self.model_alias
+
+        try:
+            from core.api_client import stream_request
+            summary_chunks: list[str] = []
+            for delta in stream_request(
+                [
+                    {"role": "system", "content": "You are a concise technical summarizer."},
+                    {"role": "user",   "content": summary_prompt},
+                ],
+                summary_alias,
+                tools_schema=None,
+                max_tokens=600,
+            ):
+                if "choices" not in delta:
+                    continue
+                chunk = (delta["choices"][0].get("delta") or {}).get("content") or ""
+                if chunk:
+                    summary_chunks.append(chunk)
+
+            summary_text = "".join(summary_chunks).strip()
+            if summary_text:
+                self._history_summary = summary_text
+                self._summary_turn_count = current_turn_count
+                logger.info(
+                    "[PawnLogic] Context pruning triggered. Summary updated. "
+                    "Current dynamic window turns: {} | model={}",
+                    sliding, summary_alias,
+                )
+                print(c(CYAN,
+                    f"  🗜  [Context Pruning] 历史摘要已更新（保留最近 {sliding} 轮明细）"
+                ))
+        except Exception as exc:
+            logger.warning(
+                "History summary generation failed (non-fatal) | exc={!r}", exc
+            )
+
+    def _build_api_messages(self) -> list:
+        """构建发送给 LLM 的消息列表（滚动窗口视图）。
+        不修改 self.messages 原始列表，只返回裁剪后的副本。
+
+        结构：
+          [0] system prompt
+          [1..2] 原始任务目标（前 1~2 轮 user+assistant，永不裁剪）
+          [3] assistant: 历史摘要块（若存在）
+          [4..] 最近 ctx_sliding_turns 轮完整迭代
+        """
+        msgs = self.messages
+        if len(msgs) <= 1:
+            return list(msgs)
+
+        cfg     = DYNAMIC_CONFIG
+        sliding = cfg.get("ctx_sliding_turns", 5)
+
+        turns = self._count_turns(msgs)
+        total_turns = len(turns)
+
+        # 不需要裁剪：轮次未超过阈值
+        if total_turns <= sliding + 2:
+            return list(msgs)
+
+        # 锚定：永远保留前 2 轮（任务目标）
+        anchor_end = turns[1][1] if len(turns) >= 2 else (turns[0][1] if turns else 1)
+        anchor_msgs = msgs[:anchor_end]  # system + 前2轮
+
+        # 滚动窗口：最近 sliding 轮
+        window_start_idx = turns[-sliding][0] if total_turns >= sliding else turns[0][0]
+        window_msgs = msgs[window_start_idx:]
+
+        # 组装
+        result = list(anchor_msgs)
+
+        if self._history_summary:
+            result.append({
+                "role":    "assistant",
+                "content": f"📝 [History Summary — earlier iterations compressed]\n{self._history_summary}",
+                "_pinned": True,
+            })
+
+        # 追加滚动窗口消息（anchor 之后、window 起点之前的中间段跳过）
+        for i, m in enumerate(msgs[anchor_end:], start=anchor_end):
+            if i >= window_start_idx:
+                result.append(m)
+
+        return result
+
+    # ════════════════════════════════════════════════════
     # 模块 2：自动直觉检索辅助
     # ════════════════════════════════════════════════════
 
@@ -1448,6 +1623,10 @@ class AgentSession:
     def run_turn(self, user_input: str):
         self._reset_system_prompt(knowledge_query=user_input)
         self.messages.append({"role": "user", "content": user_input})
+
+        # ★ 滚动窗口：计算当前轮次数，按需同步生成历史摘要
+        _current_turns = len(self._count_turns(self.messages))
+        self._maybe_update_summary(self.messages, _current_turns)
 
         dropped = _trim_and_compact_context(self.messages)
         if dropped:
@@ -1674,6 +1853,9 @@ class AgentSession:
                 _API_RETRY_MAX = 3
                 text_buf = ""; tc_buf = {}
 
+                # ★ 滚动窗口视图：发给 LLM 的是裁剪后的消息，self.messages 原始列表不变
+                _api_msgs = self._build_api_messages()
+
                 while True:
                     text_buf = ""; tc_buf = {}
                     # ★ thinking-mode 修复：独立累积 reasoning_content
@@ -1686,7 +1868,7 @@ class AgentSession:
                     _tokens_before = self._turn_completion_tokens
 
                     for delta in stream_request(
-                        self.messages, self.model_alias,
+                        _api_msgs, self.model_alias,
                         tools_schema=current_tools,
                         max_tokens=current_max_tokens,
                     ):
@@ -2336,29 +2518,23 @@ class AgentSession:
     def _maybe_autoname(self, msgs_snapshot: list):
         if self._naming_done:
             return
-        # ★ Turn 门槛：首轮后不命名（上下文太薄，slug 质量低）。
-        # 从第 2 轮结束起才尝试，与 should_name_session 的启发式叠加使用。
         if self._turn_count < 2:
             return
         if not should_name_session(msgs_snapshot):
             return
-        now = time.monotonic()
-        if now - self._naming_attempted_at < 10:
-            return
-        self._naming_attempted_at = now
         sid, model_alias, cwd, workspace_dir = (
             self.session_id, self.model_alias, self.cwd, self.workspace_dir
         )
 
         def _do():
-            # ★ 顶层异常护城河：不论 API 超时、模型崩溃、SQLite 写锁超时、
-            # rename IO 错误 —— 任何失败都不得逃逸到 daemon 线程外杀主进程。
-            # 整个过程以"best-effort"精神执行：成功则命名+swap+入库；
-            # 失败则记 warning，保留旧 session_<id>/ 目录结构，下次继续尝试。
             if not self._naming_lock.acquire(blocking=False):
                 return
             try:
-                # 1. 选轻量模型（全链不可用时降级到原会话模型）
+                # ★ 冷却门移入锁内：失败时不阻断下次重试（锁释放后可重新进入）
+                now = time.monotonic()
+                if now - self._naming_attempted_at < 10:
+                    return
+                self._naming_attempted_at = now
                 try:
                     naming_alias = pick_naming_model(model_alias)
                 except Exception as exc:
