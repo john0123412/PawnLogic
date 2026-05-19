@@ -109,7 +109,10 @@ from config import (
     CUSTOM_PROVIDERS_PATH,
 )
 from utils.ansi       import c, cp, rl_wrap, BOLD, DIM, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA, Spinner
-from core.session     import AgentSession, _ctx_chars, STATE_FILENAME
+from core.session     import (
+    AgentSession, _ctx_chars, STATE_FILENAME,
+    attach_external_mcp_tools, detach_external_mcp_tools,
+)
 from core.api_client  import stream_request
 from core.memory import (
     init_db, list_knowledge, delete_knowledge,
@@ -2365,6 +2368,7 @@ async def main():
     )
 
     init_db()
+    attach_external_mcp_tools()
 
     # ── 模块 2：无 Key 时进入配置向导 ────────────────────
     any_key = any(
@@ -2830,3 +2834,5 @@ if __name__ == "__main__":
         print(c(CYAN, "\n\n  Goodbye! 👋"))
     except SystemExit:
         pass
+    finally:
+        detach_external_mcp_tools()

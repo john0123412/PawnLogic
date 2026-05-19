@@ -367,6 +367,46 @@ def _try_load_delegate():
 _try_load_delegate()
 
 # ════════════════════════════════════════════════════════
+# 外部 MCP 工具挂载点
+# 由 main.py 在 init_db 之后、AgentSession 实例化之前调用一次。
+# ════════════════════════════════════════════════════════
+
+def attach_external_mcp_tools() -> None:
+    """
+    把 mcp_client_manager 发现的外部 MCP 工具合并进
+    TOOL_MAP / TOOLS_SCHEMA / AGENT_PHASES。
+    无配置或全部 server 启动失败时本函数自动 no-op。
+    """
+    from core.mcp_client_manager import init_external_mcp
+    from config import AGENT_PHASES
+
+    mgr = init_external_mcp()
+    if mgr is None:
+        return
+
+    # 1. 工具表：update / extend —— PawnLogic 主循环零感知地消费
+    TOOL_MAP.update(mgr.build_pawnlogic_handlers())
+    TOOLS_SCHEMA.extend(mgr.build_pawnlogic_schemas())
+
+    # 2. Phase 归属：让外部工具按配置进入对应 Phase 可见列表
+    for prefixed_name, phase in mgr.get_phase_mapping().items():
+        target = phase if phase in AGENT_PHASES else "GENERAL"
+        if phase != target:
+            logger.warning(
+                f"[MCP] unknown phase '{phase}' for '{prefixed_name}' → fallback to GENERAL"
+            )
+        bucket = AGENT_PHASES.setdefault(target, [])
+        if prefixed_name not in bucket:
+            bucket.append(prefixed_name)
+
+
+def detach_external_mcp_tools() -> None:
+    """收割背景线程与全部外部 MCP 子进程。幂等。"""
+    from core.mcp_client_manager import shutdown_external_mcp
+    shutdown_external_mcp()
+
+
+# ════════════════════════════════════════════════════════
 # ★ 改动 [1]：_PLAN_REQUIRED_MSG → 温和引导语气
 #   不再是 "ERROR: Rule Violation"，改为 "Notice"，
 #   只在终端打印，不注入对话上下文（避免上下文污染）。

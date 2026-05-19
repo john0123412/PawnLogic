@@ -6,6 +6,7 @@
 .env
 *.Key
 *.token
+mcp_configs.json
 
 # --- Python 环境与缓存 ---
 .venv/
