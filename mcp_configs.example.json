@@ -1,0 +1,54 @@
+{
+  "_comment": "PawnLogic 外部 MCP Server 配置模板。复制为 mcp_configs.json 后填入真实 token；mcp_configs.json 已加入 .gitignore。",
+
+  "_format": {
+    "command":       "必填，可执行文件 (npx / python / node ...)",
+    "args":          "可选，命令行参数数组；支持 ${VAR} 环境变量插值",
+    "env":           "可选，子进程环境变量；支持 ${VAR} 插值（推荐用此方式注入 token）",
+    "phase":         "可选，归属 Phase；默认 GENERAL。可选：RECON / VULN_DEV / EXPLOIT / WEB_PEN / GENERAL",
+    "timeout":       "可选，单次 call_tool 超时秒数；默认 120",
+    "include_tools": "可选，白名单数组；仅注册数组内工具",
+    "exclude_tools": "可选，黑名单数组；剔除数组内工具（与白名单可叠加，先白后黑）"
+  },
+
+  "_setup_steps": [
+    "1. cp mcp_configs.example.json mcp_configs.json",
+    "2. 确认 .env 内 TAVILY_API_KEY 已配（GITHUB_TOKEN 可选，仅用 github MCP 才需要）",
+    "3. Playwright 首次启动会下载 ~70MB npm 包；其后 browser_navigate 首调用还会自动拉 Chromium（~120MB）",
+    "4. 直接 pawn 启动，日志看到 [MCP] ✔ 'xxx': N/M tools registered 即接入成功",
+    "5. 想看某 server 真实暴露的工具名 → 先去掉 include_tools 跑一次，再按需收紧"
+  ],
+
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args":    ["-y", "@playwright/mcp@latest"],
+      "phase":   "WEB_PEN",
+      "timeout": 180,
+      "_note":   "首次会拉浏览器；如果只想用部分工具防止 prompt 膨胀，先空运行一次看真实工具名再添加 include_tools"
+    },
+
+    "tavily": {
+      "command": "npx",
+      "args":    ["-y", "tavily-mcp"],
+      "env": {
+        "TAVILY_API_KEY": "${TAVILY_API_KEY}"
+      },
+      "phase":   "GENERAL",
+      "timeout": 30,
+      "exclude_tools": ["tavily_search"],
+      "_note":   "已实测暴露 5 个工具：tavily_search / tavily_extract / tavily_crawl / tavily_map / tavily_research。tavily_search 与 PawnLogic 自带 web_search 重叠，默认 exclude；如想全用 Tavily 路线可移除此 exclude"
+    },
+
+    "github": {
+      "command": "npx",
+      "args":    ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "phase":   "GENERAL",
+      "timeout": 60,
+      "_note":   "未设 GITHUB_TOKEN 时会优雅失败并跳过，不影响其他 server。若不需要 github 集成可以整段删除此 server 配置"
+    }
+  }
+}
