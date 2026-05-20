@@ -500,7 +500,7 @@ class ProviderTUI:
             self._detail_status = "✅ Key saved. Testing..."
             self._detail_status_style = "class:spinner"
             rebuild()
-            asyncio.get_event_loop().create_task(self._run_test_detail(pname))
+            e.app.create_background_task(self._run_test_detail(pname))
 
         @kb.add("escape", filter=_key_active)
         def _key_cancel(e):
@@ -564,7 +564,7 @@ class ProviderTUI:
         def _d_dn(e): self._detail_cursor = (self._detail_cursor + 1) % 4; inv()
 
         @kb.add("enter", filter=_det)
-        def _d_enter(e): asyncio.get_event_loop().create_task(self._detail_action())
+        def _d_enter(e): e.app.create_background_task(self._detail_action())
 
         @kb.add("escape", filter=_det)
         def _d_esc(e): self._panel = "main"; rebuild()
@@ -609,7 +609,7 @@ class ProviderTUI:
                          and not self._wiz_fmt_open and not self._dialog)
 
         @kb.add("enter", filter=_btn)
-        def _w_confirm(e): asyncio.get_event_loop().create_task(self._wizard_confirm())
+        def _w_confirm(e): e.app.create_background_task(self._wizard_confirm())
 
         @kb.add("escape", filter=_wiz)
         def _w_esc(e): self._panel = "main"; rebuild()
