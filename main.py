@@ -1004,24 +1004,6 @@ def _provider_add():
     except (EOFError, KeyboardInterrupt):
         print(); return
 
-    # 模型 ID
-    try:
-        model_id = input(cp(BOLD, "  模型 ID (如 gpt-4o / claude-sonnet-4-6): ")).strip()
-    except (EOFError, KeyboardInterrupt):
-        print(); return
-    if not model_id:
-        print(c(RED, "  ✗ 模型 ID 不能为空"))
-        return
-
-    # 别名
-    default_alias = model_id.split("/")[-1]
-    try:
-        alias = input(cp(BOLD, f"  模型别名 (用于 /model，默认 {default_alias}): ")).strip()
-    except (EOFError, KeyboardInterrupt):
-        print(); return
-    if not alias:
-        alias = default_alias
-
     # 写入 .env
     if key:
         env_path = _ENV_PATH  # ~/.pawnlogic/.env，开源友好
@@ -1044,22 +1026,10 @@ def _provider_add():
         "label":       f"Custom ({name})",
         "api_format":  api_format,
     }
-    models_cfg = {
-        alias: {
-            "id":       model_id,
-            "provider": name,
-            "desc":     f"Custom {model_id} via {name}",
-            "color":    "\033[37m",
-            "vision":   False,
-        }
-    }
 
-    # 保存到 JSON
-    save_custom_provider(name, prov_cfg, models_cfg)
-
-    # 热加载到内存
+    # 保存到 JSON（不注册任何模型，用 /provider fetch 拉取）
+    save_custom_provider(name, prov_cfg, {})
     PROVIDERS[name] = prov_cfg
-    MODELS[alias] = models_cfg[alias]
 
     print(c(GREEN, f"\n  ✓ Provider '{name}' 已添加"))
     print(c(GRAY,  f"    格式: {api_format}"))
