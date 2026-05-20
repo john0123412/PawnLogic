@@ -406,7 +406,7 @@ def init_external_mcp(config_path: Optional[Path] = None) -> Optional[MCPClientM
     if _GLOBAL_MANAGER is not None:
         return _GLOBAL_MANAGER
 
-    cfg = config_path or (Path(__file__).resolve().parent.parent / "mcp_configs.json")
+    cfg = config_path or (Path.home() / ".pawnlogic" / "mcp_configs.json")
     mgr = MCPClientManager(cfg)
     if not mgr.start():
         return None
