@@ -1,31 +1,24 @@
 """
 core/provider_tui.py — Interactive TUI for Provider Management
-
 4-panel stack: Main → Detail → AddWizard → ModelSelection
-Dialogs: SecurityWarning, DeleteConfirm (floating overlays)
 All UI text in English. API Keys never displayed in plain text.
 """
 from __future__ import annotations
-import asyncio, os, time
+import asyncio, json, os, time, datetime
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-# ── prompt_toolkit imports ────────────────────────────────────────────────────
 from prompt_toolkit.application import Application
-from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout
-from prompt_toolkit.layout.containers import (
-    HSplit, VSplit, Window, FloatContainer, Float, ConditionalContainer,
-)
+from prompt_toolkit.layout.containers import HSplit, Window, FloatContainer, Float, ConditionalContainer
 from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.layout.dimension import Dimension as D
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import TextArea, Frame
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 
-# ── project imports ───────────────────────────────────────────────────────────
 from config.providers import (
     PROVIDERS, MODELS, CUSTOM_PROVIDERS_PATH,
     save_custom_provider, load_custom_providers, remove_custom_provider,
@@ -34,14 +27,13 @@ from config.providers import (
 _PAWNLOGIC_DIR = Path.home() / ".pawnlogic"
 _ENV_PATH = _PAWNLOGIC_DIR / ".env"
 _BUILTIN = {"deepseek", "openai", "anthropic"}
-
 _NOISE = {"embedding", "rerank", "tts", "whisper", "moderation", "davinci", "babbage"}
+_PAGE = 20  # rows per page in model selector
 
 TUI_STYLE = Style.from_dict({
     "title":        "#00afff bold",
     "subtitle":     "#888888",
     "cursor":       "#00ff00 bold",
-    "selected":     "#00ff00 bold",
     "key-ok":       "#00d700",
     "key-missing":  "#ff5555",
     "badge-builtin":"#888888",
@@ -60,54 +52,38 @@ TUI_STYLE = Style.from_dict({
     "spinner":      "#00afff bold",
 })
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Helpers
-# ══════════════════════════════════════════════════════════════════════════════
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 def _mask_key(key: str) -> str:
     if not key:
         return "— Not Configured"
-    if len(key) <= 8:
-        return "••••••••"
-    return f"{key[:4]}{'•' * 8}{key[-4:]}"
-
+    return f"{key[:4]}{'•' * 8}{key[-4:]}" if len(key) > 8 else "••••••••"
 
 def _provider_key(pname: str) -> str:
     env_var = PROVIDERS.get(pname, {}).get("api_key_env", "")
     return os.getenv(env_var, "") if env_var else ""
 
-
 def _model_count(pname: str) -> int:
     return sum(1 for m in MODELS.values() if m.get("provider") == pname)
 
-
 def _last_synced(pname: str) -> str:
-    """Return last-synced timestamp from custom_providers.json, or 'Never'."""
     if not CUSTOM_PROVIDERS_PATH.exists():
         return "Never"
     try:
-        import json
         data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
-        ts = data.get("sync_times", {}).get(pname)
-        return ts if ts else "Never"
+        return data.get("sync_times", {}).get(pname) or "Never"
     except Exception:
         return "Never"
 
-
 def _save_key_to_env(env_var: str, key: str) -> None:
-    """Append/update KEY=value in ~/.pawnlogic/.env and inject into os.environ."""
     _PAWNLOGIC_DIR.mkdir(parents=True, exist_ok=True)
     existing = _ENV_PATH.read_text(encoding="utf-8") if _ENV_PATH.exists() else ""
-    lines = existing.splitlines()
-    new_lines = [l for l in lines if not l.startswith(f"{env_var}=")]
-    new_lines.append(f"{env_var}={key}")
-    _ENV_PATH.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    lines = [l for l in existing.splitlines() if not l.startswith(f"{env_var}=")]
+    lines.append(f"{env_var}={key}")
+    _ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
     os.environ[env_var] = key
 
-
 def _record_sync_time(pname: str) -> None:
-    import json, datetime
     _PAWNLOGIC_DIR.mkdir(parents=True, exist_ok=True)
     data: dict = {"providers": {}, "models": {}, "sync_times": {}}
     if CUSTOM_PROVIDERS_PATH.exists():
@@ -115,59 +91,49 @@ def _record_sync_time(pname: str) -> None:
             data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
         except Exception:
             pass
-    data.setdefault("sync_times", {})[pname] = (
-        datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    )
-    CUSTOM_PROVIDERS_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    data.setdefault("sync_times", {})[pname] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    CUSTOM_PROVIDERS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
+def _sync_models_to_runtime() -> None:
+    """Merge custom_providers.json into in-memory MODELS. Never changes DEFAULT_MODEL."""
+    load_custom_providers()
+
+def _normalize_base_url(raw: str, api_format: str = "openai") -> str:
+    """Build the actual chat endpoint from whatever the user stored."""
+    raw = raw.rstrip("/")
+    if raw.endswith("/chat/completions") or raw.endswith("/messages"):
+        return raw
+    suffix = "/messages" if api_format == "anthropic" else "/chat/completions"
+    if raw.endswith("/v1"):
+        return raw + suffix
+    return raw + "/v1" + suffix
 
 async def _test_connection(base_url: str, api_key: str, api_format: str) -> tuple[bool, str, int]:
-    """
-    Send a minimal request. Returns (ok, message, ms).
-    Does NOT require a registered model alias.
-    """
-    import httpx, json as _json
+    import httpx
     t0 = time.monotonic()
+    endpoint = _normalize_base_url(base_url, api_format)
     try:
         if api_format == "anthropic":
-            payload = {
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 1,
-                "messages": [{"role": "user", "content": "hi"}],
-            }
-            headers = {
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            }
+            payload = {"model": "claude-haiku-4-5-20251001", "max_tokens": 1,
+                       "messages": [{"role": "user", "content": "hi"}]}
+            headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01",
+                       "content-type": "application/json"}
         else:
-            payload = {
-                "model": "gpt-3.5-turbo",
-                "max_tokens": 1,
-                "messages": [{"role": "user", "content": "hi"}],
-            }
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "content-type": "application/json",
-            }
+            payload = {"model": "gpt-3.5-turbo", "max_tokens": 1,
+                       "messages": [{"role": "user", "content": "hi"}]}
+            headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(base_url, json=payload, headers=headers)
+            resp = await client.post(endpoint, json=payload, headers=headers)
         ms = int((time.monotonic() - t0) * 1000)
         if resp.status_code in (200, 400):
-            # 400 can mean wrong model id but auth passed
             body = resp.json()
             if resp.status_code == 200 or "error" in body:
                 return True, f"Connected ({ms}ms)", ms
-        return False, f"HTTP {resp.status_code}: {resp.text[:120]}", ms
+        return False, f"HTTP {resp.status_code}: {resp.text[:100]}", ms
     except Exception as e:
-        ms = int((time.monotonic() - t0) * 1000)
-        return False, str(e)[:120], ms
-
+        return False, str(e)[:100], int((time.monotonic() - t0) * 1000)
 
 async def _fetch_models(base_url: str, api_key: str) -> tuple[list[tuple[str, dict]], str]:
-    """Returns (candidates, error_msg). candidates = [(id, cfg_dict), ...]"""
     import httpx
     parsed = urlparse(base_url)
     models_url = f"{parsed.scheme}://{parsed.netloc}/v1/models"
@@ -176,208 +142,177 @@ async def _fetch_models(base_url: str, api_key: str) -> tuple[list[tuple[str, di
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             while url:
-                resp = await client.get(
-                    url, headers={"Authorization": f"Bearer {api_key}"}
-                )
+                resp = await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
                 resp.raise_for_status()
                 body = resp.json()
                 all_data.extend(body.get("data", []))
                 if not body.get("has_more"):
                     break
                 cursor = body.get("next_cursor") or body.get("next_page")
-                if not cursor:
-                    break
-                url = f"{models_url}?limit=200&after={cursor}"
+                url = f"{models_url}?limit=200&after={cursor}" if cursor else None
     except Exception as e:
-        return [], str(e)[:120]
-
+        return [], str(e)[:100]
     candidates = []
     for item in all_data:
         mid = item.get("id", "")
         if not mid or any(n in mid.lower() for n in _NOISE):
             continue
         vision = any(k in mid.lower() for k in ("vision", "vl", "visual"))
-        candidates.append((mid, {
-            "id": mid, "provider": "", "desc": "fetched",
-            "color": "\033[37m", "vision": vision,
-        }))
+        candidates.append((mid, {"id": mid, "provider": "", "desc": "fetched",
+                                  "color": "\033[37m", "vision": vision}))
     return candidates, ""
 
-
 # ══════════════════════════════════════════════════════════════════════════════
-# ProviderTUI — main class
+# ProviderTUI
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ProviderTUI:
-    """
-    Single Application instance. Panel navigation via _panel stack.
-    Call await ProviderTUI().run() from an async context.
-    """
-
     def __init__(self):
         self._app: Optional[Application] = None
-        # panel stack: each entry is a string tag
         self._panel: str = "main"
-        # shared state
+        # main
         self._main_cursor: int = 0
+        # detail
         self._detail_provider: str = ""
-        self._detail_cursor: int = 0          # 0-3 action items
-        self._dialog: Optional[str] = None    # "security" | "delete" | None
-        self._dialog_cursor: int = 0          # button index
-        # add wizard state
-        self._wiz_fields = ["", "", "openai", ""]  # name, url, format, key
-        self._wiz_focus: int = 0
-        self._wiz_fmt_open: bool = False
-        self._wiz_fmt_cursor: int = 0         # 0=openai 1=anthropic
-        self._wiz_error: str = ""
-        self._wiz_status: str = ""            # spinner / result text
-        self._wiz_status_style: str = ""
-        # model selection state
-        self._ms_entries: list[tuple[str, dict]] = []
-        self._ms_selected: set[int] = set()
-        self._ms_cursor: int = 0
-        self._ms_provider: str = ""
-        self._ms_caller: str = "main"         # panel to return to
-        self._ms_error: str = ""
-        # detail panel inline state
+        self._detail_cursor: int = 0
         self._detail_status: str = ""
         self._detail_status_style: str = ""
-        self._detail_key_input_active: bool = False
-        self._detail_key_ta: Optional[TextArea] = None
-        # key input widget (reused)
-        self._key_ta = TextArea(
-            password=True, multiline=False, height=1,
-            style="class:field-focus",
-        )
+        self._detail_key_active: bool = False
+        self._key_ta = TextArea(password=True, multiline=False, height=1, style="class:field-focus")
+        # dialog: None | "security" | "delete" | "save_anyway"
+        self._dialog: Optional[str] = None
+        self._dialog_cursor: int = 0
+        self._wiz_fields_pending: tuple = ()
+        # wizard
+        self._wiz_fields: list = ["", "", "openai", ""]
+        self._wiz_focus: int = 0
+        self._wiz_fmt_open: bool = False
+        self._wiz_fmt_cursor: int = 0
+        self._wiz_error: str = ""
+        self._wiz_status: str = ""
+        self._wiz_status_style: str = ""
+        # model selector
+        self._ms_all: list[tuple[str, dict]] = []   # full unfiltered list
+        self._ms_selected: set[str] = set()          # selected model IDs (strings)
+        self._ms_manual: list[str] = []              # manually added IDs
+        self._ms_cursor: int = 0
+        self._ms_viewport: int = 0                   # top row of visible window
+        self._ms_provider: str = ""
+        self._ms_caller: str = "main"
+        self._ms_error: str = ""
+        self._ms_search: str = ""
+        self._ms_search_focus: bool = False
 
-    # ── provider list helper ──────────────────────────────────────────────────
+    # ── helpers ───────────────────────────────────────────────────────────────
+
     def _provider_rows(self) -> list[str]:
         return list(PROVIDERS.keys())
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # RENDER FUNCTIONS
-    # ══════════════════════════════════════════════════════════════════════════
+    def _ms_filtered(self) -> list[tuple[str, dict]]:
+        """Return entries filtered by search string."""
+        q = self._ms_search.lower()
+        if not q:
+            return self._ms_all
+        return [(mid, cfg) for mid, cfg in self._ms_all if q in mid.lower()]
+
+    # ── render: main ─────────────────────────────────────────────────────────
 
     def _render_main(self) -> StyleAndTextTuples:
         rows = self._provider_rows()
-        f: StyleAndTextTuples = []
-        f.append(("class:title", "\n  🔌 Provider Manager\n\n"))
+        f: StyleAndTextTuples = [("class:title", "\n  🔌 Provider Manager\n\n")]
         if not rows:
             f.append(("class:subtitle", "  No providers configured. Press N to add one.\n"))
         for i, pname in enumerate(rows):
             key = _provider_key(pname)
-            n_models = _model_count(pname)
+            n = _model_count(pname)
             is_builtin = pname in _BUILTIN
-            cursor = "▶ " if i == self._main_cursor else "  "
+            cur = "▶ " if i == self._main_cursor else "  "
+            badge_s = "class:badge-builtin" if is_builtin else "class:badge-custom"
             badge = "[built-in]" if is_builtin else "[custom]"
-            badge_style = "class:badge-builtin" if is_builtin else "class:badge-custom"
-            if key:
-                key_tag = ("class:key-ok", "  ✓ Key Set")
-            else:
-                key_tag = ("class:key-missing", "  ✗ Not Configured")
-            cur_style = "class:cursor" if i == self._main_cursor else ""
-            f.append((cur_style, f"  {cursor}"))
-            f.append((cur_style, f"● {pname:<20}"))
-            f.append(key_tag)
-            f.append(("class:subtitle", f"  {n_models} models  "))
-            f.append((badge_style, badge))
-            f.append(("", "\n"))
+            cs = "class:cursor" if i == self._main_cursor else ""
+            f += [(cs, f"  {cur}● {pname:<22}"),
+                  ("class:key-ok" if key else "class:key-missing",
+                   "  ✓ Key Set" if key else "  ✗ Not Configured"),
+                  ("class:subtitle", f"  {n} models  "),
+                  (badge_s, badge), ("", "\n")]
         f.append(("", "\n"))
         return f
 
     def _render_status_main(self) -> StyleAndTextTuples:
-        return [
-            ("class:status-key", " ↑↓ "), ("class:status", "Move  "),
-            ("class:status-key", "Enter "), ("class:status", "Manage  "),
-            ("class:status-key", "N "), ("class:status", "Add  "),
-            ("class:status-key", "D "), ("class:status", "Delete  "),
-            ("class:status-key", "Q "), ("class:status", "Quit "),
-        ]
+        return [("class:status-key", " ↑↓ "), ("class:status", "Move  "),
+                ("class:status-key", "Enter "), ("class:status", "Manage  "),
+                ("class:status-key", "N "), ("class:status", "Add  "),
+                ("class:status-key", "D "), ("class:status", "Delete  "),
+                ("class:status-key", "Q "), ("class:status", "Quit ")]
+
+    # ── render: detail ────────────────────────────────────────────────────────
 
     def _render_detail(self) -> StyleAndTextTuples:
         pname = self._detail_provider
         pinfo = PROVIDERS.get(pname, {})
         key = _provider_key(pname)
-        n_models = _model_count(pname)
-        synced = _last_synced(pname)
+        n = _model_count(pname)
         fmt = pinfo.get("api_format", "openai")
         fmt_label = "Anthropic Compatible" if fmt == "anthropic" else "OpenAI Compatible"
-        f: StyleAndTextTuples = []
-        f.append(("class:title", f"\n  ◀ {pname}\n\n"))
-        # info table
-        f.append(("class:subtitle", f"  {'Name':<12}│ {pname}\n"))
-        f.append(("class:subtitle", f"  {'Base URL':<12}│ {pinfo.get('base_url','')}\n"))
-        f.append(("class:subtitle", f"  {'Format':<12}│ {fmt_label}\n"))
+        f: StyleAndTextTuples = [("class:title", f"\n  ◀ {pname}\n\n")]
+        f += [("class:subtitle", f"  {'Name':<12}│ {pname}\n"),
+              ("class:subtitle", f"  {'Base URL':<12}│ {pinfo.get('base_url','')}\n"),
+              ("class:subtitle", f"  {'Format':<12}│ {fmt_label}\n")]
         if key:
-            f.append(("class:subtitle", f"  {'API Key':<12}│ "))
-            f.append(("class:key-ok", f"{_mask_key(key)}   ● Configured\n"))
+            f += [("class:subtitle", f"  {'API Key':<12}│ "),
+                  ("class:key-ok", f"{_mask_key(key)}   ● Configured\n")]
         else:
-            f.append(("class:subtitle", f"  {'API Key':<12}│ "))
-            f.append(("class:key-missing", "— Not Configured\n"))
-        f.append(("class:subtitle", f"  {'Models':<12}│ {n_models} loaded  (Last synced: {synced})\n"))
-        # model preview
-        model_names = [a for a, m in MODELS.items() if m.get("provider") == pname]
-        if model_names:
-            preview = model_names[:5]
-            f.append(("class:subtitle", "               │ " + ", ".join(preview)))
-            if len(model_names) > 5:
-                f.append(("class:subtitle", f"  ... and {len(model_names)-5} more"))
-            f.append(("", "\n"))
+            f += [("class:subtitle", f"  {'API Key':<12}│ "),
+                  ("class:key-missing", "— Not Configured\n")]
+        f.append(("class:subtitle", f"  {'Models':<12}│ {n} loaded  (Last synced: {_last_synced(pname)})\n"))
+        names = [a for a, m in MODELS.items() if m.get("provider") == pname]
+        if names:
+            preview = ", ".join(names[:5])
+            more = f"  ... and {len(names)-5} more" if len(names) > 5 else ""
+            f.append(("class:subtitle", f"               │ {preview}{more}\n"))
         f.append(("", "\n"))
-        # key input area (shown when active)
-        if self._detail_key_input_active:
-            f.append(("class:warning", "  New API Key (input hidden):\n"))
-        # action menu
-        actions = [
-            "Update API Key",
-            "Fetch / Sync Models",
-            "Test Connection",
-            "Delete Provider",
-        ]
+        if self._detail_key_active:
+            f.append(("class:warning", "  New API Key (input hidden, Enter to save, Esc to cancel):\n"))
+        actions = ["Update API Key", "Fetch / Sync Models", "Test Connection", "Delete Provider"]
         for i, act in enumerate(actions):
-            if i == self._detail_cursor and not self._detail_key_input_active:
+            if i == self._detail_cursor and not self._detail_key_active:
                 f.append(("class:cursor", f"  ▶ [ {act} ]\n"))
             else:
                 f.append(("class:subtitle", f"    [ {act} ]\n"))
         f.append(("", "\n"))
-        # status line
         if self._detail_status:
             f.append((self._detail_status_style, f"  {self._detail_status}\n"))
         return f
 
     def _render_status_detail(self) -> StyleAndTextTuples:
-        return [
-            ("class:status-key", " ↑↓ "), ("class:status", "Move  "),
-            ("class:status-key", "Enter "), ("class:status", "Execute  "),
-            ("class:status-key", "Esc "), ("class:status", "Back "),
-        ]
+        return [("class:status-key", " ↑↓ "), ("class:status", "Move  "),
+                ("class:status-key", "Enter "), ("class:status", "Execute  "),
+                ("class:status-key", "Esc "), ("class:status", "Back ")]
+
+    # ── render: wizard ────────────────────────────────────────────────────────
 
     def _render_wizard(self) -> StyleAndTextTuples:
         labels = ["Name", "Base URL", "Format", "API Key"]
-        f: StyleAndTextTuples = []
-        f.append(("class:title", "\n  ✚ Add Provider\n\n"))
+        f: StyleAndTextTuples = [("class:title", "\n  ✚ Add Provider\n\n")]
         for i, label in enumerate(labels):
             focused = (i == self._wiz_focus)
-            style = "class:field-focus" if focused else "class:field-normal"
+            s = "class:field-focus" if focused else "class:field-normal"
             val = self._wiz_fields[i]
-            if i == 3:  # key field — mask
+            if i == 3:
                 display = "•" * len(val) if val else ""
-            elif i == 2:  # format
+            elif i == 2:
                 display = "Anthropic Compatible" if val == "anthropic" else "OpenAI Compatible"
             else:
                 display = val
-            f.append((style, f"  {'①②③④'[i]} {label:<10} [ {display:<40} ]\n"))
-            # inline format dropdown
+            f.append((s, f"  {'①②③④'[i]} {label:<10} [ {display:<40} ]\n"))
             if i == 2 and focused and self._wiz_fmt_open:
-                opts = ["OpenAI Compatible", "Anthropic Compatible"]
-                for j, opt in enumerate(opts):
+                for j, opt in enumerate(["OpenAI Compatible", "Anthropic Compatible"]):
                     cur = "▶ " if j == self._wiz_fmt_cursor else "  "
-                    s = "class:cursor" if j == self._wiz_fmt_cursor else "class:subtitle"
-                    f.append((s, f"       {cur}{opt}\n"))
+                    fs = "class:cursor" if j == self._wiz_fmt_cursor else "class:subtitle"
+                    f.append((fs, f"       {cur}{opt}\n"))
         f.append(("", "\n"))
-        # confirm button
-        btn_style = "class:btn-focus" if self._wiz_focus == 4 else "class:btn-normal"
-        f.append((btn_style, "  [ Confirm & Test Connection ]\n\n"))
+        bs = "class:btn-focus" if self._wiz_focus == 4 else "class:btn-normal"
+        f.append((bs, "  [ Confirm & Test Connection ]\n\n"))
         if self._wiz_error:
             f.append(("class:error", f"  ✗ {self._wiz_error}\n"))
         if self._wiz_status:
@@ -385,139 +320,130 @@ class ProviderTUI:
         return f
 
     def _render_status_wizard(self) -> StyleAndTextTuples:
-        return [
-            ("class:status-key", " Tab "), ("class:status", "Next Field  "),
-            ("class:status-key", "↑↓ "), ("class:status", "Move/Select  "),
-            ("class:status-key", "Enter "), ("class:status", "Confirm  "),
-            ("class:status-key", "Esc "), ("class:status", "Cancel "),
-        ]
+        return [("class:status-key", " Tab "), ("class:status", "Next Field  "),
+                ("class:status-key", "↑↓ "), ("class:status", "Move/Select  "),
+                ("class:status-key", "Enter "), ("class:status", "Confirm  "),
+                ("class:status-key", "Esc "), ("class:status", "Cancel ")]
+
+    # ── render: model selector ────────────────────────────────────────────────
 
     def _render_model_select(self) -> StyleAndTextTuples:
-        entries = self._ms_entries
-        f: StyleAndTextTuples = []
-        f.append(("class:title", f"\n  📦 Select Models — {self._ms_provider}\n"))
-        f.append(("class:subtitle", f"  {len(entries)} models available. Choose which to load.\n\n"))
-        for i, (mid, cfg) in enumerate(entries):
-            checked = "✓" if i in self._ms_selected else " "
-            cursor = "▶" if i == self._ms_cursor else " "
+        filtered = self._ms_filtered()
+        total = len(filtered)
+        f: StyleAndTextTuples = [
+            ("class:title", f"\n  📦 Select Models — {self._ms_provider}\n"),
+            ("class:subtitle", f"  {len(self._ms_all)} models available. Choose which to load.\n\n"),
+        ]
+        # search bar
+        sb_s = "class:field-focus" if self._ms_search_focus else "class:field-normal"
+        f.append((sb_s, f"  🔍 Search: {self._ms_search}{'▌' if self._ms_search_focus else ''}\n\n"))
+        # paginated list
+        start = self._ms_viewport
+        end = min(start + _PAGE, total)
+        for i in range(start, end):
+            mid, cfg = filtered[i]
+            checked = "✓" if mid in self._ms_selected else " "
+            cur = "▶" if i == self._ms_cursor and not self._ms_search_focus else " "
             vtag = " 📷" if cfg.get("vision") else ""
-            style = "class:cursor" if i == self._ms_cursor else ""
-            f.append((style, f"  {cursor} [{checked}] {mid}{vtag}\n"))
+            manual = " [+]" if mid in self._ms_manual else ""
+            cs = "class:cursor" if i == self._ms_cursor and not self._ms_search_focus else ""
+            f.append((cs, f"  {cur} [{checked}] {mid}{vtag}{manual}\n"))
+        if total > _PAGE:
+            f.append(("class:subtitle", f"\n  Showing {start+1}–{end} of {total}\n"))
         f.append(("", f"\n  {len(self._ms_selected)} selected\n\n"))
-        btn_style = "class:btn-focus" if self._ms_cursor == len(entries) else "class:btn-normal"
-        f.append((btn_style, "  [ Load Selected Models ]\n"))
+        bs = "class:btn-focus" if (self._ms_cursor >= total and not self._ms_search_focus) else "class:btn-normal"
+        f.append((bs, "  [ Load Selected Models ]\n"))
         if self._ms_error:
-            f.append(("class:error", f"\n  ✗ {self._ms_error}\n"))
+            f.append(("class:error", f"\n  ⚠ {self._ms_error}\n"))
         return f
 
     def _render_status_ms(self) -> StyleAndTextTuples:
-        return [
-            ("class:status-key", " ↑↓ "), ("class:status", "Move  "),
-            ("class:status-key", "Space "), ("class:status", "Toggle  "),
-            ("class:status-key", "A "), ("class:status", "All  "),
-            ("class:status-key", "C "), ("class:status", "Clear  "),
-            ("class:status-key", "Enter "), ("class:status", "Confirm  "),
-            ("class:status-key", "Esc "), ("class:status", "Cancel "),
-        ]
+        return [("class:status-key", " ↑↓ "), ("class:status", "Move  "),
+                ("class:status-key", "Space "), ("class:status", "Toggle  "),
+                ("class:status-key", "/ "), ("class:status", "Search  "),
+                ("class:status-key", "A "), ("class:status", "All  "),
+                ("class:status-key", "C "), ("class:status", "Clear  "),
+                ("class:status-key", "Enter "), ("class:status", "Confirm  "),
+                ("class:status-key", "Esc "), ("class:status", "Cancel ")]
 
-    def _render_dialog_security(self) -> StyleAndTextTuples:
-        f: StyleAndTextTuples = []
-        f.append(("class:dialog-title", "  ⚠  Security Notice\n\n"))
-        f.append(("class:dialog-body", "  Updating the API Key will clear the existing key.\n"))
-        f.append(("class:dialog-body", "  You must paste the full key again.\n"))
-        f.append(("class:dialog-body", "  The key will never be displayed in plain text.\n\n"))
-        for i, btn in enumerate(["Continue", "Cancel"]):
-            s = "class:btn-focus" if i == self._dialog_cursor else "class:btn-normal"
-            f.append((s, f"  [ {btn} ]  "))
+    # ── render: dialogs ───────────────────────────────────────────────────────
+
+    def _render_dialog(self) -> StyleAndTextTuples:
+        if self._dialog == "security":
+            f: StyleAndTextTuples = [
+                ("class:dialog-title", "  ⚠  Security Notice\n\n"),
+                ("class:dialog-body", "  Updating the API Key will clear the existing key.\n"),
+                ("class:dialog-body", "  You must paste the full key again.\n"),
+                ("class:dialog-body", "  The key will never be displayed in plain text.\n\n"),
+            ]
+            for i, btn in enumerate(["Continue", "Cancel"]):
+                f.append(("class:btn-focus" if i == self._dialog_cursor else "class:btn-normal",
+                           f"  [ {btn} ]  "))
+        elif self._dialog == "delete":
+            pname = self._detail_provider
+            f = [("class:dialog-title", "  🗑  Confirm Delete\n\n"),
+                 ("class:dialog-body", f"  Delete provider '{pname}'? This cannot be undone.\n\n")]
+            for i, btn in enumerate(["Cancel", "Delete"]):
+                f.append(("class:btn-focus" if i == self._dialog_cursor else "class:btn-normal",
+                           f"  [ {btn} ]  "))
+        elif self._dialog == "save_anyway":
+            f = [("class:dialog-title", "  ⚠  Connection Failed\n\n"),
+                 ("class:dialog-body", "  Save provider anyway without testing?\n\n")]
+            for i, btn in enumerate(["No — Edit", "Yes — Save"]):
+                f.append(("class:btn-focus" if i == self._dialog_cursor else "class:btn-normal",
+                           f"  [ {btn} ]  "))
+        else:
+            return []
         f.append(("", "\n"))
         return f
 
-    def _render_dialog_delete(self) -> StyleAndTextTuples:
-        pname = self._detail_provider
-        f: StyleAndTextTuples = []
-        f.append(("class:dialog-title", "  🗑  Confirm Delete\n\n"))
-        f.append(("class:dialog-body", f"  Delete provider '{pname}'? This cannot be undone.\n\n"))
-        for i, btn in enumerate(["Cancel", "Delete"]):
-            s = "class:btn-focus" if i == self._dialog_cursor else "class:btn-normal"
-            f.append((s, f"  [ {btn} ]  "))
-        f.append(("", "\n"))
-        return f
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # LAYOUT BUILDER
-    # ══════════════════════════════════════════════════════════════════════════
+    # ── layout ────────────────────────────────────────────────────────────────
 
     def _build_layout(self) -> Layout:
-        def body_content():
-            if self._panel == "main":
-                return self._render_main()
-            elif self._panel == "detail":
-                return self._render_detail()
-            elif self._panel == "wizard":
-                return self._render_wizard()
-            elif self._panel == "models":
-                return self._render_model_select()
+        def body():
+            p = self._panel
+            if p == "main":   return self._render_main()
+            if p == "detail": return self._render_detail()
+            if p == "wizard": return self._render_wizard()
+            if p == "models": return self._render_model_select()
             return []
 
-        def status_content():
-            if self._panel == "main":
-                return self._render_status_main()
-            elif self._panel == "detail":
-                return self._render_status_detail()
-            elif self._panel == "wizard":
-                return self._render_status_wizard()
-            elif self._panel == "models":
-                return self._render_status_ms()
+        def status():
+            p = self._panel
+            if p == "main":   return self._render_status_main()
+            if p == "detail": return self._render_status_detail()
+            if p == "wizard": return self._render_status_wizard()
+            if p == "models": return self._render_status_ms()
             return []
 
-        def dialog_content():
-            if self._dialog == "security":
-                return self._render_dialog_security()
-            elif self._dialog == "delete":
-                return self._render_dialog_delete()
-            return []
+        body_win = Window(content=FormattedTextControl(body), always_hide_cursor=True)
+        status_win = Window(content=FormattedTextControl(status), height=1, always_hide_cursor=True)
 
-        body = Window(content=FormattedTextControl(body_content), always_hide_cursor=True)
-        status = Window(content=FormattedTextControl(status_content),
-                        height=1, always_hide_cursor=True)
-
-        # key input widget shown in detail panel when active
-        key_input_container = ConditionalContainer(
-            content=HSplit([
-                Window(height=1),
-                self._key_ta,
-                Window(height=1),
-            ]),
-            filter=Condition(lambda: (
-                self._panel == "detail" and self._detail_key_input_active
-            )),
+        key_input = ConditionalContainer(
+            content=HSplit([Window(height=1), self._key_ta, Window(height=1)]),
+            filter=Condition(lambda: self._panel == "detail" and self._detail_key_active),
         )
 
-        main_body = HSplit([body, key_input_container])
-
-        dialog_float = Float(
-            content=Frame(
-                body=Window(
-                    content=FormattedTextControl(dialog_content),
-                    always_hide_cursor=True,
+        # Bug 1 fix: only create Float when dialog is active
+        floats = []
+        if self._dialog:
+            floats = [Float(
+                content=Frame(
+                    body=Window(content=FormattedTextControl(self._render_dialog),
+                                always_hide_cursor=True),
+                    width=58, height=10,
                 ),
-                width=56, height=10,
-            ),
-            transparent=True,
-        )
+                transparent=True,
+            )]
 
         root = FloatContainer(
-            content=HSplit([main_body, status]),
-            floats=[dialog_float],
+            content=HSplit([body_win, key_input, status_win]),
+            floats=floats,
         )
+        focused = self._key_ta if (self._panel == "detail" and self._detail_key_active) else body_win
+        return Layout(root, focused_element=focused)
 
-        return Layout(root, focused_element=self._key_ta if (
-            self._panel == "detail" and self._detail_key_input_active
-        ) else body)
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # KEY BINDINGS
-    # ══════════════════════════════════════════════════════════════════════════
+    # ── key bindings ──────────────────────────────────────────────────────────
 
     def _build_kb(self) -> KeyBindings:
         kb = KeyBindings()
@@ -526,325 +452,313 @@ class ProviderTUI:
             if self._app:
                 self._app.invalidate()
 
-        # ── dialog bindings ───────────────────────────────────────────────────
-        @kb.add("left",  filter=Condition(lambda: self._dialog is not None))
-        @kb.add("right", filter=Condition(lambda: self._dialog is not None))
-        @kb.add("tab",   filter=Condition(lambda: self._dialog is not None))
-        def _dlg_move(event):
-            n = 2
-            self._dialog_cursor = (self._dialog_cursor + 1) % n
-            inv()
+        def rebuild():
+            if self._app:
+                self._app.layout = self._build_layout()
+                self._app.invalidate()
 
-        @kb.add("enter", filter=Condition(lambda: self._dialog is not None))
-        def _dlg_enter(event):
-            dlg = self._dialog
-            cur = self._dialog_cursor
-            self._dialog = None
-            self._dialog_cursor = 0
-            if dlg == "security":
-                if cur == 0:  # Continue
-                    self._detail_key_input_active = True
-                    self._key_ta.text = ""
-                    self._app.layout = self._build_layout()
-            elif dlg == "delete":
-                if cur == 1:  # Delete
-                    self._do_delete_provider()
-            inv()
+        # ── dialogs ───────────────────────────────────────────────────────────
+        _dlg = Condition(lambda: self._dialog is not None)
 
-        @kb.add("escape", filter=Condition(lambda: self._dialog is not None))
-        def _dlg_esc(event):
-            self._dialog = None
-            self._dialog_cursor = 0
-            inv()
+        @kb.add("left",   filter=_dlg)
+        @kb.add("right",  filter=_dlg)
+        @kb.add("tab",    filter=_dlg)
+        def _dlg_move(e): self._dialog_cursor ^= 1; inv()
 
-        # ── key input (detail panel) ──────────────────────────────────────────
-        @kb.add("enter", filter=Condition(lambda: (
-            self._panel == "detail" and self._detail_key_input_active
-            and self._dialog is None
-        )))
-        def _key_submit(event):
+        @kb.add("enter", filter=_dlg)
+        def _dlg_enter(e):
+            dlg, cur = self._dialog, self._dialog_cursor
+            self._dialog = None; self._dialog_cursor = 0
+            if dlg == "security" and cur == 0:
+                self._detail_key_active = True
+                self._key_ta.text = ""
+            elif dlg == "delete" and cur == 1:
+                self._do_delete_provider()
+            elif dlg == "save_anyway" and cur == 1:
+                self._do_save_provider_no_test()
+            rebuild()
+
+        @kb.add("escape", filter=_dlg)
+        def _dlg_esc(e):
+            self._dialog = None; self._dialog_cursor = 0; rebuild()
+
+        # ── key input ─────────────────────────────────────────────────────────
+        _key_active = Condition(lambda: self._panel == "detail" and self._detail_key_active and not self._dialog)
+
+        @kb.add("enter", filter=_key_active)
+        def _key_submit(e):
             new_key = self._key_ta.text.strip()
-            self._detail_key_input_active = False
+            self._detail_key_active = False
             if not new_key:
                 self._detail_status = "Cancelled — no key entered."
                 self._detail_status_style = "class:warning"
-                self._app.layout = self._build_layout()
-                inv()
-                return
+                rebuild(); return
             pname = self._detail_provider
             env_var = PROVIDERS.get(pname, {}).get("api_key_env", "")
             if env_var:
                 _save_key_to_env(env_var, new_key)
-            self._detail_status = "✅ Key saved. Testing connection..."
+            self._detail_status = "✅ Key saved. Testing..."
             self._detail_status_style = "class:spinner"
-            self._app.layout = self._build_layout()
-            inv()
+            rebuild()
             asyncio.get_event_loop().create_task(self._run_test_detail(pname))
 
-        @kb.add("escape", filter=Condition(lambda: (
-            self._panel == "detail" and self._detail_key_input_active
-            and self._dialog is None
-        )))
-        def _key_cancel(event):
-            self._detail_key_input_active = False
-            self._detail_status = ""
-            self._app.layout = self._build_layout()
-            inv()
+        @kb.add("escape", filter=_key_active)
+        def _key_cancel(e):
+            self._detail_key_active = False; self._detail_status = ""; rebuild()
 
-        # ── main panel ────────────────────────────────────────────────────────
-        _main_active = Condition(lambda: (
-            self._panel == "main" and self._dialog is None
-        ))
+        # ── main ──────────────────────────────────────────────────────────────
+        _main = Condition(lambda: self._panel == "main" and not self._dialog)
 
-        @kb.add("up",    filter=_main_active)
-        def _main_up(event):
+        @kb.add("up",    filter=_main)
+        def _m_up(e):
             rows = self._provider_rows()
-            if rows:
-                self._main_cursor = (self._main_cursor - 1) % len(rows)
+            if rows: self._main_cursor = (self._main_cursor - 1) % len(rows)
             inv()
 
-        @kb.add("down",  filter=_main_active)
-        def _main_down(event):
+        @kb.add("down",  filter=_main)
+        def _m_dn(e):
             rows = self._provider_rows()
-            if rows:
-                self._main_cursor = (self._main_cursor + 1) % len(rows)
+            if rows: self._main_cursor = (self._main_cursor + 1) % len(rows)
             inv()
 
-        @kb.add("enter", filter=_main_active)
-        def _main_enter(event):
+        @kb.add("enter", filter=_main)
+        def _m_enter(e):
             rows = self._provider_rows()
             if rows and self._main_cursor < len(rows):
                 self._detail_provider = rows[self._main_cursor]
-                self._detail_cursor = 0
-                self._detail_status = ""
-                self._detail_key_input_active = False
-                self._panel = "detail"
-                self._app.layout = self._build_layout()
-            inv()
+                self._detail_cursor = 0; self._detail_status = ""
+                self._detail_key_active = False
+                self._panel = "detail"; rebuild()
 
-        @kb.add("n", filter=_main_active)
-        @kb.add("N", filter=_main_active)
-        def _main_add(event):
+        @kb.add("n", filter=_main)
+        @kb.add("N", filter=_main)
+        def _m_add(e):
             self._wiz_fields = ["", "", "openai", ""]
-            self._wiz_focus = 0
-            self._wiz_fmt_open = False
-            self._wiz_error = ""
-            self._wiz_status = ""
-            self._panel = "wizard"
-            self._app.layout = self._build_layout()
-            inv()
+            self._wiz_focus = 0; self._wiz_fmt_open = False
+            self._wiz_error = ""; self._wiz_status = ""
+            self._panel = "wizard"; rebuild()
 
-        @kb.add("d", filter=_main_active)
-        @kb.add("D", filter=_main_active)
-        def _main_delete(event):
+        @kb.add("d", filter=_main)
+        @kb.add("D", filter=_main)
+        def _m_del(e):
             rows = self._provider_rows()
-            if not rows:
-                return
+            if not rows: return
             pname = rows[self._main_cursor]
             if pname in _BUILTIN:
-                self._detail_status = "Cannot delete built-in providers."
-                inv()
                 return
             self._detail_provider = pname
-            self._dialog = "delete"
-            self._dialog_cursor = 0  # default: Cancel
-            inv()
+            self._dialog = "delete"; self._dialog_cursor = 0; inv()
 
-        @kb.add("q",      filter=_main_active)
-        @kb.add("Q",      filter=_main_active)
-        @kb.add("escape", filter=_main_active)
-        def _main_quit(event):
-            event.app.exit()
+        @kb.add("q",      filter=_main)
+        @kb.add("Q",      filter=_main)
+        @kb.add("escape", filter=_main)
+        def _m_quit(e): e.app.exit()
 
-        # ── detail panel ──────────────────────────────────────────────────────
-        _detail_active = Condition(lambda: (
-            self._panel == "detail" and self._dialog is None
-            and not self._detail_key_input_active
-        ))
+        # ── detail ────────────────────────────────────────────────────────────
+        _det = Condition(lambda: self._panel == "detail" and not self._dialog and not self._detail_key_active)
 
-        @kb.add("up",    filter=_detail_active)
-        def _det_up(event):
-            self._detail_cursor = (self._detail_cursor - 1) % 4
-            inv()
+        @kb.add("up",    filter=_det)
+        def _d_up(e): self._detail_cursor = (self._detail_cursor - 1) % 4; inv()
 
-        @kb.add("down",  filter=_detail_active)
-        def _det_down(event):
-            self._detail_cursor = (self._detail_cursor + 1) % 4
-            inv()
+        @kb.add("down",  filter=_det)
+        def _d_dn(e): self._detail_cursor = (self._detail_cursor + 1) % 4; inv()
 
-        @kb.add("enter", filter=_detail_active)
-        def _det_enter(event):
-            asyncio.get_event_loop().create_task(self._detail_action())
+        @kb.add("enter", filter=_det)
+        def _d_enter(e): asyncio.get_event_loop().create_task(self._detail_action())
 
-        @kb.add("escape", filter=_detail_active)
-        def _det_esc(event):
-            self._panel = "main"
-            self._app.layout = self._build_layout()
-            inv()
+        @kb.add("escape", filter=_det)
+        def _d_esc(e): self._panel = "main"; rebuild()
 
-        # ── wizard panel ──────────────────────────────────────────────────────
-        _wiz_active = Condition(lambda: (
-            self._panel == "wizard" and self._dialog is None
-        ))
+        # ── wizard ────────────────────────────────────────────────────────────
+        _wiz = Condition(lambda: self._panel == "wizard" and not self._dialog)
+        _wiz_nav = Condition(lambda: self._panel == "wizard" and not self._dialog
+                             and not (self._wiz_focus == 2 and self._wiz_fmt_open))
 
-        @kb.add("tab",       filter=_wiz_active)
-        @kb.add("down",      filter=Condition(lambda: (
-            self._panel == "wizard" and self._dialog is None
-            and not (self._wiz_focus == 2 and self._wiz_fmt_open)
-        )))
-        def _wiz_next(event):
-            self._wiz_fmt_open = False
-            self._wiz_focus = (self._wiz_focus + 1) % 5  # 0-3 fields + 4 button
-            inv()
+        @kb.add("tab",   filter=_wiz_nav)
+        @kb.add("down",  filter=_wiz_nav)
+        def _w_next(e): self._wiz_fmt_open = False; self._wiz_focus = (self._wiz_focus + 1) % 5; inv()
 
-        @kb.add("s-tab",  filter=_wiz_active)
-        @kb.add("up",     filter=Condition(lambda: (
-            self._panel == "wizard" and self._dialog is None
-            and not (self._wiz_focus == 2 and self._wiz_fmt_open)
-        )))
-        def _wiz_prev(event):
-            self._wiz_fmt_open = False
-            self._wiz_focus = (self._wiz_focus - 1) % 5
-            inv()
+        @kb.add("s-tab", filter=_wiz_nav)
+        @kb.add("up",    filter=_wiz_nav)
+        def _w_prev(e): self._wiz_fmt_open = False; self._wiz_focus = (self._wiz_focus - 1) % 5; inv()
 
-        # format field: open dropdown on enter/space
-        @kb.add("enter", filter=Condition(lambda: (
-            self._panel == "wizard" and self._wiz_focus == 2
-            and not self._wiz_fmt_open and self._dialog is None
-        )))
-        @kb.add("space", filter=Condition(lambda: (
-            self._panel == "wizard" and self._wiz_focus == 2
-            and not self._wiz_fmt_open and self._dialog is None
-        )))
-        def _wiz_fmt_open_dd(event):
+        _fmt_closed = Condition(lambda: self._panel == "wizard" and self._wiz_focus == 2
+                                and not self._wiz_fmt_open and not self._dialog)
+        _fmt_open   = Condition(lambda: self._panel == "wizard" and self._wiz_focus == 2
+                                and self._wiz_fmt_open)
+
+        @kb.add("enter", filter=_fmt_closed)
+        @kb.add("space", filter=_fmt_closed)
+        def _w_fmt_open(e):
             self._wiz_fmt_open = True
-            self._wiz_fmt_cursor = 0 if self._wiz_fields[2] == "openai" else 1
-            inv()
+            self._wiz_fmt_cursor = 0 if self._wiz_fields[2] == "openai" else 1; inv()
 
-        @kb.add("up", filter=Condition(lambda: (
-            self._panel == "wizard" and self._wiz_focus == 2
-            and self._wiz_fmt_open
-        )))
-        def _wiz_fmt_up(event):
-            self._wiz_fmt_cursor = (self._wiz_fmt_cursor - 1) % 2
-            inv()
+        @kb.add("up",    filter=_fmt_open)
+        def _w_fmt_up(e): self._wiz_fmt_cursor = (self._wiz_fmt_cursor - 1) % 2; inv()
 
-        @kb.add("down", filter=Condition(lambda: (
-            self._panel == "wizard" and self._wiz_focus == 2
-            and self._wiz_fmt_open
-        )))
-        def _wiz_fmt_down(event):
-            self._wiz_fmt_cursor = (self._wiz_fmt_cursor + 1) % 2
-            inv()
+        @kb.add("down",  filter=_fmt_open)
+        def _w_fmt_dn(e): self._wiz_fmt_cursor = (self._wiz_fmt_cursor + 1) % 2; inv()
 
-        @kb.add("enter", filter=Condition(lambda: (
-            self._panel == "wizard" and self._wiz_focus == 2
-            and self._wiz_fmt_open
-        )))
-        @kb.add("space", filter=Condition(lambda: (
-            self._panel == "wizard" and self._wiz_focus == 2
-            and self._wiz_fmt_open
-        )))
-        def _wiz_fmt_confirm(event):
+        @kb.add("enter", filter=_fmt_open)
+        @kb.add("space", filter=_fmt_open)
+        def _w_fmt_pick(e):
             self._wiz_fields[2] = "anthropic" if self._wiz_fmt_cursor == 1 else "openai"
-            self._wiz_fmt_open = False
+            self._wiz_fmt_open = False; inv()
+
+        _btn = Condition(lambda: self._panel == "wizard" and self._wiz_focus == 4
+                         and not self._wiz_fmt_open and not self._dialog)
+
+        @kb.add("enter", filter=_btn)
+        def _w_confirm(e): asyncio.get_event_loop().create_task(self._wizard_confirm())
+
+        @kb.add("escape", filter=_wiz)
+        def _w_esc(e): self._panel = "main"; rebuild()
+
+        @kb.add("<any>", filter=Condition(lambda: self._panel == "wizard"
+                                          and self._wiz_focus in (0, 1, 3)
+                                          and not self._dialog and not self._wiz_fmt_open))
+        def _w_char(e):
+            k = e.key_sequence[0].key
+            fi = self._wiz_focus
+            if len(k) == 1:
+                self._wiz_fields[fi] += k
+            elif k in ("backspace", "c-h"):
+                self._wiz_fields[fi] = self._wiz_fields[fi][:-1]
             inv()
 
-        # confirm button
-        @kb.add("enter", filter=Condition(lambda: (
-            self._panel == "wizard" and self._wiz_focus == 4
-            and not self._wiz_fmt_open and self._dialog is None
-        )))
-        def _wiz_confirm(event):
-            asyncio.get_event_loop().create_task(self._wizard_confirm())
+        # ── model selector ────────────────────────────────────────────────────
+        _ms = Condition(lambda: self._panel == "models")
+        _ms_list = Condition(lambda: self._panel == "models" and not self._ms_search_focus)
+        _ms_srch = Condition(lambda: self._panel == "models" and self._ms_search_focus)
 
-        @kb.add("escape", filter=_wiz_active)
-        def _wiz_esc(event):
-            self._panel = "main"
-            self._app.layout = self._build_layout()
+        @kb.add("up",    filter=_ms_list)
+        def _ms_up(e):
+            filtered = self._ms_filtered()
+            total = len(filtered) + 1
+            self._ms_cursor = max(0, self._ms_cursor - 1)
+            if self._ms_cursor < self._ms_viewport:
+                self._ms_viewport = self._ms_cursor
             inv()
 
-        # character input for wizard text fields (0=name, 1=url, 3=key)
-        @kb.add("<any>", filter=Condition(lambda: (
-            self._panel == "wizard" and self._wiz_focus in (0, 1, 3)
-            and self._dialog is None and not self._wiz_fmt_open
-        )))
-        def _wiz_char(event):
-            key_str = event.key_sequence[0].key
-            if len(key_str) == 1:
-                self._wiz_fields[self._wiz_focus] += key_str
-            elif key_str == "backspace" or key_str == "c-h":
-                self._wiz_fields[self._wiz_focus] = self._wiz_fields[self._wiz_focus][:-1]
+        @kb.add("down",  filter=_ms_list)
+        def _ms_dn(e):
+            filtered = self._ms_filtered()
+            total = len(filtered)
+            self._ms_cursor = min(total, self._ms_cursor + 1)  # total = confirm btn
+            if self._ms_cursor >= self._ms_viewport + _PAGE:
+                self._ms_viewport = self._ms_cursor - _PAGE + 1
             inv()
 
-        # ── model selection panel ─────────────────────────────────────────────
-        _ms_active = Condition(lambda: self._panel == "models")
+        @kb.add("pageup",   filter=_ms_list)
+        def _ms_pgup(e):
+            self._ms_cursor = max(0, self._ms_cursor - _PAGE)
+            self._ms_viewport = max(0, self._ms_viewport - _PAGE); inv()
 
-        @kb.add("up",    filter=_ms_active)
-        def _ms_up(event):
-            total = len(self._ms_entries) + 1  # +1 for confirm button
-            self._ms_cursor = (self._ms_cursor - 1) % total
-            inv()
+        @kb.add("pagedown", filter=_ms_list)
+        def _ms_pgdn(e):
+            filtered = self._ms_filtered()
+            self._ms_cursor = min(len(filtered), self._ms_cursor + _PAGE)
+            self._ms_viewport = min(max(0, len(filtered) - _PAGE),
+                                    self._ms_viewport + _PAGE); inv()
 
-        @kb.add("down",  filter=_ms_active)
-        def _ms_down(event):
-            total = len(self._ms_entries) + 1
-            self._ms_cursor = (self._ms_cursor + 1) % total
-            inv()
-
-        @kb.add("space", filter=_ms_active)
-        def _ms_space(event):
-            if self._ms_cursor < len(self._ms_entries):
-                if self._ms_cursor in self._ms_selected:
-                    self._ms_selected.discard(self._ms_cursor)
+        @kb.add("space", filter=_ms_list)
+        def _ms_space(e):
+            filtered = self._ms_filtered()
+            if self._ms_cursor < len(filtered):
+                mid = filtered[self._ms_cursor][0]
+                if mid in self._ms_selected:
+                    self._ms_selected.discard(mid)
                 else:
-                    self._ms_selected.add(self._ms_cursor)
+                    self._ms_selected.add(mid)
             inv()
 
-        @kb.add("a", filter=_ms_active)
-        @kb.add("A", filter=_ms_active)
-        def _ms_all(event):
-            self._ms_selected = set(range(len(self._ms_entries)))
-            inv()
+        @kb.add("a", filter=_ms_list)
+        @kb.add("A", filter=_ms_list)
+        def _ms_all(e):
+            self._ms_selected = {mid for mid, _ in self._ms_all}; inv()
 
-        @kb.add("c", filter=_ms_active)
-        @kb.add("C", filter=_ms_active)
-        def _ms_clear(event):
-            self._ms_selected.clear()
-            inv()
+        @kb.add("c", filter=_ms_list)
+        @kb.add("C", filter=_ms_list)
+        def _ms_clr(e): self._ms_selected.clear(); inv()
 
-        @kb.add("enter", filter=_ms_active)
-        def _ms_enter(event):
-            if self._ms_cursor == len(self._ms_entries) or True:
-                if not self._ms_selected:
-                    self._ms_error = "Select at least one model."
-                    inv()
-                    return
-                self._ms_error = ""
-                self._do_save_models()
+        @kb.add("/",   filter=_ms_list)
+        @kb.add("tab", filter=_ms_list)
+        def _ms_to_search(e): self._ms_search_focus = True; inv()
 
-        @kb.add("escape", filter=_ms_active)
-        def _ms_esc(event):
-            self._panel = self._ms_caller
-            self._app.layout = self._build_layout()
-            inv()
+        @kb.add("enter", filter=_ms_list)
+        def _ms_enter(e):
+            filtered = self._ms_filtered()
+            if self._ms_cursor < len(filtered):
+                # toggle on enter too
+                mid = filtered[self._ms_cursor][0]
+                if mid in self._ms_selected: self._ms_selected.discard(mid)
+                else: self._ms_selected.add(mid)
+                inv(); return
+            # confirm button
+            if not self._ms_selected:
+                self._ms_error = "Select at least one model."; inv(); return
+            self._ms_error = ""; self._do_save_models()
+
+        @kb.add("escape", filter=_ms)
+        def _ms_esc(e):
+            if self._ms_search_focus:
+                self._ms_search_focus = False; self._ms_search = ""; inv()
+            else:
+                self._panel = self._ms_caller; rebuild()
+
+        # search bar input
+        @kb.add("<any>", filter=_ms_srch)
+        def _ms_srch_char(e):
+            k = e.key_sequence[0].key
+            if len(k) == 1:
+                self._ms_search += k
+            elif k in ("backspace", "c-h"):
+                self._ms_search = self._ms_search[:-1]
+            # reset viewport when filter changes
+            self._ms_cursor = 0; self._ms_viewport = 0; inv()
+
+        @kb.add("enter", filter=_ms_srch)
+        def _ms_srch_enter(e):
+            q = self._ms_search.strip()
+            if not q:
+                self._ms_search_focus = False; inv(); return
+            filtered = self._ms_filtered()
+            if len(filtered) == 1:
+                # exact single match — toggle and clear
+                mid = filtered[0][0]
+                if mid in self._ms_selected: self._ms_selected.discard(mid)
+                else: self._ms_selected.add(mid)
+                self._ms_search = ""; self._ms_search_focus = False
+            elif len(filtered) == 0:
+                # manual add
+                if q not in self._ms_manual:
+                    self._ms_manual.append(q)
+                    self._ms_all.insert(0, (q, {"id": q, "provider": self._ms_provider,
+                                                "desc": "manual", "color": "\033[37m", "vision": False}))
+                self._ms_selected.add(q)
+                self._ms_search = ""; self._ms_search_focus = False
+            else:
+                # multiple matches — move focus to list
+                self._ms_search_focus = False
+            self._ms_cursor = 0; self._ms_viewport = 0; inv()
+
+        @kb.add("tab",    filter=_ms_srch)
+        def _ms_srch_tab(e):
+            self._ms_search_focus = False; self._ms_search = ""
+            self._ms_cursor = 0; self._ms_viewport = 0; inv()
 
         return kb
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # ACTIONS
-    # ══════════════════════════════════════════════════════════════════════════
+    # ── actions ───────────────────────────────────────────────────────────────
 
     def _do_delete_provider(self):
         pname = self._detail_provider
         if pname in _BUILTIN:
             return
         remove_custom_provider(pname)
-        if pname in PROVIDERS:
-            del PROVIDERS[pname]
-        to_rm = [a for a, m in list(MODELS.items()) if m.get("provider") == pname]
-        for a in to_rm:
-            del MODELS[a]
+        PROVIDERS.pop(pname, None)
+        for a in [k for k, m in list(MODELS.items()) if m.get("provider") == pname]:
+            MODELS.pop(a, None)
         rows = self._provider_rows()
         self._main_cursor = min(self._main_cursor, max(0, len(rows) - 1))
         self._panel = "main"
@@ -854,15 +768,31 @@ class ProviderTUI:
 
     def _do_save_models(self):
         pname = self._ms_provider
-        chosen = [self._ms_entries[i] for i in sorted(self._ms_selected)]
         models_cfg = {}
-        for mid, cfg in chosen:
-            models_cfg[mid] = {**cfg, "provider": pname}
+        for mid in self._ms_selected:
+            cfg = next((c for m, c in self._ms_all if m == mid), None)
+            if cfg:
+                models_cfg[mid] = {**cfg, "provider": pname}
         prov_cfg = PROVIDERS.get(pname, {})
         save_custom_provider(pname, prov_cfg, models_cfg)
         _record_sync_time(pname)
-        load_custom_providers()
+        _sync_models_to_runtime()
         self._panel = self._ms_caller
+        if self._app:
+            self._app.layout = self._build_layout()
+            self._app.invalidate()
+
+    def _do_save_provider_no_test(self):
+        if not self._wiz_fields_pending:
+            return
+        name, url, fmt, key, env_var = self._wiz_fields_pending
+        _save_key_to_env(env_var, key)
+        prov_cfg = {"base_url": url, "api_key_env": env_var,
+                    "label": f"Custom ({name})", "api_format": fmt}
+        save_custom_provider(name, prov_cfg, {})
+        PROVIDERS[name] = prov_cfg
+        load_custom_providers()
+        self._panel = "main"
         if self._app:
             self._app.layout = self._build_layout()
             self._app.invalidate()
@@ -870,185 +800,105 @@ class ProviderTUI:
     async def _run_test_detail(self, pname: str):
         pinfo = PROVIDERS.get(pname, {})
         key = _provider_key(pname)
-        ok, msg, ms = await _test_connection(
-            pinfo.get("base_url", ""), key, pinfo.get("api_format", "openai")
-        )
+        ok, msg, _ = await _test_connection(
+            pinfo.get("base_url", ""), key, pinfo.get("api_format", "openai"))
         self._detail_status = f"✅ {msg}" if ok else f"✗ {msg}"
         self._detail_status_style = "class:success" if ok else "class:error"
         if self._app:
             self._app.invalidate()
 
+    async def _open_model_selector(self, pname: str, caller: str):
+        pinfo = PROVIDERS.get(pname, {})
+        key = _provider_key(pname)
+        self._detail_status = "⟳ Fetching model list..."
+        self._detail_status_style = "class:spinner"
+        if self._app: self._app.invalidate()
+        candidates, err = await _fetch_models(pinfo.get("base_url", ""), key)
+        if err or not candidates:
+            self._detail_status = f"✗ Failed: {err or 'No models returned'}"
+            self._detail_status_style = "class:error"
+            if self._app: self._app.invalidate()
+            return
+        # Bug 4: start all unchecked; pre-check only previously saved models
+        existing = {a for a, m in MODELS.items() if m.get("provider") == pname}
+        self._ms_all = candidates
+        self._ms_selected = {mid for mid, _ in candidates if mid in existing}
+        # do NOT pre-select all — user must choose
+        self._ms_manual = []
+        self._ms_cursor = 0; self._ms_viewport = 0
+        self._ms_provider = pname; self._ms_caller = caller
+        self._ms_error = ""; self._ms_search = ""; self._ms_search_focus = False
+        self._detail_status = ""
+        self._panel = "models"
+        if self._app:
+            self._app.layout = self._build_layout()
+            self._app.invalidate()
+
     async def _detail_action(self):
         pname = self._detail_provider
         cur = self._detail_cursor
-        if cur == 0:  # Update API Key
-            self._dialog = "security"
-            self._dialog_cursor = 0
-        elif cur == 1:  # Fetch / Sync Models
-            self._detail_status = "⟳ Fetching model list..."
-            self._detail_status_style = "class:spinner"
-            if self._app:
-                self._app.invalidate()
-            pinfo = PROVIDERS.get(pname, {})
-            key = _provider_key(pname)
-            candidates, err = await _fetch_models(pinfo.get("base_url", ""), key)
-            if err or not candidates:
-                self._detail_status = f"✗ Failed: {err or 'No models returned'}"
-                self._detail_status_style = "class:error"
-            else:
-                # pre-check already loaded models
-                existing = {a for a, m in MODELS.items() if m.get("provider") == pname}
-                self._ms_entries = candidates
-                self._ms_selected = {
-                    i for i, (mid, _) in enumerate(candidates) if mid in existing
-                }
-                if not self._ms_selected:
-                    self._ms_selected = set(range(len(candidates)))
-                self._ms_cursor = 0
-                self._ms_provider = pname
-                self._ms_caller = "detail"
-                self._ms_error = ""
-                self._detail_status = ""
-                self._panel = "models"
-                if self._app:
-                    self._app.layout = self._build_layout()
-        elif cur == 2:  # Test Connection
+        if cur == 0:
+            self._dialog = "security"; self._dialog_cursor = 0
+        elif cur == 1:
+            await self._open_model_selector(pname, "detail")
+        elif cur == 2:
             self._detail_status = "⟳ Testing..."
             self._detail_status_style = "class:spinner"
-            if self._app:
-                self._app.invalidate()
+            if self._app: self._app.invalidate()
             await self._run_test_detail(pname)
             await asyncio.sleep(3)
             self._detail_status = ""
-            if self._app:
-                self._app.invalidate()
-        elif cur == 3:  # Delete
+            if self._app: self._app.invalidate()
+        elif cur == 3:
             if pname in _BUILTIN:
                 self._detail_status = "Cannot delete built-in providers."
                 self._detail_status_style = "class:warning"
             else:
-                self._dialog = "delete"
-                self._dialog_cursor = 0
-        if self._app:
-            self._app.invalidate()
+                self._dialog = "delete"; self._dialog_cursor = 0
+        if self._app: self._app.invalidate()
 
     async def _wizard_confirm(self):
         name, url, fmt, key = self._wiz_fields
-        # validate
         if not name:
-            self._wiz_error = "Name is required."
-            if self._app: self._app.invalidate()
-            return
+            self._wiz_error = "Name is required."; self._app and self._app.invalidate(); return
         if name in PROVIDERS:
-            self._wiz_error = "Name already exists. Choose a different name."
-            if self._app: self._app.invalidate()
-            return
+            self._wiz_error = "Name already exists."; self._app and self._app.invalidate(); return
         if not url:
-            self._wiz_error = "Base URL is required."
-            if self._app: self._app.invalidate()
-            return
+            self._wiz_error = "Base URL is required."; self._app and self._app.invalidate(); return
         if not key:
-            self._wiz_error = "API Key is required."
-            if self._app: self._app.invalidate()
-            return
+            self._wiz_error = "API Key is required."; self._app and self._app.invalidate(); return
 
         self._wiz_error = ""
         self._wiz_status = "⟳ Testing connection..."
         self._wiz_status_style = "class:spinner"
         if self._app: self._app.invalidate()
 
-        ok, msg, ms = await _test_connection(url, key, fmt)
-
+        ok, msg, _ = await _test_connection(url, key, fmt)
         env_var = f"{name.upper().replace('-','_').replace(' ','_')}_API_KEY"
 
         if ok:
             self._wiz_status = f"✅ {msg}"
             self._wiz_status_style = "class:success"
             if self._app: self._app.invalidate()
-            # save
             _save_key_to_env(env_var, key)
-            prov_cfg = {
-                "base_url": url, "api_key_env": env_var,
-                "label": f"Custom ({name})", "api_format": fmt,
-            }
+            prov_cfg = {"base_url": url, "api_key_env": env_var,
+                        "label": f"Custom ({name})", "api_format": fmt}
             save_custom_provider(name, prov_cfg, {})
             PROVIDERS[name] = prov_cfg
             load_custom_providers()
-            # fetch models?
-            await asyncio.sleep(0.8)
-            self._wiz_status = "Fetching model list..."
-            if self._app: self._app.invalidate()
-            candidates, err = await _fetch_models(url, key)
-            if candidates:
-                self._ms_entries = candidates
-                self._ms_selected = set(range(len(candidates)))
-                self._ms_cursor = 0
-                self._ms_provider = name
-                self._ms_caller = "main"
-                self._ms_error = ""
-                self._panel = "models"
-            else:
-                self._panel = "main"
-            if self._app:
-                self._app.layout = self._build_layout()
-                self._app.invalidate()
+            await asyncio.sleep(0.5)
+            await self._open_model_selector(name, "main")
         else:
             self._wiz_status = f"✗ Connection failed: {msg}"
             self._wiz_status_style = "class:error"
-            if self._app: self._app.invalidate()
-            # save anyway? — handled via a simple inline prompt
-            # We repurpose dialog_cursor: 0=No 1=Yes
-            self._dialog = "save_anyway"
-            self._dialog_cursor = 0
             self._wiz_fields_pending = (name, url, fmt, key, env_var)
+            self._dialog = "save_anyway"; self._dialog_cursor = 0
             if self._app: self._app.invalidate()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # RUN
-    # ══════════════════════════════════════════════════════════════════════════
+    # ── run ───────────────────────────────────────────────────────────────────
 
     async def run(self) -> None:
-        # prompt_toolkit availability is guaranteed by module-level imports;
-        # if those fail, this file fails to import, and main.py handles the fallback.
-
-        # handle save_anyway dialog (not in _build_layout floats — use enter binding)
         kb = self._build_kb()
-
-        # extra: save_anyway dialog
-        @kb.add("enter", filter=Condition(lambda: self._dialog == "save_anyway"))
-        def _sa_enter(event):
-            cur = self._dialog_cursor
-            self._dialog = None
-            if cur == 1:  # Yes
-                name, url, fmt, key, env_var = self._wiz_fields_pending
-                _save_key_to_env(env_var, key)
-                prov_cfg = {
-                    "base_url": url, "api_key_env": env_var,
-                    "label": f"Custom ({name})", "api_format": fmt,
-                }
-                save_custom_provider(name, prov_cfg, {})
-                PROVIDERS[name] = prov_cfg
-                load_custom_providers()
-                self._panel = "main"
-            else:
-                self._wiz_status = ""
-            if self._app:
-                self._app.layout = self._build_layout()
-                self._app.invalidate()
-
-        @kb.add("left",  filter=Condition(lambda: self._dialog == "save_anyway"))
-        @kb.add("right", filter=Condition(lambda: self._dialog == "save_anyway"))
-        @kb.add("tab",   filter=Condition(lambda: self._dialog == "save_anyway"))
-        def _sa_move(event):
-            self._dialog_cursor = (self._dialog_cursor + 1) % 2
-            if self._app: self._app.invalidate()
-
-        @kb.add("escape", filter=Condition(lambda: self._dialog == "save_anyway"))
-        def _sa_esc(event):
-            self._dialog = None
-            self._wiz_status = ""
-            if self._app: self._app.invalidate()
-
         self._app = Application(
             layout=self._build_layout(),
             key_bindings=kb,
@@ -1059,6 +909,5 @@ class ProviderTUI:
         await self._app.run_async()
 
 
-# ── module-level entry point ──────────────────────────────────────────────────
 async def run_provider_tui() -> None:
     await ProviderTUI().run()

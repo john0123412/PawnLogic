@@ -897,6 +897,18 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session):
         if _HAS_PROMPT_TOOLKIT:
             from core.provider_tui import run_provider_tui
             await run_provider_tui()
+            # Refresh completer with any newly fetched models
+            try:
+                _new_words = list(_all_cmd_words)
+                _new_meta: dict = dict(_cmd_meta)
+                for _a, _m in _visible_models().items():
+                    _w = f"/model {_a}"
+                    _new_words.append(_w)
+                    _new_meta[_w] = _m.get("desc", "")
+                _pawn_completer.words = _new_words
+                _pawn_completer.meta_dict = _new_meta
+            except Exception:
+                pass
         else:
             _provider_list()
         return
@@ -976,18 +988,14 @@ def _provider_add():
         print(); return
     api_format = "anthropic" if fmt_choice == "2" else "openai"
 
-    # Base URL
-    default_path = "/v1/messages" if api_format == "anthropic" else "/v1/chat/completions"
+    # Base URL — store raw, no path appended
     try:
-        base_url = input(cp(BOLD, f"  Base URL (如 https://my-relay.com{default_path}): ")).strip()
+        base_url = input(cp(BOLD, f"  Base URL (如 https://api.example.com/v1/chat/completions): ")).strip()
     except (EOFError, KeyboardInterrupt):
         print(); return
     if not base_url:
         print(c(RED, "  ✗ URL 不能为空"))
         return
-    # 自动补全 path
-    if not base_url.endswith(default_path) and not base_url.endswith("/"):
-        base_url = base_url.rstrip("/") + default_path
 
     # API Key
     env_var_name = f"{name.upper().replace('-', '_')}_API_KEY"
@@ -2708,6 +2716,9 @@ async def main():
     _PAWNLOGIC_DIR.mkdir(parents=True, exist_ok=True)
     init_db()
     attach_external_mcp_tools()
+    # Sync custom providers/models into memory on every startup
+    from config.providers import load_custom_providers as _lcp
+    _lcp()
 
     # ── 首次运行向导（新）────────────────────────────────
     if not _ENV_PATH.exists() or not _has_any_api_key():
