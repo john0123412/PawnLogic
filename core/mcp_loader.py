@@ -11,8 +11,9 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-_CONFIG_PATH = Path("mcp_configs.json")
-_EXAMPLE_PATH = Path("mcp_configs.example.json")
+_PAWNLOGIC_DIR = Path.home() / ".pawnlogic"
+_CONFIG_PATH = _PAWNLOGIC_DIR / "mcp_configs.json"
+_EXAMPLE_PATH = Path(__file__).resolve().parent.parent / "mcp_configs.example.json"
 
 # 运行中的 MCP 子进程注册表 {服务名: Popen 对象}
 _running_servers: dict[str, subprocess.Popen] = {}
