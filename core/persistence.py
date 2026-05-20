@@ -5,9 +5,10 @@ core/persistence.py — 会话持久化对外接口
 """
 
 import json
+import os
 import sys
 import urllib.request, urllib.error
-from config import DYNAMIC_CONFIG, DEFAULT_MODEL, MODELS, get_api_config
+from config import DYNAMIC_CONFIG, DEFAULT_MODEL, MODELS, PROVIDERS, get_api_config
 from core.memory import (
     init_db, upsert_session, list_sessions, get_session, delete_session,
     rename_session, save_messages, load_messages, pin_message_by_seq,
@@ -85,10 +86,17 @@ def session_load(session, query: str) -> str:
     session.messages.clear()
 
     # ── 模型别名归一化：若 DB 中残留已失效的旧名（如 "mimo"），
-    #    降级到 DEFAULT_MODEL 并打印警告，避免下游 MODELS[...] 崩溃。──
+    #    或对应 Provider 的 Key 未配置，降级到 DEFAULT_MODEL。──
     loaded_alias = full["model"]
     if loaded_alias in MODELS:
-        session.model_alias = loaded_alias
+        prov_key_env = PROVIDERS.get(MODELS[loaded_alias].get("provider", ""), {}).get("api_key_env", "")
+        if prov_key_env and not os.getenv(prov_key_env, ""):
+            print(c(YELLOW,
+                f"  ⚠ 会话模型 '{loaded_alias}' 的 API Key 未配置，"
+                f"降级到默认模型 '{DEFAULT_MODEL}'"))
+            session.model_alias = DEFAULT_MODEL
+        else:
+            session.model_alias = loaded_alias
     else:
         print(c(YELLOW,
             f"  ⚠ 会话中的模型别名 '{loaded_alias}' 已失效，"
