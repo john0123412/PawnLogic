@@ -1184,29 +1184,22 @@ async def handle_slash(cmd: str, session: AgentSession):
     elif verb == "/model":
         if not arg:
             # ── CC 风格内联选择器 ──────────────────────────
-            if _HAS_PROMPT_TOOLKIT:
-                # 按 provider 分组，构建带 Key 状态和视觉标记的 entries
+            _vm = _visible_models()
+            if not _vm:
+                print(c(YELLOW, "  ⚠ 当前没有已配置 API Key 的模型，请先用 /setkey 配置。"))
+            elif _HAS_PROMPT_TOOLKIT:
+                # 按 provider 分组（仅已配置 Key 的模型）
                 from collections import defaultdict
                 _groups: dict[str, list] = defaultdict(list)
-                for _alias, _cfg_m in MODELS.items():
-                    _prov_name = _cfg_m.get("provider", "")
-                    _prov_label = PROVIDERS.get(_prov_name, {}).get("label", _prov_name)
+                for _alias, _cfg_m in _vm.items():
+                    _prov_label = PROVIDERS.get(_cfg_m.get("provider", ""), {}).get("label", _cfg_m.get("provider", ""))
                     _groups[_prov_label].append((_alias, _cfg_m))
 
-                # 打印分组标题（选择器不支持不可选分隔行）
-                print(c(BOLD, "\n  模型列表（按 Provider 分组）："))
+                print(c(BOLD, "\n  可用模型（仅已配置 Key）："))
                 for _prov_label, _entries in _groups.items():
-                    _key_ok_count = sum(1 for _a, _ in _entries if validate_api_key(_a)[0])
-                    _status = c(GREEN, f"[{_key_ok_count}/{len(_entries)} 已配置]")
-                    print(c(CYAN, f"  {_prov_label}") + f"  {_status}")
+                    print(c(CYAN, f"  {_prov_label}") + c(GRAY, f"  [{len(_entries)} 个]"))
 
-                # 展平为有序列表，供选择器使用
-                _ordered_models: dict[str, dict] = {}
-                for _label in _groups:
-                    for _alias, _cfg_m in _groups[_label]:
-                        _ordered_models[_alias] = _cfg_m
-
-                result = await cc_style_model_selector(_ordered_models, session.model_alias)
+                result = await cc_style_model_selector(_vm, session.model_alias)
                 if result:
                     session.model_alias = result
                     ok, env = validate_api_key(result)
@@ -1217,12 +1210,11 @@ async def handle_slash(cmd: str, session: AgentSession):
                 else:
                     print(c(GRAY, "  已取消"))
             else:
-                # readline 降级：按 provider 分组的纯文本列表
+                # readline 降级：按 provider 分组的纯文本列表（仅已配置 Key 的模型）
                 from collections import defaultdict
                 _groups: dict[str, list] = defaultdict(list)
-                for _alias, _cfg_m in MODELS.items():
-                    _prov_name = _cfg_m.get("provider", "")
-                    _prov_label = PROVIDERS.get(_prov_name, {}).get("label", _prov_name)
+                for _alias, _cfg_m in _vm.items():
+                    _prov_label = PROVIDERS.get(_cfg_m.get("provider", ""), {}).get("label", _cfg_m.get("provider", ""))
                     _groups[_prov_label].append((_alias, _cfg_m))
 
                 print(c(BOLD, "\n  可用模型："))
@@ -1230,19 +1222,12 @@ async def handle_slash(cmd: str, session: AgentSession):
                     print(c(CYAN, f"\n  ── {_prov_label} ──"))
                     for _alias, _cfg_m in _entries:
                         tick  = c(GREEN, " ◀ 当前") if _alias == session.model_alias else ""
-                        ok, _ = validate_api_key(_alias)
-                        # Key 状态：有则脱敏显示首尾，无则标注"未配置"
-                        _prov_n = _cfg_m.get("provider", "")
-                        _env_var = PROVIDERS.get(_prov_n, {}).get("api_key_env", "")
+                        _env_var = PROVIDERS.get(_cfg_m.get("provider", ""), {}).get("api_key_env", "")
                         _raw_key = os.getenv(_env_var, "")
-                        if _raw_key:
-                            _masked = f"{_raw_key[:4]}…{_raw_key[-4:]}" if len(_raw_key) > 8 else "****"
-                            ktag = c(GREEN, f"[{_masked}]")
-                        else:
-                            ktag = c(RED, "[未配置]")
+                        _masked = f"{_raw_key[:4]}…{_raw_key[-4:]}" if len(_raw_key) > 8 else "****"
+                        ktag  = c(GREEN, f"[{_masked}]")
                         vtag  = c(CYAN, " 📷") if _cfg_m.get("vision") else ""
-                        fmt   = get_api_format(_alias)
-                        ftag  = c(MAGENTA, " [A]") if fmt == "anthropic" else ""
+                        ftag  = c(MAGENTA, " [A]") if get_api_format(_alias) == "anthropic" else ""
                         print(f"    {c(_cfg_m['color'], f'{_alias:14}')}{_cfg_m['desc']:30} {ktag}{vtag}{ftag}{tick}")
                 print(c(GRAY, "\n  用法: /model <alias>  📷=支持视觉  [A]=Anthropic 格式"))
         elif arg in MODELS:
@@ -2379,6 +2364,15 @@ def _has_any_api_key() -> bool:
     return any(os.getenv(p["api_key_env"], "") for p in PROVIDERS.values())
 
 
+def _visible_models() -> dict:
+    """返回当前进程环境中已配置 API Key 的模型子集（动态，每次调用实时检查）。"""
+    return {
+        alias: cfg
+        for alias, cfg in MODELS.items()
+        if os.getenv(PROVIDERS.get(cfg.get("provider", ""), {}).get("api_key_env", ""), "")
+    }
+
+
 def first_run_wizard() -> None:
     """
     首次运行配置向导。
@@ -2710,10 +2704,10 @@ async def main():
         "/exit":          "退出 PawnLogic",
     }
 
-    # 合并一级命令 + 模型别名 + 子命令
+    # 合并一级命令 + 模型别名（仅已配置 Key 的模型）+ 子命令
     _all_words = list(_all_cmd_words)
     _all_meta  = dict(_cmd_meta)
-    for _alias, _minfo in MODELS.items():
+    for _alias, _minfo in _visible_models().items():
         _w = f"/model {_alias}"
         _all_words.append(_w)
         _all_meta[_w] = _minfo.get("desc", "")
