@@ -1008,11 +1008,8 @@ class ProviderTUI:
     # ══════════════════════════════════════════════════════════════════════════
 
     async def run(self) -> None:
-        if not _HAS_PROMPT_TOOLKIT:
-            # non-TTY fallback
-            from config.providers import PROVIDERS as P
-            print("Providers:", list(P.keys()))
-            return
+        # prompt_toolkit availability is guaranteed by module-level imports;
+        # if those fail, this file fails to import, and main.py handles the fallback.
 
         # handle save_anyway dialog (not in _build_layout floats — use enter binding)
         kb = self._build_kb()
