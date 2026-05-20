@@ -888,35 +888,14 @@ def _handle_chat(arg: str, arg2: str, session):
 # /provider 命令处理
 # ════════════════════════════════════════════════════════
 
-def _handle_provider_cmd(sub: str, sub_arg: str, session):
+async def _handle_provider_cmd(sub: str, sub_arg: str, session):
     """处理 /provider 子命令。"""
     import getpass
 
-    # ── /provider 无参数 — 交互式面板 ─────────────────
+    # ── /provider 无参数 — 全交互式 TUI 面板 ──────────
     if not sub:
-        print(f"""
-{c(BOLD+CYAN, "  ╔══════════════════════════════════════════╗")}
-{c(BOLD+CYAN, "  ║")}  {c(BOLD, "Provider 管理面板")}                      {c(BOLD+CYAN, "║")}
-{c(BOLD+CYAN, "  ╚══════════════════════════════════════════╝")}
-
-  {c(CYAN, "[1]")} 查看所有 Provider
-  {c(CYAN, "[2]")} 添加自定义 Provider
-  {c(CYAN, "[3]")} 删除自定义 Provider
-  {c(CYAN, "[4]")} 测试连通性
-  {c(GRAY, "[0]")} 返回
-""")
-        try:
-            choice = input(cp(BOLD, "  请输入序号: ")).strip()
-        except (EOFError, KeyboardInterrupt):
-            print(); return
-        if choice == "1":
-            _provider_list()
-        elif choice == "2":
-            _provider_add()
-        elif choice == "3":
-            _provider_remove()
-        elif choice == "4":
-            _provider_test(session)
+        from core.provider_tui import run_provider_tui
+        await run_provider_tui()
         return
 
     # ── /provider list ────────────────────────────────
@@ -925,20 +904,26 @@ def _handle_provider_cmd(sub: str, sub_arg: str, session):
     elif sub == "add":
         parts_add = sub_arg.split() if sub_arg else []
         if len(parts_add) >= 3:
-            _provider_add_cli(parts_add[0], parts_add[1], parts_add[2])
+            _provider_add_cli(parts_add[0], parts_add[1], parts_add[2],
+                              parts_add[3] if len(parts_add) > 3 else "openai")
         else:
             _provider_add()
     elif sub == "fetch":
         if not sub_arg:
             print(c(RED, "  用法: /provider fetch <别名>"))
         else:
-            _provider_fetch(sub_arg.strip())
+            await _provider_fetch(sub_arg.strip())
+    elif sub == "update":
+        if not sub_arg:
+            print(c(RED, "  用法: /provider update <别名>"))
+        else:
+            await _provider_fetch(sub_arg.strip())  # update = re-fetch
     elif sub == "remove":
         _provider_remove(sub_arg)
     elif sub == "test":
         _provider_test(session, sub_arg)
     else:
-        print(c(RED, f"  ✗ 未知子命令 '{sub}'。可用: list · add · fetch · remove · test"))
+        print(c(RED, f"  ✗ 未知子命令 '{sub}'。可用: list · add · fetch · update · remove · test"))
 
 
 def _provider_list():
@@ -1028,7 +1013,7 @@ def _provider_add():
 
     # 写入 .env
     if key:
-        env_path = Path(__file__).resolve().parent / ".env"
+        env_path = _ENV_PATH  # ~/.pawnlogic/.env，开源友好
         env_line = f'\n{env_var_name}="{key}"\n'
         try:
             existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
@@ -1068,9 +1053,8 @@ def _provider_add():
     print(c(GREEN, f"\n  ✓ Provider '{name}' 已添加"))
     print(c(GRAY,  f"    格式: {api_format}"))
     print(c(GRAY,  f"    URL:  {base_url}"))
-    print(c(GRAY,  f"    模型: {alias} → {model_id}"))
     print(c(GRAY,  f"    配置: {CUSTOM_PROVIDERS_PATH}"))
-    print(c(CYAN,  f"    使用: /model {alias}"))
+    print(c(CYAN,  f"    接下来运行 /provider fetch {name} 拉取模型列表"))
     print()
 
 
@@ -1149,26 +1133,140 @@ def _provider_test(session, model_alias: str = ""):
 
 
 
-def _provider_add_cli(alias: str, base_url: str, env_key: str) -> None:
-    """非交互式：/provider add <alias> <base_url> <ENV_KEY>"""
+def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str = "openai") -> None:
+    """非交互式：/provider add <alias> <base_url> <ENV_KEY> [anthropic]"""
     from config.providers import save_custom_provider, load_custom_providers
     if alias in PROVIDERS:
         print(c(YELLOW, f"  ⚠ Provider '{alias}' 已存在，将覆盖配置"))
+    fmt = api_format if api_format in ("openai", "anthropic") else "openai"
     prov_cfg = {
         "base_url":    base_url,
         "api_key_env": env_key,
         "label":       f"Custom ({alias})",
-        "api_format":  "openai",
+        "api_format":  fmt,
     }
     save_custom_provider(alias, prov_cfg, {})
     PROVIDERS[alias] = prov_cfg
     load_custom_providers()
     print(c(GREEN, f"  ✓ 供应商注册成功！请确保已在 .env 中配置了 {env_key}。"))
-    print(c(CYAN,  f"  接下来请运行 /provider fetch {alias} 以拉取模型。"))
+    # 自动询问是否立即 fetch
+    if os.getenv(env_key, ""):
+        try:
+            ans = input(cp(BOLD, f"  是否立即拉取 {alias} 的模型列表？[Y/n]: ")).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            ans = "n"
+        if ans in ("", "y"):
+            _provider_fetch(alias)
+    else:
+        print(c(CYAN, f"  接下来请运行 /provider fetch {alias} 以拉取模型。"))
 
 
-def _provider_fetch(alias: str) -> None:
-    """/provider fetch <alias>: 请求 /v1/models 并批量注册模型。"""
+def _fetch_models_paginated(models_url: str, api_key: str) -> list:
+    """带分页支持的 /v1/models 请求，返回所有 model 条目。"""
+    import httpx
+    all_data: list = []
+    url = f"{models_url}?limit=200"
+    while url:
+        resp = httpx.get(url, headers={"Authorization": f"Bearer {api_key}"}, timeout=15)
+        resp.raise_for_status()
+        body = resp.json()
+        all_data.extend(body.get("data", []))
+        # OpenAI 标准分页：has_more + next_cursor / next_page
+        if not body.get("has_more"):
+            break
+        cursor = body.get("next_cursor") or body.get("next_page")
+        if not cursor:
+            break
+        url = f"{models_url}?limit=200&after={cursor}"
+    return all_data
+
+
+async def _provider_fetch_selector(entries: list[tuple[str, dict]]) -> list[str]:
+    """
+    prompt_toolkit 多选菜单：Space 选中/取消，Enter 确认，Esc 全不选退出。
+    返回选中的 model id 列表。
+    """
+    if not _HAS_PROMPT_TOOLKIT:
+        # 降级：全部选中
+        return [mid for mid, _ in entries]
+
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.layout.containers import Window
+
+    selected: set[int] = set(range(len(entries)))  # 默认全选
+    cursor_idx = 0
+
+    def get_fragments():
+        frags = []
+        frags.append(("class:title", f"  选择要注册的模型（共 {len(entries)} 个）\n"))
+        frags.append(("class:desc",  "  Space 选中/取消  ↑↓ 移动  A 全选  N 全不选  Enter 确认  Esc 取消\n\n"))
+
+        for i, (mid, cfg) in enumerate(entries):
+            checked = "●" if i in selected else "○"
+            cursor  = "❯ " if i == cursor_idx else "  "
+            vtag    = " 📷" if cfg.get("vision") else ""
+            style   = "class:selected" if i == cursor_idx else ""
+            frags.append((style, f"  {cursor}{checked} {mid}{vtag}\n"))
+        frags.append(("", f"\n  已选 {len(selected)}/{len(entries)} 个\n"))
+        return frags
+
+    control = FormattedTextControl(get_fragments)
+    kb = KeyBindings()
+
+    @kb.add("up")
+    def _(e):
+        nonlocal cursor_idx
+        cursor_idx = (cursor_idx - 1) % len(entries)
+
+    @kb.add("down")
+    def _(e):
+        nonlocal cursor_idx
+        cursor_idx = (cursor_idx + 1) % len(entries)
+
+    @kb.add("space")
+    def _(e):
+        if cursor_idx in selected:
+            selected.discard(cursor_idx)
+        else:
+            selected.add(cursor_idx)
+
+    @kb.add("a")
+    def _(e):
+        selected.update(range(len(entries)))
+
+    @kb.add("n")
+    def _(e):
+        selected.clear()
+
+    @kb.add("enter")
+    def _(e):
+        e.app.exit(result=[entries[i][0] for i in sorted(selected)])
+
+    @kb.add("escape")
+    @kb.add("c-c")
+    def _(e):
+        e.app.exit(result=[])
+
+    style = _PTStyle.from_dict({
+        "title":    "#00afff bold",
+        "desc":     "#888888",
+        "selected": "#00ff00 bold",
+    })
+    app = Application(
+        layout=Layout(Window(content=control, always_hide_cursor=True)),
+        key_bindings=kb,
+        style=style,
+        mouse_support=False,
+        full_screen=False,
+    )
+    return await app.run_async()
+
+
+async def _provider_fetch(alias: str) -> None:
+    """/provider fetch <alias>: 分页请求 /v1/models，交互多选后批量注册。"""
     from urllib.parse import urlparse
     from config.providers import save_custom_provider, load_custom_providers
 
@@ -1184,7 +1282,7 @@ def _provider_fetch(alias: str) -> None:
 
     api_key = os.getenv(prov.get("api_key_env", ""), "")
     if not api_key:
-        print(c(RED, f"  ✗ {prov.get('api_key_env')} 未配置，请先在 .env 中设置该变量。"))
+        print(c(RED, f"  ✗ {prov.get('api_key_env')} 未配置，请先在 ~/.pawnlogic/.env 中设置该变量。"))
         return
 
     parsed = urlparse(prov["base_url"])
@@ -1193,40 +1291,42 @@ def _provider_fetch(alias: str) -> None:
 
     try:
         import httpx
-        resp = httpx.get(
-            models_url,
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json().get("data", [])
+        data = _fetch_models_paginated(models_url, api_key)
     except Exception as e:
         print(c(RED, f"  ✗ 请求失败: {e}"))
         return
 
     _NOISE = {"embedding", "rerank", "tts", "whisper", "moderation", "davinci", "babbage"}
-    models_cfg: dict = {}
+    candidates: list[tuple[str, dict]] = []
     for item in data:
         mid = item.get("id", "")
         if not mid or any(n in mid.lower() for n in _NOISE):
             continue
         vision = any(k in mid.lower() for k in ("vision", "vl", "visual"))
-        models_cfg[mid] = {
+        candidates.append((mid, {
             "id":       mid,
             "provider": alias,
             "desc":     "动态拉取模型",
             "color":    "\033[37m",
             "vision":   vision,
-        }
+        }))
 
-    if not models_cfg:
-        print(c(YELLOW, "  ⚠ 未获取到任何模型，请检查接口返回格式。"))
+    if not candidates:
+        print(c(YELLOW, "  ⚠ 未获取到任何可用模型，请检查接口返回格式。"))
         return
 
-    save_custom_provider(alias, PROVIDERS[alias], models_cfg)
-    load_custom_providers()  # 热加载，内部已更新 MODELS
+    print(c(GREEN, f"  ✓ 获取到 {len(candidates)} 个模型，请选择要注册的模型：\n"))
+    chosen_ids = await _provider_fetch_selector(candidates)
 
-    print(c(GREEN, f"  ✓ 成功从云端捕获并注册了 {len(models_cfg)} 个新模型！输入 /model 即可无缝切换。"))
+    if not chosen_ids:
+        print(c(GRAY, "  已取消，未注册任何模型。"))
+        return
+
+    models_cfg = {mid: cfg for mid, cfg in candidates if mid in set(chosen_ids)}
+    save_custom_provider(alias, PROVIDERS[alias], models_cfg)
+    load_custom_providers()
+
+    print(c(GREEN, f"  ✓ 成功注册了 {len(models_cfg)} 个模型！输入 /model 即可无缝切换。"))
 
 
 # ════════════════════════════════════════════════════════
@@ -1268,7 +1368,7 @@ async def handle_slash(cmd: str, session: AgentSession):
 
     # ── Provider 管理 ──────────────────────────────────
     elif verb == "/provider":
-        _handle_provider_cmd(arg, arg2, session)
+        await _handle_provider_cmd(arg, arg2, session)
 
     # ── 模型 ────────────────────────────────────────────
     elif verb == "/model":
@@ -2601,6 +2701,8 @@ async def main():
         _runtime_state.quiet_mode,
     )
 
+    # 确保运行时数据目录存在（开源友好：基于 Path.home()，无硬路径）
+    _PAWNLOGIC_DIR.mkdir(parents=True, exist_ok=True)
     init_db()
     attach_external_mcp_tools()
 
@@ -2846,8 +2948,9 @@ async def main():
     # Provider 子命令
     for _sub, _desc in [
         ("list",   "列出所有 Provider 状态"),
-        ("add",    "注册自定义 Provider（交互式或 add <alias> <url> <KEY>）"),
-        ("fetch",  "自动嗅探并注册 Provider 的所有模型"),
+        ("add",    "注册自定义 Provider（交互式或 add <alias> <url> <KEY> [anthropic]）"),
+        ("fetch",  "自动嗅探并注册 Provider 的所有模型（交互多选）"),
+        ("update", "重新拉取并更新已注册 Provider 的模型列表"),
         ("remove", "删除自定义 Provider"),
         ("test",   "测试 Provider 连通性"),
     ]:
