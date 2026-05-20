@@ -548,7 +548,7 @@ class ProviderTUI:
             if pname in _BUILTIN:
                 return
             self._detail_provider = pname
-            self._dialog = "delete"; self._dialog_cursor = 0; inv()
+            self._dialog = "delete"; self._dialog_cursor = 0; rebuild()
 
         @kb.add("q",      filter=_main)
         @kb.add("Q",      filter=_main)
@@ -841,6 +841,9 @@ class ProviderTUI:
         cur = self._detail_cursor
         if cur == 0:
             self._dialog = "security"; self._dialog_cursor = 0
+            if self._app:
+                self._app.layout = self._build_layout()
+                self._app.invalidate()
         elif cur == 1:
             await self._open_model_selector(pname, "detail")
         elif cur == 2:
@@ -855,9 +858,12 @@ class ProviderTUI:
             if pname in _BUILTIN:
                 self._detail_status = "Cannot delete built-in providers."
                 self._detail_status_style = "class:warning"
+                if self._app: self._app.invalidate()
             else:
                 self._dialog = "delete"; self._dialog_cursor = 0
-        if self._app: self._app.invalidate()
+                if self._app:
+                    self._app.layout = self._build_layout()
+                    self._app.invalidate()
 
     async def _wizard_confirm(self):
         name, url, fmt, key = self._wiz_fields
