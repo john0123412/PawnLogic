@@ -70,13 +70,15 @@ except Exception as _e:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ── 启动时加载 .env（必须在 import config 之前）───────────
+_PAWNLOGIC_DIR = Path.home() / ".pawnlogic"
+_ENV_PATH = _PAWNLOGIC_DIR / ".env"
+
 try:
     from dotenv import load_dotenv
-    _env_path = Path(__file__).resolve().parent / ".env"
-    if _env_path.exists():
-        load_dotenv(dotenv_path=_env_path)
+    if _ENV_PATH.exists():
+        load_dotenv(dotenv_path=_ENV_PATH)
     else:
-        print(f"\033[93m  ⚠ 警告: 未找到 {_env_path} 文件\033[0m")
+        print(f"\033[93m  ⚠ 警告: 未找到 {_ENV_PATH} 文件\033[0m")
 except ImportError:
     print("\033[93m  ⚠ 警告: 未安装 python-dotenv！请执行 pip install python-dotenv\033[0m")
 
@@ -1183,7 +1185,28 @@ async def handle_slash(cmd: str, session: AgentSession):
         if not arg:
             # ── CC 风格内联选择器 ──────────────────────────
             if _HAS_PROMPT_TOOLKIT:
-                result = await cc_style_model_selector(MODELS, session.model_alias)
+                # 按 provider 分组，构建带 Key 状态和视觉标记的 entries
+                from collections import defaultdict
+                _groups: dict[str, list] = defaultdict(list)
+                for _alias, _cfg_m in MODELS.items():
+                    _prov_name = _cfg_m.get("provider", "")
+                    _prov_label = PROVIDERS.get(_prov_name, {}).get("label", _prov_name)
+                    _groups[_prov_label].append((_alias, _cfg_m))
+
+                # 打印分组标题（选择器不支持不可选分隔行）
+                print(c(BOLD, "\n  模型列表（按 Provider 分组）："))
+                for _prov_label, _entries in _groups.items():
+                    _key_ok_count = sum(1 for _a, _ in _entries if validate_api_key(_a)[0])
+                    _status = c(GREEN, f"[{_key_ok_count}/{len(_entries)} 已配置]")
+                    print(c(CYAN, f"  {_prov_label}") + f"  {_status}")
+
+                # 展平为有序列表，供选择器使用
+                _ordered_models: dict[str, dict] = {}
+                for _label in _groups:
+                    for _alias, _cfg_m in _groups[_label]:
+                        _ordered_models[_alias] = _cfg_m
+
+                result = await cc_style_model_selector(_ordered_models, session.model_alias)
                 if result:
                     session.model_alias = result
                     ok, env = validate_api_key(result)
@@ -1194,16 +1217,33 @@ async def handle_slash(cmd: str, session: AgentSession):
                 else:
                     print(c(GRAY, "  已取消"))
             else:
-                # readline 降级：纯文本列表
+                # readline 降级：按 provider 分组的纯文本列表
+                from collections import defaultdict
+                _groups: dict[str, list] = defaultdict(list)
+                for _alias, _cfg_m in MODELS.items():
+                    _prov_name = _cfg_m.get("provider", "")
+                    _prov_label = PROVIDERS.get(_prov_name, {}).get("label", _prov_name)
+                    _groups[_prov_label].append((_alias, _cfg_m))
+
                 print(c(BOLD, "\n  可用模型："))
-                for alias, cfg_m in MODELS.items():
-                    tick   = c(GREEN, " ◀ 当前") if alias == session.model_alias else ""
-                    ok, _  = validate_api_key(alias)
-                    ktag   = c(GREEN, "[key✓]") if ok else c(RED, "[key✗]")
-                    vtag   = c(CYAN,  " 📷")    if cfg_m.get("vision") else ""
-                    fmt    = get_api_format(alias)
-                    ftag   = c(MAGENTA, " [A]")  if fmt == "anthropic" else ""
-                    print(f"    {c(cfg_m['color'], f'{alias:14}')}{cfg_m['desc']:30} {ktag}{vtag}{ftag}{tick}")
+                for _prov_label, _entries in _groups.items():
+                    print(c(CYAN, f"\n  ── {_prov_label} ──"))
+                    for _alias, _cfg_m in _entries:
+                        tick  = c(GREEN, " ◀ 当前") if _alias == session.model_alias else ""
+                        ok, _ = validate_api_key(_alias)
+                        # Key 状态：有则脱敏显示首尾，无则标注"未配置"
+                        _prov_n = _cfg_m.get("provider", "")
+                        _env_var = PROVIDERS.get(_prov_n, {}).get("api_key_env", "")
+                        _raw_key = os.getenv(_env_var, "")
+                        if _raw_key:
+                            _masked = f"{_raw_key[:4]}…{_raw_key[-4:]}" if len(_raw_key) > 8 else "****"
+                            ktag = c(GREEN, f"[{_masked}]")
+                        else:
+                            ktag = c(RED, "[未配置]")
+                        vtag  = c(CYAN, " 📷") if _cfg_m.get("vision") else ""
+                        fmt   = get_api_format(_alias)
+                        ftag  = c(MAGENTA, " [A]") if fmt == "anthropic" else ""
+                        print(f"    {c(_cfg_m['color'], f'{_alias:14}')}{_cfg_m['desc']:30} {ktag}{vtag}{ftag}{tick}")
                 print(c(GRAY, "\n  用法: /model <alias>  📷=支持视觉  [A]=Anthropic 格式"))
         elif arg in MODELS:
             session.model_alias = arg
@@ -2400,7 +2440,8 @@ def first_run_wizard() -> None:
 
     # 写入 .env（追加模式，避免覆盖已有内容）
     env_key = f"{alias.upper().replace('-', '_').replace(' ', '_')}_API_KEY"
-    env_path = Path(".env")
+    env_path = _ENV_PATH
+    _PAWNLOGIC_DIR.mkdir(parents=True, exist_ok=True)
     with open(env_path, "a", encoding="utf-8") as f:
         f.write(f"\n# 由首次运行向导自动生成\n{env_key}={api_key}\n")
 
@@ -2427,7 +2468,7 @@ def first_run_wizard() -> None:
     # 重新加载 .env，让当前进程能立即使用新 Key
     try:
         from dotenv import load_dotenv
-        load_dotenv(override=True)
+        load_dotenv(env_path, override=True)
     except ImportError:
         os.environ[env_key] = api_key
 
@@ -2480,8 +2521,7 @@ async def main():
     attach_external_mcp_tools()
 
     # ── 首次运行向导（新）────────────────────────────────
-    env_path = Path(".env")
-    if not env_path.exists() or not _has_any_api_key():
+    if not _ENV_PATH.exists() or not _has_any_api_key():
         from core.state import state as _st
         _st.is_first_run = True
         first_run_wizard()
