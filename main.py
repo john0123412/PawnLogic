@@ -923,13 +923,22 @@ def _handle_provider_cmd(sub: str, sub_arg: str, session):
     if sub == "list":
         _provider_list()
     elif sub == "add":
-        _provider_add()
+        parts_add = sub_arg.split() if sub_arg else []
+        if len(parts_add) >= 3:
+            _provider_add_cli(parts_add[0], parts_add[1], parts_add[2])
+        else:
+            _provider_add()
+    elif sub == "fetch":
+        if not sub_arg:
+            print(c(RED, "  用法: /provider fetch <别名>"))
+        else:
+            _provider_fetch(sub_arg.strip())
     elif sub == "remove":
         _provider_remove(sub_arg)
     elif sub == "test":
         _provider_test(session, sub_arg)
     else:
-        print(c(RED, f"  ✗ 未知子命令 '{sub}'。可用: list · add · remove · test"))
+        print(c(RED, f"  ✗ 未知子命令 '{sub}'。可用: list · add · fetch · remove · test"))
 
 
 def _provider_list():
@@ -1137,6 +1146,87 @@ def _provider_test(session, model_alias: str = ""):
         print(c(RED, f"  ✗ 测试失败: {err}"))
     else:
         print(c(GREEN, f"  ✓ 连通成功！响应: {text[:80]}"))
+
+
+
+def _provider_add_cli(alias: str, base_url: str, env_key: str) -> None:
+    """非交互式：/provider add <alias> <base_url> <ENV_KEY>"""
+    from config.providers import save_custom_provider, load_custom_providers
+    if alias in PROVIDERS:
+        print(c(YELLOW, f"  ⚠ Provider '{alias}' 已存在，将覆盖配置"))
+    prov_cfg = {
+        "base_url":    base_url,
+        "api_key_env": env_key,
+        "label":       f"Custom ({alias})",
+        "api_format":  "openai",
+    }
+    save_custom_provider(alias, prov_cfg, {})
+    PROVIDERS[alias] = prov_cfg
+    load_custom_providers()
+    print(c(GREEN, f"  ✓ 供应商注册成功！请确保已在 .env 中配置了 {env_key}。"))
+    print(c(CYAN,  f"  接下来请运行 /provider fetch {alias} 以拉取模型。"))
+
+
+def _provider_fetch(alias: str) -> None:
+    """/provider fetch <alias>: 请求 /v1/models 并批量注册模型。"""
+    from urllib.parse import urlparse
+    from config.providers import save_custom_provider, load_custom_providers
+
+    _BUILTIN = {"deepseek", "openai", "anthropic"}
+    if alias in _BUILTIN:
+        print(c(RED, f"  ✗ 拒绝修改内置 Provider '{alias}'，保护核心资产。"))
+        return
+
+    prov = PROVIDERS.get(alias)
+    if not prov:
+        print(c(RED, f"  ✗ 未找到 Provider '{alias}'，请先运行 /provider add {alias} <url> <KEY>"))
+        return
+
+    api_key = os.getenv(prov.get("api_key_env", ""), "")
+    if not api_key:
+        print(c(RED, f"  ✗ {prov.get('api_key_env')} 未配置，请先在 .env 中设置该变量。"))
+        return
+
+    parsed = urlparse(prov["base_url"])
+    models_url = f"{parsed.scheme}://{parsed.netloc}/v1/models"
+    print(c(GRAY, f"  正在请求 {models_url} ..."))
+
+    try:
+        import httpx
+        resp = httpx.get(
+            models_url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+    except Exception as e:
+        print(c(RED, f"  ✗ 请求失败: {e}"))
+        return
+
+    _NOISE = {"embedding", "rerank", "tts", "whisper", "moderation", "davinci", "babbage"}
+    models_cfg: dict = {}
+    for item in data:
+        mid = item.get("id", "")
+        if not mid or any(n in mid.lower() for n in _NOISE):
+            continue
+        vision = any(k in mid.lower() for k in ("vision", "vl", "visual"))
+        models_cfg[mid] = {
+            "id":       mid,
+            "provider": alias,
+            "desc":     "动态拉取模型",
+            "color":    "\033[37m",
+            "vision":   vision,
+        }
+
+    if not models_cfg:
+        print(c(YELLOW, "  ⚠ 未获取到任何模型，请检查接口返回格式。"))
+        return
+
+    save_custom_provider(alias, PROVIDERS[alias], models_cfg)
+    load_custom_providers()  # 热加载，内部已更新 MODELS
+
+    print(c(GREEN, f"  ✓ 成功从云端捕获并注册了 {len(models_cfg)} 个新模型！输入 /model 即可无缝切换。"))
 
 
 # ════════════════════════════════════════════════════════
