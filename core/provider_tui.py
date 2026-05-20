@@ -50,6 +50,7 @@ TUI_STYLE = Style.from_dict({
     "success":      "#00d700",
     "warning":      "#ffaa00",
     "spinner":      "#00afff bold",
+    "dialog-bg":    "bg:#1a1a2e #cccccc",
 })
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -203,6 +204,10 @@ class ProviderTUI:
         self._ms_search: str = ""
         self._ms_search_focus: bool = False
         self._ms_filter_cache: tuple = ("", [])
+        # manage models panel
+        self._mm_models: list[str] = []   # alias list for current provider
+        self._mm_cursor: int = 0
+        self._mm_provider: str = ""
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
@@ -276,7 +281,8 @@ class ProviderTUI:
         f.append(("", "\n"))
         if self._detail_key_active:
             f.append(("class:warning", "  New API Key (input hidden, Enter to save, Esc to cancel):\n"))
-        actions = ["Update API Key", "Fetch / Sync Models", "Test Connection", "Delete Provider"]
+        actions = ["Update API Key", "Fetch / Sync Models", "Test Connection",
+                   "Manage Models", "Delete Provider"]
         for i, act in enumerate(actions):
             if i == self._detail_cursor and not self._detail_key_active:
                 f.append(("class:cursor", f"  ▶ [ {act} ]\n"))
@@ -398,6 +404,25 @@ class ProviderTUI:
         f.append(("", "\n"))
         return f
 
+    def _render_manage_models(self) -> StyleAndTextTuples:
+        pname = self._mm_provider
+        f: StyleAndTextTuples = [("class:title", f"\n  🗂 Manage Models — {pname}\n\n")]
+        if not self._mm_models:
+            f.append(("class:subtitle", "  No models loaded. Use Fetch / Sync Models.\n"))
+        for i, alias in enumerate(self._mm_models):
+            cur = "▶" if i == self._mm_cursor else " "
+            cs = "class:cursor" if i == self._mm_cursor else ""
+            mid = MODELS.get(alias, {}).get("id", alias)
+            f.append((cs, f"  {cur} {alias}  "))
+            f.append(("class:subtitle", f"({mid})\n"))
+        f.append(("", "\n"))
+        return f
+
+    def _render_status_mm(self) -> StyleAndTextTuples:
+        return [("class:status-key", " ↑↓ "), ("class:status", "Move  "),
+                ("class:status-key", "D "), ("class:status", "Delete model  "),
+                ("class:status-key", "Esc "), ("class:status", "Back ")]
+
     # ── layout ────────────────────────────────────────────────────────────────
 
     def _build_layout(self) -> Layout:
@@ -407,6 +432,7 @@ class ProviderTUI:
             if p == "detail": return self._render_detail()
             if p == "wizard": return self._render_wizard()
             if p == "models": return self._render_model_select()
+            if p == "manage": return self._render_manage_models()
             return []
 
         def status():
@@ -415,6 +441,7 @@ class ProviderTUI:
             if p == "detail": return self._render_status_detail()
             if p == "wizard": return self._render_status_wizard()
             if p == "models": return self._render_status_ms()
+            if p == "manage": return self._render_status_mm()
             return []
 
         body_win = Window(content=FormattedTextControl(body), always_hide_cursor=True)
@@ -425,16 +452,16 @@ class ProviderTUI:
             filter=Condition(lambda: self._panel == "detail" and self._detail_key_active),
         )
 
-        # Bug 1 fix: only create Float when dialog is active
+        # Dialog: opaque background so text doesn't bleed through
         floats = []
         if self._dialog:
             floats = [Float(
                 content=Frame(
                     body=Window(content=FormattedTextControl(self._render_dialog),
-                                always_hide_cursor=True),
-                    width=58, height=10,
+                                always_hide_cursor=True, style="class:dialog-bg"),
+                    width=58, height=10, style="class:dialog-bg",
                 ),
-                transparent=True,
+                transparent=False,
             )]
 
         root = FloatContainer(
@@ -559,16 +586,53 @@ class ProviderTUI:
         _det = Condition(lambda: self._panel == "detail" and not self._dialog and not self._detail_key_active)
 
         @kb.add("up",    filter=_det)
-        def _d_up(e): self._detail_cursor = (self._detail_cursor - 1) % 4; inv()
+        def _d_up(e): self._detail_cursor = (self._detail_cursor - 1) % 5; inv()
 
         @kb.add("down",  filter=_det)
-        def _d_dn(e): self._detail_cursor = (self._detail_cursor + 1) % 4; inv()
+        def _d_dn(e): self._detail_cursor = (self._detail_cursor + 1) % 5; inv()
 
         @kb.add("enter", filter=_det)
         def _d_enter(e): e.app.create_background_task(self._detail_action())
 
         @kb.add("escape", filter=_det)
         def _d_esc(e): self._panel = "main"; rebuild()
+
+        # ── manage models panel ───────────────────────────────────────────────
+        _mm = Condition(lambda: self._panel == "manage")
+
+        @kb.add("up",    filter=_mm)
+        def _mm_up(e):
+            if self._mm_models:
+                self._mm_cursor = (self._mm_cursor - 1) % len(self._mm_models); inv()
+
+        @kb.add("down",  filter=_mm)
+        def _mm_dn(e):
+            if self._mm_models:
+                self._mm_cursor = (self._mm_cursor + 1) % len(self._mm_models); inv()
+
+        @kb.add("d", filter=_mm)
+        @kb.add("D", filter=_mm)
+        def _mm_del(e):
+            if not self._mm_models: return
+            alias = self._mm_models[self._mm_cursor]
+            # Remove from MODELS and custom_providers.json
+            MODELS.pop(alias, None)
+            import json as _j
+            if CUSTOM_PROVIDERS_PATH.exists():
+                try:
+                    data = _j.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
+                    data.get("models", {}).pop(alias, None)
+                    CUSTOM_PROVIDERS_PATH.write_text(
+                        _j.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+            self._mm_models = [a for a, m in MODELS.items()
+                               if m.get("provider") == self._mm_provider]
+            self._mm_cursor = min(self._mm_cursor, max(0, len(self._mm_models) - 1))
+            inv()
+
+        @kb.add("escape", filter=_mm)
+        def _mm_esc(e): self._panel = "detail"; rebuild()
 
         # ── wizard ────────────────────────────────────────────────────────────
         _wiz = Condition(lambda: self._panel == "wizard" and not self._dialog)
@@ -854,7 +918,15 @@ class ProviderTUI:
             await asyncio.sleep(3)
             self._detail_status = ""
             if self._app: self._app.invalidate()
-        elif cur == 3:
+        elif cur == 3:  # Manage Models
+            self._mm_provider = pname
+            self._mm_models = [a for a, m in MODELS.items() if m.get("provider") == pname]
+            self._mm_cursor = 0
+            self._panel = "manage"
+            if self._app:
+                self._app.layout = self._build_layout()
+                self._app.invalidate()
+        elif cur == 4:  # Delete Provider
             if pname in _BUILTIN:
                 self._detail_status = "Cannot delete built-in providers."
                 self._detail_status_style = "class:warning"
