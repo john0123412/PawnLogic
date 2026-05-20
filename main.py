@@ -2330,6 +2330,113 @@ class PawnCompleter(Completer):
             )
 
 
+# ════════════════════════════════════════════════════════
+# 首次运行向导
+# ════════════════════════════════════════════════════════
+
+def _has_any_api_key() -> bool:
+    """检查是否至少有一个可用的 API Key。"""
+    return any(os.getenv(p["api_key_env"], "") for p in PROVIDERS.values())
+
+
+def first_run_wizard() -> None:
+    """
+    首次运行配置向导。
+    当 .env 不存在或没有任何可用 API Key 时自动触发。
+    引导用户选择 API 格式、填入 URL 和 Key，写入 .env 和 custom_providers.json。
+    """
+    from config.providers import save_custom_provider
+
+    print("\n" + "═" * 56)
+    print("  欢迎使用 PawnLogic！检测到尚未配置任何 API。")
+    print("  首次运行需要配置一个 AI 接口，仅需 1 分钟。")
+    print("═" * 56 + "\n")
+
+    print("第一步：选择 API 格式")
+    print("  1. OpenAI 兼容格式（DeepSeek / Qwen / Ollama 等大多数服务）")
+    print("  2. Anthropic 原生格式（仅限 Claude 官方 API）\n")
+
+    while True:
+        fmt = input("请输入 1 或 2（默认 1）：").strip() or "1"
+        if fmt in ("1", "2"):
+            break
+        print("  请输入 1 或 2")
+
+    api_format = "openai" if fmt == "1" else "anthropic"
+
+    default_urls = {
+        "openai": "https://api.deepseek.com/v1/chat/completions",
+        "anthropic": "https://api.anthropic.com/v1/messages",
+    }
+    default_models = {
+        "openai": "deepseek-chat",
+        "anthropic": "claude-sonnet-4-6",
+    }
+
+    print(f"\n第二步：填入接口信息（{api_format.upper()} 格式）")
+    default_url = default_urls[api_format]
+    base_url = input(f"  API Base URL\n  直接回车使用默认：{default_url}\n  > ").strip()
+    if not base_url:
+        base_url = default_url
+
+    api_key = ""
+    while not api_key:
+        api_key = input("\n  API Key（必填）：").strip()
+        if not api_key:
+            print("  API Key 不能为空")
+
+    default_model = default_models[api_format]
+    model_id = input(
+        f"\n  模型 ID（直接回车使用默认：{default_model}）：\n  > "
+    ).strip() or default_model
+
+    alias = ""
+    while not alias:
+        alias = input(
+            "\n  给这个模型起个别名（如 my-claude / my-deepseek）：\n  > "
+        ).strip()
+        if not alias:
+            print("  别名不能为空")
+
+    # 写入 .env（追加模式，避免覆盖已有内容）
+    env_key = f"{alias.upper().replace('-', '_').replace(' ', '_')}_API_KEY"
+    env_path = Path(".env")
+    with open(env_path, "a", encoding="utf-8") as f:
+        f.write(f"\n# 由首次运行向导自动生成\n{env_key}={api_key}\n")
+
+    # 写入 custom_providers.json（结构配置，不含 Key）
+    save_custom_provider(
+        name=alias,
+        prov_cfg={
+            "base_url": base_url,
+            "api_key_env": env_key,
+            "label": alias,
+            "api_format": api_format,
+        },
+        models_cfg={
+            alias: {
+                "id": model_id,
+                "provider": alias,
+                "desc": f"用户配置 ({api_format})",
+                "color": "\033[37m",
+                "vision": False,
+            }
+        },
+    )
+
+    # 重新加载 .env，让当前进程能立即使用新 Key
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+    except ImportError:
+        os.environ[env_key] = api_key
+
+    print(f"\n✓ 配置完成！")
+    print(f"  模型别名：{alias}")
+    print(f"  启动后使用 /model {alias} 确认切换\n")
+    print("═" * 56 + "\n")
+
+
 async def main():
     global _deferred_history
     prompt_toolkit_enabled = _HAS_PROMPT_TOOLKIT
@@ -2371,6 +2478,15 @@ async def main():
 
     init_db()
     attach_external_mcp_tools()
+
+    # ── 首次运行向导（新）────────────────────────────────
+    env_path = Path(".env")
+    if not env_path.exists() or not _has_any_api_key():
+        from core.state import state as _st
+        _st.is_first_run = True
+        first_run_wizard()
+        from config.providers import load_custom_providers
+        load_custom_providers()
 
     # ── 模块 2：无 Key 时进入配置向导 ────────────────────
     any_key = any(
