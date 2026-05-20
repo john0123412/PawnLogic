@@ -2843,6 +2843,17 @@ async def main():
         _w = f"/docker {_sub}"
         _all_words.append(_w)
         _all_meta[_w] = _desc
+    # Provider 子命令
+    for _sub, _desc in [
+        ("list",   "列出所有 Provider 状态"),
+        ("add",    "注册自定义 Provider（交互式或 add <alias> <url> <KEY>）"),
+        ("fetch",  "自动嗅探并注册 Provider 的所有模型"),
+        ("remove", "删除自定义 Provider"),
+        ("test",   "测试 Provider 连通性"),
+    ]:
+        _w = f"/provider {_sub}"
+        _all_words.append(_w)
+        _all_meta[_w] = _desc
 
     # ── readline 历史文件路径 ─────────────────────────────
     _history_path = str(Path.home() / ".pawnlogic" / ".input_history")
