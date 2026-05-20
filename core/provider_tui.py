@@ -202,6 +202,7 @@ class ProviderTUI:
         self._ms_error: str = ""
         self._ms_search: str = ""
         self._ms_search_focus: bool = False
+        self._ms_filter_cache: tuple = ("", [])
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
@@ -209,11 +210,13 @@ class ProviderTUI:
         return list(PROVIDERS.keys())
 
     def _ms_filtered(self) -> list[tuple[str, dict]]:
-        """Return entries filtered by search string."""
+        """Return entries filtered by search string. Result cached per search query."""
         q = self._ms_search.lower()
         if not q:
             return self._ms_all
-        return [(mid, cfg) for mid, cfg in self._ms_all if q in mid.lower()]
+        if not hasattr(self, "_ms_filter_cache") or self._ms_filter_cache[0] != q:
+            self._ms_filter_cache = (q, [(mid, cfg) for mid, cfg in self._ms_all if q in mid.lower()])
+        return self._ms_filter_cache[1]
 
     # ── render: main ─────────────────────────────────────────────────────────
 
@@ -687,14 +690,7 @@ class ProviderTUI:
 
         @kb.add("enter", filter=_ms_list)
         def _ms_enter(e):
-            filtered = self._ms_filtered()
-            if self._ms_cursor < len(filtered):
-                # toggle on enter too
-                mid = filtered[self._ms_cursor][0]
-                if mid in self._ms_selected: self._ms_selected.discard(mid)
-                else: self._ms_selected.add(mid)
-                inv(); return
-            # confirm button
+            # Enter always confirms — Space is for toggling
             if not self._ms_selected:
                 self._ms_error = "Select at least one model."; inv(); return
             self._ms_error = ""; self._do_save_models()
@@ -702,9 +698,17 @@ class ProviderTUI:
         @kb.add("escape", filter=_ms)
         def _ms_esc(e):
             if self._ms_search_focus:
-                self._ms_search_focus = False; self._ms_search = ""; inv()
+                self._ms_search_focus = False; self._ms_search = ""
+                self._ms_cursor = 0; self._ms_viewport = 0; inv()
             else:
-                self._panel = self._ms_caller; rebuild()
+                self._panel = self._ms_caller
+                if self._app:
+                    self._app.layout = self._build_layout()
+                    self._app.invalidate()
+
+        @kb.add("q", filter=_ms)
+        @kb.add("Q", filter=_ms)
+        def _ms_quit(e): e.app.exit()
 
         # search bar input
         @kb.add("<any>", filter=_ms_srch)
