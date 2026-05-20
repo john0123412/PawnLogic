@@ -337,10 +337,9 @@ class ProviderTUI:
             ("class:title", f"\n  📦 Select Models — {self._ms_provider}\n"),
             ("class:subtitle", f"  {len(self._ms_all)} models available. Choose which to load.\n\n"),
         ]
-        # search bar
         sb_s = "class:field-focus" if self._ms_search_focus else "class:field-normal"
         f.append((sb_s, f"  🔍 Search: {self._ms_search}{'▌' if self._ms_search_focus else ''}\n\n"))
-        # paginated list
+        # Only render the visible viewport window — never all rows
         start = self._ms_viewport
         end = min(start + _PAGE, total)
         for i in range(start, end):
@@ -354,8 +353,7 @@ class ProviderTUI:
         if total > _PAGE:
             f.append(("class:subtitle", f"\n  Showing {start+1}–{end} of {total}\n"))
         f.append(("", f"\n  {len(self._ms_selected)} selected\n\n"))
-        bs = "class:btn-focus" if (self._ms_cursor >= total and not self._ms_search_focus) else "class:btn-normal"
-        f.append((bs, "  [ Load Selected Models ]\n"))
+        f.append(("class:btn-normal", "  [ Load Selected Models ]  (Enter to confirm)\n"))
         if self._ms_error:
             f.append(("class:error", f"\n  ⚠ {self._ms_error}\n"))
         return f
@@ -890,8 +888,12 @@ class ProviderTUI:
             save_custom_provider(name, prov_cfg, {})
             PROVIDERS[name] = prov_cfg
             load_custom_providers()
-            await asyncio.sleep(0.5)
-            await self._open_model_selector(name, "main")
+            await asyncio.sleep(0.3)
+            self._wiz_status = f"✅ Saved. Use Fetch/Sync Models in the detail panel to load models."
+            self._panel = "main"
+            if self._app:
+                self._app.layout = self._build_layout()
+                self._app.invalidate()
         else:
             self._wiz_status = f"✗ Connection failed: {msg}"
             self._wiz_status_style = "class:error"
