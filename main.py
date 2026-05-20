@@ -894,8 +894,11 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session):
 
     # ── /provider 无参数 — 全交互式 TUI 面板 ──────────
     if not sub:
-        from core.provider_tui import run_provider_tui
-        await run_provider_tui()
+        if _HAS_PROMPT_TOOLKIT:
+            from core.provider_tui import run_provider_tui
+            await run_provider_tui()
+        else:
+            _provider_list()
         return
 
     # ── /provider list ────────────────────────────────
