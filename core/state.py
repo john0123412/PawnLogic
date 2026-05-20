@@ -14,7 +14,7 @@ class RuntimeState:
     quiet_mode: bool = False      # True = 静默模式
 
     # 模型状态
-    current_model: str = "ds-chat"
+    current_model: str = "ds-v4-flash"
     current_worker: str = "auto"
 
     # 算力档位（从 config.tiers 初始化，运行时可修改）

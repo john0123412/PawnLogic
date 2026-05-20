@@ -176,7 +176,7 @@ def generate_session_name(
     text = ""
     kwargs = {}
     # 只对明确支持 json_object 的 OpenAI 官方模型传 response_format
-    _SUPPORTS_JSON_FORMAT = {"gpt-4o", "gpt-4o-mini", "gpt-4-turbo"}
+    _SUPPORTS_JSON_FORMAT = {"gpt-4o", "gpt-4.1", "gpt-4-turbo"}
     if model_alias in _SUPPORTS_JSON_FORMAT:
         kwargs["response_format"] = {"type": "json_object"}
     for delta in stream_request(
