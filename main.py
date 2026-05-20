@@ -895,8 +895,14 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session):
     # ── /provider 无参数 — 全交互式 TUI 面板 ──────────
     if not sub:
         if _HAS_PROMPT_TOOLKIT:
-            from core.provider_tui import run_provider_tui
-            await run_provider_tui()
+            try:
+                from core.provider_tui import run_provider_tui
+                await run_provider_tui()
+            except Exception as _tui_err:
+                logger.error(f"[provider-tui] crashed: {_tui_err}")
+                import traceback; traceback.print_exc()
+                _provider_list()
+                return
             # Refresh completer with any newly fetched models
             try:
                 _new_words = list(_all_cmd_words)
