@@ -9,7 +9,7 @@ delegate_task(task_description)：
 
 双模型路由（v1.1 新增）：
   · 子任务强制使用"高速/低成本"小模型（worker_model）
-  · 优先级列表：ds-v4-flash → glm-4.5-air → qwen-turbo → gpt-4o-mini
+  · 优先级列表：ds-v4-flash → claude-haiku → gpt-4.1
   · 由代码底层自动选取首个可用模型，大模型无权干预
 
 避免循环导入：
@@ -36,9 +36,8 @@ _MAX_DEPTH    = 2                   # 子 Agent 最大嵌套层数
 # ── 双模型路由：Worker 候选优先级列表 ────────────────────
 _WORKER_MODEL_CANDIDATES = [
     "ds-v4-flash",
-    "glm-4.5-air",
-    "qwen-turbo",
-    "gpt-4o-mini",
+    "claude-haiku",
+    "gpt-4.1",
 ]
 
 def _select_worker_model() -> str:

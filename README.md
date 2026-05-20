@@ -75,10 +75,10 @@ PawnLogic is a terminal-native AI agent that **actually does things**: runs code
 
 | Capability | Description |
 |-----------|-------------|
-| 🔀 **12 LLM Providers** | DeepSeek, Claude, GPT-4o, Qwen, GLM, Groq, MiMo, Ollama — hot-switch with `/model` |
+| 🔀 **3 LLM Providers** | DeepSeek, Claude, GPT-4o — hot-switch with `/model` |
 | 🧠 **Persistent Memory** | SQLite session history, RAG knowledge base, cross-session full-text search |
 | 🛠️ **Real Tool Execution** | Shell, code sandbox (8 languages), web fetch, file ops, Docker containers |
-| 👁️ **Vision** | Feed screenshots to `glm-4v` or `gpt-4o` for analysis |
+| 👁️ **Vision** | Feed screenshots to `gpt-4o` or `claude-sonnet` for analysis |
 | 📋 **Spec-Driven Planning** | Agent outputs `<plan>` XML before every action — no blind execution |
 | 💬 **Session Management** | Tag, search, link, and export conversations with `/chat` commands |
 | 🗜️ **Sliding-Window Context** | Auto-summarizes old history to prevent API timeouts on long tasks |
@@ -128,14 +128,9 @@ You > Analyze ./vuln — find the stack overflow offset
 
 | Provider | Aliases | Best For |
 |----------|---------|----------|
-| DeepSeek | `ds-chat` `ds-r1` `ds-v4-pro` `ds-v4-flash` | Reasoning, cost-efficient, ultra-fast |
-| Anthropic | `claude-opus` `claude-sonnet` `claude-haiku` | Flagship reasoning, balanced, fast |
-| OpenAI | `gpt-4o` `gpt-4o-mini` | Vision + reasoning |
-| ZhipuAI | `glm-5.1` `glm-4.7` `glm-4v` | China-direct, vision |
-| Groq | `groq-llama3` | Ultra-fast script generation |
-| Xiaomi MiMo | `mimo-v2.5-pro` `mimo-v2.5` | China-direct reasoning |
-| Qwen | `qwen-max` `qwen-3.0` | Long context, code |
-| Local Ollama | `qwen-local` | Offline / air-gapped |
+| DeepSeek | `ds-v4-flash` `ds-v4-pro` | Fast default, flagship reasoning |
+| OpenAI | `gpt-4o` `gpt-4.1` `o3` | Vision, code, complex reasoning |
+| Anthropic | `claude-sonnet` `claude-haiku` | Balanced, fast low-cost |
 
 Full model table with IDs and use cases: [GUIDE.md → Model Routing](GUIDE.md#model-routing)
 

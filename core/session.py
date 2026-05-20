@@ -425,9 +425,8 @@ _URGENT_THRESHOLD_SEC = 30   # 剩余 < 30s 时触发 URGENT_MODE
 # 极速模型候选（时间紧迫时自动切换）
 _URGENT_MODEL_CANDIDATES = [
     "ds-v4-flash",
-    "glm-4.5-air",
-    "qwen-turbo",
-    "groq-llama3",
+    "claude-haiku",
+    "gpt-4.1",
 ]
 
 _URGENT_SIGNAL = (
