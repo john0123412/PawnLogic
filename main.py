@@ -97,7 +97,8 @@ def _install_proxy():
 
 PROXY_STATUS = _install_proxy()
 
-import config  # for config.QUIET_MODE / config.USER_MODE mutation after argparse
+import config  # kept for backward-compat attribute access
+from core.state import state as _runtime_state
 from config import (
     VERSION, DYNAMIC_CONFIG, NORMAL_CONFIG,
     TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX,
@@ -1216,8 +1217,8 @@ async def handle_slash(cmd: str, session: AgentSession):
 
     # ── P6: 双模输出 /mode ─────────────────────────────────
     elif verb == "/mode":
-        config.USER_MODE = not config.USER_MODE
-        if config.USER_MODE:
+        _runtime_state.user_mode = not _runtime_state.user_mode
+        if _runtime_state.user_mode:
             print(c(GREEN, "  ✓ 已切换到 USER 模式（简洁输出，屏蔽底层错误）"))
         else:
             print(c(CYAN, "  ✓ 已切换到 DEV 模式（极致透明，显示所有细节）"))
@@ -1652,7 +1653,7 @@ async def handle_slash(cmd: str, session: AgentSession):
         est_usd = tot / 1_000_000 * 1.50
         if tot + tt == 0:
             print(c(GRAY, "  (本次会话暂无 API 调用记录)"))
-        elif config.QUIET_MODE:
+        elif _runtime_state.quiet_mode:
             print(c(GRAY, f"  stats: ↑{pt:,} ↓{ct:,} total={tot:,} tools={tt} ~${est_usd:.4f}"))
         else:
             print(c(BOLD, "\n  ╔══ 会话用量审计 ════════════════════════════╗"))
@@ -1939,7 +1940,7 @@ async def handle_slash(cmd: str, session: AgentSession):
         elif sub == "sync":
             # 全球同步：遍历所有带 .git 的技能包，git pull
             from core.session import _skill_scanner
-            if config.USER_MODE:
+            if _runtime_state.user_mode:
                 with Spinner("正在同步技能包"):
                     results = _skill_scanner.sync_packs()
             else:
@@ -1954,7 +1955,7 @@ async def handle_slash(cmd: str, session: AgentSession):
                 for r in results:
                     tag = c(GREEN, "✓") if r["status"] == "ok" else c(RED, "✗")
                     detail = ""
-                    if not config.USER_MODE:
+                    if not _runtime_state.user_mode:
                         detail = c(GRAY, f"  {r['detail']}")
                     print(f"    {tag} {r['name']}{detail}")
                 if err_count > 0:
@@ -1968,7 +1969,7 @@ async def handle_slash(cmd: str, session: AgentSession):
                 print(c(GRAY, "  例: /sp install https://github.com/user/exploit-pack.git"))
             else:
                 from core.session import _skill_scanner
-                if config.USER_MODE:
+                if _runtime_state.user_mode:
                     with Spinner("正在安装技能包"):
                         result = _skill_scanner.install_pack(repo_url)
                 else:
@@ -2352,19 +2353,20 @@ async def main():
     )
     args, _ = parser.parse_known_args()
     config.QUIET_MODE = args.quiet  # mutate the single canonical flag in config
+    _runtime_state.quiet_mode = args.quiet  # sync to state
 
     # ★ 初始化 loguru 双端输出
     # · QUIET_MODE 下终端只输出 WARNING 及以上，减少干扰
     # · 文件始终记录 DEBUG 级别，保留完整诊断信息
     setup_logger(
-        stderr_level="WARNING" if (config.QUIET_MODE or config.USER_MODE) else "INFO",
+        stderr_level="WARNING" if (_runtime_state.quiet_mode or _runtime_state.user_mode) else "INFO",
         file_level="DEBUG",
     )
     logger.info(
         "PawnLogic {} starting | model={} quiet={}",
         config.VERSION,
         args.model or config.DEFAULT_MODEL,
-        config.QUIET_MODE,
+        _runtime_state.quiet_mode,
     )
 
     init_db()
@@ -2417,7 +2419,7 @@ async def main():
         + (" ✓" if any(validate_api_key(m)[0] for m in vision_models) else "  (需配置 Key)")
     )
 
-    if not config.QUIET_MODE:
+    if not _runtime_state.quiet_mode:
         print(f"""
 {c(BOLD+CYAN,"╔══════════════════════════════════════════════════════╗")}
 {c(BOLD+CYAN,"║")}  {c(BOLD,f"PawnLogic {VERSION}")}  {c(GRAY,"· Plan · Vision · GSD · SQLite")}   {c(BOLD+CYAN,"║")}
@@ -2695,7 +2697,7 @@ async def main():
             reserve_space_for_menu=4,
         )
 
-        if not config.QUIET_MODE:
+        if not _runtime_state.quiet_mode:
             print(c(GRAY, "  🐚 PawnCompleter 就绪（内置模糊匹配 + 退格不消失 + 底部工具栏）"))
             if _HAS_RICH:
                 print(c(GRAY, "  📝 rich 就绪（Markdown 渲染 + 代码高亮）"))
@@ -2728,7 +2730,7 @@ async def main():
             import atexit
             atexit.register(lambda: _safe_write_history(_history_path))
 
-        if not config.QUIET_MODE:
+        if not _runtime_state.quiet_mode:
             print(c(GRAY, "  🐚 readline 降级模式（Tab 补全可用，无模糊匹配）"))
             if _PT_IMPORT_ERROR:
                 print(c(YELLOW, f"  ⚠ prompt_toolkit 加载失败: {_PT_IMPORT_ERROR}"))
