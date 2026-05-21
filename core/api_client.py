@@ -37,14 +37,20 @@ class APIEmptyResponseError(Exception):
 # 推理模型特征：model_alias 或 model_id 包含任一关键词即视为推理模型
 _REASONING_MODEL_PATTERNS = (
     "mimo",        # 小米 MiMo 全系（含 legacy alias）
-    "reasoner",    # DeepSeek Reasoner (deepseek-reasoner)
+    "deepseek",    # DeepSeek 全系（v4-flash / v4-pro / reasoner / r1）
     "qwq",         # 阿里 QwQ 推理系列
-    "r1",          # DeepSeek R1 通用别名 (ds-r1 / deepseek-r1)
 )
 
 
 def _is_reasoning_model(model_alias: str, model_id: str = "") -> bool:
-    """判断是否为支持 reasoning_content 字段的推理模型。"""
+    """判断是否为支持 reasoning_content 字段的推理模型。
+    优先读取 MODELS[alias].reasoning 显式声明；
+    未声明时（自定义 provider）fallback 到关键词匹配。
+    """
+    m = MODELS.get(model_alias)
+    if m is not None and "reasoning" in m:
+        return bool(m["reasoning"])
+    # fallback：关键词匹配（兼容自定义 provider）
     combo = f"{(model_alias or '').lower()}|{(model_id or '').lower()}"
     return any(p in combo for p in _REASONING_MODEL_PATTERNS)
 
@@ -64,8 +70,8 @@ def _sanitize_messages_for_model(
     处理逻辑：
       · 🔑 第一步（深度拷贝隔离）：copy.deepcopy(messages) —— 绝不在原始
         session.messages 上原地修改，避免跨模型切换时污染嵌套结构。
-      · 第二步（识别）：_is_reasoning_model 用 'mimo' / 'r1' / 'qwq' /
-        'reasoner' 四个关键词匹配 model_alias 和 model_id 的组合字串。
+      · 第二步（识别）：_is_reasoning_model 优先读取 MODELS[alias].reasoning
+        显式声明；未声明时 fallback 到关键词匹配（mimo / deepseek / qwq）。
       · 第三步（裁剪）：
           - 私有字段（键以 '_' 开头，例 _pinned / _args_parsed）一律剥离
           - 空 reasoning_content（"" / None / 0 / 空列表）→ del 键，避免
