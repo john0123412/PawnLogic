@@ -31,6 +31,7 @@ from config import (
     QUIET_MODE, smart_truncate,
     AGENT_PHASES,
     USER_MODE, user_friendly_error,
+    is_fast_model, find_fast_peer,
     SKILLS_DIR,
 )
 from utils.ansi import c, BOLD, DIM, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
@@ -1784,26 +1785,32 @@ class AgentSession:
                         "content": _URGENT_SIGNAL,
                     })
 
-                    # 自动切换到极速模型
-                    for _u_alias in _URGENT_MODEL_CANDIDATES:
-                        if _u_alias in MODELS:
-                            _u_ok, _ = validate_api_key(_u_alias)
-                            if _u_ok and _u_alias != self.model_alias:
-                                old_model = self.model_alias
-                                self.model_alias = _u_alias
-                                print(c(MAGENTA,
-                                    f"  🚨 [URGENT] 模型已切换: "
-                                    f"{old_model} → {_u_alias}（极速响应）"
-                                ))
-                                # 重建工具列表
-                                phase_whitelist = set(AGENT_PHASES.get(self.current_phase, []))
-                                current_tools = [
-                                    s for s in TOOLS_SCHEMA
-                                    if s.get("function", {}).get("name") in phase_whitelist
-                                    or s.get("function", {}).get("name") in ("switch_phase", "bump_skill")
-                                ]
-                                current_max_tokens = min(current_max_tokens, 4096)
-                                break
+                    # 自动切换到极速模型（优先同 provider 的 fast 模型）
+                    _urgent_target = None
+                    if not is_fast_model(self.model_alias):
+                        _urgent_target = find_fast_peer(self.model_alias)
+                    if _urgent_target is None:
+                        for _u_alias in _URGENT_MODEL_CANDIDATES:
+                            if _u_alias in MODELS and _u_alias != self.model_alias:
+                                _u_ok, _ = validate_api_key(_u_alias)
+                                if _u_ok:
+                                    _urgent_target = _u_alias
+                                    break
+                    if _urgent_target:
+                        old_model = self.model_alias
+                        self.model_alias = _urgent_target
+                        print(c(MAGENTA,
+                            f"  🚨 [URGENT] 模型已切换: "
+                            f"{old_model} → {_urgent_target}（极速响应）"
+                        ))
+                        # 重建工具列表
+                        phase_whitelist = set(AGENT_PHASES.get(self.current_phase, []))
+                        current_tools = [
+                            s for s in TOOLS_SCHEMA
+                            if s.get("function", {}).get("name") in phase_whitelist
+                            or s.get("function", {}).get("name") in ("switch_phase", "bump_skill")
+                        ]
+                        current_max_tokens = min(current_max_tokens, 4096)
 
                 # ════════════════════════════════════════════════
                 # Logic Refresh 模块：阶段性总结 + 冗余清理 + 错误检测
