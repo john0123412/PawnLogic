@@ -22,7 +22,7 @@ import sys, io, json, contextlib, threading
 from datetime import datetime
 from config import (
     DYNAMIC_CONFIG, DEFAULT_MODEL, MODELS, get_api_config,
-    validate_api_key,
+    validate_api_key, is_fast_model, find_fast_peer,
 )
 from core.api_client import stream_request, ensure_tool_call_id
 from core.memory     import _gen_id
@@ -40,27 +40,33 @@ _WORKER_MODEL_CANDIDATES = [
     "gpt-4.1",
 ]
 
-def _select_worker_model() -> str:
+def _select_worker_model(current_model: str = DEFAULT_MODEL) -> str:
     """
-    选择子任务 Worker 模型。
-    优先检查 DYNAMIC_CONFIG["preferred_worker"]：
-      · 若非 "auto" → 直接返回用户锁定的模型（极客模式）
-      · 若为 "auto" → 按优先级列表自动选取首个可用小模型
-    若全部不可用则回退到 DEFAULT_MODEL。
+    Select the worker model for a delegated sub-task.
+
+    - If current model is already fast-tier → use it directly (no downgrade needed)
+    - If current model is pro-tier → find a fast peer in the same provider
+    - Fallback: first available model in _WORKER_MODEL_CANDIDATES, then DEFAULT_MODEL
     """
-    # ── 用户手动锁定的模型优先 ──────────────────────────
     preferred = DYNAMIC_CONFIG.get("preferred_worker", "auto")
     if preferred and preferred != "auto":
         if preferred in MODELS:
             ok, _ = validate_api_key(preferred)
             if ok:
                 return preferred
-            # Key 未配置，降级到自动路由
-        else:
-            # 模型不存在，降级到自动路由
-            pass
 
-    # ── 自动优先级路由 ──────────────────────────────────
+    # Already fast — no point switching
+    if is_fast_model(current_model):
+        ok, _ = validate_api_key(current_model)
+        if ok:
+            return current_model
+
+    # Pro model — find fast peer in same provider
+    peer = find_fast_peer(current_model)
+    if peer:
+        return peer
+
+    # Cross-provider fallback
     for alias in _WORKER_MODEL_CANDIDATES:
         if alias not in MODELS:
             continue
@@ -240,8 +246,8 @@ def tool_delegate_task(a: dict) -> str:
     if not task:
         return "ERROR: task_description 不能为空"
 
-    # ── ★ 双模型路由：强制降维至小模型 ──────────────────
-    worker_model = _select_worker_model()
+    # ── ★ 双模型路由：pro → fast peer，fast → 直接用自身 ──
+    worker_model = _select_worker_model(caller_model)
     _preferred = DYNAMIC_CONFIG.get("preferred_worker", "auto")
     if _preferred and _preferred != "auto":
         print(c(MAGENTA,

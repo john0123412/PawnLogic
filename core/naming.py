@@ -7,7 +7,7 @@ import os
 import re
 from pathlib import Path
 
-from config import WORKSPACE_DIR, get_api_format, NAMING_MODEL_CHAIN, MODELS, validate_api_key
+from config import WORKSPACE_DIR, get_api_format, NAMING_MODEL_CHAIN, MODELS, validate_api_key, is_fast_model, find_fast_peer
 from core.api_client import stream_request
 from core.logger import logger
 
@@ -17,15 +17,23 @@ _WEAK_USER_MESSAGES = {"hi", "hello", "hey", "你好", "您好", "在吗", "test
 
 
 def pick_naming_model(fallback: str) -> str:
-    """Return the first alias in NAMING_MODEL_CHAIN with a valid API key.
+    """Return a fast-tier model for background naming tasks.
 
-    Falls back to ``fallback`` (usually ``session.model_alias``) when no
-    candidate model has credentials available. This keeps auto-naming
-    non-blocking for users who have not configured Anthropic / DeepSeek etc.
-
-    Silently skips candidates that are not registered in MODELS (avoids
-    crashes when config.py diverges from naming chain during refactor).
+    Priority:
+    1. If fallback is already fast-tier, use it directly.
+    2. Find a fast peer in the same provider as fallback.
+    3. Walk NAMING_MODEL_CHAIN for any available fast model.
+    4. Return fallback.
     """
+    if is_fast_model(fallback):
+        ok, _ = validate_api_key(fallback)
+        if ok:
+            return fallback
+
+    peer = find_fast_peer(fallback)
+    if peer:
+        return peer
+
     for alias in NAMING_MODEL_CHAIN:
         if not alias or alias not in MODELS:
             continue

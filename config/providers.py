@@ -104,6 +104,36 @@ def _normalize_url(raw: str, api_format: str = "openai") -> str:
     return raw + "/v1" + suffix
 
 
+_FAST_KEYWORDS = {"flash", "haiku", "mini", "turbo", "lite"}
+
+
+def is_fast_model(model_alias: str) -> bool:
+    """Return True if the model id contains a fast-tier keyword."""
+    mid = MODELS.get(model_alias, {}).get("id", model_alias).lower()
+    return any(k in mid for k in _FAST_KEYWORDS)
+
+
+def find_fast_peer(model_alias: str) -> str | None:
+    """
+    Given a pro-tier model alias, return the alias of a fast-tier model
+    from the same provider that has a valid API key.
+    Returns None if no fast peer is found.
+    """
+    m = MODELS.get(model_alias)
+    if not m:
+        return None
+    provider = m.get("provider", "")
+    for alias, cfg in MODELS.items():
+        if cfg.get("provider") != provider:
+            continue
+        if not is_fast_model(alias):
+            continue
+        ok, _ = validate_api_key(alias)
+        if ok:
+            return alias
+    return None
+
+
 def get_api_config(model_alias: str) -> tuple[str, str]:
     """返回 (base_url, api_key)。Key 从环境变量读取，永不硬编码。"""
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
