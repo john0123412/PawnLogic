@@ -93,12 +93,24 @@ VISION_PRIORITY = ["gpt-4o", "claude-sonnet"]
 CUSTOM_PROVIDERS_PATH = Path.home() / ".pawnlogic" / "custom_providers.json"
 
 
+def _normalize_url(raw: str, api_format: str = "openai") -> str:
+    """Ensure base_url ends with the correct chat endpoint path."""
+    raw = raw.rstrip("/")
+    if raw.endswith("/chat/completions") or raw.endswith("/messages"):
+        return raw
+    suffix = "/messages" if api_format == "anthropic" else "/chat/completions"
+    if raw.endswith("/v1"):
+        return raw + suffix
+    return raw + "/v1" + suffix
+
+
 def get_api_config(model_alias: str) -> tuple[str, str]:
     """返回 (base_url, api_key)。Key 从环境变量读取，永不硬编码。"""
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
     prov = PROVIDERS.get(m["provider"], list(PROVIDERS.values())[0])
     key  = os.getenv(prov["api_key_env"], "")
-    return prov["base_url"], key
+    fmt  = prov.get("api_format", "openai")
+    return _normalize_url(prov["base_url"], fmt), key
 
 
 def get_api_format(model_alias: str) -> str:
@@ -113,10 +125,11 @@ def get_provider_config(model_alias: str) -> dict:
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
     prov = PROVIDERS.get(m["provider"], list(PROVIDERS.values())[0])
     key  = os.getenv(prov["api_key_env"], "")
+    fmt  = prov.get("api_format", "openai")
     return {
-        "base_url":   prov["base_url"],
+        "base_url":   _normalize_url(prov["base_url"], fmt),
         "api_key":    key,
-        "api_format": prov.get("api_format", "openai"),
+        "api_format": fmt,
         "label":      prov.get("label", ""),
     }
 
@@ -155,6 +168,14 @@ def list_vision_models() -> list[str]:
 
 def load_custom_providers() -> None:
     """从 custom_providers.json 加载用户自定义 provider，合并进 PROVIDERS/MODELS。"""
+    # Reload .env so keys added after startup (e.g. via wizard) are available
+    try:
+        from dotenv import load_dotenv
+        _env = Path.home() / ".pawnlogic" / ".env"
+        if _env.exists():
+            load_dotenv(_env, override=True)
+    except ImportError:
+        pass
     if not CUSTOM_PROVIDERS_PATH.exists():
         return
     try:
