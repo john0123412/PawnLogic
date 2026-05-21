@@ -77,14 +77,18 @@ python main.py   # MCP servers load automatically
 
 ## Data Layout
 
+All runtime data and API keys are stored in `~/.pawnlogic/` — **never in the project directory**.
+
 ```
 ~/.pawnlogic/
-├── .env                    # API keys (never committed)
-├── custom_providers.json   # user-added providers and models
+├── .env                    # ALL API keys (LLM providers + MCP tools like Tavily)
+├── custom_providers.json   # user-added provider configs (no keys)
+├── mcp_configs.json        # MCP server declarations (references keys in .env)
 ├── pawn.db                 # sessions, messages, knowledge base
-├── mcp_configs.json        # MCP server declarations
 └── logs/                   # audit logs
 ```
+
+The project directory contains no secrets. It is safe to commit or share.
 
 ## Installation
 

@@ -163,14 +163,28 @@ python main.py   # MCP 服务自动加载
 
 ## API Key 配置
 
-所有 Key 存储在 `~/.pawnlogic/.env`，格式：
+所有 Key 存储在 `~/.pawnlogic/.env`，**项目目录中不含任何密钥**。
+
+这个文件同时存放：
+- **大模型 API Key**（DeepSeek、OpenAI、Anthropic 及所有自定义 Provider）
+- **MCP 工具 Key**（Tavily 搜索、Browserbase 等）
+
+格式示例：
 
 ```bash
+# 大模型
 DEEPSEEK_API_KEY=sk-...
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
-# 自定义 Provider 的 Key 由向导自动写入
+
+# MCP 工具
+TAVILY_API_KEY=tvly-...
+
+# 自定义 Provider（由向导自动写入）
+MYRELAY_API_KEY=...
 ```
+
+`mcp_configs.json` 中通过 `${VAR_NAME}` 引用 `.env` 里的 Key，两者解耦。
 
 运行时查看 Key 状态：
 ```

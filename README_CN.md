@@ -77,12 +77,14 @@ python main.py   # MCP 服务自动加载
 
 ## 数据目录
 
+所有运行时数据和 API 密钥均存储在 `~/.pawnlogic/` 下，**项目目录中不含任何密钥**，可安全提交或分享。
+
 ```
 ~/.pawnlogic/
-├── .env                    # API 密钥（已 gitignore，勿提交）
+├── .env                    # 所有 API 密钥（大模型 + Tavily 等 MCP 工具）
 ├── custom_providers.json   # 用户自定义 Provider（不含密钥）
+├── mcp_configs.json        # MCP 服务声明（引用 .env 中的密钥）
 ├── pawn.db                 # 会话、消息、知识库
-├── mcp_configs.json        # MCP 服务声明
 └── logs/                   # 审计日志
 ```
 
