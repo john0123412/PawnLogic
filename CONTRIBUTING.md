@@ -10,6 +10,23 @@ pip install -e ".[dev]"
 
 ## 如何新增一个 API Provider
 
+**方式一：运行时动态添加（推荐，无需改代码）**
+
+```bash
+# 注册供应商（支持 openai/anthropic 两种格式）
+/provider add siliconflow https://api.siliconflow.cn/v1/chat/completions SILICON_API_KEY
+
+# 自动拉取模型列表（交互多选，↑↓ 移动，Space 选中，Enter 确认）
+/provider fetch siliconflow
+
+# 更新已注册供应商的模型列表
+/provider update siliconflow
+```
+
+密钥写入 `~/.pawnlogic/.env`，模型配置写入 `~/.pawnlogic/custom_providers.json`，不污染代码库。
+
+**方式二：内置到代码（适合 PR 贡献）**
+
 1. 打开 `config/providers.py`，在 `PROVIDERS` 中添加一条
 2. 在 `MODELS` 中添加对应的模型别名
 3. 在 `.env.example` 的"可选"区域添加 `XXX_API_KEY=` 占位

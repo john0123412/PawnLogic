@@ -1,569 +1,344 @@
-# PawnLogic 1.1 — Complete User Guide
+# PawnLogic 1.1 — 完整使用指南
 
-> Full English reference for all features, commands, models, deployment, and architecture.
-
----
-
-## Table of Contents
-
-1. [Features Overview](#features-overview)
-2. [Model Routing](#model-routing)
-3. [Deployment](#deployment)
-4. [API Key Configuration](#api-key-configuration)
-5. [Command Reference](#command-reference)
-6. [Usage Examples](#usage-examples)
-7. [Architecture](#architecture)
-8. [Changelog](#changelog)
-9. [FAQ](#faq)
+> 功能、命令、模型、架构、常见问题的完整中文参考手册。
 
 ---
 
-## Features Overview
+## 目录
 
-### 1. Session Management
-
-- `/chat list [n]` — List recent n sessions (default 20)
-- `/chat view <id|n>` — View full conversation content
-- `/chat export <id|n> [path]` — Export as Markdown file
-- `/chat find <keyword>` — Full-text search across all sessions
-- `/chat tag <id|n> <tags>` — Tag a session (comma-separated)
-- `/chat untag <id|n> <tags>` — Remove tags
-- `/chat bytag <tag>` — Filter sessions by tag
-- `/chat link <id1> <id2> [note]` — Link two related sessions
-- `/chat unlink <id1> <id2>` — Remove link
-- `/chat related <id|n>` — View linked sessions
-
-### 2. Auto-Naming & Dynamic Workspace
-
-- **Auto-naming**: After the 2nd conversation turn, the agent generates a semantic session name (e.g. `python-crawler` / `ctf-heap-overflow`)
-- **Dynamic workspace**: Each session gets an isolated `~/.pawnlogic/workspace/session_<timestamp>_<hash>/` directory
-- **Atomic switching**: Session load triggers rename + reverse symlink + pointer update atomically
-- **DB consistency**: All session `workspace_dir` fields are validated; `/chat load` never returns an empty path
-
-### 3. CC-Style Interaction
-
-- **Ctrl+C to undo**: In input mode, Ctrl+C rolls back the last turn and re-displays the prompt (Claude Code style)
-- **Ctrl+D to exit**: Clean exit via EOF
-- **Interrupt generation**: Ctrl+C during agent generation stops immediately, preserving partial output
-
-### 4. GSD Engineering Architecture
-
-- **Spec-driven planning**: Agent must output `<plan>` XML with `<action>` and `<verify>` before any tool call
-- **Fresh-context delegation**: Built-in `delegate_task` tool spawns clean sub-agents to avoid context corruption
-- **Atomic commits**: After each verified file change, `git commit` is called automatically
-- **Global state**: `/init_project` generates `.pawn_state.md` as the project memory anchor
-
-### 5. Vision (Multimodal)
-
-- Terminal AI vision via `glm-4v` or `gpt-4o`
-- Use cases: error screenshot analysis, web UI inspection, CTF steganography, architecture diagrams
-
-### 6. Execution Capabilities
-
-- **Multi-language sandbox**: Python / C / C++ / JS / Bash / Rust / Go / Java
-- **Docker execution**: `run_code_docker` (ephemeral) + `pwn_container` (persistent), network-isolated by default
-- **Smart web crawler**: Jina Reader → Pandoc → regex fallback (3-tier degradation)
-- **GDB crash backtracing**: Auto-appends `bt full` on SIGSEGV/SIGABRT/SIGBUS
-- **Defensive auditing**: Tool failures auto-recorded; 3+ same-type failures sink to `global_skills.md`
-- **Time-aware scheduling**: `/time` sets countdown; <30s remaining triggers URGENT_MODE
-
-### 7. Cost Control
-
-- `/undo [n]` — Roll back last n turns (default 1), preserves pinned messages
-- `/compact` — Lightweight model summarizes progress → clears history → summary becomes first message
-- `/think <prompt>` — Single reasoning turn, auto-switches to reasoning worker (ds-r1/qwq), then restores
-- `/ping` — Minimal keepalive request to refresh API cache TTL
-
-### 8. Persistent Memory
-
-- **SQLite-backed**: `~/.pawnlogic/pawn.db` with multi-session save/load
-- **Native RAG**: `/memorize` distills conversations into local knowledge base, auto-injected across sessions
-- **Pin messages**: `/pin msg <n>` prevents critical messages from being pruned
-
-### 9. Dual Output Modes
-
-- `/mode` toggles **USER mode** and **DEV mode**
-- **USER mode**: All raw tracebacks, tool call JSON, and exceptions converted to friendly messages (e.g. `❌ Please try again`)
-- **DEV mode**: Full transparency — tool call details, async thread state, raw responses
-
-### 10. Local Skill Engine
-
-- `./skills/` directory holds skill pack folders (zero config: just drop a `.md` file)
-- Agent auto-scans and scores skills by filename + content keywords before each task
-- `min_score=3` threshold: skills only injected when relevant intent detected; zero injection for casual chat
-- Complements GSA (Global Skills Archive): GSA manages cross-session experience, local skills manage project templates
-
-### 11. Environment Recon
-
-- `check_service(port)` — Extracts process details for a port via lsof or `/proc`
-- Returns: PID, process name, executable path, command line, working dir, env vars, linked libraries
-- Read-only operation, exempt from `<plan>` requirement
-
-### 12. Skill Pack Sync
-
-- `/sp sync` — `git pull` all skill packs with `.git` directories
-- `/sp install <url>` — Clone + install a new skill pack from remote
-- `/sp rescan` — Clear cache and re-scan `skills/` directory
-
-### 13. Scrapling Anti-Bot Engine
-
-- `StealthyFetcher.configure()` pre-warmed globally: eliminates cold-start timeout
-- Auto-retry on timeout: 2s → 5s → 10s, up to 3 attempts
-- Bypasses Cloudflare 5-second shield and JS-rendered pages
-
-### 14. Sliding-Window Context (v1.1)
-
-- Automatically summarizes old history when iteration count exceeds threshold
-- Preserves: system prompt + first 2 turns (task anchor) + history summary + last N turns (sliding window)
-- Summary retains security primitives: offsets, addresses, gadgets, ruled-out paths
-- Prevents Read Timeout on long agentic tasks (e.g. mimo-v2.5 120s limit)
+1. [功能概览](#功能概览)
+2. [Provider 与模型管理](#provider-与模型管理)
+3. [安装与部署](#安装与部署)
+4. [API Key 配置](#api-key-配置)
+5. [命令参考](#命令参考)
+6. [使用示例](#使用示例)
+7. [架构说明](#架构说明)
+8. [常见问题](#常见问题)
 
 ---
 
-## Model Routing
+## 功能概览
 
-PawnLogic supports 12 providers with hot-switching via `/model`. Both OpenAI Chat Completions and Anthropic Messages API formats are natively supported.
+### 1. 会话管理
 
-| Provider | Alias | Model ID | Format | Best For |
-|----------|-------|----------|--------|----------|
-| PawnLogic Engine | `hermes` / `hermes405` | `NousResearch/Hermes-4-70B` | OpenAI | High instruction-following |
-| OpenAI | `gpt-4o` / `gpt-4o-mini` | `gpt-4o` | OpenAI | Vision + reasoning |
-| Anthropic | `claude-opus` / `claude-sonnet` / `claude-haiku` | `claude-opus-4-7` | Anthropic | Flagship / balanced / fast |
-| DeepSeek | `ds-chat` / `ds-r1` | `deepseek-chat` / `deepseek-reasoner` | OpenAI | Cost-efficient / deep reasoning |
-| DeepSeek V4 | `ds-v4-pro` / `ds-v4-flash` | `deepseek-v4-pro` | OpenAI | Pwn logic / ultra-fast |
-| ZhipuAI | `glm-5.1` / `glm-4.7` / `glm-4.5-air` | `glm-5.1` | OpenAI | China-direct, strong reasoning |
-| ZhipuAI Vision | `glm-4v` | `glm-4v-plus` | OpenAI | Screenshot / stego analysis |
-| Qwen | `qwen-max` / `qwen-3.0` | `qwen-3.0-max` | OpenAI | Long context, code correction |
-| SiliconFlow | `sf-ds-v3` / `sf-qwen72b` | `deepseek-ai/DeepSeek-V3` | OpenAI | Low-cost open-source inference |
-| Moonshot | `kimi` | `moonshot-v1-128k` | OpenAI | Ultra-long context log analysis |
-| Groq | `groq-llama3` | `llama-3.3-70b-versatile` | OpenAI | **Ultra-fast** script generation |
-| Xiaomi MiMo | `mimo-v2.5-pro` / `mimo-v2.5` | `mimo-v2.5-pro` | OpenAI | China-direct reasoning model |
-| Local Ollama | `qwen-local` | `qwen2.5-7b-instruct` | OpenAI | Offline / air-gapped |
+- `/chat list [n]` — 列出最近 n 个会话（默认 20）
+- `/chat view <id|n>` — 查看完整对话内容
+- `/chat export <id|n> [路径]` — 导出为 Markdown 文件
+- `/chat find <关键词>` — 跨所有会话全文搜索
+- `/chat tag <id|n> <标签>` — 给会话打标签（逗号分隔）
+- `/chat untag <id|n> <标签>` — 移除标签
+- `/chat bytag <标签>` — 按标签筛选会话
+- `/chat link <id1> <id2> [备注]` — 关联两个会话
+- `/chat unlink <id1> <id2>` — 取消关联
+- `/chat related <id|n>` — 查看关联会话
 
-### Reasoning Models
+### 2. 自动命名与动态工作区
 
-Models returning `reasoning_content` (DeepSeek R1, MiMo, QwQ) are fully supported:
-- Reasoning steps auto-saved to SQLite `messages.reasoning_content` column
-- `/think <prompt>` for single reasoning turn; restores original model after
-- Use for: Pwn exploit analysis, math proofs, code auditing
+- **自动命名**：第 2 轮对话后，Agent 自动生成语义化会话名（如 `python-爬虫` / `ctf-堆溢出`）
+- **动态工作区**：每个会话获得独立的 `~/.pawnlogic/workspace/session_<时间戳>_<哈希>/` 目录
+- **原子切换**：加载会话时触发重命名 + 反向符号链接 + 指针更新，保证原子性
+- **DB 一致性**：所有会话的 `workspace_dir` 字段均经过校验，`/chat load` 不会返回空路径
 
-### Custom Providers
+### 3. 交互体验
 
+- **Ctrl+C 撤回**：输入模式下 Ctrl+C 回滚上一轮并重新显示提示符（Claude Code 风格）
+- **Ctrl+D 退出**：通过 EOF 干净退出
+- **中断生成**：Agent 生成过程中按 Ctrl+C 立即停止，保留已输出内容
+
+### 4. GSD 工程架构
+
+- **规格驱动规划**：Agent 在任何工具调用前必须输出包含 `<action>` 和 `<verify>` 的 `<plan>` XML
+- **原子提交**：每个功能点独立提交，保持 git 历史整洁
+- `/init_project [描述]` — 在当前目录生成 `.pawn_state.md`（项目大目标）
+- `/state` — 查看当前目录的 `.pawn_state.md`
+
+### 5. 上下文管理
+
+- **滑动窗口**：自动摘要旧历史，防止长任务 API 超时
+- `/compact` — 手动压缩：轻量模型总结 + 清空历史
+- `/clear` — 清空上下文（保留 Pin 消息）
+- `/pin [n]` — 固定最近 n 条消息（默认 2）
+- `/unpin` — 解除所有 Pin
+- `/context` — 查看上下文大小和 Token 估算
+
+### 6. 知识库 RAG
+
+- `/memorize [主题]` — AI 总结对话 → 存入知识库（每次新会话自动召回）
+- `/knowledge [查询]` — 搜索/列出知识条目
+- `/forget <id>` — 删除指定知识条目
+
+---
+
+## Provider 与模型管理
+
+### 内置 Provider
+
+| Provider | 环境变量 | 格式 |
+|----------|---------|------|
+| DeepSeek | `DEEPSEEK_API_KEY` | OpenAI |
+| OpenAI | `OPENAI_API_KEY` | OpenAI |
+| Anthropic | `ANTHROPIC_API_KEY` | Anthropic |
+
+### 内置模型别名
+
+| 别名 | 模型 ID | 说明 |
+|------|---------|------|
+| `ds-v4-flash` | deepseek-v4-flash | 默认主力，快速低成本 |
+| `ds-v4-pro` | deepseek-v4-pro | 旗舰推理 |
+| `gpt-4o` | gpt-4o | 视觉 + 多模态 |
+| `gpt-4.1` | gpt-4.1 | 代码与指令跟随 |
+| `o3` | o3 | 复杂推理 |
+| `claude-sonnet` | claude-sonnet-4-6 | 均衡主力 |
+| `claude-haiku` | claude-haiku-4-5-20251001 | 快速低成本 |
+
+### 添加自定义 Provider
+
+**方式一：TUI 面板（推荐）**
+```
+/provider
+```
+打开交互式面板，支持：
+- 上下键导航，Enter 进入详情
+- N 新增 Provider（填写名称、Base URL、格式、API Key）
+- D 删除自定义 Provider
+- 详情页：更新 Key、拉取模型、测试连通性、管理模型（逐个删除）
+
+**方式二：命令行**
 ```bash
-/provider add        # Interactive guided setup
-/provider list       # List all providers with format tags ([A] = Anthropic)
-/provider test <model>  # Test connectivity
-/provider remove <n>    # Remove custom provider
+# 注册 Provider（不注册模型）
+/provider add siliconflow https://api.siliconflow.cn/v1/chat/completions SILICON_API_KEY
+
+# 拉取模型列表（交互多选）
+/provider fetch siliconflow
+
+# 更新模型列表
+/provider update siliconflow
+
+# 删除
+/provider remove siliconflow
 ```
 
+**Base URL 规则**：存储原始 URL，系统在请求时自动补全路径：
+- 以 `/chat/completions` 或 `/messages` 结尾 → 直接使用
+- 以 `/v1` 结尾 → 追加 `/chat/completions` 或 `/messages`
+- 裸域名（如 `https://api.example.com`）→ 追加 `/v1/chat/completions` 或 `/v1/messages`
+
+### 模型过滤机制
+
+`/model` 命令和 Tab 补全只显示**已配置 API Key 的模型**。未配置 Key 的 Provider 下的所有模型自动隐藏。
+
 ---
 
-## Deployment
+## 安装与部署
 
-### Requirements
-
-- **Recommended**: WSL2 / Ubuntu (full experience)
-- **Optional**: Windows (basic only — no Pwn toolchain)
-
-### WSL2 / Ubuntu (Recommended)
+### WSL2 / Ubuntu（推荐）
 
 ```bash
 git clone https://github.com/john0123412/PawnLogic.git && cd PawnLogic
 python3 -m venv venv && source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-cp .env.example .env   # fill in your API keys
+pip install --upgrade pip && pip install -r requirements.txt
 python main.py
 ```
 
-Optional CTF/Pwn system dependencies:
-```bash
-sudo apt update && sudo apt install gcc g++ python3-dev libssl-dev libffi-dev build-essential
-```
+首次运行自动进入配置向导，无需手动编辑配置文件。
 
-### Global `pawn` Command
+### 全局 `pawn` 命令
 
 ```bash
-chmod +x /path/to/PawnLogic/pawn.sh
-ln -sf /path/to/PawnLogic/pawn.sh ~/.local/bin/pawn
-# Then from any directory:
-pawn
+chmod +x pawn.sh
+ln -sf "$(pwd)/pawn.sh" ~/.local/bin/pawn
+# 之后在任意目录输入 pawn 即可启动
 ```
 
-`pawn.sh` resolves its own real path via `readlink -f`, activates the venv, and runs `main.py`. Code changes take effect immediately on next run.
-
-### Docker Deployment
+### MCP 工具接入
 
 ```bash
-# Install Docker
-sudo apt install -y docker.io
-sudo usermod -aG docker $USER
-
-# Install Python Docker SDK
-pip install docker
-
-# Check status inside PawnLogic
-/docker status
+cp mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
+# 编辑 mcp_configs.json，按需启用服务
+# 在 ~/.pawnlogic/.env 中填入对应 Key
+python main.py   # MCP 服务自动加载
 ```
-
-Pre-configured image aliases:
-
-| Alias | Image | Use Case |
-|-------|-------|----------|
-| `pwndocker` | `skysider/pwndocker` | Full Pwn env (GDB/pwntools/ROPgadget) |
-| `ubuntu18` | `ubuntu:18.04` | glibc 2.27 — older CTF challenges |
-| `ubuntu22` | `ubuntu:22.04` | glibc 2.35 — newer challenges |
-| `kali` | `kalilinux/kali-rolling` | Penetration testing |
-| `python` | `python:3.12-slim` | Pure Python execution |
-| `gcc` | `gcc:latest` | C/C++ compilation |
 
 ---
 
-## API Key Configuration
+## API Key 配置
+
+所有 Key 存储在 `~/.pawnlogic/.env`，格式：
 
 ```bash
-cp .env.example .env
-# Edit .env and fill in keys for the providers you use
-python main.py
+DEEPSEEK_API_KEY=sk-...
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+# 自定义 Provider 的 Key 由向导自动写入
 ```
 
-Check key status at runtime:
+运行时查看 Key 状态：
 ```
 /keys
 ```
 
-All keys are read from environment variables. No hardcoded credentials anywhere in the codebase. Keys are stored only in `.env` (gitignored). Custom provider configs (without keys) are stored in `~/.pawnlogic/custom_providers.json`.
+---
+
+## 命令参考
+
+### 对话控制
+
+| 命令 | 说明 |
+|------|------|
+| `/model [别名]` | 切换模型（只显示已配置 Key 的模型） |
+| `/mode` | 切换 USER / DEV 输出模式 |
+| `/clear` | 清空上下文（保留 Pin 消息） |
+| `/context` | 上下文大小 / Token 估算 |
+| `/pin [n]` | 固定最近 n 条消息（默认 2） |
+| `/unpin` | 解除所有 Pin |
+| `/undo [n]` | 撤回最近 n 轮（默认 1） |
+| `/compact` | 压缩上下文 |
+| `/think <问题>` | 单次深度推理 |
+| `/cd <路径>` | 切换工作目录 |
+| `/file <路径>` | 载入文件到上下文 |
+| `/history` | 消息历史（含序号） |
+
+### Provider 管理
+
+| 命令 | 说明 |
+|------|------|
+| `/provider` | 打开交互式 TUI 面板 |
+| `/provider list` | 列出所有 Provider 状态 |
+| `/provider add <名称> <url> [anthropic]` | 注册 Provider |
+| `/provider fetch <名称>` | 拉取模型列表（交互多选） |
+| `/provider update <名称>` | 重新拉取模型列表 |
+| `/provider remove <名称>` | 删除自定义 Provider |
+| `/provider test <模型>` | 测试连通性 |
+| `/keys` | 查看所有 Key 状态 |
+| `/setkey` | 重新运行 Key 配置向导 |
+
+### 会话持久化
+
+| 命令 | 说明 |
+|------|------|
+| `/save [名称]` | 保存当前会话 |
+| `/load <名称\|n>` | 加载历史会话 |
+| `/sessions` | 列出所有会话 |
+| `/del <名称\|n>` | 删除指定会话 |
+| `/rename <n> <名称>` | 重命名会话 |
+| `/resume [n]` | 恢复会话并显示历史 |
+
+### 知识库
+
+| 命令 | 说明 |
+|------|------|
+| `/memorize [主题]` | AI 总结 → 存入知识库 |
+| `/knowledge [查询]` | 搜索/列出知识条目 |
+| `/forget <id>` | 删除知识条目 |
+
+### 算力档位
+
+| 命令 | 说明 |
+|------|------|
+| `/low` | 日常模式：tokens=4k, ctx=40k, iter=10 |
+| `/mid` | 开发模式：tokens=8k, ctx=150k, iter=30（默认） |
+| `/deep` | 深度模式：tokens=32k, ctx=400k, iter=50 |
+| `/max` | 极限模式：tokens=32k, ctx=600k, iter=100 |
+| `/normal` | 重置到 /mid |
+
+### 工具状态
+
+| 命令 | 说明 |
+|------|------|
+| `/webstatus` | Jina / Pandoc / Lynx 状态 |
+| `/pwnenv` | CTF 工具链完整性检查 |
+| `/docker` | Docker 容器管理 |
+| `/stats` | 本次会话 Token 用量统计 |
 
 ---
 
-## Command Reference
+## 使用示例
 
-### Environment & Model Control
-
-| Command | Description |
-|---------|-------------|
-| `/mode` | Toggle USER / DEV output mode |
-| `/model [alias]` | Switch LLM (e.g. `/model ds-r1`) |
-| `/setkey` | Re-run API key configuration wizard |
-| `/keys` | Show key status for all providers |
-| `/clear` | Clear history, free tokens (keeps pinned + state) |
-| `/cd <path>` | Change agent working directory |
-| `/file <path>` | Load a file into conversation context |
-| `/undo [n]` | Roll back last n turns (default 1) |
-| `/compact` | Summarize + clear history (keeps pins) |
-| `/think <prompt>` | Single reasoning turn |
-| `/ping` | Keepalive request |
-
-### Project Management
-
-| Command | Description |
-|---------|-------------|
-| `/init_project [desc]` | Initialize `.pawn_state.md` for GSD workflow |
-| `/state` | View current project plan |
-| `/memorize [topic]` | Distill conversation into knowledge base |
-| `/knowledge [query]` | Search / list knowledge entries |
-| `/forget <id>` | Delete a knowledge entry |
-
-### Session Management
-
-| Command | Description |
-|---------|-------------|
-| `/history` | View numbered message history |
-| `/pin msg <n>` | Pin message n (prevents pruning) |
-| `/save [name]` | Save current session to DB |
-| `/sessions` | List all sessions |
-| `/load <name\|n>` | Load a session by name or index |
-| `/resume [n]` | Resume session with history display |
-| `/rename <n> <name>` | Rename a saved session |
-| `/del <name\|n>` | Delete a session |
-
-### Compute Tiers
-
-| Command | Tokens | Context | Max Iter | Time Budget |
-|---------|--------|---------|----------|-------------|
-| `/low` | 4k | 40k | 10 | 5 min |
-| `/mid` | 8k | 150k | 30 | 10 min ← default |
-| `/deep` | 32k | 400k | 50 | 30 min |
-| `/max` | 32k | 600k | 100 | 60 min |
-| `/normal` | — | — | — | Reset to /mid |
-
-Fine-grained: `/tokens`, `/ctx`, `/iter`, `/toolsize`, `/fetchsize <n>` · `/limits` to view current values.
-
-### Time-Aware Scheduling
-
-| Command | Description |
-|---------|-------------|
-| `/time` | View budget / elapsed / remaining |
-| `/time <seconds>` | Set time budget |
-| `/time 0` | Disable time limit |
-
-When <30s remain, URGENT_MODE activates: skips `<plan>`, switches to fastest available model, compresses output.
-
-### Docker Management
-
-| Command | Description |
-|---------|-------------|
-| `/docker status` | Check Docker connection |
-| `/docker images` | List local images |
-| `/docker ps` | List PawnLogic-managed containers |
-| `/docker pull <image>` | Pull image (supports aliases) |
-
-### Workspace Maintenance
-
-| Command | Description |
-|---------|-------------|
-| `/workspace status` | Overview: size / file count / DB consistency |
-| `/workspace cleanup` | Read-only scan + auto-backup |
-| `/workspace cleanup plan` | Phase 0+1: backup + generate cleanup list |
-| `/workspace cleanup execute` | Phase 2+3: archive to `~/.pawnlogic/archive/` + fix DB |
-| `/workspace cleanup restore` | Roll back from latest tar backup (atomic) |
-
-### Defensive Auditing
-
-| Command | Description |
-|---------|-------------|
-| `/failures` | View last 20 tool call failure records |
-| `/failures <N>` | View last N failures |
-| `/failures clear` | Clear all failure records |
-
-### Global Skills Archive (GSA)
-
-| Command | Description |
-|---------|-------------|
-| `/memo [content]` | Archive a skill: AI classifies and writes to `global_skills.md` |
-| `/memo` | Archive last AI response from current session |
-| `/skills` | View category index of `global_skills.md` |
-| `/skills view` | View full content (paginated) |
-| `/skills path` | Show file path |
-
-### Local Skill Packs
-
-| Command | Description |
-|---------|-------------|
-| `/sp` or `/skillpack` | List all local skill packs |
-| `/sp rescan` | Clear cache, re-scan `skills/` |
-| `/sp sync` | `git pull` all skill packs with `.git` |
-| `/sp install <url>` | Install skill pack from remote repo |
-| `/sp <name>` | View skill pack details |
-
-### Worker Model Selection
-
-| Command | Description |
-|---------|-------------|
-| `/worker` | Show sub-task worker candidate menu |
-| `/worker <alias>` | Lock sub-task model |
-| `/worker auto` | Restore auto-routing |
-
----
-
-## Usage Examples
-
-### Example 1: Large-Scale Engineering (GSD)
+### 接入第三方 API
 
 ```
-You > /init_project Build a FastAPI user management system with RBAC
+/provider add myrelay https://api.myrelay.com/v1/chat/completions MYRELAY_API_KEY
+/provider fetch myrelay
+# 在弹出的多选界面中选择需要的模型，Enter 确认
+/model gpt-4o   # 切换到刚注册的模型
 ```
 
-Agent reads project state, outputs a strict `<plan>` with `<action>` and `<verify>` blocks, scaffolds `models.py`, `auth.py`, etc. Each file that passes `<verify>` triggers a silent `git commit`. Come back to a complete, version-controlled repository.
-
-### Example 2: Multimodal Analysis (Vision)
+### 视觉分析
 
 ```
-You > Analyze ./error_log.png, use delegate_task to search for the fix, then write a patch script
+分析截图 ./screenshot.png，提取其中的代码并修复 bug
 ```
 
-Agent calls `analyze_local_image` → extracts error text → spawns a clean sub-agent for web search → returns the solution to the main window.
-
-### Example 3: CTF Binary Exploitation
+### CTF Pwn
 
 ```
-You > Analyze ./vuln_pwn. Find the stack overflow offset and set a breakpoint at main with pwn_debug
+/model ds-v4-pro
+分析 ./challenge，用 pwn_debug 在 main 断点查看寄存器状态
 ```
 
-Agent runs checksec, generates de Bruijn pattern via `pwn_cyclic`, writes a GDB batch script, runs `pwn_debug`, and returns register state with the confirmed offset.
-
-### Example 4: USER vs DEV Mode
+### 项目工程（GSD）
 
 ```
-You > /mode          # switch to USER mode
-You > run ./broken_script.py
-# Output: ❌ Please try again  (no traceback, no JSON)
-
-You > /mode          # switch back to DEV mode
-You > run ./broken_script.py
-# Output: full traceback + tool call JSON + thread state
-```
-
-### Example 5: Web Penetration (P6 Auto-Exploit Chain)
-
-```
-You > Scan http://target.com:8080, find and exploit the vulnerability
-```
-
-Agent executes the full P6 pipeline:
-1. **Recon**: `web_fetch` extracts Server/X-Powered-By/Cookie fingerprints
-2. **Env confirm**: `check_service(port=8080)` gets PID/path/env vars
-3. **Weapon search**: `search_skills(query='Shiro')` matches local skill packs
-4. **Sync**: `/sp sync` or `/sp install` for latest exploit scripts
-5. **Execute**: Runs pre-built exploit from skill pack
-6. **Verify**: Confirms flag/shell, calls `bump_skill` to boost skill weight
-
-### Example 6: Session Management
-
-```bash
-/chat find python crawler        # full-text search across all sessions
-/chat tag 3 crawler,learning     # tag session #3
-/chat bytag crawler              # filter by tag
-/chat link 3 5 "same project, different phases"
+/init_project 实现一个命令行 JSON 美化工具
+→ Agent 自动 plan → write → verify → git commit
 ```
 
 ---
 
-## Architecture
+## 架构说明
 
-### Code Layout
-
-```
-main.py                  — Entry point, slash command parser
-config.py                — API routing, model registry, tier presets, security lists
-core/
-  session.py             — Agentic loop, streaming parser, tool executor, context management
-  memory.py              — SQLite DB manager, RAG retrieval, FTS5 search
-  persistence.py         — Session persistence
-  naming.py              — Auto session naming, workspace alias management
-  gsa.py                 — Global Skills Archive manager
-  skill_manager.py       — SkillScanner: scan, match, sync, install
-  logger.py              — loguru dual-sink logging
-tools/
-  file_ops.py            — File read/write/patch/shell
-  web_ops.py             — Web search and fetch
-  browser_ops.py         — Scrapling anti-bot browser (StealthyFetcher + Patchright)
-  recon_ops.py           — Environment recon (check_service)
-  sandbox.py             — Multi-language code sandbox
-  docker_sandbox.py      — Docker container execution
-  pwn_chain.py           — CTF/Pwn toolchain (GDB/ROP/libc/one_gadget)
-  vision.py              — Multimodal vision analysis
-  delegate_tool.py       — Fresh-context sub-agent delegation
-skills/                  — Local skill pack directory
-```
-
-### Data Storage (`~/.pawnlogic/`)
+### 项目代码结构
 
 ```
-pawn.db                  — Core SQLite DB (sessions, messages, knowledge, facts, failures)
-global_skills.md         — Global Skills Archive
-workspace/               — Per-session isolated working directories
-logs/                    — Audit logs (audit_*.jsonl)
-custom_providers.json    — Custom provider configs (no keys)
+PawnLogic/
+├── main.py              # 入口、命令解析、交互循环
+├── config/              # 配置包
+│   ├── providers.py     # Provider 与模型注册表
+│   ├── tiers.py         # 算力档位预设
+│   ├── security.py      # 安全名单
+│   ├── sandbox.py       # 沙箱配置
+│   └── phases.py        # MoE 路由表
+├── core/                # 核心模块
+│   ├── session.py       # Agentic Loop
+│   ├── memory.py        # SQLite 持久化
+│   ├── state.py         # 运行时状态
+│   ├── api_client.py    # 双格式 API 客户端
+│   ├── provider_tui.py  # Provider 管理 TUI
+│   └── mcp_client_manager.py  # MCP 客户端
+├── tools/               # 工具实现
+└── skills/              # 本地技能包
 ```
 
-### Security Constraints
+### 运行时数据（`~/.pawnlogic/`）
 
-1. **Read protection**: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube` are blacklisted
-2. **Write protection**: `/etc`, `/bin`, `/boot`, `/lib`, `/sys` etc. are blacklisted
-3. **Dangerous command interception**: `rm -rf /`, fork bombs, reverse shells, `curl|sh`, `sudo` — 14+ patterns blocked
-4. **Sandbox env isolation**: All API keys stripped from sandbox environment variables
-5. **Docker network isolation**: `network=none` by default; resource limits: 512MB RAM, 0.5 CPU, 256 PIDs
+```
+~/.pawnlogic/
+├── .env                    # API 密钥
+├── custom_providers.json   # 自定义 Provider（不含密钥）
+├── pawn.db                 # SQLite 数据库
+├── mcp_configs.json        # MCP 服务声明
+├── workspace/              # Agent 工作区
+└── logs/                   # 审计日志
+```
 
 ---
 
-## Changelog
+## 常见问题
 
-### v1.1 (Current)
+**Q: 添加了 Provider 但 `/model` 看不到新模型？**
+A: 需要先运行 `/provider fetch <名称>` 拉取模型列表，然后在多选界面选择并确认。
 
-**Context Management**
-- ✅ Sliding-window context pruning: `_build_api_messages()` sends only anchor + summary + recent N turns to LLM
-- ✅ History summarization: lightweight model distills old turns, preserving security primitives (offsets, addresses, gadgets)
-- ✅ Fixes Read Timeout on long agentic tasks (e.g. mimo-v2.5 120s limit at iteration 15)
+**Q: Test Connection 失败但 fetch 成功？**
+A: 正常现象。`/v1/models` 是 GET 请求，很多中转服务对它不鉴权。Test Connection 发送真实 chat 请求，用的是通用测试模型 ID，部分中转不支持该 ID。只要 fetch 成功、Key 有效，实际使用不受影响。
 
-**Auto-Naming Reliability**
-- ✅ Fixed retry blocking: cooldown gate moved inside `_do()` lock — API failures no longer block retries
-- ✅ Fixed Markdown code block parsing in `_extract_json`
-- ✅ Fixed snippet collection: prioritizes user/assistant text over tool call names
-- ✅ Fixed `response_format` parameter: only passed to OpenAI official models
+**Q: 切换到自定义模型后报 HTTP 305？**
+A: Base URL 格式问题。系统会自动补全路径，但如果已有旧数据，可通过 `/provider` → 详情页 → Update API Key 重新保存触发修复，或直接编辑 `~/.pawnlogic/custom_providers.json`。
 
-**Dynamic Workspace**
-- ✅ Per-session isolated workspace directories with atomic rename + reverse symlink
-- ✅ `/workspace cleanup` suite: status / plan / execute / restore
+**Q: 如何彻底删除一个自定义模型？**
+A: `/provider` → 选择对应 Provider → Enter → Manage Models → 上下键选择 → D 删除。
 
-**Reasoning Model Support**
-- ✅ Full support for `reasoning_content` field (DeepSeek R1, MiMo, QwQ)
-- ✅ Reasoning steps persisted to SQLite for later review
-- ✅ `/think <prompt>` single reasoning mode
+**Q: API Key 在哪里？**
+A: `~/.pawnlogic/.env`，不在项目目录，不会被 git 追踪。
 
-**Custom Provider & Dual API Format**
-- ✅ Native OpenAI Chat Completions + Anthropic Messages support
-- ✅ `/provider` interactive panel: add / remove / test
-- ✅ Configs persisted to `~/.pawnlogic/custom_providers.json` (no keys)
-
-**Security & Robustness (P0–P8)**
-- ✅ Command injection fix in `git_op` (subprocess list form)
-- ✅ Semantic failure detection (20+ signals: Traceback, Segfault, exit codes)
-- ✅ Anti-loop detection: 3 identical command+error pairs → inject bypass hints
-- ✅ Logic Refresh: every 20 iterations, summarize recent observations
-- ✅ API empty response retry: exponential backoff 2s→4s→8s, up to 3 attempts
-- ✅ URGENT_MODE: <30s remaining → skip plan, switch to fastest model, compress output
-- ✅ `/max` tier: iter=100, ctx=600k, 60min budget
-
-**UX (P2)**
-- ✅ `prompt_toolkit` FuzzyCompleter + Fish-style inline suggestions
-- ✅ `rich` Markdown rendering with syntax highlighting
-- ✅ Bottom status bar: model / tier / token usage / Ctx% / directory / phase
-- ✅ Ctx% color thresholds: green (<70%) / yellow (70–90%) / red (≥90%)
-- ✅ Fuzzy command correction: `/modle` → `/model` (similarity ≥0.7)
-
-### v1.0
-
-- ✅ `/chat` session management command suite
-- ✅ SQLite with tags, links, FTS5 full-text search
-- ✅ 2026 model ecosystem: DeepSeek V4, GLM-5.1, Qwen 3.0, Groq, Moonshot
-- ✅ GSD engineering architecture · multimodal vision · RAG knowledge base · multi-language sandbox · CTF/Pwn toolchain
-
----
-
-## FAQ
-
-**Q: How do I switch models?**
-Use `/model <alias>`, e.g. `/model ds-v4-pro` for DeepSeek V4 Pro.
-
-**Q: How do I back up my sessions?**
-`/chat export <id> ./backup.md` exports as Markdown.
-
-**Q: How do I find a past project?**
-`/chat find <keyword>` for full-text search, or `/chat bytag <tag>` to filter by tag.
-
-**Q: Agent is slow — what can I do?**
-Use `/low` for low-compute mode, `/model groq-llama3` for ultra-fast responses, or `/clear` to free context tokens.
-
-**Q: Docker won't connect on WSL2?**
-Run `sudo dockerd &` manually, or enable systemd in `/etc/wsl.conf`:
-```ini
-[boot]
-systemd=true
-```
-Then run `/docker status` to diagnose.
-
-**Q: Can I use PawnLogic without Docker?**
-Yes. Docker is optional. `run_code` local sandbox is unaffected. `run_code_docker` and `pwn_container` will return installation instructions if Docker is unavailable.
-
-**Q: What's the difference between USER and DEV mode?**
-`/mode` toggles. USER mode hides all raw errors and shows friendly messages — good for demos. DEV mode shows full tracebacks, tool call JSON, and thread state — good for debugging.
-
-**Q: How do I undo the last turn?**
-`/undo` rolls back 1 turn; `/undo 3` rolls back 3. Ctrl+C in input mode also triggers undo.
-
-**Q: Context is nearly full — what should I do?**
-`/compact` summarizes progress and clears history (keeps pins). `/clear` clears everything. Watch the Ctx% indicator in the status bar.
-
-**Q: How do I add a custom skill?**
-Create a folder under `./skills/`, add `skill.md` (or `guide.md`). Keywords are auto-extracted from filename and headings. Optionally add `manifest.json` for metadata. See `skills/README.md`.
-
-**Q: Is `check_service` safe to run?**
-Yes. It is read-only — uses `/proc` or `lsof` only, modifies nothing. It is exempt from the `<plan>` requirement.
-
----
-
-## Support
-
-- **GitHub**: [github.com/john0123412/PawnLogic](https://github.com/john0123412/PawnLogic)
-- **Issues**: Please use GitHub Issues for bug reports and feature requests
+**Q: 支持 Ollama 本地模型吗？**
+A: 支持。通过 `/provider add` 注册，Base URL 填 `http://localhost:11434`，Key 留空或填任意字符串。
