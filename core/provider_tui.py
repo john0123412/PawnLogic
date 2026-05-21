@@ -28,6 +28,7 @@ _PAWNLOGIC_DIR = Path.home() / ".pawnlogic"
 _ENV_PATH = _PAWNLOGIC_DIR / ".env"
 _BUILTIN = {"deepseek", "openai", "anthropic"}
 _NOISE = {"embedding", "rerank", "tts", "whisper", "moderation", "davinci", "babbage"}
+_REASONING_KEYWORDS = ("mimo", "deepseek", "qwq")  # 与 api_client._REASONING_MODEL_PATTERNS 保持同步
 _PAGE = 20  # rows per page in model selector
 
 TUI_STYLE = Style.from_dict({
@@ -158,9 +159,12 @@ async def _fetch_models(base_url: str, api_key: str) -> tuple[list[tuple[str, di
         mid = item.get("id", "")
         if not mid or any(n in mid.lower() for n in _NOISE):
             continue
-        vision = any(k in mid.lower() for k in ("vision", "vl", "visual"))
+        ml = mid.lower()
+        vision    = any(k in ml for k in ("vision", "vl", "visual"))
+        reasoning = any(k in ml for k in _REASONING_KEYWORDS)
         candidates.append((mid, {"id": mid, "provider": "", "desc": "fetched",
-                                  "color": "\033[37m", "vision": vision}))
+                                  "color": "\033[37m", "vision": vision,
+                                  "reasoning": reasoning}))
     return candidates, ""
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -800,7 +804,8 @@ class ProviderTUI:
                 if q not in self._ms_manual:
                     self._ms_manual.append(q)
                     self._ms_all.insert(0, (q, {"id": q, "provider": self._ms_provider,
-                                                "desc": "manual", "color": "\033[37m", "vision": False}))
+                                                "desc": "manual", "color": "\033[37m", "vision": False,
+                                                "reasoning": any(k in q.lower() for k in _REASONING_KEYWORDS)}))
                 self._ms_selected.add(q)
                 self._ms_search = ""; self._ms_search_focus = False
             else:
