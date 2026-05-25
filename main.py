@@ -11,7 +11,7 @@ PawnLogic 1.1 (Expert Edition) — main.py
   source ~/.bashrc
   pawn   # 首次运行会自动进入 API Key 配置向导
 """
-import os, sys, shutil, getpass, argparse, time, re, asyncio
+import os, sys, shutil, getpass, argparse, time, asyncio
 
 # ── 退出哨兵值（handle_slash 返回此值表示用户请求退出）────
 _EXIT_SENTINEL = "__PAWN_EXIT__"
@@ -650,8 +650,6 @@ def _handle_chat(arg: str, arg2: str, session):
         tag_session, untag_session, find_sessions_by_tag,
         link_sessions, unlink_sessions, get_linked_sessions,
     )
-    from utils.ansi import c, BOLD, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
-    from pathlib import Path
 
     sub = arg.lower().strip() if arg else "list"
     # 将 arg2 分割为 rest（子命令后的所有参数）
@@ -890,7 +888,6 @@ def _handle_chat(arg: str, arg2: str, session):
 
 async def _handle_provider_cmd(sub: str, sub_arg: str, session):
     """处理 /provider 子命令。"""
-    import getpass
 
     # ── /provider 无参数 — 全交互式 TUI 面板 ──────────
     if not sub:
@@ -2299,8 +2296,7 @@ async def cc_style_model_selector(
     """
     from prompt_toolkit.application import Application
     from prompt_toolkit.key_binding import KeyBindings
-    from prompt_toolkit.layout import Layout, HSplit
-    from prompt_toolkit.widgets import Frame
+    from prompt_toolkit.layout import Layout
     from prompt_toolkit.layout.controls import FormattedTextControl
     from prompt_toolkit.layout.containers import Window
 
