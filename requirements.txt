@@ -1,19 +1,33 @@
-# PawnLogic — Core Dependencies
+# PawnLogic — Runtime Dependencies
 # Install: pip install -r requirements.txt
+#
+# Keep version pins in sync with pyproject.toml [project.dependencies].
 
-# Required
 loguru>=0.7.0
 python-dotenv>=1.0.0
+prompt_toolkit>=3.0.0
+rich>=13.0.0
+anthropic>=0.40.0
+httpx>=0.27.0
 
-# P2: CLI UX — Terminal experience upgrade
-prompt_toolkit>=3.0.0    # Fish-style completion, PromptSession, multiline input
-rich>=13.0.0             # Markdown rendering, syntax highlighting, panels
-
-# Optional (enhanced features)
-# pandoc  — HTML→Markdown conversion (apt install pandoc)
-# ROPgadget — ROP chain search (pip3 install ROPgadget)
-# ropper  — Alternative ROP search (pip3 install ropper)
-# one_gadget — execve gadget search (gem install one_gadget)
-# pwntools — CTF exploit development (pip3 install pwntools, used inside run_code sandbox)
-# docker  — P3: Docker containerization (pip install docker + Docker CE runtime)
-# mcp     — P5: Scrapling browser toolkit (pip install mcp + Node.js >= 18 for npx)
+# ── Optional / situational ──────────────────────────────
+# Install only what you need:
+#
+# CTF / Pwn:
+#   pip install pwntools          # exploit dev (also available inside Docker sandbox)
+#   pip install ROPgadget         # ROP chain search
+#   pip install ropper            # alternative ROP search
+#   gem install one_gadget        # execve gadget finder
+#
+# Docker sandbox:
+#   pip install docker            # Python SDK (requires Docker CE runtime)
+#
+# MCP tools:
+#   pip install mcp               # MCP client + server support
+#   Node.js >= 18 required for npx-based MCP servers
+#
+# Web scraping (Scrapling browser mode):
+#   pip install scrapling patchright
+#
+# System tools (apt):
+#   sudo apt install pandoc       # HTML→Markdown conversion
