@@ -1,6 +1,8 @@
-# 贡献指南
+# Contributing to PawnLogic
 
-## 开发环境
+Thank you for your interest in contributing! Please read this guide before opening a PR.
+
+## Development Setup
 
 ```bash
 git clone https://github.com/john0123412/PawnLogic.git && cd PawnLogic
@@ -8,42 +10,58 @@ python3 -m venv venv && source venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-## 如何新增一个 API Provider
-
-**方式一：运行时动态添加（推荐，无需改代码）**
+## Running Tests
 
 ```bash
-# 注册供应商（支持 openai/anthropic 两种格式）
-/provider add siliconflow https://api.siliconflow.cn/v1/chat/completions SILICON_API_KEY
-
-# 自动拉取模型列表（交互多选，↑↓ 移动，Space 选中，Enter 确认）
-/provider fetch siliconflow
-
-# 更新已注册供应商的模型列表
-/provider update siliconflow
+pytest tests/ -v
 ```
 
-密钥写入 `~/.pawnlogic/.env`，模型配置写入 `~/.pawnlogic/custom_providers.json`，不污染代码库。
+## Adding an API Provider
 
-**方式二：内置到代码（适合 PR 贡献）**
+**Option A — Runtime (recommended, no code change needed):**
 
-1. 打开 `config/providers.py`，在 `PROVIDERS` 中添加一条
-2. 在 `MODELS` 中添加对应的模型别名
-3. 在 `.env.example` 的"可选"区域添加 `XXX_API_KEY=` 占位
-4. 提 PR，标题格式：`feat(providers): add XXX`
+```bash
+/provider add my-relay https://api.example.com/v1/chat/completions MY_API_KEY
+/provider fetch my-relay   # auto-discover models with interactive multi-select
+```
 
-## 如何新增一个 MCP 工具
+Keys are written to `~/.pawnlogic/.env`. Provider configs go to `~/.pawnlogic/custom_providers.json`. Neither file is committed.
 
-1. 在 `mcp_configs.example.json` 的 `mcpServers` 中添加服务声明
-2. 如需密钥，在 `.env.example` 的"MCP 工具密钥"区域添加占位
-3. 提 PR，标题格式：`feat(mcp): add XXX tool`
+**Option B — Built-in (for PRs):**
 
-## 核心模块边界
+1. Add an entry to `PROVIDERS` in `config/providers.py`
+2. Add model aliases to `MODELS` in the same file
+3. Add `XXX_API_KEY=` placeholder to `.env.example`
+4. PR title: `feat(providers): add <name>`
 
-- `core/session.py`：Agentic Loop 核心，改动需非常谨慎，须附测试
-- `tools/`：工具实现，新增工具不修改现有文件
-- `config/`：配置声明，不包含业务逻辑
+## Adding an MCP Tool
 
-## 提交规范
+1. Add the server declaration to `mcp_configs.example.json`
+2. Add any required key placeholder to `.env.example`
+3. PR title: `feat(mcp): add <name>`
 
-使用 Conventional Commits：`feat` / `fix` / `refactor` / `docs` / `chore`
+## Module Boundaries
+
+| Module | Rule |
+|--------|------|
+| `core/session.py` | Agentic loop core — changes require tests |
+| `tools/` | Add new files; do not modify existing tool signatures |
+| `config/` | Config declarations only, no business logic |
+| `config/paths.py` | **Only place to change the version number** |
+
+## Commit Convention
+
+Use [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+feat(scope): short description
+fix(scope): short description
+refactor / docs / chore / test
+```
+
+## Pull Request Checklist
+
+- [ ] `python -m py_compile` passes on all modified files
+- [ ] `pytest tests/` passes
+- [ ] No secrets or API keys committed
+- [ ] PR description filled in (use the template)
