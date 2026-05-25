@@ -16,11 +16,11 @@ tools/docker_sandbox.py — P3: Docker 动态容器化沙箱
   · 本地 Docker CE 运行时（dockerd）
 """
 
-import os, re, time, shutil, tempfile
+import os, re, tempfile
 from pathlib import Path
 
 from config import DYNAMIC_CONFIG, DANGEROUS_PATTERNS
-from utils.ansi import c, YELLOW, GREEN, RED, GRAY, MAGENTA, BOLD
+from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN, MAGENTA, BOLD
 
 # ════════════════════════════════════════════════════════
 # P4.1  安全工作区定义（One-Way Glass）
