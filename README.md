@@ -2,6 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.1-blue.svg)](config/paths.py)
+[![PyPI](https://img.shields.io/pypi/v/pawnlogic.svg)](https://pypi.org/project/pawnlogic/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
@@ -9,6 +10,13 @@
 
 ## ⚡ Quick Start
 
+**Option A — pip install (recommended)**
+```bash
+pip install pawnlogic
+pawn   # first run launches the API configuration wizard
+```
+
+**Option B — from source**
 ```bash
 git clone https://github.com/john0123412/PawnLogic.git && cd PawnLogic
 python3 -m venv venv && source venv/bin/activate
