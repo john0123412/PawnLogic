@@ -58,6 +58,10 @@ version = {attr = "config.paths.VERSION"}
 where = ["."]
 include = ["config*", "core*", "tools*", "utils*", "skills*"]
 
+# main.py lives at root — declare it explicitly as a py-module
+[tool.setuptools]
+py-modules = ["main"]
+
 [tool.setuptools.package-data]
 "*" = ["*.md", "*.json", "*.sh", "*.txt"]
 
