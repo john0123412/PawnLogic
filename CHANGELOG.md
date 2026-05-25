@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.1] - 2026-05-25
+## [0.0.1] - 2026-05-25
 
 ### Fixed
 - `NameError: CYAN` in `docker_sandbox.py` — `tool_pwn_container list` action crashed at runtime due to missing import
@@ -29,7 +29,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.0] - 2026-05-18
+## [0.0.0] - 2026-05-18
 
 ### Added
 - Initial public release
