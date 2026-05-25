@@ -22,7 +22,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 from config import DYNAMIC_CONFIG, USER_AGENTS
-from utils.ansi import c, BLUE, YELLOW, GRAY, GREEN, RED
+from utils.ansi import c, BLUE, YELLOW, GRAY, GREEN
 
 # ── 检测本地工具 ─────────────────────────────────────────
 _has_pandoc = bool(shutil.which("pandoc"))

@@ -17,7 +17,6 @@ tools/docker_sandbox.py — P3: Docker 动态容器化沙箱
 """
 
 import os, re, tempfile
-from pathlib import Path
 
 from config import DYNAMIC_CONFIG, DANGEROUS_PATTERNS
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN, MAGENTA, BOLD
@@ -383,7 +382,6 @@ def tool_pwn_container(a: dict) -> str:
     name    = a.get("name", "").strip()
     image   = _resolve_image(a.get("image", "pwndocker"))
     command = a.get("command", "").strip()
-    timeout = int(a.get("timeout", 30))
     network    = a.get("network", "none")
     mount_files = a.get("mount_files", {})  # P4.1: 挂载配置
 

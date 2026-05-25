@@ -13,11 +13,10 @@ tools/vision.py — 模块 1：本地图片识别与多模态分析
 import os, base64, mimetypes
 from pathlib import Path
 from config import (
-    MODELS, get_api_config, get_best_vision_model, list_vision_models,
-    DYNAMIC_CONFIG,
+    MODELS, get_best_vision_model, list_vision_models,
 )
 from core.api_client import call_once
-from utils.ansi import c, BLUE, YELLOW, GREEN, RED, GRAY
+from utils.ansi import c, BLUE
 
 # ── MIME 类型映射（OpenAI vision 接受的格式）─────────────
 _MIME_MAP = {

@@ -55,10 +55,9 @@ PawnLogic 1.1
 ─────────────────────────────────────────────────────────────
 """
 
-import re, json, math
-from pathlib import Path
+import re, json
 from datetime import datetime
-from config import GLOBAL_SKILLS_PATH, DEFAULT_MODEL
+from config import GLOBAL_SKILLS_PATH
 
 # ════════════════════════════════════════════════════════
 # 文件初始化
@@ -508,7 +507,7 @@ def prune_zombie_skills(
     """
     try:
         content = _ensure_file()
-    except Exception as e:
+    except Exception:
         return 0, []
 
     # 按 ## 拆分，保留文件头部（非技能块内容）

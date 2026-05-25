@@ -15,8 +15,7 @@ tools/lsp_lite.py — LSP-lite: Semantic Code Indexing (1.1 新增)
 
 import ast, os, re, subprocess
 from pathlib import Path
-from config import DYNAMIC_CONFIG
-from utils.ansi import c, BLUE, GRAY, YELLOW
+from utils.ansi import c, BLUE
 
 # ── 支持的文件扩展名 ──────────────────────────────────────
 _PYTHON_EXTS = {".py"}

@@ -11,7 +11,7 @@ import copy
 import json, re, os, ssl, socket, time, threading
 import http.client
 from urllib.parse import urlparse
-from config import get_api_config, get_api_format, get_provider_config, MODELS, DEFAULT_MODEL, DYNAMIC_CONFIG
+from config import get_provider_config, MODELS, DEFAULT_MODEL, DYNAMIC_CONFIG
 
 
 # ── 自定义异常 ──────────────────────────────────────────

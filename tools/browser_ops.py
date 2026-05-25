@@ -27,15 +27,13 @@ tools/browser_ops.py — P5: Scrapling 浏览器武器库
 """
 
 import os
-import json
 import time
-import shutil
 import threading
 from pathlib import Path
 from datetime import datetime
 
 from config import BROWSER_CONFIG
-from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN, BOLD
+from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN
 
 # ── 常量 ──────────────────────────────────────────────────
 SAFE_WORKSPACE = str(Path.home() / ".pawnlogic" / "workspace")
@@ -356,13 +354,13 @@ _scrapling_ok = False
 _patchright_ok = False
 
 try:
-    from scrapling import StealthyFetcher as _SF
+    from scrapling import StealthyFetcher as _SF  # noqa: F401
     _scrapling_ok = True
 except ImportError:
     pass
 
 try:
-    from patchright.sync_api import sync_playwright as _sp
+    from patchright.sync_api import sync_playwright as _sp  # noqa: F401
     _patchright_ok = True
 except ImportError:
     pass
