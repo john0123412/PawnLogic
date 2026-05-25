@@ -102,7 +102,8 @@ python main.py   # MCP 服务器自动加载
 |------|------|
 | **README.md** | English version |
 | **README_CN.md** | 本页 |
-| **GUIDE.md** | 完整参考手册 — 命令、架构、常见问题 |
+| **GUIDE_EN.md** | Full reference — commands, architecture, FAQ |
+| **GUIDE_CN.md** | 完整参考手册 — 命令、架构、常见问题 |
 
 ## 支持
 
