@@ -1,6 +1,7 @@
 # 🤖 PawnLogic
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/pawnlogic.svg)](https://pypi.org/project/pawnlogic/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
@@ -8,6 +9,13 @@
 
 ## ⚡ 快速开始
 
+**方式一 — pip 安装（推荐）**
+```bash
+pip install pawnlogic
+pawn   # 首次运行自动进入 API 配置向导
+```
+
+**方式二 — 从源码安装**
 ```bash
 git clone https://github.com/john0123412/PawnLogic.git && cd PawnLogic
 python3 -m venv venv && source venv/bin/activate
