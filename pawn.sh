@@ -46,4 +46,6 @@ if [ ! -f "$SCRIPT_DIR/main.py" ]; then
 fi
 
 # 5. 启动（使用 exec 替换进程，透传所有参数 $@）
-exec python3 "$SCRIPT_DIR/main.py" "$@"
+_PYTHON="$SCRIPT_DIR/venv/bin/python3"
+[ ! -x "$_PYTHON" ] && _PYTHON="python3"
+exec "$_PYTHON" "$SCRIPT_DIR/main.py" "$@"
