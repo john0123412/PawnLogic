@@ -9,11 +9,23 @@ dynamic = ["version"]
 description = "A fully autonomous terminal AI agent — multi-model routing, persistent memory, real tool execution"
 requires-python = ">=3.10"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     {name = "john0123412", email = "junjohn05@gmail.com"},
 ]
 keywords = ["ai-agent", "llm", "ctf", "cli", "autonomous", "multi-model", "security", "pwn"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: Console",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Intended Audience :: Developers",
+]
 
 dependencies = [
     "python-dotenv>=1.0",
@@ -40,8 +52,14 @@ Changelog = "https://github.com/john0123412/PawnLogic/blob/main/CHANGELOG.md"
 pawn = "main:main"
 
 [tool.setuptools.dynamic]
-# 版本号唯一来源：config/paths.py 中的 VERSION 字符串
 version = {attr = "config.paths.VERSION"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["config*", "core*", "tools*", "utils*", "skills*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.md", "*.json", "*.sh", "*.txt"]
 
 [tool.ruff]
 line-length = 100
