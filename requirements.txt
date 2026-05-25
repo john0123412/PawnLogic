@@ -9,6 +9,7 @@ prompt_toolkit>=3.0.0
 rich>=13.0.0
 anthropic>=0.40.0
 httpx>=0.27.0
+mcp>=1.0
 
 # ── Optional / situational ──────────────────────────────
 # Install only what you need:
@@ -21,10 +22,6 @@ httpx>=0.27.0
 #
 # Docker sandbox:
 #   pip install docker            # Python SDK (requires Docker CE runtime)
-#
-# MCP tools:
-#   pip install mcp               # MCP client + server support
-#   Node.js >= 18 required for npx-based MCP servers
 #
 # Web scraping (Scrapling browser mode):
 #   pip install scrapling patchright
