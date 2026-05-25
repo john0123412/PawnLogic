@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pawnlogic"
-version = "1.1.0"
+dynamic = ["version"]
 description = "A modular AI Agent framework for complex task orchestration"
 requires-python = ">=3.10"
 readme = "README.md"
@@ -28,6 +28,10 @@ dev = [
 
 [project.scripts]
 pawn = "main:main"
+
+[tool.setuptools.dynamic]
+# 版本号唯一来源：config/paths.py 中的 VERSION 字符串
+version = {attr = "config.paths.VERSION"}
 
 [tool.ruff]
 line-length = 100

@@ -1,7 +1,11 @@
-"""config/paths.py — 路径与版本常量"""
-import os
+"""config/paths.py — 路径与版本常量
+
+版本号唯一定义处。全局通过 `from config import VERSION` 读取。
+升级时只需修改此处。
+"""
 from pathlib import Path
 
+# ── 唯一版本号定义 ──────────────────────────────────────
 VERSION = "1.0"
 
 SESSIONS_DIR       = Path.home() / ".pawnlogic" / "sessions"
