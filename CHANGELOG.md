@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.0.2] - 2026-05-25
+
+### Fixed
+- `mcp` missing from dependencies causing crash on startup
+- `mcp_client_manager.py` bare import now guarded with try/except
+- Add `docker` optional dependency declaration
+
+---
+
 ## [0.0.1] - 2026-05-25
 
 ### Fixed

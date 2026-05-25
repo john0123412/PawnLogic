@@ -31,8 +31,15 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Callable, Optional
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+try:
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+    _MCP_AVAILABLE = True
+except ImportError:
+    _MCP_AVAILABLE = False
+    ClientSession = None
+    StdioServerParameters = None
+    stdio_client = None
 
 from core.logger import logger
 
@@ -397,11 +404,13 @@ def get_manager() -> Optional[MCPClientManager]:
     return _GLOBAL_MANAGER
 
 
-def init_external_mcp(config_path: Optional[Path] = None) -> Optional[MCPClientManager]:
+def init_external_mcp(config_path: Optional[Path] = None) -> Optional["MCPClientManager"]:
     """
     在 main.py 启动早期调用一次：拉起背景线程 + 全部外部 server。
-    返回已就绪的 manager（无配置/全部失败 → None）。
+    返回已就绪的 manager（无配置/全部失败/mcp未安装 → None）。
     """
+    if not _MCP_AVAILABLE:
+        return None
     global _GLOBAL_MANAGER
     if _GLOBAL_MANAGER is not None:
         return _GLOBAL_MANAGER
