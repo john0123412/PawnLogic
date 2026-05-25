@@ -1,22 +1,27 @@
 {
   "mcpServers": {
     "tavily": {
-      "command": "node",
-      "args": ["/home/johnny/.npm-global/lib/node_modules/tavily-mcp/build/index.js"],
+      "command": "npx",
+      "args": ["-y", "tavily-mcp"],
       "env": {
         "TAVILY_API_KEY": "${TAVILY_API_KEY}"
       }
     },
     "playwright": {
-      "command": "node",
-      "args": ["/home/johnny/.npm-global/lib/node_modules/@playwright/mcp/cli.js"]
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp"]
     },
     "filesystem": {
-      "command": "node",
+      "command": "npx",
       "args": [
-        "/home/johnny/.npm-global/lib/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
         "/tmp"
       ]
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
     }
   }
 }
