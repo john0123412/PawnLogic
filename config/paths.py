@@ -6,7 +6,7 @@
 from pathlib import Path
 
 # ── 唯一版本号定义 ──────────────────────────────────────
-VERSION = "1.1"
+VERSION = "1.2"
 
 SESSIONS_DIR       = Path.home() / ".pawnlogic" / "sessions"
 DB_PATH            = Path.home() / ".pawnlogic" / "pawn.db"

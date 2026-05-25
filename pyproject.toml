@@ -49,7 +49,7 @@ Issues = "https://github.com/john0123412/PawnLogic/issues"
 Changelog = "https://github.com/john0123412/PawnLogic/blob/main/CHANGELOG.md"
 
 [project.scripts]
-pawn = "main:main"
+pawn = "main:run"
 
 [tool.setuptools.dynamic]
 version = {attr = "config.paths.VERSION"}
