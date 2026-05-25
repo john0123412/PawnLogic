@@ -4,7 +4,7 @@ PawnLogic — main.py
 多 Provider · 多模态视觉 · SQLite · CoT 引导 · GSA 技能存档 · 规格驱动 · GSD架构
 
 快速部署（WSL2 Ubuntu）:
-  cp -r PawnLogic_1.1 ~/.local/share/pawnlogic
+  cp -r PawnLogic ~/.local/share/pawnlogic
   chmod +x ~/.local/share/pawnlogic/main.py
   ln -sf ~/.local/share/pawnlogic/pawn.sh ~/.local/bin/pawn
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc

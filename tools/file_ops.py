@@ -1,11 +1,11 @@
 """
 tools/file_ops.py — 文件读写、目录列出、文件搜索
-1.1 新增（模块 3）：
+新增（模块 3）：
   · patch_file 重构为 Aider 风格 SEARCH/REPLACE 块机制
   · 支持多块连续替换，提供精确的失败定位信息
   · 允许轻微缩进宽容度（indentation tolerance）
   · 向后兼容：仍接受旧式 old_content/new_content 参数
-1.1 优化：
+优化：
   · _best_match_context 现在输出逐行相似度百分比和原因提示
     例："Your SEARCH line 1 is 90% similar to file line 145. Please check indentation."
 """
@@ -110,7 +110,7 @@ def _run(cmd: str, timeout: int = 15, cwd: str = None, env=None) -> str:
     """
     执行 Shell 命令的底层实现。
 
-    防阻塞加固（v1.2）：
+    防阻塞加固：
       · stdin=DEVNULL  —— 切断键盘输入，防止交互式程序挂起（SIGTTIN）
       · timeout=15s    —— 默认超时熔断，防止大模型逻辑死锁
       · env 缓存       —— 自动注入 HOST_IP / proxy 等持久化环境变量
