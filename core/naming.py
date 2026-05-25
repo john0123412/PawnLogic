@@ -17,47 +17,32 @@ _WEAK_USER_MESSAGES = {"hi", "hello", "hey", "你好", "您好", "在吗", "test
 
 
 def pick_naming_model(fallback: str) -> str:
-    """Return a fast-tier, non-reasoning model for background naming tasks."""
-    from config import MODELS
+    """Return a fast-tier model for background naming tasks.
 
-    def _ok_for_naming(alias: str) -> bool:
-        """Must have a valid key AND must NOT be a reasoning model."""
+    Priority:
+    1. If fallback is already fast-tier, use it directly.
+    2. Find a fast peer in the same provider as fallback.
+    3. Walk NAMING_MODEL_CHAIN for any available fast model.
+    4. Return fallback.
+    """
+    if is_fast_model(fallback):
+        ok, _ = validate_api_key(fallback)
+        if ok:
+            return fallback
+
+    peer = find_fast_peer(fallback)
+    if peer:
+        return peer
+
+    for alias in NAMING_MODEL_CHAIN:
         if not alias or alias not in MODELS:
-            return False
-        if MODELS[alias].get("reasoning", False):
-            return False
+            continue
         try:
             ok, _ = validate_api_key(alias)
-            return ok
         except Exception:
-            return False
-
-    # 1. If fallback is already fast + non-reasoning, use it directly.
-    if is_fast_model(fallback) and _ok_for_naming(fallback):
-        return fallback
-
-    # 2. Fast peer in same provider that is non-reasoning.
-    m = MODELS.get(fallback)
-    if m:
-        provider = m.get("provider", "")
-        for alias, cfg in MODELS.items():
-            if cfg.get("provider") != provider:
-                continue
-            if not is_fast_model(alias):
-                continue
-            if _ok_for_naming(alias):
-                return alias
-
-    # 3. Walk NAMING_MODEL_CHAIN for any available non-reasoning model.
-    for alias in NAMING_MODEL_CHAIN:
-        if _ok_for_naming(alias):
+            ok = False
+        if ok:
             return alias
-
-    # 4. Any non-reasoning model with a valid key.
-    for alias in MODELS:
-        if _ok_for_naming(alias):
-            return alias
-
     return fallback
 
 
@@ -202,11 +187,20 @@ def generate_session_name(
     _SUPPORTS_JSON_FORMAT = {"gpt-4o", "gpt-4.1", "gpt-4-turbo"}
     if model_alias in _SUPPORTS_JSON_FORMAT:
         kwargs["response_format"] = {"type": "json_object"}
+
+    # 推理模型（ds-v4-flash / ds-v4-pro 等）会先消耗 token 做推理再输出 content。
+    # max_tokens=128 不够用，必须放大；同时在 system prompt 中抑制推理过程。
+    from core.api_client import _is_reasoning_model
+    is_reasoning = _is_reasoning_model(model_alias)
+    naming_max_tokens = 512 if is_reasoning else 128
+    if is_reasoning:
+        req_messages[0]["content"] = "Return JSON only. No reasoning, no explanation."
+
     for delta in stream_request(
         req_messages,
         model_alias,
         tools_schema=None,
-        max_tokens=128,
+        max_tokens=naming_max_tokens,
         **kwargs,
     ):
         if "_error" in delta:
