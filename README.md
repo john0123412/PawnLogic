@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/Platform-WSL2%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)]()
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
 > **A fully autonomous terminal AI agent** — multi-model routing, persistent memory, real tool execution, and session management. Built for developers and security researchers.
 
@@ -13,6 +13,11 @@ git clone https://github.com/john0123412/PawnLogic.git && cd PawnLogic
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 python main.py   # first run launches the API configuration wizard
+```
+
+Global `pawn` command:
+```bash
+chmod +x pawn.sh && ln -sf "$(pwd)/pawn.sh" ~/.local/bin/pawn
 ```
 
 ## Key Capabilities
@@ -27,22 +32,7 @@ python main.py   # first run launches the API configuration wizard
 | 💬 **Session Management** | Tag, search, link, and export conversations with `/chat` commands |
 | 🔐 **CTF / Pwn Toolchain** | GDB automation, ROP chain building, libc leak resolution, Docker isolation |
 
-## Provider Management
-
-Add any third-party OpenAI-compatible API in seconds:
-
-```bash
-/provider              # open interactive TUI panel
-/provider add <name> <base_url> [anthropic]   # register a provider
-/provider fetch <name>   # auto-discover models with interactive multi-select
-/provider update <name>  # re-fetch model list
-/provider list           # show all providers and key status
-/provider test <model>   # test connectivity
-```
-
-All keys are stored in `~/.pawnlogic/.env`. Provider configs (no keys) go to `~/.pawnlogic/custom_providers.json`.
-
-## Supported Built-in Models
+## Supported Models
 
 | Provider | Aliases | Best For |
 |----------|---------|----------|
@@ -52,10 +42,22 @@ All keys are stored in `~/.pawnlogic/.env`. Provider configs (no keys) go to `~/
 
 Custom providers added via `/provider fetch` appear automatically in `/model` and Tab completion.
 
+## Provider Management
+
+```bash
+/provider              # open interactive TUI panel
+/provider add <name> <base_url> <ENV_KEY> [anthropic]
+/provider fetch <name> # auto-discover models with interactive multi-select
+/provider list         # show all providers and key status
+/provider test <model> # test connectivity
+```
+
+All keys are stored in `~/.pawnlogic/.env`. Provider configs (no keys) go to `~/.pawnlogic/custom_providers.json`.
+
 ## Quick Command Reference
 
 ```bash
-/model [alias]          # switch model (only shows models with configured keys)
+/model [alias]          # switch model
 /mode                   # toggle USER / DEV output mode
 /chat find <keyword>    # full-text search across all sessions
 /think <prompt>         # single deep-reasoning turn
@@ -75,42 +77,32 @@ cp mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
 python main.py   # MCP servers load automatically
 ```
 
+Supported MCP servers: **Tavily** (search), **Playwright** (browser automation), **Filesystem** (file bridge).
+
 ## Data Layout
 
 All runtime data and API keys are stored in `~/.pawnlogic/` — **never in the project directory**.
 
 ```
 ~/.pawnlogic/
-├── .env                    # ALL API keys (LLM providers + MCP tools like Tavily)
+├── .env                    # ALL API keys (LLM providers + MCP tools)
 ├── custom_providers.json   # user-added provider configs (no keys)
-├── mcp_configs.json        # MCP server declarations (references keys in .env)
+├── mcp_configs.json        # MCP server declarations
 ├── pawn.db                 # sessions, messages, knowledge base
+├── global_skills.md        # GSA skill archive
+├── workspace/              # per-session working directories
 └── logs/                   # audit logs
 ```
 
-The project directory contains no secrets. It is safe to commit or share.
-
-## Installation
-
-```bash
-git clone https://github.com/john0123412/PawnLogic.git && cd PawnLogic
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-python main.py
-```
-
-Global `pawn` command:
-```bash
-chmod +x pawn.sh && ln -sf "$(pwd)/pawn.sh" ~/.local/bin/pawn
-```
+The project directory contains no secrets and is safe to commit or share.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | **README.md** | This page |
-| **[README_CN.md](README_CN.md)** | 中文版 |
-| **[GUIDE.md](GUIDE.md)** | Full reference — commands, architecture, FAQ |
+| **README_CN.md** | 中文版 |
+| **GUIDE.md** | Full reference — commands, architecture, FAQ |
 
 ## Support
 
