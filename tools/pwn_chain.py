@@ -433,7 +433,7 @@ def tool_pwn_debug(a: dict) -> str:
     return out
 
 # ════════════════════════════════════════════════════════
-# pwn_one_gadget — execve 跳板一键搜索（2.1.0 NEW）
+# pwn_one_gadget — execve 跳板一键搜索
 # ════════════════════════════════════════════════════════
 
 def tool_pwn_one_gadget(a: dict) -> str:

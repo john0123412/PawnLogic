@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PawnLogic 1.1 (Expert Edition) — main.py
+PawnLogic — main.py
 多 Provider · 多模态视觉 · SQLite · CoT 引导 · GSA 技能存档 · 规格驱动 · GSD架构
 
 快速部署（WSL2 Ubuntu）:
@@ -120,7 +120,7 @@ from core.api_client  import stream_request
 from core.memory import (
     init_db, list_knowledge, delete_knowledge,
     search_knowledge, pin_message_by_seq,
-    # 2.1.0 新增
+    # 新增
     full_text_search, get_session_messages_pretty,
     export_session_to_markdown,
     tag_session, untag_session, find_sessions_by_tag,
