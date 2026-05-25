@@ -103,7 +103,8 @@ The project directory contains no secrets and is safe to commit or share.
 |----------|-------------|
 | **README.md** | This page |
 | **README_CN.md** | 中文版 |
-| **GUIDE.md** | Full reference — commands, architecture, FAQ |
+| **GUIDE_EN.md** | Full reference — commands, architecture, FAQ |
+| **GUIDE_CN.md** | 完整参考手册 — 命令、架构、常见问题 |
 
 ## Support
 
