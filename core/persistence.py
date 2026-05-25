@@ -11,11 +11,10 @@ import urllib.request, urllib.error
 from config import DYNAMIC_CONFIG, DEFAULT_MODEL, MODELS, PROVIDERS, get_api_config
 from core.memory import (
     init_db, upsert_session, list_sessions, get_session, delete_session,
-    rename_session, save_messages, load_messages, pin_message_by_seq,
-    add_knowledge, search_knowledge, format_knowledge_for_prompt, _gen_id,
+    rename_session, save_messages, load_messages, add_knowledge,
 )
 from core.naming import stable_workspace_dir
-from utils.ansi import c, CYAN, GRAY, GREEN, RED, YELLOW, BOLD, DIM
+from utils.ansi import c, CYAN, GRAY, YELLOW, DIM
 
 # ── 优先使用 prompt_toolkit 的渲染通道（绕过可能被接管的 stdout）──
 try:

@@ -12,7 +12,6 @@ merge_ctf_skills.py — 将 claude-skills-ctf 仓库按分类聚合到 pawnlogic
 
 import json
 import re
-import shutil
 import sys
 from pathlib import Path
 

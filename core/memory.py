@@ -17,7 +17,6 @@ core/memory.py — SQLite 数据库管理器（1.1 对话存储扩展版）
 
 import sqlite3, json, re, os, hashlib, threading
 from datetime import datetime
-from pathlib import Path
 from config import DB_PATH
 
 # ════════════════════════════════════════════════════════

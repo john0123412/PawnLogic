@@ -35,10 +35,9 @@ from config import (
     SKILLS_DIR,
 )
 from utils.ansi import c, BOLD, DIM, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
-from core.api_client import stream_request, ensure_tool_call_id, APIEmptyResponseError
+from core.api_client import stream_request, ensure_tool_call_id
 from core.memory import (
-    init_db, _gen_id, save_messages,
-    search_knowledge, format_knowledge_for_prompt,
+    init_db, _gen_id, search_knowledge, format_knowledge_for_prompt,
     update_session_naming,
     # P0: Failure Pattern DB
     write_failure, check_failure, count_failure,
@@ -1467,7 +1466,6 @@ class AgentSession:
 
         # 滚动窗口：最近 sliding 轮
         window_start_idx = turns[-sliding][0] if total_turns >= sliding else turns[0][0]
-        window_msgs = msgs[window_start_idx:]
 
         # 组装
         result = list(anchor_msgs)
@@ -2102,11 +2100,6 @@ class AgentSession:
                 #   · 不阻断工具执行，让模型先看到结果
                 #   · 信号以 "user" 角色追加在工具结果之后（attention 贴近推理层）
                 # ════════════════════════════════════════════════
-                has_plan    = "<plan>" in text_buf.lower()
-                is_exempt   = _is_plan_exempt(tc_buf)
-                # P1.7: URGENT_MODE 跳过 CoT Guard
-                need_plan   = not has_plan and not is_exempt and not self._urgent_mode
-
                 _plan_signal_injected = False
 
                 if _plan_rejected > _MAX_SOFT_CORRECTIONS:

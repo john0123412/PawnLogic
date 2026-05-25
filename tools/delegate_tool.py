@@ -18,16 +18,15 @@ delegate_task(task_description)：
   · _sub_stream() 直接使用 core/api_client.stream_request（无 session 依赖）
 """
 
-import sys, io, json, contextlib, threading
+import io, json, contextlib, threading
 from datetime import datetime
 from config import (
-    DYNAMIC_CONFIG, DEFAULT_MODEL, MODELS, get_api_config,
-    validate_api_key, is_fast_model, find_fast_peer,
+    DYNAMIC_CONFIG, DEFAULT_MODEL, MODELS, validate_api_key, is_fast_model, find_fast_peer,
 )
 from core.api_client import stream_request, ensure_tool_call_id
 from core.memory     import _gen_id
 from tools.file_ops  import _session_cwd
-from utils.ansi      import c, YELLOW, GRAY, GREEN, RED, MAGENTA, BOLD
+from utils.ansi      import c, YELLOW, GRAY, GREEN, MAGENTA
 
 # ── 递归深度保护 ──────────────────────────────────────────
 _delegate_ctx = threading.local()   # .depth 表示当前线程的委派深度

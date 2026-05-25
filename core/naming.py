@@ -3,11 +3,10 @@ core/naming.py — Semantic session naming and workspace aliases.
 """
 
 import json
-import os
 import re
 from pathlib import Path
 
-from config import WORKSPACE_DIR, get_api_format, NAMING_MODEL_CHAIN, MODELS, validate_api_key, is_fast_model, find_fast_peer
+from config import WORKSPACE_DIR, NAMING_MODEL_CHAIN, MODELS, validate_api_key, is_fast_model, find_fast_peer
 from core.api_client import stream_request
 from core.logger import logger
 

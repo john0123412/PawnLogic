@@ -702,8 +702,6 @@ class ProviderTUI:
 
         @kb.add("up",    filter=_ms_list)
         def _ms_up(e):
-            filtered = self._ms_filtered()
-            total = len(filtered) + 1
             self._ms_cursor = max(0, self._ms_cursor - 1)
             if self._ms_cursor < self._ms_viewport:
                 self._ms_viewport = self._ms_cursor

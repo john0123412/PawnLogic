@@ -10,10 +10,10 @@ tools/file_ops.py — 文件读写、目录列出、文件搜索
     例："Your SEARCH line 1 is 90% similar to file line 145. Please check indentation."
 """
 
-import os, re, difflib, subprocess, signal, threading
+import os, re, difflib, subprocess
 from pathlib import Path
 from config import DYNAMIC_CONFIG, READ_BLACKLIST, WRITE_BLACKLIST, DANGEROUS_PATTERNS, WORKSPACE_DIR
-from utils.ansi import c, YELLOW, BLUE, GRAY, RED
+from utils.ansi import c, YELLOW, BLUE, GRAY
 from core.logger import logger
 
 # ── 全局 cwd 引用 ─────────────────────────────────────────

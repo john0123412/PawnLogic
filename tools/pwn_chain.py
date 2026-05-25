@@ -8,7 +8,6 @@ tools/pwn_chain.py — CTF / Pwn 工具链
 import re, shutil, subprocess, tempfile, os
 from collections import OrderedDict
 from pathlib import Path
-from config import DYNAMIC_CONFIG
 from utils.ansi import c, YELLOW, MAGENTA, GRAY, GREEN, RED
 from tools.file_ops import _run, _check_read, _session_cwd
 
