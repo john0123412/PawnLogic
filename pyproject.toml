@@ -6,10 +6,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pawnlogic"
 dynamic = ["version"]
-description = "A modular AI Agent framework for complex task orchestration"
+description = "A fully autonomous terminal AI agent — multi-model routing, persistent memory, real tool execution"
 requires-python = ">=3.10"
 readme = "README.md"
 license = {text = "MIT"}
+authors = [
+    {name = "john0123412", email = "junjohn05@gmail.com"},
+]
+keywords = ["ai-agent", "llm", "ctf", "cli", "autonomous", "multi-model", "security", "pwn"]
 
 dependencies = [
     "python-dotenv>=1.0",
@@ -25,6 +29,12 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.4",
 ]
+
+[project.urls]
+Homepage = "https://github.com/john0123412/PawnLogic"
+Repository = "https://github.com/john0123412/PawnLogic"
+Issues = "https://github.com/john0123412/PawnLogic/issues"
+Changelog = "https://github.com/john0123412/PawnLogic/blob/main/CHANGELOG.md"
 
 [project.scripts]
 pawn = "main:main"
