@@ -81,7 +81,7 @@ def _categorize(name: str, is_dir: bool) -> str:
         return "orphan_sessions"
     n_low = name.lower()
     if re.match(r"^(flask_)?exploit", n_low):
-        return "pre_v1.1_exploits"
+        return "legacy_exploits"
     if name.endswith((".php", ".html")):
         return "web_pentest_relics"
     if name.startswith(("mechanism", "mech_", "rune_")):
@@ -91,7 +91,7 @@ def _categorize(name: str, is_dir: bool) -> str:
     if name == "libc.so.6" or name == "notepad":
         return "binaries"
     if name.startswith(("pwn", "final_")):
-        return "pre_v1.1_exploits"
+        return "legacy_exploits"
     return "misc"
 
 

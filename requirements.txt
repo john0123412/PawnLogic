@@ -1,4 +1,4 @@
-# PawnLogic 1.1 — Core Dependencies
+# PawnLogic — Core Dependencies
 # Install: pip install -r requirements.txt
 
 # Required

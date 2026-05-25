@@ -7,7 +7,7 @@ delegate_task(task_description)：
   · 捕获子 agent 的工具调用日志和最终回复，精简后返回给主 Session
   · 主 Session 上下文不增长，只获得结果摘要
 
-双模型路由（v1.1 新增）：
+双模型路由：
   · 子任务强制使用"高速/低成本"小模型（worker_model）
   · 优先级列表：ds-v4-flash → claude-haiku → gpt-4.1
   · 由代码底层自动选取首个可用模型，大模型无权干预

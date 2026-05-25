@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 
-VERSION = "1.1"
+VERSION = "1.0"
 
 SESSIONS_DIR       = Path.home() / ".pawnlogic" / "sessions"
 DB_PATH            = Path.home() / ".pawnlogic" / "pawn.db"

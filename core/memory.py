@@ -1,7 +1,7 @@
 """
-core/memory.py — SQLite 数据库管理器（1.1 对话存储扩展版）
+core/memory.py — SQLite 数据库管理器
 
-1.1 新增：
+新增功能：
   · sessions 表新增 tags 列（逗号分隔标签）
   · session_links 表（双向关联两个会话）
   · full_text_search() 跨会话全文检索消息内容
@@ -117,7 +117,7 @@ def _create_core_tables():
         CREATE INDEX IF NOT EXISTS idx_session_tags  ON sessions(tags);
         """)
 
-    # ── FTS5 全文搜索引擎（v1.1 新增）─────────────────────
+    # ── FTS5 全文搜索引擎─────────────────────
     # 使用 content=messages 延迟同步模式，FTS5 自动读取 messages 表
     with get_conn() as conn:
         try:
@@ -767,7 +767,7 @@ def format_knowledge_for_prompt(rows: list[sqlite3.Row]) -> str:
     return "\n".join(lines)
 
 # ════════════════════════════════════════════════════════
-# Persistent Agent Facts — Key-Value MemoryStore (2.1.0 新增)
+# Persistent Agent Facts — Key-Value MemoryStore
 #
 # 用途：跨会话、跨 delegate_task 的持久化事实存储。
 # 解决"上下文失忆"问题——即使 /clear 或新 delegate_task 启动，

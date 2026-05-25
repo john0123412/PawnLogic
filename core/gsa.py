@@ -1,6 +1,6 @@
 """
 core/gsa.py — Global Skills Archive (GSA) Engine
-PawnLogic 1.1
+PawnLogic
 
 职责：
   · 读取 / 初始化 global_skills.md
@@ -138,7 +138,7 @@ _META_RE  = re.compile(
 )
 _META_FMT = "<!-- meta: hits={hits} last_used={last_used} confidence={confidence:.2f} -->"
 
-# ── FSRS 稳定性锚定衰减参数（v2.1.1）──────────────────────────────────
+# ── FSRS 稳定性锚定衰减参数──────────────────────────────────
 # 个性化稳定性：S = S_MIN × (1 + hits)^GROWTH × confidence × 2
 _S_MIN:         float = 14.0   # 新技能最短半衰期 14 天
 _GROWTH:        float = 0.6    # 幂律增长指数（防止高 hits 过度拉伸）
@@ -195,9 +195,9 @@ def _add_initial_meta(skill_block: str) -> str:
 
 
 # ════════════════════════════════════════════════════════
-# ★ v2.1.1：FSRS 稳定性锚定衰减 + FinalScore
+# FSRS 稳定性锚定衰减 + FinalScore
 #
-# 解决 v2.1.0 的"长期离线全库崩溃"问题：
+# 解决之前版本的"长期离线全库崩溃"问题：
 #   · 每个技能拥有由自身验证历史决定的个性化稳定性 S
 #   · 精华技能（hits 高）半衰期远大于新写入技能
 #   · 从未验证的僵尸技能快速自然沉底
@@ -359,7 +359,7 @@ def load_relevant_skills(
     """
     根据 query 从 global_skills.md 动态加载最相关的 Top-K 技能块。
 
-    ★ v2.1.1 升级点（相比 v2.1.0）：
+    升级点：
       · 衰减从全局指数（牛顿冷却）升级为个性化 FSRS 幂律衰减
       · 精华技能（hits 高）半衰期显著更长，长期离线不导致全库崩溃
       · 引入 SCORE_FLOOR 底分保护，相关技能即使旧了也不会消失
@@ -402,7 +402,7 @@ def load_relevant_skills(
     top = scored[:top_k]
 
     # 过滤掉底分以下的完全不相关项，但至少保留 1 个
-    # v2.1.1：改用 SCORE_FLOOR 而非 0，让僵尸技能真正被过滤
+    # 改用 SCORE_FLOOR 而非 0，让僵尸技能真正被过滤
     threshold = _SCORE_FLOOR * 0.5   # 轻微放宽，避免误杀语义相关但旧的技能
     filtered = [(s, t, b) for s, t, b in top if s >= threshold]
     if not filtered:
