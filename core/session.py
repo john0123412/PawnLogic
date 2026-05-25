@@ -377,7 +377,10 @@ def attach_external_mcp_tools() -> None:
     TOOL_MAP / TOOLS_SCHEMA / AGENT_PHASES。
     无配置或全部 server 启动失败时本函数自动 no-op。
     """
-    from core.mcp_client_manager import init_external_mcp
+    try:
+        from core.mcp_client_manager import init_external_mcp
+    except ImportError:
+        return  # mcp 未安装时静默跳过
     from config import AGENT_PHASES
 
     mgr = init_external_mcp()
@@ -402,8 +405,11 @@ def attach_external_mcp_tools() -> None:
 
 def detach_external_mcp_tools() -> None:
     """收割背景线程与全部外部 MCP 子进程。幂等。"""
-    from core.mcp_client_manager import shutdown_external_mcp
-    shutdown_external_mcp()
+    try:
+        from core.mcp_client_manager import shutdown_external_mcp
+        shutdown_external_mcp()
+    except Exception:  # noqa: BLE001
+        pass  # finally 块里绝不能抛异常
 
 
 # ════════════════════════════════════════════════════════
