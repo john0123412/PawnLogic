@@ -17,32 +17,47 @@ _WEAK_USER_MESSAGES = {"hi", "hello", "hey", "你好", "您好", "在吗", "test
 
 
 def pick_naming_model(fallback: str) -> str:
-    """Return a fast-tier model for background naming tasks.
+    """Return a fast-tier, non-reasoning model for background naming tasks."""
+    from config import MODELS
 
-    Priority:
-    1. If fallback is already fast-tier, use it directly.
-    2. Find a fast peer in the same provider as fallback.
-    3. Walk NAMING_MODEL_CHAIN for any available fast model.
-    4. Return fallback.
-    """
-    if is_fast_model(fallback):
-        ok, _ = validate_api_key(fallback)
-        if ok:
-            return fallback
-
-    peer = find_fast_peer(fallback)
-    if peer:
-        return peer
-
-    for alias in NAMING_MODEL_CHAIN:
+    def _ok_for_naming(alias: str) -> bool:
+        """Must have a valid key AND must NOT be a reasoning model."""
         if not alias or alias not in MODELS:
-            continue
+            return False
+        if MODELS[alias].get("reasoning", False):
+            return False
         try:
             ok, _ = validate_api_key(alias)
+            return ok
         except Exception:
-            ok = False
-        if ok:
+            return False
+
+    # 1. If fallback is already fast + non-reasoning, use it directly.
+    if is_fast_model(fallback) and _ok_for_naming(fallback):
+        return fallback
+
+    # 2. Fast peer in same provider that is non-reasoning.
+    m = MODELS.get(fallback)
+    if m:
+        provider = m.get("provider", "")
+        for alias, cfg in MODELS.items():
+            if cfg.get("provider") != provider:
+                continue
+            if not is_fast_model(alias):
+                continue
+            if _ok_for_naming(alias):
+                return alias
+
+    # 3. Walk NAMING_MODEL_CHAIN for any available non-reasoning model.
+    for alias in NAMING_MODEL_CHAIN:
+        if _ok_for_naming(alias):
             return alias
+
+    # 4. Any non-reasoning model with a valid key.
+    for alias in MODELS:
+        if _ok_for_naming(alias):
+            return alias
+
     return fallback
 
 
