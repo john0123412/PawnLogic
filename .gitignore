@@ -20,6 +20,7 @@ __pycache__/
 
 # --- AI 工具缓存与配置 ---
 .aider*
+.aiderignore
 .cline/
 .thought
 
