@@ -3178,3 +3178,15 @@ if __name__ == "__main__":
         pass
     finally:
         detach_external_mcp_tools()
+
+
+def run():
+    """Synchronous entry point for the `pawn` CLI command (pip install)."""
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print(c(CYAN, "\n\n  Goodbye! 👋"))
+    except SystemExit:
+        pass
+    finally:
+        detach_external_mcp_tools()
