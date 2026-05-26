@@ -106,6 +106,7 @@ async def dispatch(ctx: CommandContext) -> Any:
 # (which they should not, in practice).
 # ────────────────────────────────────────────────────────
 from . import system  # noqa: E402, F401
+from . import session  # noqa: E402, F401
 
 
 __all__ = [
