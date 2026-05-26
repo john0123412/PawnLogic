@@ -8,7 +8,7 @@ without risk of circular imports.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from config import DYNAMIC_CONFIG
 from utils.ansi import c, CYAN
@@ -75,9 +75,38 @@ def take_deferred_history() -> Optional[list]:
     return snap
 
 
+# ────────────────────────────────────────────────────────
+# Active output sink (stage 2)
+# ────────────────────────────────────────────────────────
+# Set once by main() at startup based on --json. dispatch() reads it to
+# populate `ctx.sink` if the caller didn't supply one. Kept here (not in
+# main.py) so command handlers and tests have a single import target.
+_active_sink: Any = None
+
+
+def set_active_sink(sink: Any) -> None:
+    """Register the process-wide output sink (HumanSink or JsonSink)."""
+    global _active_sink
+    _active_sink = sink
+
+
+def get_active_sink() -> Any:
+    """Return the current sink, or a freshly-built HumanSink if none was set.
+
+    Falling back to HumanSink keeps unit tests and ad-hoc scripts that
+    construct CommandContext directly working without explicit setup.
+    """
+    if _active_sink is not None:
+        return _active_sink
+    from core.output import HumanSink
+    return HumanSink()
+
+
 __all__ = [
     "EXIT_SENTINEL",
     "fmt_config",
     "set_deferred_history",
     "take_deferred_history",
+    "set_active_sink",
+    "get_active_sink",
 ]

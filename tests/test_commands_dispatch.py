@@ -222,7 +222,9 @@ def test_command_context_is_dataclass_instance(cmd_pkg, fake_session):
     ctx = cmd_pkg.CommandContext(verb="/help", arg="", arg2="", session=fake_session)
     assert dataclasses.is_dataclass(ctx)
     fields = {f.name for f in dataclasses.fields(ctx)}
-    assert fields == {"verb", "arg", "arg2", "session"}
+    # `sink` was added in stage-2 step 4 with a None default so existing
+    # callers don't have to specify it; dispatch() injects it lazily.
+    assert fields == {"verb", "arg", "arg2", "session", "sink"}
 
 
 def test_command_context_supports_keyword_only_construction(cmd_pkg, fake_session):
@@ -237,3 +239,56 @@ def test_command_context_supports_keyword_only_construction(cmd_pkg, fake_sessio
     )
     assert ctx.verb == "/save"
     assert ctx.arg == "my-session"
+
+
+# ════════════════════════════════════════════════════════
+# 4. Sink injection (stage-2 step 4)
+# ════════════════════════════════════════════════════════
+
+def test_dispatch_injects_active_sink_when_ctx_sink_is_none(cmd_pkg, fake_session):
+    """dispatch() should fall back to `get_active_sink()` if ctx.sink is None."""
+    from core.commands._common import get_active_sink, set_active_sink
+    from core.output import HumanSink, JsonSink
+
+    saved = get_active_sink()
+    sentinel = JsonSink()
+    set_active_sink(sentinel)
+    try:
+        captured = {}
+
+        async def _capturing_handler(ctx):
+            captured["sink"] = ctx.sink
+
+        original = cmd_pkg.COMMANDS["/help"]
+        cmd_pkg.COMMANDS["/help"] = _capturing_handler
+        try:
+            ctx = _ctx(cmd_pkg, "/help", session=fake_session)
+            assert ctx.sink is None  # not pre-set by caller
+            asyncio.run(cmd_pkg.dispatch(ctx))
+            assert captured["sink"] is sentinel
+            assert ctx.sink is sentinel  # dispatch mutated the same ctx
+        finally:
+            cmd_pkg.COMMANDS["/help"] = original
+    finally:
+        # Reset to prior sink to avoid bleeding into other tests.
+        set_active_sink(saved if not isinstance(saved, HumanSink) else None)
+
+
+def test_keys_command_emits_json_with_jsonsink(cmd_pkg, fake_session, capsys):
+    """/keys with JsonSink should emit one NDJSON line of api_key_env -> bool."""
+    import json
+    from core.output import JsonSink
+
+    ctx = cmd_pkg.CommandContext(
+        verb="/keys", arg="", arg2="", session=fake_session, sink=JsonSink(),
+    )
+    asyncio.run(cmd_pkg.dispatch(ctx))
+    out = capsys.readouterr().out.strip().splitlines()
+    assert len(out) == 1, f"expected exactly one JSON line, got {len(out)}: {out!r}"
+    payload = json.loads(out[0])
+    assert payload["type"] == "json"
+    # The data field is a dict mapping env-var name -> bool.
+    assert isinstance(payload["data"], dict)
+    for env, status in payload["data"].items():
+        assert env.endswith("_API_KEY") or env.endswith("_KEY"), env
+        assert isinstance(status, bool)

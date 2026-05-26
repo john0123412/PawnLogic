@@ -28,11 +28,16 @@ class CommandContext:
         arg:     First positional argument after the verb (may be empty).
         arg2:    Remainder of the line after `arg` (may be empty).
         session: The active AgentSession instance.
+        sink:    Output sink (HumanSink or JsonSink). If left as None,
+                 `dispatch()` will inject the process-wide active sink
+                 from `core.commands._common.get_active_sink()` before
+                 invoking the handler.
     """
     verb: str
     arg: str
     arg2: str
     session: Any  # AgentSession; kept loose to avoid circular import
+    sink: Any = None  # HumanSink | JsonSink; populated by dispatch()
 
 
 # ────────────────────────────────────────────────────────
@@ -66,7 +71,14 @@ async def dispatch(ctx: CommandContext) -> Any:
     Looks up `ctx.verb` in COMMANDS (populated by @register decorators).
     If unknown, prints a friendly error consistent with the legacy
     behavior and returns None.
+
+    If `ctx.sink` is None, the process-wide active sink (set once by
+    main() at startup) is injected so handlers can rely on it.
     """
+    if ctx.sink is None:
+        from core.commands._common import get_active_sink
+        ctx.sink = get_active_sink()
+
     handler = COMMANDS.get(ctx.verb)
     if handler is not None:
         return await handler(ctx)
