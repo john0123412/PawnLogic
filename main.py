@@ -592,6 +592,12 @@ async def main():
     config.QUIET_MODE = args.quiet  # mutate the single canonical flag in config
     _runtime_state.quiet_mode = args.quiet  # sync to state
 
+    # ── 输出 sink（阶段 2 接入点）──────────────────
+    # 选择人读 / JSON 输出。该对象将在后续步骤传入各 command handler，
+    # 当前仅初始化，未被使用。
+    from core.output import HumanSink, JsonSink
+    sink = JsonSink() if args.json else HumanSink()  # noqa: F841
+
     # ★ 初始化 loguru 双端输出
     # · QUIET_MODE 下终端只输出 WARNING 及以上，减少干扰
     # · 文件始终记录 DEBUG 级别，保留完整诊断信息
