@@ -8,6 +8,8 @@ without risk of circular imports.
 
 from __future__ import annotations
 
+from typing import Optional
+
 from config import DYNAMIC_CONFIG
 from utils.ansi import c, CYAN
 
@@ -39,4 +41,43 @@ def fmt_config() -> str:
     )
 
 
-__all__ = ["EXIT_SENTINEL", "fmt_config"]
+# ────────────────────────────────────────────────────────
+# Deferred history rendering
+# ────────────────────────────────────────────────────────
+# /load and /resume commands can replace the full conversation history.
+# The REPL loop in main.py wants to render that new history *before* the
+# next prompt_async call (so it appears above the prompt). Since the
+# command handlers run inside the REPL's iteration, they can't render
+# directly without conflicting with the prompt.
+#
+# Pattern:
+#   set_deferred_history(session.messages)   # called by /load, /resume,
+#                                            # and /chat (auto-resume)
+#   ...
+#   msgs = take_deferred_history()           # called by REPL loop;
+#                                            # returns msgs once and clears
+#
+# Set from main.py too (startup auto-resume), so this lives in shared
+# state rather than being owned by a single module.
+_deferred_history: Optional[list] = None
+
+
+def set_deferred_history(msgs: list) -> None:
+    """Tell the REPL loop to render this message list before the next prompt."""
+    global _deferred_history
+    _deferred_history = list(msgs)
+
+
+def take_deferred_history() -> Optional[list]:
+    """Pop and return the deferred history list. Returns None if not set."""
+    global _deferred_history
+    snap, _deferred_history = _deferred_history, None
+    return snap
+
+
+__all__ = [
+    "EXIT_SENTINEL",
+    "fmt_config",
+    "set_deferred_history",
+    "take_deferred_history",
+]
