@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.0.3] - 2026-05-26
+
+### Refactor
+- Extract all 56 slash commands from `main.py` into `core/commands/`
+  (system / session / provider / workspace / tools)
+- `main.py` reduced from 3192 → 1102 lines (−65.5%)
+
+### Tests
+- Add dispatch registry and routing tests for `core/commands/`
+  (179 tests total)
+
+---
+
 ## [0.0.2] - 2026-05-25
 
 ### Fixed
