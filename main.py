@@ -14,7 +14,9 @@ PawnLogic — main.py
 import os, sys, shutil, getpass, argparse, time, asyncio
 
 # ── 退出哨兵值（handle_slash 返回此值表示用户请求退出）────
-_EXIT_SENTINEL = "__PAWN_EXIT__"
+# Re-exported from core.commands._common; the new system.py /exit handler
+# returns the same sentinel object so identity comparison still works.
+from core.commands._common import EXIT_SENTINEL as _EXIT_SENTINEL
 
 # ── 延迟渲染队列：handle_slash 设置此值，主循环在 prompt_async 前消费 ──
 _deferred_history: list | None = None
@@ -102,11 +104,9 @@ PROXY_STATUS = _install_proxy()
 import config  # kept for backward-compat attribute access
 from core.state import state as _runtime_state
 from config import (
-    VERSION, DYNAMIC_CONFIG, NORMAL_CONFIG,
-    TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX,
-    MODELS, DEFAULT_MODEL, DB_PATH, PROVIDERS,
+    VERSION, DYNAMIC_CONFIG,
+    MODELS, DB_PATH, PROVIDERS,
     validate_api_key, list_vision_models,
-    user_friendly_error,
     get_api_format, get_provider_config,
     save_custom_provider, remove_custom_provider,
     CUSTOM_PROVIDERS_PATH,
@@ -407,19 +407,6 @@ HELP_TEXT = f"""
   {c(YELLOW,"/exit")}  退出
 """
 
-# ════════════════════════════════════════════════════════
-# 配置显示
-# ════════════════════════════════════════════════════════
-
-def _fmt_config() -> str:
-    cfg = DYNAMIC_CONFIG
-    return (
-        f"  max_tokens      : {c(CYAN,str(cfg['max_tokens']))}  (每次 API 输出上限)\n"
-        f"  ctx_max_chars   : {c(CYAN,str(cfg['ctx_max_chars']))}  (~{cfg['ctx_max_chars']//4:,} tokens)\n"
-        f"  max_iter        : {c(CYAN,str(cfg['max_iter']))}  (工具调用轮次上限)\n"
-        f"  tool_max_chars  : {c(CYAN,str(cfg['tool_max_chars']))}\n"
-        f"  fetch_max_chars : {c(CYAN,str(cfg['fetch_max_chars']))}\n"
-    )
 
 # ════════════════════════════════════════════════════════
 # 模块 4.4：/init_project 命令实现
@@ -1318,21 +1305,33 @@ async def _provider_fetch(alias: str) -> None:
 # ════════════════════════════════════════════════════════
 
 async def handle_slash(cmd: str, session: AgentSession):
-    global _deferred_history
+    """Thin entry shell. Parses the raw line into a CommandContext and
+    forwards to the dispatcher in core.commands.
+    """
+    from core.commands import CommandContext, dispatch
     parts = cmd.strip().split(None, 2)
-    verb  = parts[0].lower()
-    arg   = parts[1].strip() if len(parts) > 1 else ""
-    arg2  = parts[2].strip() if len(parts) > 2 else ""
+    ctx = CommandContext(
+        verb = parts[0].lower(),
+        arg  = parts[1].strip() if len(parts) > 1 else "",
+        arg2 = parts[2].strip() if len(parts) > 2 else "",
+        session = session,
+    )
+    return await dispatch(ctx)
+
+
+async def _legacy_slash_dispatch(ctx):
+    """Legacy monolithic slash dispatcher (stage-1 migration shim).
+
+    The body is the original `handle_slash` implementation, kept verbatim
+    to minimize migration risk. Subsequent stages will extract individual
+    commands into core/commands/<theme>.py modules.
+    """
+    verb, arg, arg2 = ctx.verb, ctx.arg, ctx.arg2
+    session = ctx.session
+    global _deferred_history
 
     # ── 帮助 / 退出 ────────────────────────────────────
-    if verb == "/help":
-        print(HELP_TEXT)
-
-    elif verb in ("/exit", "/quit", "/q"):
-        return _EXIT_SENTINEL
-
-    # ── 模块 2：Key 管理 ────────────────────────────────
-    elif verb == "/setkey":
+    if verb == "/setkey":
         _run_key_wizard()
 
     elif verb == "/keys":
@@ -1423,27 +1422,6 @@ async def handle_slash(cmd: str, session: AgentSession):
             print(c(CYAN, "  ✓ 已切换到 DEV 模式（极致透明，显示所有细节）"))
 
     # ── 上下文 ─────────────────────────────────────────
-    elif verb == "/clear":
-        pinned = [m for m in session.messages if m.get("_pinned")]
-        session.messages.clear(); session._reset_system_prompt()
-        session.messages.extend(pinned)
-        state_exists = (Path(session.cwd) / STATE_FILENAME).exists()
-        state_note   = c(GREEN, "  (State.md 将在下轮自动注入)") if state_exists else ""
-        print(c(GREEN, f"  ✓ 已清空（保留 {len(pinned)} 条 Pin 消息）{state_note}"))
-
-    elif verb == "/context":
-        msgs   = session.messages
-        chars  = _ctx_chars(msgs)
-        pct    = chars / DYNAMIC_CONFIG["ctx_max_chars"] * 100
-        tok    = chars // 4
-        pinned = sum(1 for m in msgs if m.get("_pinned"))
-        filled = int(min(pct, 100)/100*30)
-        bcol   = RED if pct > 80 else (YELLOW if pct > 50 else GREEN)
-        bar    = c(bcol, "█"*filled) + c(GRAY, "░"*(30-filled))
-        warn   = c(YELLOW, "  ⚠ 超80%，建议 /clear") if pct > 80 else ""
-        print(f"\n  {c(BOLD,'上下文')}  {len(msgs)}条  Pin:{c(GREEN,str(pinned))}"
-              f"  ~{tok:,} tokens\n  [{bar}] {pct:.1f}%  {warn}\n")
-
     elif verb == "/pin":
         if arg == "msg":
             try:
@@ -1565,34 +1543,6 @@ async def handle_slash(cmd: str, session: AgentSession):
                 )
                 session.run_turn(_think_prefix + arg)
 
-    elif verb == "/ping":
-        # 极简保活请求，刷新缓存 TTL
-        _ping_msgs = [
-            {"role": "system", "content": "respond with 'pong' only."},
-            {"role": "user", "content": "ping"},
-        ]
-        _ping_buf = ""
-        print(c(CYAN, "  🏓 ping..."), end="", flush=True)
-        try:
-            for delta in stream_request(
-                _ping_msgs, session.model_alias,
-                max_tokens=16, tools_schema=None,
-            ):
-                if "_error" in delta:
-                    print(c(RED, f" ✗ {delta['_error']}"))
-                    break
-                choices = delta.get("choices") or []
-                if not choices:
-                    continue
-                chunk = choices[0].get("delta", {}).get("content", "")
-                _ping_buf += chunk
-            if _ping_buf:
-                print(c(GREEN, f" {_ping_buf.strip()} ✓"))
-            else:
-                print(c(GREEN, " pong ✓"))
-        except Exception as e:
-            print(c(RED, f" ✗ {e}"))
-
     elif verb == "/cd":
         target = arg or "~"
         try:
@@ -1616,20 +1566,6 @@ async def handle_slash(cmd: str, session: AgentSession):
                 "content": f"已载入 `{arg}` ({len(content)} 字符)"})
             print(c(GREEN, f"  ✓ 已载入 {arg}"))
 
-    elif verb == "/history":
-        print(c(CYAN, f"\n  {len(session.messages)} 条消息（序号不含 system）："))
-        seq = 0
-        for m in session.messages:
-            role    = m.get("role", "?")
-            content = str(m.get("content") or "")[:65].replace("\n", " ")
-            pin_tag = c(GREEN, " 📌") if m.get("_pinned") else "   "
-            if role == "system":
-                print(c(GRAY,  f"  [{'sys':9}]     {content[:50]}"))
-            else:
-                print(c(GRAY, f"  [{role:9}]") + c(CYAN, f"[{seq:3d}]") + pin_tag + f" {content}")
-                seq += 1
-
-    # ── 会话持久化 ──────────────────────────────────────
     elif verb == "/save":
         sid = session_save(session, arg)
         print(c(GREEN, f"  ✓ 已保存 session_id={sid}"))
@@ -1745,92 +1681,6 @@ async def handle_slash(cmd: str, session: AgentSession):
             print(c(GRAY,  "  State.md 已注入 System Prompt，/clear 后也会保持。"))
             print(c(GRAY,  f"  提示：直接说出任务，Agent 将遵循规格驱动格式执行并自动提交 git。"))
 
-    elif verb == "/state":
-        p = Path(session.cwd) / STATE_FILENAME
-        if p.exists():
-            print(c(BOLD, f"\n  {p}："))
-            print(p.read_text(encoding="utf-8"))
-        else:
-            print(c(GRAY, f"  当前目录没有 {STATE_FILENAME}。用 /init_project 创建。"))
-
-    # ── 三档预设 ────────────────────────────────────────
-    elif verb == "/low":
-        DYNAMIC_CONFIG.update(TIER_LOW)
-        session._reset_system_prompt()
-        print(c(GREEN,        "  ✓ /low 模式（日常 / 算法）")); print(_fmt_config())
-
-    elif verb == "/mid":
-        DYNAMIC_CONFIG.update(TIER_MID)
-        session._reset_system_prompt()
-        print(c(YELLOW,       "  ✓ /mid 模式（开发 / Pwn）")); print(_fmt_config())
-
-    elif verb == "/deep":
-        DYNAMIC_CONFIG.update(TIER_DEEP)
-        session._reset_system_prompt()
-        print(c(BOLD+MAGENTA, "  🔥 /deep 全火力")); print(_fmt_config())
-
-    elif verb == "/max":
-        DYNAMIC_CONFIG.update(TIER_MAX)
-        session._reset_system_prompt()
-        print(c(BOLD+RED, "  💀 /max 极限火力（iter=100, ctx=600k, 60min）")); print(_fmt_config())
-
-    elif verb == "/normal":
-        DYNAMIC_CONFIG.update(NORMAL_CONFIG)
-        session._reset_system_prompt()
-        print(c(GREEN, "  ✓ 已重置到 /mid")); print(_fmt_config())
-
-    elif verb == "/limits":
-        print(c(BOLD, "\n  当前运行时限制：")); print(_fmt_config())
-        print(c(GRAY, "  /low /mid /deep /max  |  /tokens /ctx /iter /toolsize /fetchsize"))
-
-    # ── 细粒度调节 ──────────────────────────────────────
-    elif verb == "/tokens":
-        if not arg: print(c(GRAY, f"  当前: {DYNAMIC_CONFIG['max_tokens']}  /tokens <n>"))
-        else:
-            try:
-                n = max(256, min(65536, int(arg)))
-                DYNAMIC_CONFIG["max_tokens"] = n
-                session._reset_system_prompt()
-                print(c(GREEN, f"  ✓ max_tokens={n}"))
-            except ValueError: print(c(RED, "  ✗ 无效数字"))
-
-    elif verb == "/ctx":
-        if not arg: print(c(GRAY, f"  当前: {DYNAMIC_CONFIG['ctx_max_chars']}  /ctx <n>"))
-        else:
-            try:
-                n = max(10_000, int(arg))
-                DYNAMIC_CONFIG["ctx_max_chars"] = n
-                DYNAMIC_CONFIG["ctx_trim_to"]   = int(n * .75)
-                session._reset_system_prompt()
-                print(c(GREEN, f"  ✓ ctx_max_chars={n}"))
-            except ValueError: print(c(RED, "  ✗ 无效数字"))
-
-    elif verb == "/iter":
-        if not arg: print(c(GRAY, f"  当前: {DYNAMIC_CONFIG['max_iter']}  /iter <n>"))
-        else:
-            try:
-                n = max(1, int(arg))
-                DYNAMIC_CONFIG["max_iter"] = n
-                print(c(GREEN, f"  ✓ max_iter={n}"))
-            except ValueError: print(c(RED, "  ✗ 无效数字"))
-
-    elif verb == "/toolsize":
-        if not arg: print(c(GRAY, f"  当前: {DYNAMIC_CONFIG['tool_max_chars']}"))
-        else:
-            try:
-                DYNAMIC_CONFIG["tool_max_chars"] = max(1000, int(arg))
-                print(c(GREEN, f"  ✓ tool_max_chars={DYNAMIC_CONFIG['tool_max_chars']}"))
-            except ValueError: print(c(RED, "  ✗ 无效数字"))
-
-    elif verb == "/fetchsize":
-        if not arg: print(c(GRAY, f"  当前: {DYNAMIC_CONFIG['fetch_max_chars']}"))
-        else:
-            try:
-                DYNAMIC_CONFIG["fetch_max_chars"] = max(1000, int(arg))
-                print(c(GREEN, f"  ✓ fetch_max_chars={DYNAMIC_CONFIG['fetch_max_chars']}"))
-            except ValueError: print(c(RED, "  ✗ 无效数字"))
-
-    # ── 工具状态 ────────────────────────────────────────
     elif verb == "/webstatus":
         print(c(BOLD, "\n  网页抓取工具状态：")); print(web_tool_status())
 
@@ -1844,57 +1694,6 @@ async def handle_slash(cmd: str, session: AgentSession):
     elif verb == "/pwnenv":
         print(tool_pwn_env({}))
 
-    elif verb == "/stats":
-        pt  = session.total_prompt_tokens
-        ct  = session.total_completion_tokens
-        tt  = session.total_tool_calls
-        tot = pt + ct
-        est_usd = tot / 1_000_000 * 1.50
-        if tot + tt == 0:
-            print(c(GRAY, "  (本次会话暂无 API 调用记录)"))
-        elif _runtime_state.quiet_mode:
-            print(c(GRAY, f"  stats: ↑{pt:,} ↓{ct:,} total={tot:,} tools={tt} ~${est_usd:.4f}"))
-        else:
-            print(c(BOLD, "\n  ╔══ 会话用量审计 ════════════════════════════╗"))
-            print(f"  ║  Prompt tokens    : {c(CYAN, f'{pt:>10,}')}               ║")
-            print(f"  ║  Completion tokens: {c(CYAN, f'{ct:>10,}')}               ║")
-            print(f"  ║  Total tokens     : {c(YELLOW, f'{tot:>10,}')}               ║")
-            print(f"  ║  Tool calls       : {c(GREEN, f'{tt:>10,}')}               ║")
-            print(f"  ║  Est. cost        : {c(GRAY, f'~${est_usd:.4f} USD'):>18}         ║")
-            print(c(BOLD,  "  ╚══════════════════════════════════════════════╝"))
-            print(c(GRAY, "  (成本估算基于 $1.50/1M tokens 均值，仅供参考)"))
-
-    # ── P1: /time 命令 ───────────────────────────────────
-    elif verb == "/time":
-        budget = DYNAMIC_CONFIG.get("time_budget_sec", 0)
-        if arg and arg.strip().isdigit():
-            new_budget = max(0, int(arg.strip()))
-            DYNAMIC_CONFIG["time_budget_sec"] = new_budget
-            session._time_budget_sec = new_budget
-            session._reset_system_prompt()
-            if new_budget > 0:
-                m, s = divmod(new_budget, 60)
-                print(c(GREEN, f"  ✓ 时间预算已设为 {m}m{s}s"))
-            else:
-                print(c(GREEN, "  ✓ 时间预算已关闭（不限时）"))
-        else:
-            if budget > 0:
-                m, s = divmod(budget, 60)
-                elapsed = time.monotonic() - session._turn_start_time if session._turn_start_time else 0
-                remaining = max(0, budget - elapsed)
-                rm, rs = divmod(int(remaining), 60)
-                mode = c(RED, " [URGENT]") if session._urgent_mode else ""
-                print(c(BOLD, "\n  ⏱  时间预算："))
-                print(f"  预算: {c(CYAN, f'{m}m{s}s')}")
-                print(f"  已用: {c(YELLOW, f'{int(elapsed)}s')}")
-                print(f"  剩余: {c(GREEN if remaining > 30 else RED, f'{rm}m{rs}s')}{mode}")
-                print(c(GRAY, f"\n  /time <秒数> 修改 | /time 0 关闭"))
-            else:
-                print(c(GRAY, "  时间预算未设置（不限时）"))
-                print(c(GRAY, "  /time <秒数> 设置 | 例: /time 300 = 5分钟"))
-
-    # ── /worker：子任务 Worker 模型选择 ───────────────────
-    # ── P3: /docker 命令 ────────────────────────────────
     elif verb == "/docker":
         from tools.docker_sandbox import (
             _get_docker_client, docker_status, _active_containers, DEFAULT_DOCKER_IMAGES,
@@ -2013,34 +1812,6 @@ async def handle_slash(cmd: str, session: AgentSession):
                 print(c(RED, f"  ✗ 未知模型 '{target}'。用 /worker 查看候选列表。"))
 
     # ── P0: /failures 命令 ────────────────────────────────
-    elif verb == "/failures":
-        sub = arg.lower().strip() if arg else "list"
-        if sub == "clear":
-            n = clear_failures()
-            print(c(GREEN, f"  ✓ 已清空 {n} 条失败记录"))
-        elif sub == "list" or sub.isdigit():
-            n = int(sub) if sub.isdigit() else 20
-            rows = list_failures(n)
-            if not rows:
-                print(c(GREEN, "  ✓ 暂无失败记录（防御性审计数据库为空）"))
-            else:
-                print(c(BOLD, f"\n  失败记录（最近 {len(rows)} 条）："))
-                for i, r in enumerate(rows):
-                    etype = r["error_type"] or "?"
-                    ts = r["created_at"][:16] if r["created_at"] else ""
-                    tool = r["tool_name"]
-                    msg = r["error_msg"][:80].replace("\n", " ")
-                    print(
-                        c(GRAY, f"  [{i+1:2d}] ")
-                        + c(RED, f"{tool:20}")
-                        + c(YELLOW, f" {etype:15}")
-                        + c(GRAY, f" {ts}")
-                    )
-                    print(c(GRAY, f"       {msg}"))
-        else:
-            print(c(GRAY, "  用法: /failures [list|clear|N]"))
-
-    # ── /memo ────────────────────────────────────────────
     elif verb == "/memo":
         raw_content = (arg + " " + arg2).strip()
         result = _memo_to_skills(session, raw_content, verbose=True)
@@ -2251,6 +2022,14 @@ async def handle_slash(cmd: str, session: AgentSession):
 
     else:
         print(c(GRAY, f"  未知命令 '{verb}'，输入 /help"))
+
+
+# Register the legacy dispatcher with the new core.commands package.
+# This is a temporary migration shim; once all commands are extracted into
+# core/commands/<theme>.py, the registration call (and _legacy_slash_dispatch
+# itself) will be removed.
+from core.commands import set_legacy_dispatcher as _set_legacy_dispatcher
+_set_legacy_dispatcher(_legacy_slash_dispatch)
 
 # ════════════════════════════════════════════════════════
 # main
