@@ -47,7 +47,7 @@ from core.logger import logger
 # ════════════════════════════════════════════════════════
 # 常量
 # ════════════════════════════════════════════════════════
-DEFAULT_TIMEOUT  = 120                     # 单次 call_tool 默认超时（秒）
+DEFAULT_TIMEOUT  = 30                      # 单次 call_tool 默认超时（秒）
 STARTUP_TIMEOUT  = 60                      # 全体 server 启动总超时
 NAME_SEPARATOR   = "__"                    # 工具名前缀分隔符
 WORKSPACE_ASSETS = Path.home() / ".pawnlogic" / "workspace" / "mcp_assets"
@@ -370,7 +370,8 @@ class MCPClientManager:
                     self._call_async(server, original, args or {}),
                     self._loop,
                 )
-                return fut.result(timeout=timeout)
+                # Allow headroom for up to 3 attempts + backoff waits
+                return fut.result(timeout=timeout * 3 + 12)
             except asyncio.TimeoutError:
                 return f"[MCP error] {prefixed_name} timed out after {timeout}s"
             except Exception as e:
@@ -383,15 +384,34 @@ class MCPClientManager:
         session = self._sessions.get(server)
         if session is None:
             return f"[MCP] server '{server}' not connected"
-        try:
-            result = await session.call_tool(tool_name, args)
-        except Exception as e:
-            return f"[MCP] call_tool failed: {type(e).__name__}: {e}"
+        last_err: BaseException | None = None
+        for attempt in range(3):
+            try:
+                result = await asyncio.wait_for(
+                    session.call_tool(tool_name, args),
+                    timeout=self.discovered_tools.get(
+                        f"{server}{NAME_SEPARATOR}{tool_name}", {}
+                    ).get("timeout", DEFAULT_TIMEOUT),
+                )
+            except (asyncio.TimeoutError, ConnectionError, OSError) as e:
+                last_err = e
+                if attempt < 2:
+                    wait = min(2 ** attempt, 8)
+                    logger.warning(
+                        f"[MCP] {server}/{tool_name} attempt {attempt+1} failed, "
+                        f"retrying in {wait}s: {e}"
+                    )
+                    await asyncio.sleep(wait)
+                continue
+            except Exception as e:
+                return f"[MCP] call_tool failed: {type(e).__name__}: {e}"
 
-        text = _flatten_mcp_content(result.content, server)
-        if getattr(result, "isError", False):
-            return f"[MCP tool error from {server}] {text}"
-        return text
+            text = _flatten_mcp_content(result.content, server)
+            if getattr(result, "isError", False):
+                return f"[MCP tool error from {server}] {text}"
+            return text
+
+        return f"[MCP] {server}/{tool_name} failed after 3 attempts: {type(last_err).__name__}: {last_err}"
 
 
 # ════════════════════════════════════════════════════════
