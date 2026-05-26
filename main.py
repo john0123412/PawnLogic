@@ -686,9 +686,14 @@ async def main():
 
     # ★ 初始化 loguru 双端输出
     # · QUIET_MODE 下终端只输出 WARNING 及以上，减少干扰
+    # · --json 模式下同样强制 WARNING，避免 INFO/DEBUG 混入 NDJSON 消费者
     # · 文件始终记录 DEBUG 级别，保留完整诊断信息
     setup_logger(
-        stderr_level="WARNING" if (_runtime_state.quiet_mode or _runtime_state.user_mode) else "INFO",
+        stderr_level=(
+            "WARNING"
+            if (args.json or _runtime_state.quiet_mode or _runtime_state.user_mode)
+            else "INFO"
+        ),
         file_level="DEBUG",
     )
     logger.info(

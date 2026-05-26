@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.0.4] - 2026-05-26
+
+### Added
+- `--eval <prompt>` single-shot execution mode (non-interactive)
+- `--json` machine-readable output (NDJSON) and `--session <id>` flags
+- `HumanSink` / `JsonSink` output abstraction (`core/output.py`)
+- JSON output for `/sessions`, `/provider list`, `/keys`
+
+### Fixed
+- Force loguru stderr level to WARNING in `--json` mode so INFO/DEBUG
+  log lines never pollute the NDJSON consumer
+
+### Tests
+- 7 new tests for `--eval` flow and JSON command output
+
+---
+
 ## [0.0.3] - 2026-05-26
 
 ### Refactor
