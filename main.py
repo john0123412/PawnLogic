@@ -573,6 +573,21 @@ async def main():
         default=None,
         help="Start with a specific model alias (e.g. --model ds-chat).",
     )
+    parser.add_argument(
+        "--eval", "-e",
+        metavar="PROMPT",
+        help="Run a single prompt and exit (non-interactive).",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON (use with --eval or query commands).",
+    )
+    parser.add_argument(
+        "--session", "-s",
+        metavar="ID",
+        help="Resume a specific session by ID (use with --eval).",
+    )
     args, _ = parser.parse_known_args()
     config.QUIET_MODE = args.quiet  # mutate the single canonical flag in config
     _runtime_state.quiet_mode = args.quiet  # sync to state
