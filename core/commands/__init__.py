@@ -1,25 +1,22 @@
 """
 Slash command dispatch framework.
 
-This package will eventually contain all slash command handlers organized by
-theme (system/session/provider/workspace/tools). During the migration
-(stage 1 of the main.py refactor), the monolithic dispatcher in main.py
-registers itself via `set_legacy_dispatcher` and `dispatch` falls back to it
-for verbs that have not yet been migrated. As individual commands move into
-their own modules in `core/commands/<theme>.py`, they declare themselves with
-the `@register("/verb")` decorator and the legacy fallback shrinks.
+Command handlers are organized by theme into modules under this package
+(system / session / provider / workspace / tools). Each module declares
+its handlers with the `@register("/verb")` decorator at import time, and
+`dispatch(ctx)` looks them up in the global `COMMANDS` dict.
 
 Public API:
     - CommandContext: dataclass passed to every command handler
     - register(*verbs): decorator that binds verbs to a handler
     - dispatch(ctx): main entry point called by main.py's `handle_slash`
-    - set_legacy_dispatcher(fn): migration hook (temporary)
+    - COMMANDS: the registry, exposed for introspection
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable
 
 
 @dataclass
@@ -61,43 +58,23 @@ def register(*verbs: str) -> Callable[[Handler], Handler]:
 
 
 # ────────────────────────────────────────────────────────
-# Migration hook (temporary)
-# ────────────────────────────────────────────────────────
-_LEGACY_DISPATCHER: Optional[Handler] = None
-
-
-def set_legacy_dispatcher(fn: Handler) -> None:
-    """Register the monolithic legacy dispatcher.
-
-    Called once from main.py during stage-1 migration. Once all commands
-    have been extracted, this function and its global will be removed.
-    """
-    global _LEGACY_DISPATCHER
-    _LEGACY_DISPATCHER = fn
-
-
-# ────────────────────────────────────────────────────────
 # Dispatch
 # ────────────────────────────────────────────────────────
 async def dispatch(ctx: CommandContext) -> Any:
     """Route a slash command to its handler.
 
-    Order:
-      1. Look up `ctx.verb` in COMMANDS (populated by @register decorators).
-      2. If no match, fall back to the legacy dispatcher in main.py.
-
-    Raises RuntimeError only if neither a registered handler nor the
-    legacy fallback is available, which should be impossible in normal use.
+    Looks up `ctx.verb` in COMMANDS (populated by @register decorators).
+    If unknown, prints a friendly error consistent with the legacy
+    behavior and returns None.
     """
     handler = COMMANDS.get(ctx.verb)
     if handler is not None:
         return await handler(ctx)
 
-    if _LEGACY_DISPATCHER is None:
-        raise RuntimeError(
-            f"No handler for {ctx.verb!r} and no legacy dispatcher registered."
-        )
-    return await _LEGACY_DISPATCHER(ctx)
+    # Unknown verb — match legacy behavior of printing a hint.
+    from utils.ansi import c, GRAY
+    print(c(GRAY, f"  未知命令 '{ctx.verb}'，输入 /help"))
+    return None
 
 
 # ────────────────────────────────────────────────────────
@@ -109,12 +86,12 @@ from . import system  # noqa: E402, F401
 from . import session  # noqa: E402, F401
 from . import provider  # noqa: E402, F401
 from . import workspace  # noqa: E402, F401
+from . import tools  # noqa: E402, F401
 
 
 __all__ = [
     "CommandContext",
     "register",
     "dispatch",
-    "set_legacy_dispatcher",
     "COMMANDS",
 ]
