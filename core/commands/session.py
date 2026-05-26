@@ -202,7 +202,7 @@ def _handle_chat(arg: str, arg2: str, session) -> None:
                 if m["content_full"].count("\n") > 8:
                     print(c(GRAY, f"     ...（共 {m['content_full'].count(chr(10)) + 1} 行）"))
             elif role == "tool":
-                print(c(GRAY, f"  🔩 tool") + f" {seq_tag} {ts}  {m['preview']}")
+                print(c(GRAY, "  🔩 tool") + f" {seq_tag} {ts}  {m['preview']}")
             print()
 
     # ── /chat export <id|n> [path] ──────────────────────
