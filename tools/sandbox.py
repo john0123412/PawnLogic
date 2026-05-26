@@ -70,6 +70,13 @@ def _sandbox_preexec(cpu_timeout: int) -> None:
     except (ValueError, resource.error):
         pass
 
+    # 文件写入上限：64 MB（防止填满磁盘）
+    fsize = 64 * 1024 * 1024
+    try:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))
+    except (ValueError, resource.error, AttributeError):
+        pass
+
     # 进程数限制（防 fork bomb）—— 仅 Linux
     try:
         resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))
@@ -210,7 +217,7 @@ def tool_run_code(a: dict) -> str:
             print(c(YELLOW, f"  🐍 python code{ext}"))
             out, rc = _run_limited(
                 [py_exec, src],
-                timeout=timeout, cwd=cwd, input_data=stdin_data,
+                timeout=timeout, cwd=tmpdir, input_data=stdin_data,
             )
             output.append(out)
             output.append(f"[exit {rc}]")
@@ -257,7 +264,7 @@ def tool_run_code(a: dict) -> str:
             )
             print(c(YELLOW, f"  ▶ {run_cmd[:90]}"))
             out, rc = _run_limited(
-                run_cmd, timeout=timeout, cwd=cwd,
+                run_cmd, timeout=timeout, cwd=tmpdir,
                 input_data=stdin_data, shell=True,
             )
             output.append(out)
