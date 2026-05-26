@@ -438,6 +438,22 @@ async def cmd_resume(ctx: CommandContext) -> None:
 
 @register("/sessions")
 async def cmd_sessions(ctx: CommandContext) -> None:
+    from core.output import JsonSink
+    if isinstance(ctx.sink, JsonSink):
+        rows = list_sessions(20)
+        data = [
+            {
+                "id":         r["id"],
+                "name":       r["name"] or r["auto_name"] or r["workspace_alias"] or "",
+                "updated_at": r["updated_at"],
+                "msg_count":  r["msg_count"],
+                "model":      r["model"],
+                "tags":       r["tags"] or "",
+            }
+            for r in rows
+        ]
+        ctx.sink.print_json(data)
+        return
     print(c(BOLD, f"\n  已保存会话 (DB: {DB_PATH})："))
     print(session_list())
 

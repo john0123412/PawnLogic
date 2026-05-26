@@ -241,7 +241,34 @@ def _visible_models() -> dict:
 # ════════════════════════════════════════════════════════
 
 def _provider_list() -> None:
-    """列出所有 Provider 状态。"""
+    """列出所有 Provider 状态。人读路径（sub-commands of /provider 不带 ctx）。
+
+    JSON 路径从进程级 active sink 读取；如果是 JsonSink，发射结构化数据，
+    否则保持原有的彩色表格输出。
+    """
+    from core.commands._common import get_active_sink
+    from core.output import JsonSink
+    sink = get_active_sink()
+    if isinstance(sink, JsonSink):
+        data = []
+        for pname, pinfo in PROVIDERS.items():
+            env = pinfo.get("api_key_env", "")
+            models_for_provider = [
+                alias for alias, m in MODELS.items()
+                if m.get("provider", "") == pname
+            ]
+            data.append({
+                "name":       pname,
+                "label":      pinfo.get("label", pname),
+                "api_format": pinfo.get("api_format", "openai"),
+                "base_url":   pinfo.get("base_url", ""),
+                "key_env":    env,
+                "key_set":    bool(os.environ.get(env, "")) if env else True,
+                "models":     models_for_provider,
+            })
+        sink.print_json(data)
+        return
+
     print(c(BOLD, "\n  Provider 列表："))
     for pname, pinfo in PROVIDERS.items():
         fmt = pinfo.get("api_format", "openai")
@@ -792,6 +819,16 @@ async def cmd_setkey(ctx: CommandContext) -> None:
 
 @register("/keys")
 async def cmd_keys(ctx: CommandContext) -> None:
+    from core.output import JsonSink
+    if isinstance(ctx.sink, JsonSink):
+        data = {}
+        for pinfo in PROVIDERS.values():
+            env = pinfo.get("api_key_env")
+            if not env:
+                continue
+            data[env] = bool(os.environ.get(env, ""))
+        ctx.sink.print_json(data)
+        return
     print(c(BOLD, "\n  API Key 配置状态："))
     for pname, pinfo in PROVIDERS.items():
         env = pinfo.get("api_key_env")

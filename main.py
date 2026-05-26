@@ -677,10 +677,12 @@ async def main():
     _runtime_state.quiet_mode = args.quiet  # sync to state
 
     # ── 输出 sink（阶段 2 接入点）──────────────────
-    # 选择人读 / JSON 输出。该对象将在后续步骤传入各 command handler，
-    # 当前仅初始化，未被使用。
+    # 选择人读 / JSON 输出。同时写入进程级单例，以便 dispatch()
+    # 在 ctx.sink 未填时自动注入。
     from core.output import HumanSink, JsonSink
+    from core.commands._common import set_active_sink
     sink = JsonSink() if args.json else HumanSink()
+    set_active_sink(sink)
 
     # ★ 初始化 loguru 双端输出
     # · QUIET_MODE 下终端只输出 WARNING 及以上，减少干扰
