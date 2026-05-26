@@ -553,6 +553,90 @@ def first_run_wizard() -> None:
     print("═" * 56 + "\n")
 
 
+# ════════════════════════════════════════════════════════
+# Stage-2: --eval single-shot execution mode
+# ════════════════════════════════════════════════════════
+
+async def _run_eval_mode(session: AgentSession, args, sink) -> None:
+    """Single-shot run: execute one prompt and exit.
+
+    Behavior:
+      · If `--session <id>` is given, load that session first; on failure
+        emit a structured error and exit non-zero.
+      · Run `session.run_turn(args.eval)`. In human (default) mode, the
+        agent's streaming output flows directly to stdout exactly as it
+        would in the REPL.
+      · In JSON mode the streaming output is captured (so the JSON wire
+        stays clean), and a single structured `result` event is emitted
+        from the final assistant message in `session.messages`.
+      · Always shut down MCP subprocesses on exit.
+    """
+    is_json = bool(args.json)
+
+    # 1. Optionally load a saved session before running.
+    if args.session:
+        result = session_load(session, args.session)
+        if not result.startswith("OK"):
+            if is_json:
+                sink.print_json({
+                    "type":  "error",
+                    "stage": "session_load",
+                    "query": args.session,
+                    "detail": result,
+                })
+            else:
+                sink.print(c(RED, f"  ✗ 会话加载失败: {result}"))
+            detach_external_mcp_tools()
+            sys.exit(2)
+
+    # 2. Execute one turn.
+    if is_json:
+        # Suppress streaming prints so the JSON wire stays valid;
+        # we re-emit the final assistant text as a structured event.
+        import contextlib
+        import io
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                session.run_turn(args.eval)
+        except Exception as exc:  # noqa: BLE001
+            sink.print_json({
+                "type":   "error",
+                "stage":  "run_turn",
+                "detail": str(exc),
+            })
+            detach_external_mcp_tools()
+            sys.exit(1)
+
+        last_assistant = next(
+            (m.get("content", "") for m in reversed(session.messages)
+             if m.get("role") == "assistant" and m.get("content")),
+            "",
+        )
+        sink.print_json({
+            "type":         "result",
+            "prompt":       args.eval,
+            "response":     last_assistant,
+            "session_id":   session.session_id,
+            "model":        session.model_alias,
+            "prompt_tokens":     session.total_prompt_tokens,
+            "completion_tokens": session.total_completion_tokens,
+            "tool_calls":        session.total_tool_calls,
+        })
+    else:
+        # Human mode — let run_turn print directly, exactly as in the REPL.
+        try:
+            session.run_turn(args.eval)
+        except Exception as exc:  # noqa: BLE001
+            sink.print(c(RED, f"  ✗ {exc}"))
+            detach_external_mcp_tools()
+            sys.exit(1)
+
+    # 3. Clean shutdown of MCP subprocesses.
+    detach_external_mcp_tools()
+    sys.exit(0)
+
+
 async def main():
     prompt_toolkit_enabled = _HAS_PROMPT_TOOLKIT
     # ── CLI 参数解析 ─────────────────────────────────────
@@ -596,7 +680,7 @@ async def main():
     # 选择人读 / JSON 输出。该对象将在后续步骤传入各 command handler，
     # 当前仅初始化，未被使用。
     from core.output import HumanSink, JsonSink
-    sink = JsonSink() if args.json else HumanSink()  # noqa: F841
+    sink = JsonSink() if args.json else HumanSink()
 
     # ★ 初始化 loguru 双端输出
     # · QUIET_MODE 下终端只输出 WARNING 及以上，减少干扰
@@ -651,6 +735,13 @@ async def main():
             session.model_alias = args.model
         else:
             print(c(YELLOW, f"  ⚠ --model '{args.model}' 未知，使用默认模型"))
+
+    # ── --eval / --session 单次执行模式（阶段 2 步骤 3）──────────────
+    # 这里在 banner / wizard 之前拦截，避免装饰性输出污染 JSON 流。
+    if args.eval:
+        await _run_eval_mode(session, args, sink)
+        return
+
 
     # 启动时工具可用性检测
     BIN_TOOLS = ["gcc","g++","gdb","node","ROPgadget","checksec","objdump","pandoc"]
