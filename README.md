@@ -1,7 +1,9 @@
+**[English](README.md)** | [中文](README_CN.md)
+
 # 🤖 PawnLogic
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.0.4-blue.svg)](config/paths.py)
+[![Version](https://img.shields.io/badge/version-0.0.5-blue.svg)](config/paths.py)
 [![PyPI](https://img.shields.io/pypi/v/pawnlogic.svg?cache=no)](https://pypi.org/project/pawnlogic/)
 [![CI](https://github.com/john0123412/PawnLogic/actions/workflows/main_ci.yml/badge.svg)](https://github.com/john0123412/PawnLogic/actions/workflows/main_ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
@@ -29,6 +31,21 @@ Global `pawn` command:
 ```bash
 chmod +x pawn.sh && ln -sf "$(pwd)/pawn.sh" ~/.local/bin/pawn
 ```
+
+**CLI usage:**
+```bash
+pawn                              # interactive mode
+pawn --eval "your prompt"         # single execution then exit
+pawn --eval "prompt" --json       # JSON output (for scripting)
+```
+
+## What's New in v0.0.5
+
+- **`--eval` / `--json` / `--session` CLI flags** — non-interactive single-shot execution, JSON output for pipelines, resume a named session
+- **Sandbox security hardening** — all interpreted languages (Python/bash/node/go) now execute in isolated tmpdir; added `RLIMIT_FSIZE` (64 MB) write limit
+- **MCP auto-retry** — external tool calls retry up to 3× with exponential backoff on timeout/connection errors
+- **Session checkpoint** — mid-turn autosave every 5 iterations; `OperationalError` retry on SQLite writes
+- **Key display masking** — unified `mask_key()` across `/keys`, `/provider list`, and `/model`
 
 ## Key Capabilities
 

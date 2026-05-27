@@ -1,6 +1,9 @@
+[English](README.md) | **[中文](README_CN.md)**
+
 # 🤖 PawnLogic
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.0.5-blue.svg)](config/paths.py)
 [![PyPI](https://img.shields.io/pypi/v/pawnlogic.svg)](https://pypi.org/project/pawnlogic/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
@@ -27,6 +30,21 @@ python main.py   # 首次运行自动进入 API 配置向导
 ```bash
 chmod +x pawn.sh && ln -sf "$(pwd)/pawn.sh" ~/.local/bin/pawn
 ```
+
+**CLI 用法：**
+```bash
+pawn                              # 交互模式
+pawn --eval "your prompt"         # 单次执行后退出
+pawn --eval "prompt" --json       # JSON 输出（供脚本调用）
+```
+
+## v0.0.5 新特性
+
+- **`--eval` / `--json` / `--session` CLI 参数** — 非交互式单次执行、JSON 输出供管道调用、恢复指定会话
+- **沙箱安全加固** — 所有解释型语言（Python/bash/node/go）现在在隔离 tmpdir 中执行；新增 `RLIMIT_FSIZE`（64 MB）写入限制
+- **MCP 自动重试** — 外部工具调用在超时/连接错误时自动重试最多 3 次（指数退避）
+- **Session checkpoint** — 每 5 轮迭代自动保存中间状态；SQLite 写入失败时自动重试
+- **Key 显示脱敏** — `/keys`、`/provider list`、`/model` 统一使用 `mask_key()` 脱敏显示
 
 ## 核心能力
 
