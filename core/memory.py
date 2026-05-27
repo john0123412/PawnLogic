@@ -15,9 +15,10 @@ core/memory.py — SQLite 数据库管理器
   · 增量消息保存
 """
 
-import sqlite3, json, re, os, hashlib, threading
+import sqlite3, json, re, os, hashlib, threading, time
 from datetime import datetime
 from config import DB_PATH
+from core.logger import logger
 
 # ════════════════════════════════════════════════════════
 # 线程本地连接池
@@ -651,37 +652,42 @@ def save_messages(session_id: str, messages: list):
     prev_pins     = _pinned_snapshot.get(session_id, {})
     needs_full    = (last_seq == -1 or current_total < last_seq + 1)
 
-    try:
-        with get_conn() as conn:
-            if needs_full:
-                conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
-                if all_rows:
-                    conn.executemany("""
-                        INSERT INTO messages
-                            (session_id, seq, role, content, tool_calls, tool_call_id,
-                             is_pinned, reasoning_content, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, all_rows)
+    for _retry in range(3):
+        try:
+            with get_conn() as conn:
+                if needs_full:
+                    conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
+                    if all_rows:
+                        conn.executemany("""
+                            INSERT INTO messages
+                                (session_id, seq, role, content, tool_calls, tool_call_id,
+                                 is_pinned, reasoning_content, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, all_rows)
+                else:
+                    new_rows = [r for r in all_rows if r[1] > last_seq]
+                    if new_rows:
+                        conn.executemany("""
+                            INSERT OR REPLACE INTO messages
+                                (session_id, seq, role, content, tool_calls, tool_call_id,
+                                 is_pinned, reasoning_content, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, new_rows)
+                    cur_pins = {r[1]: r[6] for r in all_rows}
+                    for seq_idx, pinned in cur_pins.items():
+                        if prev_pins.get(seq_idx, 0) != pinned:
+                            conn.execute(
+                                "UPDATE messages SET is_pinned=? WHERE session_id=? AND seq=?",
+                                (pinned, session_id, seq_idx),
+                            )
+            _last_saved_seq[session_id]  = current_total - 1
+            _pinned_snapshot[session_id] = {r[1]: r[6] for r in all_rows}
+            break
+        except sqlite3.OperationalError as e:
+            if _retry == 2:
+                logger.error(f"save_messages 持续失败（3次重试）: {e}")
             else:
-                new_rows = [r for r in all_rows if r[1] > last_seq]
-                if new_rows:
-                    conn.executemany("""
-                        INSERT OR REPLACE INTO messages
-                            (session_id, seq, role, content, tool_calls, tool_call_id,
-                             is_pinned, reasoning_content, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, new_rows)
-                cur_pins = {r[1]: r[6] for r in all_rows}
-                for seq_idx, pinned in cur_pins.items():
-                    if prev_pins.get(seq_idx, 0) != pinned:
-                        conn.execute(
-                            "UPDATE messages SET is_pinned=? WHERE session_id=? AND seq=?",
-                            (pinned, session_id, seq_idx),
-                        )
-        _last_saved_seq[session_id]  = current_total - 1
-        _pinned_snapshot[session_id] = {r[1]: r[6] for r in all_rows}
-    except sqlite3.OperationalError:
-        pass   # busy → 静默，下次重试
+                time.sleep(0.1 * (_retry + 1))
 
 def load_messages(session_id: str) -> list[dict]:
     with get_conn() as conn:
