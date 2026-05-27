@@ -1746,6 +1746,10 @@ class AgentSession:
 
         for iteration in range(max_iter):
             try:
+                # ── Mid-turn checkpoint: 每 5 轮保存一次中间状态 ──
+                if iteration > 0 and iteration % 5 == 0:
+                    self._autosave()
+
                 # ── P6.5: 首轮迭代显示技能包加载状态 ────────
                 if iteration == 0 and self._loaded_skill_packs:
                     if USER_MODE:
@@ -2557,7 +2561,9 @@ class AgentSession:
             finally:
                 self._save_lock.release()
 
-        threading.Thread(target=_do, daemon=True, name=f"save-{sid[:8]}").start()
+        t = threading.Thread(target=_do, daemon=True, name=f"save-{sid[:8]}")
+        t.start()
+        t.join(timeout=3.0)
         self._maybe_autoname(msgs_snapshot)
 
     def _maybe_autoname(self, msgs_snapshot: list):
