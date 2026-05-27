@@ -33,10 +33,11 @@ commands and by main.py's startup wizard, which imports `_run_key_wizard`,
 
 from __future__ import annotations
 
-import getpass
 import json
 import os
 from pathlib import Path
+
+from prompt_toolkit import prompt as ptk_prompt
 
 from config import (
     CUSTOM_PROVIDERS_PATH, MODELS, PROVIDERS,
@@ -49,6 +50,7 @@ from core.logger import logger
 from utils.ansi import (
     c, cp, BOLD, CYAN, GRAY, GREEN, MAGENTA, RED, YELLOW,
 )
+from utils.key_utils import mask_key
 
 from core.commands import CommandContext, register
 
@@ -196,7 +198,7 @@ def _run_key_wizard() -> bool:
                 print(c(CYAN, f"  申请地址: {url}"))
 
             try:
-                key = getpass.getpass(c(BOLD, f"  粘贴 {env_var} (输入时不显示): ")).strip()
+                key = ptk_prompt(f"  粘贴 {env_var}（回车确认）: ").strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 continue
@@ -276,8 +278,7 @@ def _provider_list() -> None:
         env = pinfo.get("api_key_env", "")
         val = os.environ.get(env, "") if env else ""
         if val:
-            masked = val[:8] + "..." + val[-4:] if len(val) > 12 else "***"
-            ktag = c(GREEN, f"✓ ({masked})")
+            ktag = c(GREEN, f"✓ ({mask_key(val)})")
         elif not env:
             ktag = c(GRAY, "无需 Key")
         else:
@@ -326,7 +327,7 @@ def _provider_add() -> None:
 
     env_var_name = f"{name.upper().replace('-', '_')}_API_KEY"
     try:
-        key = getpass.getpass(c(BOLD, f"  API Key (输入时不显示，存入 .env → {env_var_name}): ")).strip()
+        key = ptk_prompt(f"  粘贴 API Key（回车确认，存入 .env → {env_var_name}）: ").strip()
     except (EOFError, KeyboardInterrupt):
         print()
         return
@@ -836,8 +837,7 @@ async def cmd_keys(ctx: CommandContext) -> None:
             continue
         val = os.environ.get(env, "")
         if val:
-            masked = val[:8] + "..." + val[-4:] if len(val) > 12 else "***"
-            tag = c(GREEN, f"✓ 已配置 ({masked})")
+            tag = c(GREEN, f"✓ 已配置 ({mask_key(val)})")
         else:
             tag = c(RED, "✗ 未配置")
         print(f"  {c(CYAN, f'{pname:14}')}{env:28} {tag}")
@@ -894,8 +894,7 @@ async def cmd_model(ctx: CommandContext) -> None:
                     tick = c(GREEN, " ◀ 当前") if _alias == session.model_alias else ""
                     _env_var = PROVIDERS.get(_cfg_m.get("provider", ""), {}).get("api_key_env", "")
                     _raw_key = os.getenv(_env_var, "")
-                    _masked = f"{_raw_key[:4]}…{_raw_key[-4:]}" if len(_raw_key) > 8 else "****"
-                    ktag = c(GREEN, f"[{_masked}]")
+                    ktag = c(GREEN, f"[{mask_key(_raw_key)}]")
                     vtag = c(CYAN, " 📷") if _cfg_m.get("vision") else ""
                     ftag = c(MAGENTA, " [A]") if get_api_format(_alias) == "anthropic" else ""
                     print(f"    {c(_cfg_m['color'], f'{_alias:14}')}{_cfg_m['desc']:30} {ktag}{vtag}{ftag}{tick}")
