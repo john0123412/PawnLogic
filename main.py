@@ -34,11 +34,16 @@ except ImportError:
 from pathlib import Path
 
 # ── P2: CLI UX — prompt_toolkit / rich 可用性检测 ────────
+# 读取环境变量 PROMPT_TOOLKIT_ENABLED，0/false 时强制禁用（E2E 测试用）
+_FORCE_DISABLE_PT = os.getenv("PROMPT_TOOLKIT_ENABLED", "1").lower() in ("0", "false")
+
 _HAS_PROMPT_TOOLKIT = False
 _HAS_RICH = False
 _PT_IMPORT_ERROR = None
 _RICH_IMPORT_ERROR = None
 try:
+    if _FORCE_DISABLE_PT:
+        raise ImportError("Prompt toolkit disabled by PROMPT_TOOLKIT_ENABLED=0")
     from prompt_toolkit import PromptSession
     from prompt_toolkit.completion import Completer, Completion
     from prompt_toolkit.formatted_text import StyleAndTextTuples
@@ -53,6 +58,13 @@ except Exception as _e:
     _PT_IMPORT_ERROR = str(_e)
     PromptSession = None
     _patch_stdout = None
+    # Define dummy classes to prevent NameError in class definitions below
+    class Completer:
+        pass
+    class Completion:
+        pass
+    class AutoSuggestFromHistory:
+        pass
 
 try:
     from rich.console import Console as _RichConsole
