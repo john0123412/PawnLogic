@@ -213,10 +213,6 @@ def _run(cmd: str, timeout: int = 15, cwd: str = None, env=None) -> str:
         logger.error(f"[run_shell] 执行异常: {cmd!r} — {type(e).__name__}: {e}")
         return f"ERROR: {type(e).__name__}: {e}"
 
-    except Exception as e:
-        logger.error(f"[run_shell] 执行异常: {cmd!r} — {type(e).__name__}: {e}")
-        return f"ERROR: {e}"
-
 # ════════════════════════════════════════════════════════
 # 文件读取工具
 # ════════════════════════════════════════════════════════
@@ -492,10 +488,12 @@ def _apply_patch_blocks(path: str, patch_blocks_text: str) -> str:
             "<<<<<<< SEARCH\n<原始代码>\n=======\n<新代码>\n>>>>>>> REPLACE"
         )
 
-    ok, reason = _check_write(path)
+    resolved, err = _resolve_write_path(path)
+    if err: return err
+    ok, reason = _check_write(resolved)
     if not ok: return reason
 
-    p = Path(path).expanduser()
+    p = Path(resolved).expanduser()
     if not p.exists():
         return f"ERROR: 文件不存在: {path}"
 
@@ -582,15 +580,17 @@ def tool_patch_file(a: dict) -> str:
             "或提供 old_content + new_content（旧式兼容模式）。"
         )
 
-    ok, reason = _check_write(path)
+    resolved, err = _resolve_write_path(path)
+    if err: return err
+    ok, reason = _check_write(resolved)
     if not ok: return reason
     try:
-        p    = Path(path).expanduser()
+        p    = Path(resolved).expanduser()
         text = p.read_text(encoding="utf-8")
 
         if old in text:
             p.write_text(text.replace(old, new, 1), encoding="utf-8")
-            return f"OK: 精确 patch 已应用于 {path}"
+            return f"OK: 精确 patch 已应用于 {resolved}"
 
         if a.get("fuzzy"):
             tl = text.splitlines(keepends=True)
@@ -600,11 +600,11 @@ def tool_patch_file(a: dict) -> str:
             if b.size > 0 and b.size >= len(ol) * 0.7:
                 patched = tl[:b.a] + [new] + tl[b.a + b.size:]
                 p.write_text("".join(patched), encoding="utf-8")
-                return f"OK: 模糊 patch ({b.size}/{len(ol)} 行) 已应用于 {path}"
+                return f"OK: 模糊 patch ({b.size}/{len(ol)} 行) 已应用于 {resolved}"
             return f"ERROR: 模糊匹配太弱 ({b.size}/{len(ol)} 行)，请提供更精确的 old_content。"
 
         return (
-            f"ERROR: old_content 未在 {path} 中找到。\n"
+            f"ERROR: old_content 未在 {resolved} 中找到。\n"
             "建议改用 patch_blocks（SEARCH/REPLACE 格式）以获得更好的容错性，\n"
             "或设置 fuzzy=true 启用模糊匹配。"
         )

@@ -295,7 +295,7 @@ def parse_sse_delta(raw: str) -> dict | None:
     m_content = re.search(r'"content"\s*:\s*"((?:[^"\\]|\\.)*)"', cleaned2)
     if m_content:
         try:    delta["content"] = json.loads('"' + m_content.group(1) + '"')
-        except: delta["content"] = m_content.group(1)
+        except Exception: delta["content"] = m_content.group(1)
     m_finish = re.search(r'"finish_reason"\s*:\s*"?(\w+)"?', raw)
     if m_finish:
         result["choices"][0]["finish_reason"] = m_finish.group(1)

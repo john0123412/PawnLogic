@@ -8,7 +8,7 @@ import json
 import os
 import sys
 import urllib.request, urllib.error
-from config import DYNAMIC_CONFIG, DEFAULT_MODEL, MODELS, PROVIDERS, get_api_config
+from config import DYNAMIC_CONFIG, DEFAULT_MODEL, MODELS, PROVIDERS, get_api_config, get_provider_config
 from core.memory import (
     init_db, upsert_session, list_sessions, get_session, delete_session,
     rename_session, save_messages, load_messages, add_knowledge,
@@ -372,8 +372,9 @@ def memorize(session, topic: str, n_turns: int = 6) -> str:
     )
 
     base_url, api_key = get_api_config(session.model_alias)
+    model_id = MODELS.get(session.model_alias, MODELS[DEFAULT_MODEL])["id"]
     payload = {
-        "model":      session.model["id"],
+        "model":      model_id,
         "messages":   [{"role": "user", "content": prompt}],
         "max_tokens": 512,
         "stream":     False,

@@ -754,10 +754,21 @@ def delete_knowledge(kid: int):
 def search_knowledge(query: str, limit: int = 5) -> list[sqlite3.Row]:
     keywords = list(set(re.findall(r'[a-zA-Z\u4e00-\u9fff]\w*', query.lower())))
     if not keywords: return list_knowledge(limit)
+    # Use SQL LIKE to filter at the DB level instead of loading all rows
+    like_clauses = " OR ".join(
+        "(topic LIKE ? OR content LIKE ? OR tags LIKE ?)" for _ in keywords
+    )
+    params = []
+    for kw in keywords:
+        params.extend([f"%{kw}%", f"%{kw}%", f"%{kw}%"])
     with get_conn() as conn:
-        all_rows = conn.execute("SELECT * FROM knowledge ORDER BY created_at DESC").fetchall()
+        rows = conn.execute(
+            f"SELECT * FROM knowledge WHERE {like_clauses} ORDER BY created_at DESC",
+            params,
+        ).fetchall()
+    # Score by keyword hit count for ranking
     scored = []
-    for row in all_rows:
+    for row in rows:
         text  = (row["topic"] + " " + row["content"] + " " + (row["tags"] or "")).lower()
         score = sum(1 for kw in keywords if kw in text)
         if score > 0: scored.append((score, row))
