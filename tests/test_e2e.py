@@ -18,14 +18,20 @@ except ImportError:
 def _wait_for_prompt(child, timeout=15):
     """Wait for PawnLogic to show main prompt, handling session selection first."""
     try:
-        # First, handle session selection screen
-        child.expect(["恢复会话", "Resume session", "Enter"], timeout=timeout)
-        child.sendline("")  # Start new session
-        # Then wait for main prompt
-        child.expect(["You >", "You>"], timeout=10)
+        # Try to match session selection screen first
+        idx = child.expect([
+            "恢复会话", "Resume session", "Enter",  # Session selection
+            "You >", "You>"                          # Direct prompt (no sessions)
+        ], timeout=timeout)
+        
+        if idx < 3:
+            # Got session selection screen, press Enter to create new
+            child.sendline("")
+            child.expect(["You >", "You>"], timeout=10)
+        # else: already at prompt, idx >= 3
     except pexpect.TIMEOUT:
-        # Maybe already at prompt (no sessions to select)
-        pass
+        # Might be stuck, print debug info
+        raise
 
 
 @pytest.fixture

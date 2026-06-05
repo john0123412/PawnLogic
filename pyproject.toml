@@ -40,6 +40,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-timeout>=2.0",
+    "pexpect>=4.8; sys_platform != 'win32'",
     "ruff>=0.4",
 ]
 docker = ["docker>=6.0"]
