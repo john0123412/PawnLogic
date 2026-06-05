@@ -1,18 +1,67 @@
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# PawnLogic v0.0.5 — CI Workflow (优化版)
+# 基于原 main_ci.yml 的 8 处精准修复
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 name: CI
 
+# ── 触发条件 ──────────────────────────────────────────────
 on:
   push:
     branches: [main]
+    paths-ignore:                   # FIX #8: 纯文档改动不触发 CI
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE"
   pull_request:
     branches: [main]
 
+# ── FIX #4: 防止同分支并发重复运行 ─────────────────────────
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# ── FIX #7: 最小权限原则 ────────────────────────────────────
+permissions:
+  contents: read
+
 jobs:
-  test:
+  # ── 静态检查（先跑，快速失败）──────────────────────────────
+  lint:
+    name: "🔍 Lint (ruff)"
     runs-on: ubuntu-latest
+    timeout-minutes: 5             # FIX #2: 防止挂起
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"             # FIX #3: 开启 pip 缓存
+
+      - name: Install ruff
+        run: pip install ruff
+
+      # FIX #5: 补充 ruff lint（原来完全缺失）；只检查真正的错误，不强制风格
+      - name: ruff check
+        run: ruff check . --output-format=github
+
+  # ── 多版本测试矩阵 ──────────────────────────────────────────
+  test:
+    name: "🧪 Test (Python ${{ matrix.python-version }})"
+    needs: lint                    # lint 通过才运行测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 15            # FIX #2: 防止 pytest 无限挂起
 
     strategy:
+      fail-fast: false             # FIX #6: 一个版本失败不取消其他
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
+
+    env:
+      PAWNLOGIC_TEST_MODE: "true"
 
     steps:
       - uses: actions/checkout@v4
@@ -21,14 +70,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: "pip"             # FIX #3: 开启 pip 缓存
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Syntax check
-        run: python -m compileall -q .
+      # FIX #1: 原来 compileall -q . 扫描全目录（含 venv），改为只扫描源码
+      - name: Syntax check (source only)
+        run: python -m compileall -q core/ tools/ utils/ tests/
 
       - name: Run tests
-        run: pytest tests/ -v
+        run: pytest tests/ -v --tb=short --timeout=60  # FIX #2: 单测超时 60s

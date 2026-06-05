@@ -71,6 +71,11 @@ py-modules = ["main"]
 line-length = 100
 target-version = "py310"
 
+[tool.ruff.lint]
+# CI 只拦截真正的错误：语法错误(E9)、未定义名称(F821)
+# 其余风格类 warning 不阻断 CI
+select = ["E9", "F821"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
