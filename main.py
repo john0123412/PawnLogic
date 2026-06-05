@@ -724,7 +724,8 @@ async def main():
     _lcp()
 
     # ── 首次运行向导（新）────────────────────────────────
-    if not _ENV_PATH.exists() or not _has_any_api_key():
+    _is_test_mode = os.environ.get("PAWNLOGIC_TEST_MODE", "").lower() in ("1", "true", "yes")
+    if not _is_test_mode and (not _ENV_PATH.exists() or not _has_any_api_key()):
         from core.state import state as _st
         _st.is_first_run = True
         first_run_wizard()
@@ -738,7 +739,7 @@ async def main():
         for p in PROVIDERS.values()
         if p.get("api_key_env")
     )
-    if not any_key:
+    if not _is_test_mode and not any_key:
         configured = _run_key_wizard()
         if not configured:
             print(c(YELLOW,
