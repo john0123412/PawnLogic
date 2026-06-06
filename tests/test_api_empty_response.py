@@ -7,8 +7,8 @@
   3. 正常响应不受影响
 """
 
-import sys, os, time, types
-from unittest.mock import patch, MagicMock
+import sys, types
+from unittest.mock import MagicMock
 from pathlib import Path
 
 # 将项目根目录加入 sys.path
@@ -122,8 +122,6 @@ def test_retry_mechanism():
 
     while retry_count < API_RETRY_MAX:
         # 模拟空响应
-        text_buf = ""
-        tc_buf = {}
         empty_response = True  # 每次都返回空
 
         if not empty_response:
@@ -177,9 +175,6 @@ def test_recovery_message():
 
 def test_normal_response_no_retry():
     """正常响应不应触发重试逻辑。"""
-    API_RETRY_MAX = 3
-    retry_count = 0
-
     # 模拟正常响应
     text_buf = "I found the vulnerability in /etc/passwd"
     tc_buf = {}

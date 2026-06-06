@@ -130,7 +130,7 @@ from config import (
     MODELS, DB_PATH, PROVIDERS,
     validate_api_key, list_vision_models,
 )
-from utils.ansi       import c, cp, rl_wrap, BOLD, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
+from utils.ansi       import c, cp, BOLD, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
 from core.session     import (
     AgentSession, STATE_FILENAME,
     attach_external_mcp_tools, detach_external_mcp_tools,

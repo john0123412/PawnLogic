@@ -2188,7 +2188,7 @@ class AgentSession:
                             except json.JSONDecodeError:
                                 try:
                                     fn_args = json.loads(tc["args"].strip().lstrip("\ufeff"))
-                                except:
+                                except Exception:
                                     fn_args = {"_raw_args": tc["args"]}
 
                     preview  = ", ".join(f"{k}={repr(v)[:40]}" for k, v in fn_args.items())

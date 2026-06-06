@@ -205,7 +205,7 @@ class _SubAgentSession:
             for i in sorted(tc_buf):
                 tc   = tc_buf[i]; name = tc["name"]
                 try:    fn_args = json.loads(tc["args"]) if tc["args"].strip() else {}
-                except: fn_args = {}
+                except Exception: fn_args = {}
 
                 self._tool_log.append(f"  [{iteration+1}] {name}({list(fn_args.keys())})")
 

@@ -24,6 +24,24 @@ from .paths import (
     SKILLS_DIR, LOG_DIR, WORKSPACE_DIR, WORKSPACE_ROOT,
 )
 
+__all__ = [
+    "PROVIDERS", "MODELS", "DEFAULT_MODEL", "VISION_PRIORITY",
+    "NAMING_MODEL_CHAIN", "CUSTOM_PROVIDERS_PATH",
+    "get_api_config", "get_api_format", "get_provider_config",
+    "validate_api_key", "list_configured_models",
+    "get_best_vision_model", "list_vision_models",
+    "load_custom_providers", "save_custom_provider", "remove_custom_provider",
+    "is_fast_model", "find_fast_peer",
+    "TIER_LOW", "TIER_MID", "TIER_DEEP", "TIER_MAX",
+    "READ_BLACKLIST", "WRITE_BLACKLIST", "DANGEROUS_PATTERNS",
+    "smart_truncate", "user_friendly_error",
+    "SANDBOX_LANGS", "DOCKER_IMAGES", "BROWSER_CONFIG", "USER_AGENTS",
+    "AGENT_PHASES",
+    "VERSION", "PAWNLOGIC_HOME", "SESSIONS_DIR", "DB_PATH", "GLOBAL_SKILLS_PATH",
+    "SKILLS_DIR", "LOG_DIR", "WORKSPACE_DIR", "WORKSPACE_ROOT",
+    "DYNAMIC_CONFIG", "NORMAL_CONFIG", "WEB_STRATEGY", "USER_MODE", "QUIET_MODE",
+]
+
 # ── 向后兼容：DYNAMIC_CONFIG / NORMAL_CONFIG ──────────────
 # 这两个可变 dict 由 main.py 在运行时修改（/mid /deep /low 等命令）。
 # 保留在此处以兼容所有 `from config import DYNAMIC_CONFIG` 的调用。

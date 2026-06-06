@@ -12,7 +12,6 @@ Targets zero-dependency or minimal-dependency functions only:
 """
 
 import sys
-import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -29,6 +28,7 @@ for _key in list(sys.modules):
 
 # ── Import real config first, then patch heavy session.py deps ───────
 import config  # noqa: E402 — force-cache real package
+assert config.VERSION
 
 # Heavy dependencies that session.py imports at module level — mock them
 # so we don't need a real DB, API key, or full environment.
@@ -227,6 +227,7 @@ def test_plan_renderer_flush_clears_state():
     leftover = r.flush()
     # After flush, tail is cleared and leftover contains what was in tail
     assert r.tail == ""
+    assert leftover == "<pla"
 
 
 def test_plan_renderer_initial_state():

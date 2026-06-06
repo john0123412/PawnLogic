@@ -9,7 +9,6 @@ sys.path.insert(0, ROOT)
 
 # Pre-import the real local `config` package so it wins the module cache
 # before any test file that mocks sys.modules["config"] runs.
-import importlib
 for key in list(sys.modules):
     if key == "config" or key.startswith("config."):
         f = getattr(sys.modules[key], "__file__", "") or ""

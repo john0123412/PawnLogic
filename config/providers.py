@@ -5,7 +5,6 @@ config/providers.py — API Provider 与模型注册表
 """
 import os
 import json
-from pathlib import Path
 
 from .paths import PAWNLOGIC_HOME
 

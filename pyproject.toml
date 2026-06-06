@@ -74,9 +74,9 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-# CI 只拦截真正的错误：语法错误(E9)、未定义名称(F821)
-# 其余风格类 warning 不阻断 CI
-select = ["E9", "F821"]
+# CI blocks syntax/name errors plus low-risk hygiene issues:
+# unused imports (F401), unused locals (F841), and bare except (E722).
+select = ["E9", "F821", "F401", "F841", "E722"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

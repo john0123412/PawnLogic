@@ -699,7 +699,7 @@ def load_messages(session_id: str) -> list[dict]:
         m: dict = {"role": r["role"], "content": r["content"]}
         if r["tool_calls"]:
             try: m["tool_calls"] = json.loads(r["tool_calls"])
-            except: pass
+            except Exception: pass
         if r["tool_call_id"]: m["tool_call_id"] = r["tool_call_id"]
         if r["is_pinned"]:    m["_pinned"] = True
         # ★ thinking-mode 修复：还原 reasoning_content 字段。

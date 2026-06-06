@@ -750,7 +750,7 @@ def _call_llm_classify(model_alias: str, content: str, topic_hint: str,
         m = re.search(r'\{.*\}', cleaned, re.DOTALL)
         if m:
             try:    return json.loads(m.group(0))
-            except: pass
+            except Exception: pass
     return None
 
 # ════════════════════════════════════════════════════════

@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.0.5] - 2026-06-06
+
+### Added
+- `PAWNLOGIC_HOME` runtime directory override for isolating config, logs,
+  workspace files, MCP assets, custom providers, and tests.
+- `MCP_ENABLED=false` startup switch to skip external MCP loading in test and
+  constrained environments.
+- Regression tests for runtime path isolation and MCP startup disabling.
+- Focused unit coverage for memory, persistence, API client parsing/circuit
+  breaker logic, and file patch helpers.
+
+### Fixed
+- E2E tests no longer rename or depend on the user's real
+  `~/.pawnlogic/mcp_configs.json`.
+- Replace remaining bare `except:` handlers in `core/` and `tools/` so
+  `KeyboardInterrupt` and `SystemExit` are not swallowed.
+- Document the isolated test command in `CONTRIBUTING.md`.
+
+### Tests
+- Full suite: 202 tests passing.
+- `ruff check .` passing with the configured lint rules.
+
+---
+
 ## [0.0.4] - 2026-05-26
 
 ### Added

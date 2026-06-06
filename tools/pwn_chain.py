@@ -390,10 +390,10 @@ def tool_pwn_debug(a: dict) -> str:
         result = _run(cmd, timeout=timeout, cwd=_session_cwd[0])
     finally:
         try: os.unlink(script_path)
-        except: pass
+        except Exception: pass
         if tmp_input:
             try: os.unlink(tmp_input)
-            except: pass
+            except Exception: pass
 
     # ★ 检测 SIGSEGV → 自动追加 bt full 获取完整回溯（含局部变量）
     if re.search(r"SIGSEGV|SIGABRT|SIGBUS", result):
@@ -414,7 +414,7 @@ def tool_pwn_debug(a: dict) -> str:
             pass
         finally:
             try: os.unlink(_bt_script)
-            except: pass
+            except Exception: pass
 
     # ── 关键信息高亮提取 ──────────────────────────────
     highlights = []

@@ -8,7 +8,7 @@ import json
 import os
 import sys
 import urllib.request, urllib.error
-from config import DYNAMIC_CONFIG, DEFAULT_MODEL, MODELS, PROVIDERS, get_api_config, get_provider_config
+from config import DYNAMIC_CONFIG, DEFAULT_MODEL, MODELS, PROVIDERS, get_api_config
 from core.memory import (
     init_db, upsert_session, list_sessions, get_session, delete_session,
     rename_session, save_messages, load_messages, add_knowledge,
