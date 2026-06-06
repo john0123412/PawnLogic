@@ -5,7 +5,6 @@ All UI text in English. API Keys never displayed in plain text.
 """
 from __future__ import annotations
 import asyncio, json, os, time, datetime
-from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -19,12 +18,13 @@ from prompt_toolkit.widgets import TextArea, Frame
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 
+from config.paths import PAWNLOGIC_HOME
 from config.providers import (
     PROVIDERS, MODELS, CUSTOM_PROVIDERS_PATH,
     save_custom_provider, load_custom_providers, remove_custom_provider,
 )
 
-_PAWNLOGIC_DIR = Path.home() / ".pawnlogic"
+_PAWNLOGIC_DIR = PAWNLOGIC_HOME
 _ENV_PATH = _PAWNLOGIC_DIR / ".env"
 _BUILTIN = {"deepseek", "openai", "anthropic"}
 _NOISE = {"embedding", "rerank", "tts", "whisper", "moderation", "davinci", "babbage"}

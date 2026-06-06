@@ -13,7 +13,7 @@ pip install -e ".[dev]"
 ## Running Tests
 
 ```bash
-pytest tests/ -v
+PAWNLOGIC_HOME="$(mktemp -d)" venv/bin/python -m pytest tests/ -v
 ```
 
 ## Adding an API Provider
@@ -62,6 +62,6 @@ refactor / docs / chore / test
 ## Pull Request Checklist
 
 - [ ] `python -m py_compile` passes on all modified files
-- [ ] `pytest tests/` passes
+- [ ] `PAWNLOGIC_HOME="$(mktemp -d)" venv/bin/python -m pytest tests/` passes
 - [ ] No secrets or API keys committed
 - [ ] PR description filled in (use the template)

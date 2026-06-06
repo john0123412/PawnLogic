@@ -69,7 +69,9 @@ except ImportError:
 # ────────────────────────────────────────────────────────
 # Path constants (shared layout — same as main.py)
 # ────────────────────────────────────────────────────────
-_PAWNLOGIC_DIR = Path.home() / ".pawnlogic"
+from config.paths import PAWNLOGIC_HOME
+
+_PAWNLOGIC_DIR = PAWNLOGIC_HOME
 _ENV_PATH = _PAWNLOGIC_DIR / ".env"
 
 

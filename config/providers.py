@@ -7,6 +7,8 @@ import os
 import json
 from pathlib import Path
 
+from .paths import PAWNLOGIC_HOME
+
 PROVIDERS: dict[str, dict] = {
     "deepseek": {
         "base_url":    "https://api.deepseek.com/v1/chat/completions",
@@ -97,7 +99,7 @@ NAMING_MODEL_CHAIN: list = [
 
 VISION_PRIORITY = ["gpt-4o", "claude-sonnet"]
 
-CUSTOM_PROVIDERS_PATH = Path.home() / ".pawnlogic" / "custom_providers.json"
+CUSTOM_PROVIDERS_PATH = PAWNLOGIC_HOME / "custom_providers.json"
 
 
 def _normalize_url(raw: str, api_format: str = "openai") -> str:
@@ -208,7 +210,7 @@ def load_custom_providers() -> None:
     # Reload .env so keys added after startup (e.g. via wizard) are available
     try:
         from dotenv import load_dotenv
-        _env = Path.home() / ".pawnlogic" / ".env"
+        _env = PAWNLOGIC_HOME / ".env"
         if _env.exists():
             load_dotenv(_env, override=True)
     except ImportError:

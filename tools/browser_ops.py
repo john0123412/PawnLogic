@@ -29,14 +29,13 @@ tools/browser_ops.py — P5: Scrapling 浏览器武器库
 import os
 import time
 import threading
-from pathlib import Path
 from datetime import datetime
 
-from config import BROWSER_CONFIG
+from config import BROWSER_CONFIG, WORKSPACE_DIR
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN
 
 # ── 常量 ──────────────────────────────────────────────────
-SAFE_WORKSPACE = str(Path.home() / ".pawnlogic" / "workspace")
+SAFE_WORKSPACE = WORKSPACE_DIR
 SCREENSHOT_DIR = os.path.join(SAFE_WORKSPACE, "screenshots")
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 

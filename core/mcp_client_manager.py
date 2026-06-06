@@ -42,6 +42,7 @@ except ImportError:
     stdio_client = None
 
 from core.logger import logger
+from config.paths import PAWNLOGIC_HOME
 
 
 # ════════════════════════════════════════════════════════
@@ -50,7 +51,7 @@ from core.logger import logger
 DEFAULT_TIMEOUT  = 30                      # 单次 call_tool 默认超时（秒）
 STARTUP_TIMEOUT  = 60                      # 全体 server 启动总超时
 NAME_SEPARATOR   = "__"                    # 工具名前缀分隔符
-WORKSPACE_ASSETS = Path.home() / ".pawnlogic" / "workspace" / "mcp_assets"
+WORKSPACE_ASSETS = PAWNLOGIC_HOME / "workspace" / "mcp_assets"
 
 _ENV_VAR_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 _warned_vars: set[str] = set()             # 避免同一 var 重复告警
@@ -420,6 +421,10 @@ class MCPClientManager:
 _GLOBAL_MANAGER: Optional[MCPClientManager] = None
 
 
+def _is_mcp_disabled() -> bool:
+    return os.environ.get("MCP_ENABLED", "").strip().lower() in {"0", "false", "no", "off"}
+
+
 def get_manager() -> Optional[MCPClientManager]:
     return _GLOBAL_MANAGER
 
@@ -429,13 +434,15 @@ def init_external_mcp(config_path: Optional[Path] = None) -> Optional["MCPClient
     在 main.py 启动早期调用一次：拉起背景线程 + 全部外部 server。
     返回已就绪的 manager（无配置/全部失败/mcp未安装 → None）。
     """
+    if _is_mcp_disabled():
+        return None
     if not _MCP_AVAILABLE:
         return None
     global _GLOBAL_MANAGER
     if _GLOBAL_MANAGER is not None:
         return _GLOBAL_MANAGER
 
-    cfg = config_path or (Path.home() / ".pawnlogic" / "mcp_configs.json")
+    cfg = config_path or (PAWNLOGIC_HOME / "mcp_configs.json")
     mgr = MCPClientManager(cfg)
     if not mgr.start():
         return None

@@ -20,7 +20,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
-from config import WORKSPACE_DIR, DB_PATH
+from config import PAWNLOGIC_HOME, WORKSPACE_DIR, DB_PATH
 from core.logger import logger
 
 
@@ -29,7 +29,7 @@ from core.logger import logger
 # ════════════════════════════════════════════════════════
 
 WORKSPACE_PATH = Path(WORKSPACE_DIR).expanduser()
-PAWN_HOME      = Path.home() / ".pawnlogic"
+PAWN_HOME      = PAWNLOGIC_HOME
 ARCHIVE_ROOT   = PAWN_HOME / "archive"
 LAST_BACKUP    = PAWN_HOME / ".last_backup"
 DEFAULT_PLAN   = PAWN_HOME / "cleanup_plan.md"

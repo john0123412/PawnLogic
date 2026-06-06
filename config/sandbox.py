@@ -1,5 +1,5 @@
 """config/sandbox.py — 沙箱语言表、Docker 镜像、浏览器配置"""
-from pathlib import Path
+from .paths import PAWNLOGIC_HOME
 
 SANDBOX_LANGS = {
     "python":     {"ext": ".py",   "cmd": None,           "compile": None},
@@ -24,7 +24,7 @@ DOCKER_IMAGES = {
 
 BROWSER_CONFIG = {
     "timeout":        30,
-    "screenshot_dir": str(Path.home() / ".pawnlogic" / "workspace" / "screenshots"),
+    "screenshot_dir": str(PAWNLOGIC_HOME / "workspace" / "screenshots"),
     "stealthy":       True,
     "solve_cf":       True,
 }

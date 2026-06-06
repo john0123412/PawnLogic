@@ -9,7 +9,9 @@ Covers:
   - is_fast_model / find_fast_peer logic
 """
 
+import os
 import sys
+import subprocess
 from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parent.parent)
@@ -63,6 +65,28 @@ def test_workspace_dir_type():
 
 def test_log_dir_type():
     assert isinstance(LOG_DIR, Path)
+
+
+def test_pawnlogic_home_env_overrides_runtime_paths(tmp_path):
+    pawn_home = tmp_path / "pawn-home"
+    code = """
+import config
+assert config.PAWNLOGIC_HOME == config.DB_PATH.parent
+assert str(config.PAWNLOGIC_HOME) == __import__('os').environ['PAWNLOGIC_HOME']
+assert str(config.DB_PATH).startswith(str(config.PAWNLOGIC_HOME))
+assert str(config.GLOBAL_SKILLS_PATH).startswith(str(config.PAWNLOGIC_HOME))
+assert config.WORKSPACE_DIR == str(config.PAWNLOGIC_HOME / 'workspace')
+assert str(config.CUSTOM_PROVIDERS_PATH).startswith(str(config.PAWNLOGIC_HOME))
+assert config.BROWSER_CONFIG['screenshot_dir'] == str(config.PAWNLOGIC_HOME / 'workspace' / 'screenshots')
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "PAWNLOGIC_HOME": str(pawn_home)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 # ── Tiers ─────────────────────────────────────────────────

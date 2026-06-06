@@ -18,14 +18,14 @@ tools/docker_sandbox.py — P3: Docker 动态容器化沙箱
 
 import os, re, tempfile
 
-from config import DYNAMIC_CONFIG, DANGEROUS_PATTERNS
+from config import DYNAMIC_CONFIG, DANGEROUS_PATTERNS, WORKSPACE_DIR
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN, MAGENTA, BOLD
 
 # ════════════════════════════════════════════════════════
 # P4.1  安全工作区定义（One-Way Glass）
 # ════════════════════════════════════════════════════════
 
-SAFE_WORKSPACE = os.path.abspath(os.path.expanduser("~/.pawnlogic/workspace"))
+SAFE_WORKSPACE = os.path.abspath(os.path.expanduser(WORKSPACE_DIR))
 os.makedirs(SAFE_WORKSPACE, exist_ok=True)
 
 

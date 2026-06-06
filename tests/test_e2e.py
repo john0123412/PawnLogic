@@ -35,19 +35,16 @@ def _wait_for_prompt(child, timeout=15):
 
 
 @pytest.fixture
-def spawn_pawnlogic():
+def spawn_pawnlogic(tmp_path):
     """Spawn a PawnLogic process with test env vars, yield child, cleanup."""
-    import shutil
-    from pathlib import Path
-    
-    # Temporarily rename mcp_configs.json to prevent MCP loading in E2E tests
-    mcp_config = Path.home() / ".pawnlogic" / "mcp_configs.json"
-    mcp_backup = mcp_config.with_suffix(".json.e2e_backup")
-    if mcp_config.exists():
-        shutil.move(str(mcp_config), str(mcp_backup))
-    
+    test_home = tmp_path / "home"
+    pawnlogic_home = test_home / ".pawnlogic"
+    pawnlogic_home.mkdir(parents=True)
+
     env = os.environ.copy()
     env.update({
+        "HOME": str(test_home),
+        "PAWNLOGIC_HOME": str(pawnlogic_home),
         "PAWNLOGIC_TEST_MODE": "true",
         "DEEPSEEK_API_KEY": "sk-test-fake-key-for-ci",
         "PAWN_API_KEY": "test-fake-key",
@@ -72,9 +69,6 @@ def spawn_pawnlogic():
     finally:
         if child.isalive():
             child.close(force=True)
-        # Restore mcp_configs.json
-        if mcp_backup.exists():
-            shutil.move(str(mcp_backup), str(mcp_config))
 
 
 def test_startup_and_prompt(spawn_pawnlogic):

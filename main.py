@@ -89,8 +89,12 @@ except Exception as _e:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+def _default_pawnlogic_home() -> Path:
+    return Path(os.environ.get("PAWNLOGIC_HOME", Path.home() / ".pawnlogic")).expanduser()
+
+
 # ── 启动时加载 .env（必须在 import config 之前）───────────
-_PAWNLOGIC_DIR = Path.home() / ".pawnlogic"
+_PAWNLOGIC_DIR = _default_pawnlogic_home()
 _ENV_PATH = _PAWNLOGIC_DIR / ".env"
 
 try:
@@ -984,7 +988,7 @@ async def main():
         _all_meta[_w] = _desc
 
     # ── readline 历史文件路径 ─────────────────────────────
-    _history_path = str(Path.home() / ".pawnlogic" / ".input_history")
+    _history_path = str(_PAWNLOGIC_DIR / ".input_history")
 
     if prompt_toolkit_enabled:
         # ── 直接使用 PawnCompleter，内置模糊匹配，无需 FuzzyCompleter ──

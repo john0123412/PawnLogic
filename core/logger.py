@@ -16,7 +16,7 @@ core/logger.py — PawnLogic 统一日志模块
     setup_logger()
 """
 
-import sys, json, time
+import os, sys, json, time
 from pathlib import Path
 
 from loguru import logger   # noqa: F401  — 让外部模块可以 `from core.logger import logger`
@@ -97,7 +97,7 @@ def setup_logger(stderr_level: str = "INFO", file_level: str = "DEBUG") -> None:
         log_dir = Path(LOG_DIR)
     except (ImportError, AttributeError):
         # 若 config 中尚未添加 LOG_DIR，退回默认路径
-        log_dir = Path.home() / ".pawnlogic" / "logs"
+        log_dir = Path(os.environ.get("PAWNLOGIC_HOME", Path.home() / ".pawnlogic")).expanduser() / "logs"
 
     # ── 清除所有已有 handler（包括 loguru 默认的 stderr handler）──
     logger.remove()
