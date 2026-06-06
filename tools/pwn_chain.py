@@ -5,7 +5,7 @@ tools/pwn_chain.py — CTF / Pwn 工具链
   pwn_one_gadget — one_gadget 一键 execve 跳板搜索
 """
 
-import re, shutil, subprocess, tempfile, os
+import re, shlex, shutil, subprocess, tempfile, os
 from collections import OrderedDict
 from pathlib import Path
 from utils.ansi import c, YELLOW, MAGENTA, GRAY, GREEN, RED
@@ -14,6 +14,11 @@ from tools.file_ops import _run, _check_read, _session_cwd
 # ── ELF 分析结果缓存（进程内，最多 10 条，按 (path, mtime) 键控） ──
 _ELF_CACHE: OrderedDict[tuple, dict] = OrderedDict()
 _ELF_CACHE_MAX = 10
+_ADDR_RANGE_RE = re.compile(r"^(?:0x[0-9a-fA-F]+|[0-9]+)(?::(?:0x[0-9a-fA-F]+|[0-9]+))?$")
+
+
+def _q(value: str) -> str:
+    return shlex.quote(str(value))
 
 
 def _cache_get(path: str, slot: str) -> str | None:
@@ -140,16 +145,17 @@ def tool_inspect_binary(a: dict) -> str:
     if cached is not None:
         return cached
 
+    q_path = _q(path)
     res = []
-    res.append("=== file ===");            res.append(_run(f"file '{path}'").strip())
-    cs = _run(f"checksec --file='{path}' 2>/dev/null || checksec '{path}' 2>/dev/null")
+    res.append("=== file ===");            res.append(_run(f"file {q_path}").strip())
+    cs = _run(f"checksec --file={q_path} 2>/dev/null || checksec {q_path} 2>/dev/null")
     if "not found" not in cs.lower() and cs.strip():
         res.append("\n=== checksec ===");  res.append(cs.strip())
-    grep_pipe = f" | grep -i '{grep}'" if grep else " | head -60"
-    res.append("\n=== strings ===");       res.append(_run(f"strings '{path}'{grep_pipe}").strip())
-    res.append("\n=== hexdump (前128B) ==="); res.append(_run(f"xxd '{path}' | head -8").strip())
-    res.append("\n=== readelf -S ===");    res.append(_run(f"readelf -S '{path}' 2>/dev/null | head -30").strip())
-    res.append("\n=== ldd ===");           res.append(_run(f"ldd '{path}' 2>/dev/null").strip())
+    grep_pipe = f" | grep -i {_q(grep)}" if grep else " | head -60"
+    res.append("\n=== strings ===");       res.append(_run(f"strings {q_path}{grep_pipe}").strip())
+    res.append("\n=== hexdump (前128B) ==="); res.append(_run(f"xxd {q_path} | head -8").strip())
+    res.append("\n=== readelf -S ===");    res.append(_run(f"readelf -S {q_path} 2>/dev/null | head -30").strip())
+    res.append("\n=== ldd ===");           res.append(_run(f"ldd {q_path} 2>/dev/null").strip())
     result = "\n".join(res)
     _cache_set(path, cache_slot, result)
 
@@ -182,12 +188,13 @@ def tool_pwn_rop(a: dict) -> str:
     if cached is not None:
         return cached
 
+    q_path = _q(path)
     if shutil.which("ROPgadget"):
-        cmd = f"ROPgadget --binary '{path}' --depth {depth}"
-        if grep: cmd += f" | grep -i '{grep}'"
+        cmd = f"ROPgadget --binary {q_path} --depth {depth}"
+        if grep: cmd += f" | grep -i {_q(grep)}"
     elif shutil.which("ropper"):
-        cmd = f"ropper --file '{path}'"
-        if grep: cmd += f" --search '{grep}'"
+        cmd = f"ropper --file {q_path}"
+        if grep: cmd += f" --search {_q(grep)}"
     else:
         return ("ROPgadget / ropper 均未安装。\n"
                 "  pip3 install ROPgadget\n  pip3 install ropper")
@@ -250,17 +257,24 @@ def tool_pwn_disasm(a: dict) -> str:
     path = a["path"]; func = a.get("function",""); addr = a.get("address","")
     ok, reason = _check_read(path)
     if not ok: return reason
+    q_path = _q(path)
     if func:
-        nm  = _run(f"nm '{path}' 2>/dev/null | grep -w '{func}'", timeout=10)
-        asm = _run(f"objdump -d -M intel '{path}' | awk '/^[0-9a-f]+ <{func}>:/,/^$/'", timeout=30)
+        q_func = _q(func)
+        awk_script = _q(f"/^[0-9a-f]+ <{re.escape(func)}>:/,/^$/")
+        nm  = _run(f"nm {q_path} 2>/dev/null | grep -w {q_func}", timeout=10)
+        asm = _run(f"objdump -d -M intel {q_path} | awk {awk_script}", timeout=30)
         return f"=== nm ===\n{nm.strip()}\n\n=== disasm ===\n{asm}"
     if addr:
+        if not _ADDR_RANGE_RE.match(addr):
+            return "ERROR: address 必须是 0xADDR 或 0xSTART:0xEND"
         pts = addr.split(":")
-        cmd = (f"objdump -d -M intel --start-address={pts[0]} --stop-address={pts[1]} '{path}'"
-               if len(pts)==2 else
-               f"objdump -d -M intel --start-address={addr} '{path}' | head -50")
+        cmd = (
+            f"objdump -d -M intel --start-address={pts[0]} --stop-address={pts[1]} {q_path}"
+            if len(pts) == 2 else
+            f"objdump -d -M intel --start-address={addr} {q_path} | head -50"
+        )
         return _run(cmd, timeout=30)
-    return _run(f"objdump -d -M intel '{path}' | grep -E '^[0-9a-f]+ <' | head -60", timeout=30)
+    return _run(f"objdump -d -M intel {q_path} | grep -E '^[0-9a-f]+ <' | head -60", timeout=30)
 
 # ════════════════════════════════════════════════════════
 # pwn_libc
@@ -270,16 +284,17 @@ def tool_pwn_libc(a: dict) -> str:
     path = a["path"]; action = a["action"]
     ok, reason = _check_read(path)
     if not ok: return reason
+    q_path = _q(path)
     if action == "detect":
-        ver = _run(f"strings '{path}' | grep -iE 'glibc|ubuntu|libc[-_]' | head -10", timeout=15)
-        bid = _run(f"readelf -n '{path}' 2>/dev/null | grep 'Build ID' | head -3", timeout=10)
-        ldd = _run(f"ldd '{path}' 2>/dev/null", timeout=10)
+        ver = _run(f"strings {q_path} | grep -iE 'glibc|ubuntu|libc[-_]' | head -10", timeout=15)
+        bid = _run(f"readelf -n {q_path} 2>/dev/null | grep 'Build ID' | head -3", timeout=10)
+        ldd = _run(f"ldd {q_path} 2>/dev/null", timeout=10)
         return f"=== version strings ===\n{ver.strip()}\n\n=== Build ID ===\n{bid.strip()}\n\n=== ldd ===\n{ldd.strip()}"
     if action == "symbols":
         key = ["system","execve","printf","puts","gets","read","write",
                "__libc_start_main","__stack_chk_fail","exit","mprotect","mmap"]
-        re_out = _run(f"readelf -s '{path}' 2>/dev/null | grep -E '({'|'.join(key)})'", timeout=15)
-        nm_out = _run(f"nm -D '{path}' 2>/dev/null | head -30", timeout=10)
+        re_out = _run(f"readelf -s {q_path} 2>/dev/null | grep -E '({'|'.join(key)})'", timeout=15)
+        nm_out = _run(f"nm -D {q_path} 2>/dev/null | head -30", timeout=10)
         return f"=== readelf symbols ===\n{re_out}\n\n=== nm -D ===\n{nm_out.strip()}"
     return "ERROR: action = detect | symbols"
 
@@ -326,7 +341,7 @@ def tool_pwn_debug(a: dict) -> str:
         if a.get("inputs"):
             gdb_inputs = list(a["inputs"]) + gdb_inputs
         gdb_opts = "" if use_pwndbg else "-nx "
-        gdb_cmd = f"gdb {gdb_opts}-q '{path}'"
+        gdb_cmd = f"gdb {gdb_opts}-q {_q(path)}"
         print(c(MAGENTA, f"  🐛 [interactive] {gdb_cmd}"))
         return tool_run_interactive({
             "command": gdb_cmd,
@@ -335,7 +350,7 @@ def tool_pwn_debug(a: dict) -> str:
         })
 
     # ── 构建 GDB 脚本 ──────────────────────────────────
-    script_lines = ["set pagination off", "set confirm off"]
+    script_lines = ["set pagination off", "set confirm off", "set debuginfod enabled off"]
 
     # pwndbg 支持
     if use_pwndbg:
@@ -384,11 +399,13 @@ def tool_pwn_debug(a: dict) -> str:
         script_path = f.name
 
     gdb_opts = "" if use_pwndbg else "-nx "
-    print(c(MAGENTA, f"  🐛 gdb {gdb_opts}-batch -x {script_path} {path}"))
+    q_path = _q(path)
+    q_script_path = _q(script_path)
+    print(c(MAGENTA, f"  🐛 gdb {gdb_opts}-batch -x {q_script_path} {q_path}"))
     print(c(GRAY, f"  断点: {breakpoints}  命令: {commands}"))
 
     try:
-        cmd = f"gdb {gdb_opts}-batch -x '{script_path}' '{path}' 2>&1"
+        cmd = f"gdb {gdb_opts}-batch -x {q_script_path} {q_path} 2>&1"
         result = _run(cmd, timeout=timeout, cwd=_session_cwd[0])
     finally:
         try: os.unlink(script_path)
@@ -405,7 +422,7 @@ def tool_pwn_debug(a: dict) -> str:
             _bt_cmds.extend(["bt full", "quit"])
             with open(_bt_script, "w") as _bf:
                 _bf.write("\n".join(_bt_cmds) + "\n")
-            _bt_cmd = f"gdb {gdb_opts}-batch -x '{_bt_script}' '{path}' 2>&1"
+            _bt_cmd = f"gdb {gdb_opts}-batch -x {_q(_bt_script)} {q_path} 2>&1"
             if input_file:
                 pass  # input_file 已在脚本中通过 run < 指定
             _bt_out = _run(_bt_cmd, timeout=timeout, cwd=_session_cwd[0])
@@ -485,7 +502,7 @@ def tool_pwn_one_gadget(a: dict) -> str:
         return f"ERROR: libc 文件不存在: {libc_path}"
 
     # 构建命令
-    cmd = f"one_gadget '{libc_path}'"
+    cmd = f"one_gadget {_q(libc_path)}"
     if level > 0:
         cmd += f" --level {level}"
     if only_near:

@@ -2130,6 +2130,7 @@ class AgentSession:
                         self.messages.pop()  # 撤销上一条 user 消息，保持上下文干净
                     return
 
+                elif _plan_rejected > 0:
                     # ── 软拦截：工具仍执行，计划注入信号 ──────────
                     print(c(YELLOW,
                         f"  💭 [CoT Soft #{_plan_rejected}/{_MAX_SOFT_CORRECTIONS}] "

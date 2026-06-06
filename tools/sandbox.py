@@ -23,6 +23,10 @@ if _IS_POSIX:
 _MEM_LIMIT_MB      = 512          # 子进程最大内存（MB）
 _NICE_LEVEL        = 10           # nice 值：降低调度优先级
 _OUTPUT_HARD_BYTES = 256_000      # subprocess 输出硬截断（字节）
+_PY_PKG_NAME_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9_,.-]+\])?([<>=!~]=?[A-Za-z0-9.*+!._-]+)?$"
+)
+_SYS_PKG_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+.-]*$")
 
 # ── 最小化环境变量：防止 API Key 等敏感信息泄露给子进程 ────
 _SENSITIVE_ENV_KEYS = {
@@ -36,7 +40,7 @@ def _build_sandbox_env() -> dict:
     """构建最小化环境变量，只保留 PATH/HOME/LANG 等基础变量，剔除所有 API Key。"""
     env = {}
     safe_keys = {"PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE",
-                 "TERM", "SHELL", "TMPDIR", "TEMP", "TMP", "PYTHONPATH",
+                 "TERM", "SHELL", "TMPDIR", "TEMP", "TMP",
                  "VIRTUAL_ENV", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"}
     for k, v in os.environ.items():
         if k in safe_keys:
@@ -46,6 +50,10 @@ def _build_sandbox_env() -> dict:
         elif k.startswith("PAWN_") or k.startswith("OPENAI_") or k.startswith("DEEPSEEK_"):
             continue  # 剔除所有可能的 API 相关变量
     return env
+
+
+def _invalid_packages(pkgs: list[str], pattern: re.Pattern[str]) -> list[str]:
+    return [pkg for pkg in pkgs if not pattern.fullmatch(pkg)]
 
 
 def _sandbox_preexec(cpu_timeout: int) -> None:
@@ -202,6 +210,9 @@ def tool_run_code(a: dict) -> str:
 
             if install_deps:
                 pkgs = install_deps.split()
+                invalid = _invalid_packages(pkgs, _PY_PKG_NAME_RE)
+                if invalid:
+                    return "ERROR: invalid Python package name(s): " + ", ".join(invalid)
                 print(c(YELLOW, f"  📦 pip install {' '.join(pkgs)}"))
                 out, rc = _run_limited(
                     [py_exec, "-m", "pip", "install", *pkgs, "-q",
@@ -302,6 +313,16 @@ def tool_check_deps(a: dict) -> str:
     if not python_pkgs and not system_pkgs:
         return "ERROR: specify at least one of 'python' or 'system' package lists"
 
+    invalid_python = _invalid_packages(python_pkgs, _PY_PKG_NAME_RE)
+    invalid_system = _invalid_packages(system_pkgs, _SYS_PKG_NAME_RE)
+    if invalid_python or invalid_system:
+        parts = []
+        if invalid_python:
+            parts.append("python=" + ", ".join(invalid_python))
+        if invalid_system:
+            parts.append("system=" + ", ".join(invalid_system))
+        return "ERROR: invalid package name(s): " + "; ".join(parts)
+
     results: list[str] = []
 
     # ── Python packages ───────────────────────────────────
@@ -332,8 +353,8 @@ def tool_check_deps(a: dict) -> str:
     if system_pkgs:
         for pkg in system_pkgs:
             out, rc = _run_limited(
-                f"dpkg -s {pkg} 2>/dev/null | grep '^Status'",
-                timeout=6, cwd=cwd, shell=True, disable_rlimit=True,
+                ["dpkg", "-s", pkg],
+                timeout=6, cwd=cwd, shell=False, disable_rlimit=True,
             )
             found = "install ok" in out.lower()
             mark  = "✓" if found else "✗"

@@ -417,20 +417,25 @@ def get_linked_sessions(session_id: str) -> list[sqlite3.Row]:
             FROM session_links
             WHERE session_a=? OR session_b=?
         """, (session_id, session_id, session_id)).fetchall()
-    if not rows:
-        return []
-    # 补充会话元数据
+
+        if not rows:
+            return []
+
+        linked_ids = [row["other_id"] for row in rows]
+        placeholders = ",".join("?" for _ in linked_ids)
+        meta_rows = conn.execute(f"""
+            SELECT s.id, s.name, s.model, s.tags, s.updated_at, COUNT(m.id) AS msg_count
+            FROM sessions s LEFT JOIN messages m ON s.id = m.session_id
+            WHERE s.id IN ({placeholders})
+            GROUP BY s.id
+        """, linked_ids).fetchall()
+
+    meta_by_id = {row["id"]: row for row in meta_rows}
     result = []
-    with get_conn() as conn:
-        for row in rows:
-            sid  = row["other_id"]
-            meta = conn.execute("""
-                SELECT s.id, s.name, s.model, s.tags, s.updated_at, COUNT(m.id) AS msg_count
-                FROM sessions s LEFT JOIN messages m ON s.id = m.session_id
-                WHERE s.id=? GROUP BY s.id
-            """, (sid,)).fetchone()
-            if meta:
-                result.append({"meta": meta, "note": row["note"], "linked_at": row["created_at"]})
+    for row in rows:
+        meta = meta_by_id.get(row["other_id"])
+        if meta:
+            result.append({"meta": meta, "note": row["note"], "linked_at": row["created_at"]})
     return result
 
 # ════════════════════════════════════════════════════════
@@ -855,28 +860,46 @@ def query_fact(key: str, namespace: str = "global") -> str | None:
 
 
 def search_facts(
-    query_text: str,
+    query_text: str = "",
     namespace: str | None = None,
     limit: int = 10,
+    **legacy_filters,
 ) -> list[sqlite3.Row]:
     """
     Keyword search across fact keys and values.
     Used by session._reset_system_prompt to auto-inject relevant facts.
     """
+    if not query_text and "query" in legacy_filters:
+        query_text = str(legacy_filters["query"])
     init_facts_table()
     keywords = list(set(re.findall(r'[a-zA-Z\u4e00-\u9fff]\w*', query_text.lower())))
     with get_conn() as conn:
+        limit = max(1, int(limit))
         if namespace:
-            rows = conn.execute(
-                "SELECT * FROM agent_facts WHERE namespace=? ORDER BY updated_at DESC",
-                (namespace,),
-            ).fetchall()
+            base_where = ["namespace=?"]
+            params: list[str | int] = [namespace]
         else:
-            rows = conn.execute(
-                "SELECT * FROM agent_facts ORDER BY updated_at DESC"
-            ).fetchall()
+            base_where = []
+            params = []
+
+        if keywords:
+            keyword_clauses = []
+            for kw in keywords:
+                like = f"%{kw}%"
+                keyword_clauses.append(
+                    "(LOWER(key) LIKE ? OR LOWER(value) LIKE ? OR LOWER(namespace) LIKE ?)"
+                )
+                params.extend([like, like, like])
+            base_where.append("(" + " OR ".join(keyword_clauses) + ")")
+
+        where_sql = f"WHERE {' AND '.join(base_where)}" if base_where else ""
+        rows = conn.execute(
+            f"SELECT * FROM agent_facts {where_sql} ORDER BY updated_at DESC LIMIT ?",
+            (*params, limit if not keywords else max(limit * 10, limit)),
+        ).fetchall()
+
     if not keywords:
-        return list(rows[:limit])
+        return list(rows)
     scored = []
     for row in rows:
         text  = (row["key"] + " " + row["value"] + " " + row["namespace"]).lower()

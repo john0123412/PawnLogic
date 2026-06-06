@@ -12,6 +12,7 @@ WRITE_BLACKLIST = [
 
 DANGEROUS_PATTERNS = [
     r"rm\s+-rf\s+[/~]", r"sudo\s+rm\s+-rf", r"mkfs\.",
+    r"rm\s+-rf\s+(\*|\.\/|\./\*|\.)($|\s)",
     r"dd\s+if=", r">\s*/dev/sd", r"chmod\s+-R\s+777\s+/", r"\bshred\b",
     r":\(\)\s*\{.*\|.*&\s*\};\s*:",
     r"curl\s.*\|\s*(ba)?sh",

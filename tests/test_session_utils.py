@@ -12,6 +12,7 @@ Targets zero-dependency or minimal-dependency functions only:
 """
 
 import sys
+import inspect
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -82,6 +83,7 @@ sys.modules["core.skill_manager"].SkillScanner = MagicMock(return_value=_mock_sc
 
 # Now import the real session functions
 from core.session import (  # noqa: E402
+    AgentSession,
     _ctx_chars,
     _trim_and_compact_context,
     _is_plan_exempt,
@@ -118,6 +120,12 @@ def test_ctx_chars_none_content():
 
 def test_ctx_chars_empty():
     assert _ctx_chars([]) == 0
+
+
+def test_cot_guard_soft_intercept_branch_is_reachable():
+    source = inspect.getsource(AgentSession.run_turn)
+    assert "elif _plan_rejected > 0:" in source
+    assert source.index("elif _plan_rejected > 0:") < source.index("_plan_signal_injected = True")
 
 
 # ══════════════════════════════════════════════════════════

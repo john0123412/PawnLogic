@@ -53,6 +53,7 @@ _browser_error = None  # 错误信息
 
 # ── StealthyFetcher 实例（惰性创建）────────────────────
 _stealthy_fetcher = None
+_fetcher_error = None
 _fetcher_lock = threading.Lock()
 
 
@@ -115,7 +116,7 @@ def _get_stealthy_fetcher():
     """获取或创建 StealthyFetcher 实例（Camoufox 反爬引擎）。
     使用 StealthyFetcher.configure() 全局预热，避免首次 fetch 时的冷启动超时。
     """
-    global _stealthy_fetcher
+    global _stealthy_fetcher, _fetcher_error
     with _fetcher_lock:
         if _stealthy_fetcher is None:
             try:
@@ -124,11 +125,13 @@ def _get_stealthy_fetcher():
                 # 后续 fetch() 调用直接复用，消除首次启动的 30s+ 超时
                 StealthyFetcher.configure()
                 _stealthy_fetcher = StealthyFetcher()
+                _fetcher_error = None
             except Exception as e:
                 if isinstance(e, ImportError):
-                    _stealthy_fetcher = "ERROR: 浏览器依赖未安装。修复: pip install 'pawnlogic[browser]'"
-                    return _stealthy_fetcher
-                _stealthy_fetcher = f"ERROR: {e}"
+                    _fetcher_error = "ERROR: 浏览器依赖未安装。修复: pip install 'pawnlogic[browser]'"
+                    return None
+                _fetcher_error = f"ERROR: {e}"
+                return None
         return _stealthy_fetcher
 
 
@@ -188,8 +191,8 @@ def tool_web_fetch(a: dict) -> str:
 
     try:
         fetcher = _get_stealthy_fetcher()
-        if isinstance(fetcher, str):
-            return fetcher
+        if fetcher is None:
+            return _fetcher_error or "ERROR: 浏览器初始化失败"
 
         # StealthyFetcher 基于 Camoufox（反检测 Playwright），timeout 单位为毫秒
         # 超时自动重试：间隔 2s → 5s → 10s，最多 3 次

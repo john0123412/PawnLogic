@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -23,6 +24,7 @@ def _clean_runtime_env(tmp_path: Path) -> dict[str, str]:
         "PAWNLOGIC_HOME": str(tmp_path / "home" / ".pawnlogic"),
         "MCP_ENABLED": "false",
         "PROMPT_TOOLKIT_ENABLED": "0",
+        "PAWNLOGIC_TEST_MODE": "false",
         "TERM": "dumb",
         "NO_COLOR": "1",
     })
@@ -150,7 +152,7 @@ def test_pwn_debug_disables_user_gdbinit_by_default(tmp_path, monkeypatch):
 
     from tools import pwn_chain
 
-    binary = tmp_path / "target"
+    binary = tmp_path / "target' name"
     binary.write_text("not really an elf", encoding="utf-8")
     binary.chmod(0o755)
     captured = {}
@@ -171,4 +173,37 @@ def test_pwn_debug_disables_user_gdbinit_by_default(tmp_path, monkeypatch):
     })
 
     assert "gdb -nx -batch" in captured["cmd"]
+    assert str(binary) in shlex.split(captured["cmd"])
     assert "Breakpoint" in out
+
+
+def test_pwn_chain_quotes_binary_paths_and_filters(tmp_path, monkeypatch):
+    cached = sys.modules.get("tools.pwn_chain")
+    cached_file = getattr(cached, "__file__", "") if cached is not None else ""
+    if cached is not None and str(ROOT) not in cached_file:
+        del sys.modules["tools.pwn_chain"]
+        tools_pkg = sys.modules.get("tools")
+        if tools_pkg is not None and hasattr(tools_pkg, "pwn_chain"):
+            delattr(tools_pkg, "pwn_chain")
+
+    from tools import pwn_chain
+
+    binary = tmp_path / "bin' ; touch owned ; 'x"
+    binary.write_bytes(b"\x7fELF")
+    commands: list[str] = []
+
+    monkeypatch.setattr(pwn_chain, "_check_read", lambda path: (True, ""))
+    monkeypatch.setattr(pwn_chain, "_run", lambda cmd, *a, **kw: commands.append(cmd) or "")
+    pwn_chain._ELF_CACHE.clear()
+
+    pwn_chain.tool_inspect_binary({
+        "path": str(binary),
+        "strings_grep": "needle' ; echo owned ; 'x",
+    })
+
+    split_file_cmd = shlex.split(commands[0])
+    assert split_file_cmd == ["file", str(binary)]
+
+    split_strings_cmd = shlex.split(next(cmd for cmd in commands if cmd.startswith("strings ")))
+    assert str(binary) in split_strings_cmd
+    assert "needle' ; echo owned ; 'x" in split_strings_cmd

@@ -36,6 +36,12 @@ def test_blocks_rm_rf_root():
     assert _is_blocked("rm -rf ~")
 
 
+def test_blocks_rm_rf_relative_wipe_patterns():
+    assert _is_blocked("rm -rf *")
+    assert _is_blocked("rm -rf ./")
+    assert _is_blocked("rm -rf ./*")
+
+
 def test_blocks_sudo():
     assert _is_blocked("sudo apt install x")
     assert _is_blocked("sudo rm -rf /var")

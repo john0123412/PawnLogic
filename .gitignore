@@ -4,7 +4,9 @@
 
 # --- 敏感数据 (核心保护) ---
 .env
+.env.*
 *.Key
+*.key
 *.token
 mcp_configs.json
 

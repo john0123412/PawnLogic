@@ -769,6 +769,43 @@ def stream_request(
 # 单次非流式调用（视觉工具 / memorize 使用）
 # ════════════════════════════════════════════════════════
 
+def _parse_openai_nonstream_text(raw_body: bytes) -> tuple[str, str | None]:
+    """Parse a non-streaming OpenAI-compatible response defensively."""
+    try:
+        data = json.loads(raw_body)
+    except json.JSONDecodeError as exc:
+        return "", f"Invalid JSON response: {exc}"
+
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not isinstance(choices, list) or not choices:
+        return "", "Response missing choices"
+
+    first = choices[0]
+    if not isinstance(first, dict):
+        return "", "Response choices[0] is not an object"
+
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return "", "Response missing message"
+
+    content = message.get("content")
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+            elif isinstance(part, str):
+                parts.append(part)
+        content = "".join(parts)
+
+    if not isinstance(content, str):
+        return "", "Response missing message.content"
+
+    text = content.strip()
+    if not text:
+        return "", "Response message.content is empty"
+    return text, None
+
 def call_once(
     messages: list,
     model_alias: str,
@@ -828,9 +865,7 @@ def call_once(
         if api_fmt == "anthropic":
             return _anthropic_parse_response(raw)
         else:
-            data = json.loads(raw)
-            text = data["choices"][0]["message"]["content"].strip()
-            return text, None
+            return _parse_openai_nonstream_text(raw)
 
     except socket.timeout:
         return "", "非流式调用超时"

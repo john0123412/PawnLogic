@@ -249,11 +249,19 @@ async def cmd_failures(ctx: CommandContext) -> None:
 # Tier presets
 # ════════════════════════════════════════════════════════
 
+def _tier_confirmation(label: str, tier: dict) -> str:
+    return (
+        f"  ✓ 已切换到 {label}: "
+        f"tokens={tier['max_tokens']:,}, "
+        f"ctx={tier['ctx_max_chars']:,}, "
+        f"iter={tier['max_iter']}"
+    )
+
 @register("/low")
 async def cmd_low(ctx: CommandContext) -> None:
     DYNAMIC_CONFIG.update(TIER_LOW)
     ctx.session._reset_system_prompt()
-    print(c(GREEN, "  ✓ /low 模式（日常 / 算法）"))
+    print(c(GREEN, _tier_confirmation("/low 日常模式", TIER_LOW)))
     print(fmt_config())
 
 
@@ -261,7 +269,7 @@ async def cmd_low(ctx: CommandContext) -> None:
 async def cmd_mid(ctx: CommandContext) -> None:
     DYNAMIC_CONFIG.update(TIER_MID)
     ctx.session._reset_system_prompt()
-    print(c(YELLOW, "  ✓ /mid 模式（开发 / Pwn）"))
+    print(c(YELLOW, _tier_confirmation("/mid 开发模式", TIER_MID)))
     print(fmt_config())
 
 
@@ -269,7 +277,7 @@ async def cmd_mid(ctx: CommandContext) -> None:
 async def cmd_deep(ctx: CommandContext) -> None:
     DYNAMIC_CONFIG.update(TIER_DEEP)
     ctx.session._reset_system_prompt()
-    print(c(BOLD + MAGENTA, "  🔥 /deep 全火力"))
+    print(c(BOLD + MAGENTA, _tier_confirmation("/deep 全火力模式", TIER_DEEP)))
     print(fmt_config())
 
 
@@ -277,7 +285,7 @@ async def cmd_deep(ctx: CommandContext) -> None:
 async def cmd_max(ctx: CommandContext) -> None:
     DYNAMIC_CONFIG.update(TIER_MAX)
     ctx.session._reset_system_prompt()
-    print(c(BOLD + RED, "  💀 /max 极限火力（iter=100, ctx=600k, 60min）"))
+    print(c(BOLD + RED, _tier_confirmation("/max 极限火力模式", TIER_MAX)))
     print(fmt_config())
 
 
