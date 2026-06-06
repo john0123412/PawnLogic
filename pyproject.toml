@@ -45,6 +45,7 @@ dev = [
     "ruff>=0.4",
 ]
 docker = ["docker>=6.0"]
+browser = ["scrapling>=0.2", "patchright>=1.40"]
 
 [project.urls]
 Homepage = "https://github.com/john0123412/PawnLogic"

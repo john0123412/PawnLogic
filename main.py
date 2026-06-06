@@ -11,21 +11,45 @@ PawnLogic — main.py
   source ~/.bashrc
   pawn   # 首次运行会自动进入 API Key 配置向导
 """
-import os, sys, shutil, argparse, time, asyncio
+import os, sys, shutil, argparse, time, asyncio, traceback
+
+if sys.version_info < (3, 10):
+    print(
+        "PawnLogic 需要 Python 3.10+，当前版本: "
+        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+def _fatal_startup_import_error(exc: ImportError) -> None:
+    print(
+        "PawnLogic 启动失败：缺少依赖或配置模块无法导入。\n"
+        f"错误: {exc}\n"
+        "请在项目目录运行: pip install -r requirements.txt\n"
+        "如果是 pip 安装，请运行: pip install --upgrade pawnlogic",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 # ── 退出哨兵值（handle_slash 返回此值表示用户请求退出）────
 # Re-exported from core.commands._common; the new system.py /exit handler
 # returns the same sentinel object so identity comparison still works.
-from core.commands._common import EXIT_SENTINEL as _EXIT_SENTINEL
+try:
+    from core.commands._common import EXIT_SENTINEL as _EXIT_SENTINEL
 
-# ── 延迟渲染队列：/load /resume 入口主动 set，主循环在 prompt_async 前消费。
-# 迁移后状态存于 core/commands/_common.py，这里仅保留函数引用。
-from core.commands._common import set_deferred_history, take_deferred_history
+    # ── 延迟渲染队列：/load /resume 入口主动 set，主循环在 prompt_async 前消费。
+    # 迁移后状态存于 core/commands/_common.py，这里仅保留函数引用。
+    from core.commands._common import set_deferred_history, take_deferred_history
 
-# Provider/key helpers used by main()'s startup wizard. Their canonical
-# definitions live in core/commands/provider.py (loaded eagerly by
-# core.commands.__init__).
-from core.commands.provider import _run_key_wizard, _visible_models
+    # Provider/key helpers used by main()'s startup wizard. Their canonical
+    # definitions live in core/commands/provider.py (loaded eagerly by
+    # core.commands.__init__).
+    from core.commands.provider import _run_key_wizard, _visible_models
+except ImportError as _startup_import_error:
+    _fatal_startup_import_error(_startup_import_error)
 
 try:
     import readline  # noqa  — Windows 原生无此模块，Tab 补全见 main() 内
@@ -87,10 +111,30 @@ except Exception as _e:
     _RICH_IMPORT_ERROR = str(_e)
     _rich_console = None
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 def _default_pawnlogic_home() -> Path:
-    return Path(os.environ.get("PAWNLOGIC_HOME", Path.home() / ".pawnlogic")).expanduser()
+    raw = os.environ.get("PAWNLOGIC_HOME")
+    if raw:
+        return Path(raw).expanduser()
+    try:
+        home = Path.home()
+    except Exception:
+        home = Path(os.environ.get("TMPDIR") or "/tmp")
+    return (home / ".pawnlogic").expanduser()
+
+
+def _manual_load_env(path: Path) -> None:
+    try:
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key:
+                os.environ.setdefault(key, value)
+    except Exception as exc:
+        print(f"\033[93m  ⚠ 无法读取 {path}: {exc}\033[0m", file=sys.stderr)
 
 
 # ── 启动时加载 .env（必须在 import config 之前）───────────
@@ -101,10 +145,13 @@ try:
     from dotenv import load_dotenv
     if _ENV_PATH.exists():
         load_dotenv(dotenv_path=_ENV_PATH)
-    else:
-        print(f"\033[93m  ⚠ 警告: 未找到 {_ENV_PATH} 文件\033[0m")
 except ImportError:
-    print("\033[93m  ⚠ 警告: 未安装 python-dotenv！请执行 pip install python-dotenv\033[0m")
+    if _ENV_PATH.exists():
+        print(
+            "\033[93m  ⚠ 警告: 未安装 python-dotenv，已尝试用内置解析器加载 .env。\033[0m",
+            file=sys.stderr,
+        )
+        _manual_load_env(_ENV_PATH)
 
 # ── 代理（最先初始化）────────────────────────────────────
 import urllib.request
@@ -123,22 +170,25 @@ def _install_proxy():
 
 PROXY_STATUS = _install_proxy()
 
-import config  # kept for backward-compat attribute access
-from core.state import state as _runtime_state
-from config import (
-    VERSION, DYNAMIC_CONFIG,
-    MODELS, DB_PATH, PROVIDERS,
-    validate_api_key, list_vision_models,
-)
-from utils.ansi       import c, cp, BOLD, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
-from core.session     import (
-    AgentSession, STATE_FILENAME,
-    attach_external_mcp_tools, detach_external_mcp_tools,
-)
-from core.memory import init_db
-from core.persistence import session_load, _display_session_history
-# ★ 新增：loguru 日志模块
-from core.logger import logger, setup_logger
+try:
+    import config  # kept for backward-compat attribute access
+    from core.state import state as _runtime_state
+    from config import (
+        VERSION, DYNAMIC_CONFIG,
+        MODELS, DB_PATH, PROVIDERS,
+        validate_api_key, list_vision_models,
+    )
+    from utils.ansi       import c, cp, BOLD, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
+    from core.session     import (
+        AgentSession, STATE_FILENAME,
+        attach_external_mcp_tools, detach_external_mcp_tools,
+    )
+    from core.memory import init_db
+    from core.persistence import session_load, _display_session_history
+    # ★ 新增：loguru 日志模块
+    from core.logger import logger, setup_logger
+except ImportError as _startup_import_error:
+    _fatal_startup_import_error(_startup_import_error)
 
 # ════════════════════════════════════════════════════════
 # 模块 2：交互式 API Key 配置向导
@@ -265,6 +315,69 @@ HELP_TEXT = f"""
 
   {c(YELLOW,"/exit")}  退出
 """
+
+HELP_TEXT_CN = HELP_TEXT
+HELP_TEXT_EN = f"""
+{c(BOLD+CYAN, f"PawnLogic {VERSION} — Commands")}
+
+{c(BOLD, "Conversation")}
+  {c(YELLOW, "/mode")}            Toggle USER / DEV output mode
+  {c(YELLOW, "/model [alias]")}   Switch model. Available: {", ".join(MODELS.keys())}
+  {c(YELLOW, "/clear")}           Clear context while keeping pinned messages
+  {c(YELLOW, "/context")}         Show context size and token estimate
+  {c(YELLOW, "/pin [n]")}         Pin the last n messages
+  {c(YELLOW, "/undo [n]")}        Undo recent turns
+  {c(YELLOW, "/compact")}         Summarize and compact context
+  {c(YELLOW, "/think <prompt>")}  Run one deeper reasoning turn
+  {c(YELLOW, "/cd <path>")}       Change working directory
+  {c(YELLOW, "/file <path>")}     Add a file to context
+
+{c(BOLD, "API & Models")}
+  {c(CYAN, "/setkey")}            Run API key setup again
+  {c(CYAN, "/keys")}              Show configured key status
+  {c(CYAN, "/provider")}          Open provider management panel
+  {c(CYAN, "/provider list")}     List provider status
+  {c(CYAN, "/provider add")}      Add a custom provider
+  {c(CYAN, "/provider test <model>")} Test provider connectivity
+
+{c(BOLD, "Sessions & Memory")}
+  {c(CYAN, "/save [name]")}       Save current session
+  {c(CYAN, "/load <name|n>")}     Load a saved session
+  {c(CYAN, "/sessions")}          List sessions
+  {c(CYAN, "/resume [n]")}        Resume and display history
+  {c(MAGENTA, "/memorize [topic]")} Save a summary to knowledge base
+  {c(MAGENTA, "/knowledge [query]")} Search knowledge entries
+
+{c(BOLD, "Runtime")}
+  {c(GREEN, "/low")}   Light mode
+  {c(YELLOW, "/mid")}  Default mode
+  {c(MAGENTA, "/deep")} Deep mode
+  {c(RED, "/max")}     Maximum mode
+  {c(YELLOW, "/limits")} Show current limits
+  {c(YELLOW, "/webstatus /browserstatus /docker /pwnenv")} Tool status
+
+{c(BOLD, "Projects & History")}
+  {c(YELLOW, "/init_project [desc]")} Create .pawn_state.md
+  {c(YELLOW, "/state")}               Show .pawn_state.md
+  {c(CYAN, "/chat list [n]")}         List recent sessions
+  {c(CYAN, "/chat find <keyword>")}   Search all sessions
+  {c(CYAN, "/workspace status")}      Show workspace status
+
+{c(YELLOW, "/exit")} Exit
+"""
+
+
+def _locale_prefers_english() -> bool:
+    locale = (
+        os.environ.get("LC_ALL")
+        or os.environ.get("LC_MESSAGES")
+        or os.environ.get("LANG")
+        or ""
+    ).lower()
+    return bool(locale) and not locale.startswith("zh")
+
+
+HELP_TEXT = HELP_TEXT_EN if _locale_prefers_english() else HELP_TEXT_CN
 
 
 # ════════════════════════════════════════════════════════
@@ -465,16 +578,20 @@ class PawnCompleter(Completer):
 
 def _has_any_api_key() -> bool:
     """检查是否至少有一个可用的 API Key。"""
-    return any(os.getenv(p["api_key_env"], "") for p in PROVIDERS.values())
+    return any(
+        os.getenv(p["api_key_env"], "") not in ("", "YOUR_API_KEY_HERE")
+        for p in PROVIDERS.values()
+        if p.get("api_key_env")
+    )
 
 
 
 
-def first_run_wizard() -> None:
+def first_run_wizard() -> str | None:
     """
     首次运行配置向导。
     当 .env 不存在或没有任何可用 API Key 时自动触发。
-    引导用户选择 API 格式、填入 URL 和 Key，写入 .env 和 custom_providers.json。
+    引导用户选择服务商并返回本次应启用的模型别名。
     """
     from config.providers import save_custom_provider
 
@@ -483,32 +600,64 @@ def first_run_wizard() -> None:
     print("  首次运行需要配置一个 AI 接口，仅需 1 分钟。")
     print("═" * 56 + "\n")
 
-    print("第一步：选择 API 格式")
-    print("  1. OpenAI 兼容格式（DeepSeek / Qwen / Ollama 等大多数服务）")
-    print("  2. Anthropic 原生格式（仅限 Claude 官方 API）\n")
+    choices = {
+        "1": {
+            "label": "DeepSeek",
+            "api_format": "openai",
+            "env_key": "DEEPSEEK_API_KEY",
+            "default_alias": "ds-v4-flash",
+            "default_model": "deepseek-v4-flash",
+            "default_url": "https://api.deepseek.com/v1/chat/completions",
+            "custom": False,
+        },
+        "2": {
+            "label": "OpenAI",
+            "api_format": "openai",
+            "env_key": "OPENAI_API_KEY",
+            "default_alias": "gpt-5.4-mini",
+            "default_model": "gpt-5.4-mini",
+            "default_url": "https://api.openai.com/v1/chat/completions",
+            "custom": False,
+        },
+        "3": {
+            "label": "Anthropic",
+            "api_format": "anthropic",
+            "env_key": "ANTHROPIC_API_KEY",
+            "default_alias": "claude-sonnet",
+            "default_model": "claude-sonnet-4-6",
+            "default_url": "https://api.anthropic.com/v1/messages",
+            "custom": False,
+        },
+        "4": {
+            "label": "自定义 OpenAI 兼容服务",
+            "api_format": "openai",
+            "env_key": "",
+            "default_alias": "",
+            "default_model": "",
+            "default_url": "https://api.example.com/v1/chat/completions",
+            "custom": True,
+        },
+    }
+
+    print("第一步：选择服务商")
+    print("  1. DeepSeek（默认，低成本）")
+    print("  2. OpenAI 官方")
+    print("  3. Anthropic 官方 Claude")
+    print("  4. 自定义 OpenAI 兼容服务\n")
 
     while True:
-        fmt = input("请输入 1 或 2（默认 1）：").strip() or "1"
-        if fmt in ("1", "2"):
+        selection = input("请输入 1-4（默认 1）：").strip() or "1"
+        if selection in choices:
             break
-        print("  请输入 1 或 2")
+        print("  请输入 1、2、3 或 4")
 
-    api_format = "openai" if fmt == "1" else "anthropic"
+    choice = choices[selection]
+    api_format = choice["api_format"]
 
-    default_urls = {
-        "openai": "https://api.deepseek.com/v1/chat/completions",
-        "anthropic": "https://api.anthropic.com/v1/messages",
-    }
-    default_models = {
-        "openai": "deepseek-chat",
-        "anthropic": "claude-sonnet-4-6",
-    }
-
-    print(f"\n第二步：填入接口信息（{api_format.upper()} 格式）")
-    default_url = default_urls[api_format]
-    base_url = input(f"  API Base URL\n  直接回车使用默认：{default_url}\n  > ").strip()
-    if not base_url:
-        base_url = default_url
+    print(f"\n第二步：填入接口信息（{choice['label']}）")
+    base_url = choice["default_url"]
+    if choice["custom"]:
+        base_url = input(f"  API Base URL\n  直接回车使用默认：{base_url}\n  > ").strip() or base_url
 
     api_key = ""
     while not api_key:
@@ -516,45 +665,52 @@ def first_run_wizard() -> None:
         if not api_key:
             print("  API Key 不能为空")
 
-    default_model = default_models[api_format]
-    model_id = input(
-        f"\n  模型 ID（直接回车使用默认：{default_model}）：\n  > "
-    ).strip() or default_model
+    if choice["custom"]:
+        default_model = choice["default_model"] or "my-model"
+        model_id = input(
+            f"\n  模型 ID（直接回车使用默认：{default_model}）：\n  > "
+        ).strip() or default_model
 
-    alias = ""
-    while not alias:
-        alias = input(
-            "\n  给这个模型起个别名（如 my-claude / my-deepseek）：\n  > "
-        ).strip()
-        if not alias:
-            print("  别名不能为空")
+        alias = ""
+        while not alias:
+            alias = input(
+                "\n  给这个模型起个别名（如 my-claude / my-deepseek）：\n  > "
+            ).strip()
+            if not alias:
+                print("  别名不能为空")
+        env_key = f"{alias.upper().replace('-', '_').replace(' ', '_')}_API_KEY"
+    else:
+        alias = choice["default_alias"]
+        model_id = choice["default_model"]
+        env_key = choice["env_key"]
 
     # 写入 .env（追加模式，避免覆盖已有内容）
-    env_key = f"{alias.upper().replace('-', '_').replace(' ', '_')}_API_KEY"
     env_path = _ENV_PATH
     _PAWNLOGIC_DIR.mkdir(parents=True, exist_ok=True)
     with open(env_path, "a", encoding="utf-8") as f:
         f.write(f"\n# 由首次运行向导自动生成\n{env_key}={api_key}\n")
+    os.chmod(env_path, 0o600)
 
-    # 写入 custom_providers.json（结构配置，不含 Key）
-    save_custom_provider(
-        name=alias,
-        prov_cfg={
-            "base_url": base_url,
-            "api_key_env": env_key,
-            "label": alias,
-            "api_format": api_format,
-        },
-        models_cfg={
-            alias: {
-                "id": model_id,
-                "provider": alias,
-                "desc": f"用户配置 ({api_format})",
-                "color": "\033[37m",
-                "vision": False,
-            }
-        },
-    )
+    if choice["custom"]:
+        # 写入 custom_providers.json（结构配置，不含 Key）
+        save_custom_provider(
+            name=alias,
+            prov_cfg={
+                "base_url": base_url,
+                "api_key_env": env_key,
+                "label": alias,
+                "api_format": api_format,
+            },
+            models_cfg={
+                alias: {
+                    "id": model_id,
+                    "provider": alias,
+                    "desc": f"用户配置 ({api_format})",
+                    "color": "\033[37m",
+                    "vision": False,
+                }
+            },
+        )
 
     # 重新加载 .env，让当前进程能立即使用新 Key
     try:
@@ -565,8 +721,17 @@ def first_run_wizard() -> None:
 
     print(f"\n✓ 配置完成！")
     print(f"  模型别名：{alias}")
-    print(f"  启动后使用 /model {alias} 确认切换\n")
+    print(f"  已自动切换到 /model {alias}\n")
     print("═" * 56 + "\n")
+    return alias
+
+
+def _ensure_runtime_dir_writable(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    probe = path / ".write_test"
+    with open(probe, "w", encoding="utf-8") as f:
+        f.write("ok")
+    probe.unlink(missing_ok=True)
 
 
 # ════════════════════════════════════════════════════════
@@ -645,6 +810,7 @@ async def _run_eval_mode(session: AgentSession, args, sink) -> None:
             session.run_turn(args.eval)
         except Exception as exc:  # noqa: BLE001
             sink.print(c(RED, f"  ✗ {exc}"))
+            traceback.print_exc()
             detach_external_mcp_tools()
             sys.exit(1)
 
@@ -700,6 +866,36 @@ async def main():
     sink = JsonSink() if args.json else HumanSink()
     set_active_sink(sink)
 
+    _is_test_mode = os.environ.get("PAWNLOGIC_TEST_MODE", "").lower() in ("1", "true", "yes")
+    _first_run_required = (
+        not _is_test_mode
+        and (not _ENV_PATH.exists() or not _has_any_api_key())
+    )
+
+    if args.json and _first_run_required:
+        sink.print_json({
+            "type": "error",
+            "stage": "startup",
+            "detail": (
+                "首次运行需要先完成 API 配置向导。请先运行 `pawn` 完成配置，"
+                "或设置对应 API key 环境变量后再使用 --json。"
+            ),
+        })
+        sys.exit(2)
+
+    try:
+        _ensure_runtime_dir_writable(_PAWNLOGIC_DIR)
+    except Exception as exc:
+        detail = (
+            f"无法写入运行目录 {_PAWNLOGIC_DIR}: {exc}\n"
+            "请检查 HOME/PAWNLOGIC_HOME、目录权限或磁盘空间。"
+        )
+        if args.json:
+            sink.print_json({"type": "error", "stage": "startup", "detail": detail})
+        else:
+            print(c(RED, f"  ✗ {detail}"))
+        sys.exit(1)
+
     # ★ 初始化 loguru 双端输出
     # · QUIET_MODE 下终端只输出 WARNING 及以上，减少干扰
     # · --json 模式下同样强制 WARNING，避免 INFO/DEBUG 混入 NDJSON 消费者
@@ -719,20 +915,33 @@ async def main():
         _runtime_state.quiet_mode,
     )
 
-    # 确保运行时数据目录存在（开源友好：基于 Path.home()，无硬路径）
-    _PAWNLOGIC_DIR.mkdir(parents=True, exist_ok=True)
-    init_db()
+    try:
+        init_db()
+    except Exception as exc:
+        detail = (
+            f"数据库初始化失败: {exc}\n"
+            f"请确认 {_PAWNLOGIC_DIR} 可写，或设置 PAWNLOGIC_HOME 到可写目录。"
+        )
+        logger.exception("init_db failed")
+        if args.json:
+            sink.print_json({"type": "error", "stage": "init_db", "detail": detail})
+        else:
+            print(c(RED, f"  ✗ {detail}"))
+        sys.exit(1)
     attach_external_mcp_tools()
     # Sync custom providers/models into memory on every startup
     from config.providers import load_custom_providers as _lcp
     _lcp()
 
     # ── 首次运行向导（新）────────────────────────────────
-    _is_test_mode = os.environ.get("PAWNLOGIC_TEST_MODE", "").lower() in ("1", "true", "yes")
-    if not _is_test_mode and (not _ENV_PATH.exists() or not _has_any_api_key()):
+    first_run_model_alias = None
+    if _first_run_required:
         from core.state import state as _st
         _st.is_first_run = True
-        first_run_wizard()
+        try:
+            first_run_model_alias = first_run_wizard()
+        except (EOFError, KeyboardInterrupt):
+            print(c(YELLOW, "\n  已取消首次配置向导。启动后可用 /setkey 重新配置。\n"))
         from config.providers import load_custom_providers
         load_custom_providers()
 
@@ -743,7 +952,7 @@ async def main():
         for p in PROVIDERS.values()
         if p.get("api_key_env")
     )
-    if not _is_test_mode and not any_key:
+    if not _is_test_mode and not any_key and not first_run_model_alias:
         configured = _run_key_wizard()
         if not configured:
             print(c(YELLOW,
@@ -752,6 +961,8 @@ async def main():
             ))
 
     session = AgentSession()
+    if first_run_model_alias and first_run_model_alias in MODELS:
+        session.model_alias = first_run_model_alias
 
     # Apply --model startup flag
     if args.model:
@@ -767,9 +978,13 @@ async def main():
         return
 
 
-    # 启动时工具可用性检测
-    BIN_TOOLS = ["gcc","g++","gdb","node","ROPgadget","checksec","objdump","pandoc"]
-    tool_tags = [c(GREEN, t) if shutil.which(t) else c(GRAY, f"{t}?") for t in BIN_TOOLS]
+    # 启动时工具可用性检测。CTF 工具仅在至少安装一个时展示，避免普通用户误以为安装失败。
+    CORE_TOOLS = ["gcc","g++","gdb","node","pandoc"]
+    CTF_TOOLS = ["ROPgadget","checksec","objdump"]
+    tool_tags = [c(GREEN, t) if shutil.which(t) else c(GRAY, f"{t}?") for t in CORE_TOOLS]
+    ctf_tags = [c(GREEN, t) if shutil.which(t) else c(GRAY, f"{t}?") for t in CTF_TOOLS]
+    if any(shutil.which(t) for t in CTF_TOOLS):
+        tool_tags.append(c(GRAY, "ctf:") + " " + "  ".join(ctf_tags))
 
     proxy_line = (c(GREEN, f"  proxy : {PROXY_STATUS}") if PROXY_STATUS
                   else c(GRAY, "  proxy : 未设置"))
@@ -1081,9 +1296,9 @@ async def main():
         )
 
         if not _runtime_state.quiet_mode:
-            print(c(GRAY, "  🐚 PawnCompleter 就绪（内置模糊匹配 + 退格不消失 + 底部工具栏）"))
+            print(c(GRAY, "  🐚 Tab 补全已启用（高级模式）"))
             if _HAS_RICH:
-                print(c(GRAY, "  📝 rich 就绪（Markdown 渲染 + 代码高亮）"))
+                print(c(GRAY, "  📝 Markdown 渲染和代码高亮已启用"))
             elif _RICH_IMPORT_ERROR:
                 print(c(YELLOW, f"  ⚠ rich 加载失败: {_RICH_IMPORT_ERROR}"))
     else:
@@ -1114,7 +1329,7 @@ async def main():
             atexit.register(lambda: _safe_write_history(_history_path))
 
         if not _runtime_state.quiet_mode:
-            print(c(GRAY, "  🐚 readline 降级模式（Tab 补全可用，无模糊匹配）"))
+            print(c(GRAY, "  🐚 Tab 补全已启用（基础模式）"))
             if _PT_IMPORT_ERROR:
                 print(c(YELLOW, f"  ⚠ prompt_toolkit 加载失败: {_PT_IMPORT_ERROR}"))
                 print(c(YELLOW, f"     Python: {sys.executable}"))
@@ -1202,6 +1417,7 @@ async def main():
             break
         except Exception as _loop_exc:
             logger.error("Main loop error: {!r}", _loop_exc)
+            print(c(RED, f"  ✗ 发生了一个内部错误，已写入日志: {config.LOG_DIR}"))
             continue
 
     # ── 优雅退出：收割所有存活的 asyncio tasks ────────────
@@ -1217,7 +1433,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print(c(CYAN, "\n\n  Goodbye! 👋"))
     except SystemExit:
-        pass
+        raise
     finally:
         detach_external_mcp_tools()
 
@@ -1229,6 +1445,6 @@ def run():
     except KeyboardInterrupt:
         print(c(CYAN, "\n\n  Goodbye! 👋"))
     except SystemExit:
-        pass
+        raise
     finally:
         detach_external_mcp_tools()

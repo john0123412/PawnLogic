@@ -325,7 +325,8 @@ def tool_pwn_debug(a: dict) -> str:
         gdb_inputs = bp_cmds + [f"{cmd}\n" for cmd in commands] + ["quit\n"]
         if a.get("inputs"):
             gdb_inputs = list(a["inputs"]) + gdb_inputs
-        gdb_cmd = f"gdb -q '{path}'"
+        gdb_opts = "" if use_pwndbg else "-nx "
+        gdb_cmd = f"gdb {gdb_opts}-q '{path}'"
         print(c(MAGENTA, f"  🐛 [interactive] {gdb_cmd}"))
         return tool_run_interactive({
             "command": gdb_cmd,
@@ -382,11 +383,12 @@ def tool_pwn_debug(a: dict) -> str:
         f.write("\n".join(script_lines) + "\n")
         script_path = f.name
 
-    print(c(MAGENTA, f"  🐛 gdb -batch -x {script_path} {path}"))
+    gdb_opts = "" if use_pwndbg else "-nx "
+    print(c(MAGENTA, f"  🐛 gdb {gdb_opts}-batch -x {script_path} {path}"))
     print(c(GRAY, f"  断点: {breakpoints}  命令: {commands}"))
 
     try:
-        cmd = f"gdb -batch -x '{script_path}' '{path}' 2>&1"
+        cmd = f"gdb {gdb_opts}-batch -x '{script_path}' '{path}' 2>&1"
         result = _run(cmd, timeout=timeout, cwd=_session_cwd[0])
     finally:
         try: os.unlink(script_path)
@@ -403,7 +405,7 @@ def tool_pwn_debug(a: dict) -> str:
             _bt_cmds.extend(["bt full", "quit"])
             with open(_bt_script, "w") as _bf:
                 _bf.write("\n".join(_bt_cmds) + "\n")
-            _bt_cmd = f"gdb -batch -x '{_bt_script}' '{path}' 2>&1"
+            _bt_cmd = f"gdb {gdb_opts}-batch -x '{_bt_script}' '{path}' 2>&1"
             if input_file:
                 pass  # input_file 已在脚本中通过 run < 指定
             _bt_out = _run(_bt_cmd, timeout=timeout, cwd=_session_cwd[0])

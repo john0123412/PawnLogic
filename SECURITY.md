@@ -4,7 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.0.1   | ✅ Yes     |
+| 0.0.5   | ✅ Yes     |
+| 0.0.1 – 0.0.4 | ⚠️ Upgrade recommended |
 | < 0.0.1 | ❌ No      |
 
 ## Reporting a Vulnerability

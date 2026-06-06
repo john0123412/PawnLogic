@@ -22,7 +22,7 @@ tools/browser_ops.py — P5: Scrapling 浏览器武器库
   · 编码清洗 errors='ignore'，防止终端崩溃
 
 依赖：
-  · pip install 'scrapling[ai]'（含 patchright、playwright）
+  · pip install 'pawnlogic[browser]'（含 scrapling、patchright）
   · patchright install chromium（首次使用自动下载浏览器）
 """
 
@@ -68,7 +68,7 @@ def _get_page():
             from patchright.sync_api import sync_playwright
         except ImportError:
             _browser_error = (
-                "patchright 未安装。修复: pip install patchright && patchright install chromium"
+                "浏览器依赖未安装。修复: pip install 'pawnlogic[browser]' && patchright install chromium"
             )
             return None
 
@@ -125,6 +125,9 @@ def _get_stealthy_fetcher():
                 StealthyFetcher.configure()
                 _stealthy_fetcher = StealthyFetcher()
             except Exception as e:
+                if isinstance(e, ImportError):
+                    _stealthy_fetcher = "ERROR: 浏览器依赖未安装。修复: pip install 'pawnlogic[browser]'"
+                    return _stealthy_fetcher
                 _stealthy_fetcher = f"ERROR: {e}"
         return _stealthy_fetcher
 
@@ -368,8 +371,8 @@ except ImportError:
 def browser_tool_status() -> str:
     """返回浏览器工具可用性状态。"""
     parts = [
-        ("Scrapling 库",    _scrapling_ok,    "pip install 'scrapling[ai]'" if not _scrapling_ok else "已安装"),
-        ("Patchright",      _patchright_ok,   "pip install patchright" if not _patchright_ok else "已安装"),
+        ("Scrapling 库",    _scrapling_ok,    "pip install 'pawnlogic[browser]'" if not _scrapling_ok else "已安装"),
+        ("Patchright",      _patchright_ok,   "pip install 'pawnlogic[browser]' && patchright install chromium" if not _patchright_ok else "已安装"),
         ("浏览器实例",       _page is not None and not (_page.is_closed() if _page else True),
                                               "未启动（首次使用时自动启动）" if _page is None else "已连接"),
         ("截图目录",         True,             SCREENSHOT_DIR),

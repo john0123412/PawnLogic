@@ -83,9 +83,14 @@
 |-----------------|----------------------------|--------------------|
 | `ds-v4-flash`   | deepseek-v4-flash          | 默认主力，快速低成本 |
 | `ds-v4-pro`     | deepseek-v4-pro            | 旗舰推理           |
+| `gpt-5.5`       | gpt-5.5                    | OpenAI 最新旗舰    |
+| `gpt-5.4`       | gpt-5.4                    | 编程与专业工作     |
+| `gpt-5.4-mini`  | gpt-5.4-mini               | 轻量高效           |
+| `gpt-5.4-nano`  | gpt-5.4-nano               | OpenAI 最低成本模型 |
 | `gpt-4o`        | gpt-4o                     | 视觉 + 多模态      |
 | `gpt-4.1`       | gpt-4.1                    | 代码与指令跟随     |
 | `o3`            | o3                         | 复杂推理           |
+| `claude-opus`   | claude-opus-4-6            | 前沿推理旗舰       |
 | `claude-sonnet` | claude-sonnet-4-6          | 均衡主力           |
 | `claude-haiku`  | claude-haiku-4-5-20251001  | 快速低成本         |
 
@@ -121,6 +126,13 @@
 
 ## 安装与部署
 
+### 系统要求
+
+- Linux 或 WSL2
+- Python 3.10+
+- `pip` 和 `git`
+- 如需全局 `pawn` 命令，`~/.local/bin` 需要在 `PATH` 中
+
 ### WSL2 / Ubuntu（推荐）
 
 ```bash
@@ -138,6 +150,12 @@ python main.py
 chmod +x pawn.sh
 ln -sf "$(pwd)/pawn.sh" ~/.local/bin/pawn
 # 之后在任意目录输入 pawn 即可启动
+```
+
+如果提示 `pawn: command not found`，运行：
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ### MCP 工具接入
@@ -324,6 +342,18 @@ A: `/provider` → 选择 Provider → Enter → Manage Models → 上下键 →
 
 **Q: API Key 在哪里？**  
 A: `~/.pawnlogic/.env`，不在项目目录，不会被 git 追踪。
+
+**Q: 安装后提示 `pawn: command not found`？**  
+A: 把用户命令目录加入 PATH：`export PATH="$HOME/.local/bin:$PATH"`。
+
+**Q: 启动提示需要 Python 3.10+？**  
+A: 安装更新版本的 Python，并用该版本重新创建虚拟环境。
+
+**Q: 浏览器工具提示缺少模块？**  
+A: 安装可选浏览器依赖：`pip install 'pawnlogic[browser]'`，然后运行 `patchright install chromium`。
+
+**Q: WSL2 下 PATH 或工具检测异常？**  
+A: 尽量从 Linux 文件系统启动，不要在 `/mnt/c/...` 下运行，并让 Linux 工具路径排在 Windows 路径前面。
 
 **Q: 支持 Ollama 本地模型吗？**  
 A: 支持。通过 `/provider add` 注册，Base URL 填 `http://localhost:11434`，Key 留空或填任意字符串。

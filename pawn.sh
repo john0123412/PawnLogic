@@ -3,8 +3,26 @@
 # 自动定位 venv 并激活，然后运行 main.py。
 # 用法: ln -sf ~/.local/share/pawnlogic/pawn.sh ~/.local/bin/pawn
 
+readlink_f() {
+    if readlink -f "$1" >/dev/null 2>&1; then
+        readlink -f "$1"
+    else
+        local target="$1"
+        local dir
+        while [ -L "$target" ]; do
+            dir="$(cd "$(dirname "$target")" && pwd)"
+            target="$(readlink "$target")"
+            case "$target" in
+                /*) ;;
+                *) target="$dir/$target" ;;
+            esac
+        done
+        cd "$(dirname "$target")" && printf '%s/%s\n' "$(pwd)" "$(basename "$target")"
+    fi
+}
+
 # 1. 追踪真实路径（解决软链接调用问题）
-REAL_PATH=$(readlink -f "${BASH_SOURCE[0]}")
+REAL_PATH=$(readlink_f "${BASH_SOURCE[0]}")
 SCRIPT_DIR="$(cd "$(dirname "$REAL_PATH")" && pwd)"
 
 # 2. 寻找 venv（仅保留相对路径，提高迁移性）
@@ -14,9 +32,12 @@ _VENV_CANDIDATES=(
 )
 
 _VENV_FOUND=""
+_PYTHON=""
 for _candidate in "${_VENV_CANDIDATES[@]}"; do
     if [ -f "$_candidate" ]; then
         _VENV_FOUND="$_candidate"
+        _PYTHON="$(dirname "$_candidate")/python3"
+        [ ! -x "$_PYTHON" ] && _PYTHON="$(dirname "$_candidate")/python"
         break
     fi
 done
@@ -39,6 +60,10 @@ else
     fi
 fi
 
+if [ -z "$_PYTHON" ]; then
+    _PYTHON="$(command -v python3)"
+fi
+
 # 4. 运行检查：确保 main.py 确实存在
 if [ ! -f "$SCRIPT_DIR/main.py" ]; then
     echo -e "\033[91m  ✗ 错误: 找不到入口文件 $SCRIPT_DIR/main.py\033[0m"
@@ -46,6 +71,4 @@ if [ ! -f "$SCRIPT_DIR/main.py" ]; then
 fi
 
 # 5. 启动（使用 exec 替换进程，透传所有参数 $@）
-_PYTHON="$SCRIPT_DIR/venv/bin/python3"
-[ ! -x "$_PYTHON" ] && _PYTHON="python3"
 exec "$_PYTHON" "$SCRIPT_DIR/main.py" "$@"

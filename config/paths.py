@@ -9,7 +9,19 @@ import os
 # ── 唯一版本号定义 ──────────────────────────────────────
 VERSION = "0.0.5"
 
-PAWNLOGIC_HOME     = Path(os.environ.get("PAWNLOGIC_HOME", Path.home() / ".pawnlogic")).expanduser()
+def _safe_home() -> Path:
+    try:
+        return Path.home()
+    except Exception:
+        return Path(os.environ.get("TMPDIR") or "/tmp")
+
+
+def _pawnlogic_home() -> Path:
+    raw = os.environ.get("PAWNLOGIC_HOME")
+    return Path(raw).expanduser() if raw else (_safe_home() / ".pawnlogic").expanduser()
+
+
+PAWNLOGIC_HOME     = _pawnlogic_home()
 SESSIONS_DIR       = PAWNLOGIC_HOME / "sessions"
 DB_PATH            = PAWNLOGIC_HOME / "pawn.db"
 GLOBAL_SKILLS_PATH = PAWNLOGIC_HOME / "global_skills.md"

@@ -42,6 +42,17 @@ _FMT_FILE = (
 _audit_logger = None
 
 
+def _safe_default_log_dir() -> Path:
+    raw = os.environ.get("PAWNLOGIC_HOME")
+    if raw:
+        return Path(raw).expanduser() / "logs"
+    try:
+        home = Path.home()
+    except Exception:
+        home = Path(os.environ.get("TMPDIR") or "/tmp")
+    return (home / ".pawnlogic" / "logs").expanduser()
+
+
 def audit_tool_call(
     tool_name: str,
     args_summary: str,
@@ -97,7 +108,7 @@ def setup_logger(stderr_level: str = "INFO", file_level: str = "DEBUG") -> None:
         log_dir = Path(LOG_DIR)
     except (ImportError, AttributeError):
         # 若 config 中尚未添加 LOG_DIR，退回默认路径
-        log_dir = Path(os.environ.get("PAWNLOGIC_HOME", Path.home() / ".pawnlogic")).expanduser() / "logs"
+        log_dir = _safe_default_log_dir()
 
     # ── 清除所有已有 handler（包括 loguru 默认的 stderr handler）──
     logger.remove()

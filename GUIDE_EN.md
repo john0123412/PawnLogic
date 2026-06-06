@@ -83,9 +83,14 @@
 |-----------------|-----------------------------|----------------------------|
 | `ds-v4-flash`   | deepseek-v4-flash           | Default, fast & cheap      |
 | `ds-v4-pro`     | deepseek-v4-pro             | Flagship reasoning         |
+| `gpt-5.5`       | gpt-5.5                     | OpenAI latest flagship     |
+| `gpt-5.4`       | gpt-5.4                     | Coding & professional      |
+| `gpt-5.4-mini`  | gpt-5.4-mini                | Lightweight & efficient    |
+| `gpt-5.4-nano`  | gpt-5.4-nano                | Lowest-cost OpenAI model   |
 | `gpt-4o`        | gpt-4o                      | Vision + multimodal        |
 | `gpt-4.1`       | gpt-4.1                     | Code & instruction         |
 | `o3`            | o3                          | Complex reasoning          |
+| `claude-opus`   | claude-opus-4-6             | Frontier reasoning         |
 | `claude-sonnet` | claude-sonnet-4-6           | Balanced                   |
 | `claude-haiku`  | claude-haiku-4-5-20251001   | Fast & cheap               |
 
@@ -121,6 +126,13 @@
 
 ## Installation
 
+### Requirements
+
+- Linux or WSL2
+- Python 3.10+
+- `pip` and `git`
+- `~/.local/bin` in `PATH` for the global `pawn` command
+
 ### WSL2 / Ubuntu (recommended)
 
 ```bash
@@ -137,6 +149,12 @@ The first run launches the configuration wizard automatically.
 ```bash
 chmod +x pawn.sh
 ln -sf "$(pwd)/pawn.sh" ~/.local/bin/pawn
+```
+
+If `pawn` is not found, run:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ### MCP Tools
@@ -323,6 +341,18 @@ A: `/provider` → select provider → Enter → Manage Models → arrow keys �
 
 **Q: Where are my API keys stored?**  
 A: `~/.pawnlogic/.env` — outside the project directory, never tracked by git.
+
+**Q: `pawn` says command not found after install?**  
+A: Add the user bin directory to PATH: `export PATH="$HOME/.local/bin:$PATH"`.
+
+**Q: Startup says Python 3.10+ is required?**  
+A: Install a newer Python and recreate the virtual environment with that interpreter.
+
+**Q: Browser tools say a module is missing?**  
+A: Install the optional browser extra: `pip install 'pawnlogic[browser]'`, then run `patchright install chromium`.
+
+**Q: WSL2 has strange PATH/tool detection issues?**  
+A: Start PawnLogic from the Linux filesystem, not `/mnt/c/...`, and keep Linux tool paths before Windows paths.
 
 **Q: Does it support local Ollama models?**  
 A: Yes. Use `/provider add`, set Base URL to `http://localhost:11434`, leave the key empty or use any placeholder string.

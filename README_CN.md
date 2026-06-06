@@ -10,6 +10,13 @@
 
 > **完全自主的终端 AI Agent** — 多模型路由、持久化记忆、真实工具执行、会话管理。专为开发者与安全研究者打造。
 
+## 系统要求
+
+- Linux 或 WSL2
+- Python 3.10+
+- `pip` 和 `git`
+- 如需全局 `pawn` 命令，`~/.local/bin` 需要在 `PATH` 中
+
 ## ⚡ 快速开始
 
 **方式一 — pip 安装（推荐）**
@@ -30,6 +37,7 @@ python main.py   # 首次运行自动进入 API 配置向导
 ```bash
 chmod +x pawn.sh && ln -sf "$(pwd)/pawn.sh" ~/.local/bin/pawn
 ```
+如果提示 `pawn: command not found`，运行 `export PATH="$HOME/.local/bin:$PATH"`，并把这行加入你的 shell 配置文件。
 
 **CLI 用法：**
 ```bash
@@ -63,8 +71,8 @@ pawn --eval "prompt" --json       # JSON 输出（供脚本调用）
 | 服务商 | 别名 | 适用场景 |
 |--------|------|----------|
 | DeepSeek | `ds-v4-flash` `ds-v4-pro` | 快速默认、旗舰推理 |
-| OpenAI | `gpt-4o` `gpt-4.1` `o3` | 视觉、代码、复杂推理 |
-| Anthropic | `claude-sonnet` `claude-haiku` | 均衡性能、快速低成本 |
+| OpenAI | `gpt-5.5` `gpt-5.4` `gpt-5.4-mini` `gpt-5.4-nano` `gpt-4o` `gpt-4.1` `o3` | 旗舰、编程、视觉、推理 |
+| Anthropic | `claude-opus` `claude-sonnet` `claude-haiku` | 前沿推理、均衡、快速 |
 
 通过 `/provider fetch` 添加的自定义 Provider 会自动出现在 `/model` 和 Tab 补全中。
 

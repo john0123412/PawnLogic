@@ -46,6 +46,38 @@ MODELS: dict[str, dict] = {
         "vision":    False,
         "reasoning": True,
     },
+    "gpt-5.5": {
+        "id":        "gpt-5.5",
+        "provider":  "openai",
+        "desc":      "OpenAI GPT-5.5 — 最新旗舰，复杂推理与编码",
+        "color":     "\033[97m",
+        "vision":    True,
+        "reasoning": False,
+    },
+    "gpt-5.4": {
+        "id":        "gpt-5.4",
+        "provider":  "openai",
+        "desc":      "OpenAI GPT-5.4 — 编程与专业工作",
+        "color":     "\033[37m",
+        "vision":    True,
+        "reasoning": False,
+    },
+    "gpt-5.4-mini": {
+        "id":        "gpt-5.4-mini",
+        "provider":  "openai",
+        "desc":      "OpenAI GPT-5.4 Mini — 低延迟低成本",
+        "color":     "\033[36m",
+        "vision":    True,
+        "reasoning": False,
+    },
+    "gpt-5.4-nano": {
+        "id":        "gpt-5.4-nano",
+        "provider":  "openai",
+        "desc":      "OpenAI GPT-5.4 Nano — 最低成本",
+        "color":     "\033[90m",
+        "vision":    True,
+        "reasoning": False,
+    },
     "gpt-4o": {
         "id":        "gpt-4o",
         "provider":  "openai",
@@ -70,6 +102,14 @@ MODELS: dict[str, dict] = {
         "vision":    False,
         "reasoning": False,  # OpenAI o系列推理内部化，不暴露 reasoning_content 字段
     },
+    "claude-opus": {
+        "id":        "claude-opus-4-6",
+        "provider":  "anthropic",
+        "desc":      "Claude Opus 4.6 — 前沿推理旗舰",
+        "color":     "\033[95m",
+        "vision":    True,
+        "reasoning": False,
+    },
     "claude-sonnet": {
         "id":        "claude-sonnet-4-6",
         "provider":  "anthropic",
@@ -93,10 +133,10 @@ DEFAULT_MODEL = "ds-v4-flash"
 NAMING_MODEL_CHAIN: list = [
     "claude-haiku",
     "ds-v4-flash",
-    "gpt-4.1",
+    "gpt-5.4-mini",
 ]
 
-VISION_PRIORITY = ["gpt-4o", "claude-sonnet"]
+VISION_PRIORITY = ["gpt-5.5", "gpt-4o", "claude-sonnet"]
 
 CUSTOM_PROVIDERS_PATH = PAWNLOGIC_HOME / "custom_providers.json"
 

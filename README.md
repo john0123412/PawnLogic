@@ -11,6 +11,13 @@
 
 > **A fully autonomous terminal AI agent** — multi-model routing, persistent memory, real tool execution, and session management. Built for developers and security researchers.
 
+## System Requirements
+
+- Linux or WSL2
+- Python 3.10+
+- `pip` and `git`
+- `~/.local/bin` in `PATH` if you want the global `pawn` command
+
 ## ⚡ Quick Start
 
 **Option A — pip install (recommended)**
@@ -31,6 +38,7 @@ Global `pawn` command:
 ```bash
 chmod +x pawn.sh && ln -sf "$(pwd)/pawn.sh" ~/.local/bin/pawn
 ```
+If `pawn` is not found, run `export PATH="$HOME/.local/bin:$PATH"` and add that line to your shell profile.
 
 **CLI usage:**
 ```bash
@@ -64,8 +72,8 @@ pawn --eval "prompt" --json       # JSON output (for scripting)
 | Provider | Aliases | Best For |
 |----------|---------|----------|
 | DeepSeek | `ds-v4-flash` `ds-v4-pro` | Fast default, flagship reasoning |
-| OpenAI | `gpt-4o` `gpt-4.1` `o3` | Vision, code, complex reasoning |
-| Anthropic | `claude-sonnet` `claude-haiku` | Balanced, fast low-cost |
+| OpenAI | `gpt-5.5` `gpt-5.4` `gpt-5.4-mini` `gpt-5.4-nano` `gpt-4o` `gpt-4.1` `o3` | Flagship, coding, vision, reasoning |
+| Anthropic | `claude-opus` `claude-sonnet` `claude-haiku` | Frontier reasoning, balanced, fast |
 
 Custom providers added via `/provider fetch` appear automatically in `/model` and Tab completion.
 

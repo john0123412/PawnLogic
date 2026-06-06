@@ -15,16 +15,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Regression tests for runtime path isolation and MCP startup disabling.
 - Focused unit coverage for memory, persistence, API client parsing/circuit
   breaker logic, and file patch helpers.
+- Deployment-friendly startup regression tests for `.venv` discovery, missing
+  HOME fallback, first-run JSON behavior, wizard model selection, and `.env`
+  permissions.
+- Latest built-in model aliases for OpenAI GPT-5.5 / GPT-5.4, Claude Opus 4.6,
+  and DeepSeek V4.
 
 ### Fixed
+- **Code audit — 5 bugs fixed:**
+  - `core/api_client.py`: bare `except:` in `parse_sse_delta` → `except Exception:`
+    (previously swallowed `SystemExit`/`KeyboardInterrupt`)
+  - `core/persistence.py`: `session.model["id"]` crash in `memorize()` →
+    `MODELS.get(session.model_alias, ...)` (session has `model_alias` string, not dict)
+  - `tools/file_ops.py`: `_apply_patch_blocks` and `tool_patch_file` mode B bypassed
+    workspace redirection — added `_resolve_write_path()` calls
+  - `core/memory.py`: `search_knowledge` did full table scan in Python →
+    SQL `LIKE` filtering at DB level
+  - `main.py`: `first_run_wizard()` called `input()` in CI despite API keys set —
+    added `PAWNLOGIC_TEST_MODE` guard to skip wizard/key prompts
 - E2E tests no longer rename or depend on the user's real
   `~/.pawnlogic/mcp_configs.json`.
 - Replace remaining bare `except:` handlers in `core/` and `tools/` so
   `KeyboardInterrupt` and `SystemExit` are not swallowed.
+- Make first-run setup friendlier for non-technical users: preserve real
+  `SystemExit` exit codes, return clean JSON errors before interactive setup,
+  secure generated `.env` files with `0600`, and automatically start with the
+  model selected in the wizard.
+- Improve startup portability with `.venv` launcher support, `readlink -f`
+  fallback, Python 3.10+ checks, missing-HOME fallback, and writable runtime
+  directory checks before SQLite initialization.
+- Hide CTF tool status on normal startup unless relevant tools are installed,
+  and make browser optional dependency errors point to `pawnlogic[browser]`.
 - Document the isolated test command in `CONTRIBUTING.md`.
 
 ### Tests
-- Full suite: 202 tests passing.
+- Full suite: 208 tests passing.
 - `ruff check .` passing with the configured lint rules.
 
 ---
