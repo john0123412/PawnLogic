@@ -1,6 +1,7 @@
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PawnLogic v0.0.5 — Publish to PyPI (优化版)
-# 基于原 publish.yml 的 5 处精准修复
+# PawnLogic — Publish to PyPI
+# Triggered by tag push matching v[0-9]+.[0-9]+.[0-9]*
+# Runs full test gate + dynamic E2E before twine upload
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 name: Publish to PyPI

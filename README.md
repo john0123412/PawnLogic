@@ -52,13 +52,9 @@ pawn --eval "your prompt"         # single execution then exit
 pawn --eval "prompt" --json       # JSON output (for scripting)
 ```
 
-## What's New in v0.0.5
+## What's New
 
-- **`--eval` / `--json` / `--session` CLI flags** — non-interactive single-shot execution, JSON output for pipelines, resume a named session
-- **Sandbox security hardening** — all interpreted languages (Python/bash/node/go) now execute in isolated tmpdir; added `RLIMIT_FSIZE` (64 MB) write limit
-- **MCP auto-retry** — external tool calls retry up to 3× with exponential backoff on timeout/connection errors
-- **Session checkpoint** — mid-turn autosave every 5 iterations; `OperationalError` retry on SQLite writes
-- **Key display masking** — unified `mask_key()` across `/keys`, `/provider list`, and `/model`
+See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
 ## Key Capabilities
 

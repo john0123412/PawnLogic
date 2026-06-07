@@ -51,13 +51,9 @@ pawn --eval "your prompt"         # 单次执行后退出
 pawn --eval "prompt" --json       # JSON 输出（供脚本调用）
 ```
 
-## v0.0.5 新特性
+## 新特性
 
-- **`--eval` / `--json` / `--session` CLI 参数** — 非交互式单次执行、JSON 输出供管道调用、恢复指定会话
-- **沙箱安全加固** — 所有解释型语言（Python/bash/node/go）现在在隔离 tmpdir 中执行；新增 `RLIMIT_FSIZE`（64 MB）写入限制
-- **MCP 自动重试** — 外部工具调用在超时/连接错误时自动重试最多 3 次（指数退避）
-- **Session checkpoint** — 每 5 轮迭代自动保存中间状态；SQLite 写入失败时自动重试
-- **Key 显示脱敏** — `/keys`、`/provider list`、`/model` 统一使用 `mask_key()` 脱敏显示
+完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 核心能力
 

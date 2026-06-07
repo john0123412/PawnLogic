@@ -1,6 +1,6 @@
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PawnLogic v0.0.5 — CI Workflow (优化版)
-# 基于原 main_ci.yml 的 8 处精准修复
+# PawnLogic — CI Workflow
+# Runs ruff lint and pytest matrix (3.10/3.11/3.12) plus dynamic E2E tests
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 name: CI
