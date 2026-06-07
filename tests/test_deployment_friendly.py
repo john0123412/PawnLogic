@@ -99,6 +99,87 @@ def test_json_first_run_exits_with_clean_json_error(tmp_path):
     assert payload["data"]["stage"] == "startup"
 
 
+def test_first_run_gate_accepts_process_env_key_without_dot_env_file(tmp_path):
+    """Regression: gate must not require ~/.pawnlogic/.env to exist when the
+    API key is already in process env (Docker / CI / K8s scenario).
+
+    Pre-fix, _first_run_required short-circuited on `not _ENV_PATH.exists()`,
+    falsely blocking users who inject keys via env vars without writing a file.
+    """
+    env = _clean_runtime_env(tmp_path)
+    # No .env file is created; key only lives in process env.
+    env["DEEPSEEK_API_KEY"] = "sk-test-fake-key-for-gate-regression"
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "main.py"), "--json", "--eval", "x"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=15,
+    )
+
+    # The gate's user-facing signature is the wizard prompt; any sign of it
+    # in stdout means the regression has returned.
+    assert "首次运行需要先完成 API 配置向导" not in result.stdout, (
+        "first_run gate fired even though DEEPSEEK_API_KEY was in process env "
+        "— regression of pre-0.0.6 bug. stdout: " + result.stdout[:500]
+    )
+
+
+def test_first_run_gate_treats_custom_provider_keys_uniformly(tmp_path):
+    """Regression: gate must treat custom providers (loaded from
+    custom_providers.json) the same as built-in providers — no name is
+    hardcoded.
+
+    Setup: only XIAOMI_API_KEY in env (a custom provider), no built-in
+    provider key. Pre-fix, the gate ignored custom providers because
+    _has_any_api_key() iterated PROVIDERS before custom_providers were merged.
+    Post-fix the merge happens at config.providers import time, so the gate
+    accepts the custom key.
+    """
+    pawn_home = Path(tmp_path) / "home" / ".pawnlogic"
+    pawn_home.mkdir(parents=True, exist_ok=True)
+    # Minimal custom_providers.json registering one provider with key env name.
+    (pawn_home / "custom_providers.json").write_text(
+        json.dumps({
+            "providers": {
+                "xiaomi": {
+                    "base_url": "https://example.invalid/v1",
+                    "api_key_env": "XIAOMI_API_KEY",
+                    "label": "Custom (xiaomi)",
+                    "api_format": "openai",
+                }
+            },
+            "models": {}
+        }),
+        encoding="utf-8",
+    )
+
+    env = _clean_runtime_env(tmp_path)
+    env.pop("XIAOMI_API_KEY", None)  # ensure clean baseline
+    env["XIAOMI_API_KEY"] = "tp-test-fake-key-for-custom-provider-regression"
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "main.py"), "--json", "--eval", "x"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=15,
+    )
+
+    assert "首次运行需要先完成 API 配置向导" not in result.stdout, (
+        "first_run gate fired with only a custom-provider key set — "
+        "custom providers should be treated like built-ins. stdout: "
+        + result.stdout[:500]
+    )
+
+
 def test_first_run_wizard_sets_selected_model_and_secures_env(tmp_path):
     env = _clean_runtime_env(tmp_path)
     result = subprocess.run(
