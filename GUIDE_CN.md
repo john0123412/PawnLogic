@@ -138,7 +138,7 @@
 ```bash
 git clone https://github.com/john0123412/PawnLogic.git && cd PawnLogic
 python3 -m venv venv && source venv/bin/activate
-pip install --upgrade pip && pip install -r requirements.txt
+pip install --upgrade pip && pip install -e .
 python main.py
 ```
 

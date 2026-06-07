@@ -29,7 +29,7 @@ pawn   # 首次运行自动进入 API 配置向导
 ```bash
 git clone https://github.com/john0123412/PawnLogic.git && cd PawnLogic
 python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 python main.py   # 首次运行自动进入 API 配置向导
 ```
 

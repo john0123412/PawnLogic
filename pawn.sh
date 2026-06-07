@@ -55,7 +55,7 @@ else
     if ! python3 -c "import nest_asyncio" 2>/dev/null; then
         echo -e "\033[91m  ✗ 未找到虚拟环境，且系统环境缺少依赖。\033[0m"
         echo -e "\033[93m  建议在项目目录执行:\033[0m"
-        echo -e "    cd $SCRIPT_DIR && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt"
+        echo -e "    cd $SCRIPT_DIR && python3 -m venv venv && source venv/bin/activate && pip install -e ."
         exit 1
     fi
 fi
