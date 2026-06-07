@@ -5,6 +5,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.0.6] - 2026-06-07
+
+### Fixed
+- **`first_run` gate no longer requires `~/.pawnlogic/.env` to exist** when
+  API keys are injected via process environment variables (Docker, CI, K8s
+  deployments). The pre-fix check short-circuited on `not _ENV_PATH.exists()`,
+  blocking users who never wrote a key file even though their keys were in
+  the process env. Custom providers from `custom_providers.json` are now
+  recognised on the same footing as built-in providers — `_has_any_api_key()`
+  uses no hardcoded provider names.
+
+### Added
+- Two regression tests in `tests/test_deployment_friendly.py` for the
+  `first_run` gate (process-env-only key; custom-provider-only key). The
+  tests fail when reverted against the pre-0.0.6 code.
+- `pawnlogic[ctf]` optional extra (`pwntools`, `ROPgadget`, `ropper`) for
+  users who want the CTF skill markdown and tooling.
+- `Development Status :: 4 - Beta` classifier on PyPI; `Documentation` URL
+  in `[project.urls]` pointing at `GUIDE_EN.md`.
+- `docker-compose.test.yml` + `Dockerfile.test` + `.dockerignore` for
+  isolated smoke testing (`docker compose -f docker-compose.test.yml run
+  --rm smoketest`); the smoke harness hits a real provider API and asserts a
+  recognisable response.
+
+### Changed
+- **Default wheel is now ~254 KB** (was ~1.7 MB) — `skills/ctf_*/` are
+  excluded from the default wheel via `[tool.setuptools.packages.find]
+  exclude`; install with `pip install pawnlogic[ctf]` to opt in.
+- `requirements.txt` removed; `pip install -e .` is the single source of
+  truth. README, README_CN, GUIDE_EN, GUIDE_CN, and `pawn.sh` all updated.
+- README "What's New" sections now link to `CHANGELOG.md` instead of being
+  re-edited each release.
+- `.env.example` clarifies that `XIAOMI_API_KEY` is for a custom provider
+  registered in `~/.pawnlogic/custom_providers.json`, not a built-in.
+- Workflow header comments no longer pin a specific version number.
+
+### Known Issues
+- **Top-level `main` module name conflict**: the `pawn` console script
+  resolves correctly, but installing pawnlogic also exposes a top-level
+  `main` module. Any user script doing `import main` from a fresh
+  interpreter (with no local `main.py` shadow) will resolve to PawnLogic's
+  module. Will be refactored to `pawnlogic/__main__.py` in a future minor.
+
+### Tests
+- 217 tests passing (was 215; +2 regression tests).
+- `ruff check .` passing.
+
+---
+
 ## [0.0.5] - 2026-06-06
 
 ### Added
