@@ -577,7 +577,12 @@ class PawnCompleter(Completer):
 # ════════════════════════════════════════════════════════
 
 def _has_any_api_key() -> bool:
-    """检查是否至少有一个可用的 API Key。"""
+    """是否至少有一个 provider 的 API Key 已注入 process env。
+
+    PROVIDERS 在 config.providers 模块导入时通过 load_custom_providers()
+    合并了 custom_providers.json 中的所有用户自定义条目；本函数对内置
+    与 custom provider 一视同仁，不对任何 provider 名做特殊处理。
+    """
     return any(
         os.getenv(p["api_key_env"], "") not in ("", "YOUR_API_KEY_HERE")
         for p in PROVIDERS.values()
@@ -867,10 +872,10 @@ async def main():
     set_active_sink(sink)
 
     _is_test_mode = os.environ.get("PAWNLOGIC_TEST_MODE", "").lower() in ("1", "true", "yes")
-    _first_run_required = (
-        not _is_test_mode
-        and (not _ENV_PATH.exists() or not _has_any_api_key())
-    )
+    # 仅看是否真有可用 key（_has_any_api_key 覆盖内置+custom provider）。
+    # 不再要求 ~/.pawnlogic/.env 文件存在 —— Docker/CI/K8s 场景下用户常通过
+    # 进程环境变量注入 key 而不写文件；旧逻辑会把这些用户错误地卡在向导里。
+    _first_run_required = not _is_test_mode and not _has_any_api_key()
 
     if args.json and _first_run_required:
         sink.print_json({
