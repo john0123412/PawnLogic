@@ -34,6 +34,11 @@ pip install -e .
 python main.py   # first run launches the API configuration wizard
 ```
 
+**Optional CTF skill pack** (pwntools / ROPgadget / ropper + the `skills/ctf_*` markdown):
+```bash
+pip install -e ".[ctf]"
+```
+
 Global `pawn` command:
 ```bash
 chmod +x pawn.sh && ln -sf "$(pwd)/pawn.sh" ~/.local/bin/pawn

@@ -46,6 +46,11 @@ dev = [
 ]
 docker = ["docker>=6.0"]
 browser = ["scrapling>=0.2", "patchright>=1.40"]
+ctf = [
+    "pwntools>=4.11",
+    "ROPgadget>=7.4",
+    "ropper>=1.13",
+]
 
 [project.urls]
 Homepage = "https://github.com/john0123412/PawnLogic"
@@ -62,6 +67,10 @@ version = {attr = "config.paths.VERSION"}
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["config*", "core*", "tools*", "utils*", "skills*"]
+# CTF skill packs are large and optional; install via `pip install pawnlogic[ctf]`
+# to opt into pwntools/ROPgadget/ropper. The skill markdown lives outside the wheel
+# and ships separately (see CONTRIBUTING.md for the ctf-skills add-on).
+exclude = ["skills.ctf_*"]
 
 # main.py lives at root — declare it explicitly as a py-module
 [tool.setuptools]

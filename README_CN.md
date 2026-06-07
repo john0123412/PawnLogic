@@ -33,6 +33,11 @@ pip install -e .
 python main.py   # 首次运行自动进入 API 配置向导
 ```
 
+**可选 CTF skill 包**（pwntools / ROPgadget / ropper + `skills/ctf_*` 文档）：
+```bash
+pip install -e ".[ctf]"
+```
+
 全局 `pawn` 命令：
 ```bash
 chmod +x pawn.sh && ln -sf "$(pwd)/pawn.sh" ~/.local/bin/pawn
