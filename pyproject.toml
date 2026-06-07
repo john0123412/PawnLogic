@@ -25,6 +25,9 @@ classifiers = [
     "Topic :: Security",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Intended Audience :: Developers",
+    "Development Status :: 4 - Beta",
+    # License classifier omitted: PEP 639 forbids it alongside the
+    # SPDX `license = "MIT"` expression above. setuptools rejects both.
 ]
 
 dependencies = [
@@ -57,6 +60,7 @@ Homepage = "https://github.com/john0123412/PawnLogic"
 Repository = "https://github.com/john0123412/PawnLogic"
 Issues = "https://github.com/john0123412/PawnLogic/issues"
 Changelog = "https://github.com/john0123412/PawnLogic/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/john0123412/PawnLogic/blob/main/GUIDE_EN.md"
 
 [project.scripts]
 pawn = "main:run"
