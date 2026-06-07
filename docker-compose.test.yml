@@ -1,0 +1,57 @@
+# Pre-release smoke tests for pawnlogic.
+# Usage:
+#   docker compose -f docker-compose.test.yml run --rm smoketest
+#   docker compose -f docker-compose.test.yml run --rm interactive-smoke
+#
+# Both services consume the host ~/.pawnlogic/.env, so XIAOMI_API_KEY (and any
+# other provider keys) reach the container. After verification:
+#   docker compose -f docker-compose.test.yml down --volumes --remove-orphans
+# leaves the pawnlogic-smoketest image cached for re-runs.
+
+x-common: &common
+  build:
+    context: .
+    dockerfile: Dockerfile.test
+  image: pawnlogic-smoketest:latest
+  env_file:
+    - /home/user/.pawnlogic/.env
+  environment:
+    PAWNLOGIC_HOME: /data/pawnlogic
+    MCP_ENABLED: "false"
+    TERM: dumb
+    NO_COLOR: "1"
+    PAWNLOGIC_DEFAULT_MODEL: mimo-v2.5
+    # Built-in providers gate the first-run wizard; XIAOMI is a custom provider
+    # registered via custom_providers.json. Stub a built-in key to bypass the
+    # wizard so the real call routes through the custom mimo provider.
+    DEEPSEEK_API_KEY: "stub-bypass-first-run-wizard"
+  volumes:
+    - /home/user/.pawnlogic/custom_providers.json:/data/pawnlogic/custom_providers.json:ro
+    - /home/user/.pawnlogic/.env:/data/pawnlogic/.env:ro
+
+services:
+  smoketest:
+    <<: *common
+    command:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        echo "── pawn --help ──"
+        pawn --help
+        echo
+        echo "── pawn --eval (real MiMo call) ──"
+        pawn --model mimo-v2.5 --eval "Reply with exactly the word: pawnlogic-smoke-ok" --json
+
+  interactive-smoke:
+    <<: *common
+    stdin_open: true
+    tty: true
+    command:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        echo "── interactive smoke: scripted /help + /keys + one prompt ──"
+        # Drive the TUI with a stdin script; --quiet suppresses banner so output is parseable.
+        printf '/help\n/keys\nReply with exactly the word: pawnlogic-interactive-ok\n/exit\n' | pawn --quiet --model mimo-v2.5
