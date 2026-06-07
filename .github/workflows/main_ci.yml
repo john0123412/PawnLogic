@@ -8,14 +8,18 @@ name: CI
 # ── 触发条件 ──────────────────────────────────────────────
 on:
   push:
-    branches: [main]
-    paths-ignore:                   # FIX #8: 纯文档改动不触发 CI
+    branches:
+      - main
+      - "chore/**"            # 允许 pre-release 清理分支自验
+      - "test/**"             # 允许临时测试分支手动触发
+    paths-ignore:             # 纯文档改动不触发 CI
       - "**.md"
       - "docs/**"
       - ".gitignore"
       - "LICENSE"
   pull_request:
     branches: [main]
+  workflow_dispatch:          # 允许手动触发任意分支跑 CI
 
 # ── FIX #4: 防止同分支并发重复运行 ─────────────────────────
 concurrency:

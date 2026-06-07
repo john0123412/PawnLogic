@@ -16,6 +16,25 @@ pip install -e ".[dev]"
 PAWNLOGIC_HOME="$(mktemp -d)" venv/bin/python -m pytest tests/ -v
 ```
 
+## Docker Smoke Test (optional, hits a real provider)
+
+```bash
+# One-time symlink your real env + custom providers
+ln -s ~/.pawnlogic/.env .env.smoke
+ln -s ~/.pawnlogic/custom_providers.json custom_providers.smoke.json
+
+# Non-interactive (asserts the model replies "pawnlogic-smoke-ok")
+docker compose -f docker-compose.test.yml run --rm smoketest
+
+# Scripted interactive flow (/help + /keys + one prompt + /exit)
+docker compose -f docker-compose.test.yml run --rm interactive-smoke
+
+# Clean up containers (keep image cached)
+docker compose -f docker-compose.test.yml down --volumes --remove-orphans
+```
+
+`.env.smoke` and `custom_providers.smoke.json` are in `.gitignore`/`.dockerignore`. Each smoke run consumes real API tokens.
+
 ## Adding an API Provider
 
 **Option A — Runtime (recommended, no code change needed):**

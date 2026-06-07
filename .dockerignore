@@ -20,3 +20,6 @@ docs/
 !README.md
 docker-compose*.yml
 Dockerfile*
+.env
+.env.*
+custom_providers.smoke.json

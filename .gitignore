@@ -9,6 +9,7 @@
 *.key
 *.token
 mcp_configs.json
+custom_providers.smoke.json
 
 # --- Python 环境与缓存 ---
 .venv/

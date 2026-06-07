@@ -6,14 +6,24 @@
 
 name: Publish to PyPI
 
-# FIX #1: 收窄 tag 匹配，避免 v-test / vX 误触发
+# 收窄 tag 匹配，避免 v-test / vX 误触发
 on:
   push:
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]*"   # 只匹配 v0.0.5, v1.2.3 格式
+      - "v[0-9]+.[0-9]+.[0-9]*"   # 只匹配 v0.0.6, v1.2.3 格式
+  workflow_dispatch:               # 手动触发，可选择 testpypi 做 dry-run
+    inputs:
+      target:
+        description: "Publish target"
+        required: true
+        default: "testpypi"
+        type: choice
+        options:
+          - testpypi
+          - pypi
 
 concurrency:
-  group: publish-${{ github.ref }}
+  group: publish-${{ github.ref }}-${{ inputs.target || 'tag' }}
   cancel-in-progress: false        # 发布不能中断
 
 # FIX #5: 最小权限
@@ -114,8 +124,17 @@ jobs:
       - name: Validate package (twine check)
         run: twine check dist/*
 
+      # Tag push → PyPI (生产)；workflow_dispatch → 走 inputs.target 选择
+      - name: Publish to TestPyPI
+        if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_TOKEN }}
+        run: twine upload --repository-url https://test.pypi.org/legacy/ --skip-existing dist/*
+
       - name: Publish to PyPI
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
-        run: twine upload dist/*
+        run: twine upload --skip-existing dist/*
