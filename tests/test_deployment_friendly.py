@@ -80,6 +80,41 @@ def test_pawn_sh_uses_detected_dot_venv_python(tmp_path):
     assert str(tmp_path / "main.py") in result.stdout
 
 
+def test_pawn_sh_is_executable_in_checkout():
+    mode = ROOT.joinpath("pawn.sh").stat().st_mode
+    assert mode & stat.S_IXUSR
+
+
+def test_pawn_symlink_launcher_executes_checkout_script(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    shutil.copy(ROOT / "pawn.sh", project / "pawn.sh")
+    shutil.copy(ROOT / "main.py", project / "main.py")
+    (project / "pawn.sh").chmod(0o755)
+
+    venv_bin = project / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "activate").write_text("export VIRTUAL_ENV=venv\n", encoding="utf-8")
+    fake_python = venv_bin / "python3"
+    fake_python.write_text("#!/bin/sh\necho SYMLINK_PAWN \"$@\"\n", encoding="utf-8")
+    fake_python.chmod(fake_python.stat().st_mode | stat.S_IXUSR)
+
+    local_bin = tmp_path / "user_bin"
+    local_bin.mkdir(parents=True)
+    (local_bin / "pawn").symlink_to(project / "pawn.sh")
+
+    result = subprocess.run(
+        [str(local_bin / "pawn"), "--help"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+
+    assert result.stdout.startswith("SYMLINK_PAWN ")
+    assert str(project / "main.py") in result.stdout
+
+
 def test_packaging_entry_point_uses_package_cli():
     dist = PathDistribution.at(ROOT / "pawnlogic.egg-info")
     scripts = [ep for ep in dist.entry_points if ep.group == "console_scripts"]
