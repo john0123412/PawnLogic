@@ -229,6 +229,12 @@ provider behavior, CLI help, or tests.
   PyPI.
 - Do not create a release tag or trigger production publishing from an untested
   `main` commit.
+- After a release completes, clean local build artifacts and release scratch
+  files before reporting completion: remove `dist/`, `build/`, and
+  `*.egg-info/` unless the user explicitly asks to keep them.
+- After every release workflow change or published release, re-check that
+  `CLAUDE.md` and `AGENT.md` are synchronized except for their title/opening
+  audience wording.
 - Record the PyPI publish result and release URL in the final report for any
   release task.
 
@@ -298,7 +304,15 @@ Build verification:
 rm -rf dist/ build/
 venv/bin/python -m build
 venv/bin/python -m twine check dist/*
-venv/bin/python -m zipfile -l dist/*.whl | grep -ic skills/ctf
+venv/bin/python - <<'PY'
+from pathlib import Path
+from zipfile import ZipFile
+wheel = next(Path("dist").glob("*.whl"))
+with ZipFile(wheel) as zf:
+    count = sum(name.startswith("skills/ctf") for name in zf.namelist())
+print(count)
+raise SystemExit(0 if count == 0 else 1)
+PY
 ```
 
 The wheel should not include optional `skills/ctf_*` packs by default.
