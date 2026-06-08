@@ -12,6 +12,7 @@ from .providers import (
     load_custom_providers, save_custom_provider, remove_custom_provider,
     is_fast_model, find_fast_peer, models_url_from_base_url,
     custom_model_alias, is_chat_model_candidate,
+    is_provider_active, set_provider_active,
 )
 from .tiers import TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX
 from .security import (
@@ -34,6 +35,7 @@ __all__ = [
     "load_custom_providers", "save_custom_provider", "remove_custom_provider",
     "is_fast_model", "find_fast_peer", "models_url_from_base_url",
     "custom_model_alias", "is_chat_model_candidate",
+    "is_provider_active", "set_provider_active",
     "TIER_LOW", "TIER_MID", "TIER_DEEP", "TIER_MAX",
     "READ_BLACKLIST", "WRITE_BLACKLIST", "DANGEROUS_PATTERNS",
     "smart_truncate", "user_friendly_error", "scrub_sensitive_env",

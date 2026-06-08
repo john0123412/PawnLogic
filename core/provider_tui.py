@@ -22,11 +22,13 @@ from config.providers import (
     PROVIDERS, MODELS, CUSTOM_PROVIDERS_PATH,
     save_custom_provider, load_custom_providers, remove_custom_provider,
     models_url_from_base_url, custom_model_alias, is_chat_model_candidate,
+    is_provider_active, set_provider_active,
 )
 
 _PAWNLOGIC_DIR = PAWNLOGIC_HOME
 _ENV_PATH = _PAWNLOGIC_DIR / ".env"
 _BUILTIN = {"deepseek", "openai", "anthropic"}
+_ALWAYS_ACTIVE = {"deepseek"}
 _UNSUPPORTED_MODEL_MARKERS = (
     "not supported", "unsupported", "model_not_found", "model not found",
     "does not exist", "unknown model", "invalid model", "not available",
@@ -436,6 +438,7 @@ class ProviderTUI:
             key = _provider_key(pname)
             n = _model_count(pname)
             is_builtin = pname in _BUILTIN
+            active = is_provider_active(pname)
             cur = "▶ " if i == self._main_cursor else "  "
             badge_s = "class:badge-builtin" if is_builtin else "class:badge-custom"
             badge = "[built-in]" if is_builtin else "[custom]"
@@ -444,6 +447,8 @@ class ProviderTUI:
                   ("class:key-ok" if key else "class:key-missing",
                    "  ✓ Key Set" if key else "  ✗ Not Configured"),
                   ("class:subtitle", f"  {n} models  "),
+                  ("class:key-ok" if active else "class:subtitle",
+                   " active  " if active else " inactive  "),
                   (badge_s, badge), ("", "\n")]
         f.append(("", "\n"))
         return f
@@ -464,10 +469,14 @@ class ProviderTUI:
         n = _model_count(pname)
         fmt = pinfo.get("api_format", "openai")
         fmt_label = "Anthropic Compatible" if fmt == "anthropic" else "OpenAI Compatible"
+        active = is_provider_active(pname)
         f: StyleAndTextTuples = [("class:title", f"\n  ◀ {pname}\n\n")]
         f += [("class:subtitle", f"  {'Name':<12}│ {pname}\n"),
               ("class:subtitle", f"  {'Base URL':<12}│ {pinfo.get('base_url','')}\n"),
-              ("class:subtitle", f"  {'Format':<12}│ {fmt_label}\n")]
+              ("class:subtitle", f"  {'Format':<12}│ {fmt_label}\n"),
+              ("class:subtitle", f"  {'Active':<12}│ "),
+              ("class:key-ok" if active else "class:warning",
+               "Yes - visible in /model\n" if active else "No - hidden from /model\n")]
         if key:
             f += [("class:subtitle", f"  {'API Key':<12}│ "),
                   ("class:key-ok", f"{_mask_key(key)}   ● Configured\n")]
@@ -483,8 +492,9 @@ class ProviderTUI:
         f.append(("", "\n"))
         if self._detail_key_active:
             f.append(("class:warning", "  New API Key (input hidden, Enter to save, Esc to cancel):\n"))
+        active_action = "Deactivate Provider" if active else "Activate Provider"
         actions = ["Update API Key", "Fetch / Sync Models", "Test Connection",
-                   "Manage Models", "Delete Provider"]
+                   "Manage Models", active_action, "Delete Provider"]
         for i, act in enumerate(actions):
             if i == self._detail_cursor and not self._detail_key_active:
                 f.append(("class:cursor", f"  ▶ [ {act} ]\n"))
@@ -827,10 +837,10 @@ class ProviderTUI:
         _det = Condition(lambda: self._panel == "detail" and not self._dialog and not self._detail_key_active)
 
         @kb.add("up",    filter=_det)
-        def _d_up(e): self._detail_cursor = (self._detail_cursor - 1) % 5; inv()
+        def _d_up(e): self._detail_cursor = (self._detail_cursor - 1) % 6; inv()
 
         @kb.add("down",  filter=_det)
-        def _d_dn(e): self._detail_cursor = (self._detail_cursor + 1) % 5; inv()
+        def _d_dn(e): self._detail_cursor = (self._detail_cursor + 1) % 6; inv()
 
         @kb.add("enter", filter=_det)
         def _d_enter(e): e.app.create_background_task(self._detail_action())
@@ -1079,6 +1089,25 @@ class ProviderTUI:
             self._app.layout = self._build_layout()
             self._app.invalidate()
 
+    def _toggle_provider_active(self, pname: str):
+        if pname in _ALWAYS_ACTIVE:
+            self._detail_status = "DeepSeek is always active."
+            self._detail_status_style = "class:warning"
+            if self._app:
+                self._app.invalidate()
+            return
+        target = not is_provider_active(pname)
+        if set_provider_active(pname, target):
+            self._detail_status = f"✅ Provider is now {'active' if target else 'inactive'}."
+            self._detail_status_style = "class:success"
+        else:
+            self._detail_status = "✗ Failed to update provider active state."
+            self._detail_status_style = "class:error"
+        load_custom_providers()
+        if self._app:
+            self._app.layout = self._build_layout()
+            self._app.invalidate()
+
     def _cancel_model_selector(self, close: bool = False):
         if close:
             if self._app:
@@ -1127,7 +1156,8 @@ class ProviderTUI:
         name, url, fmt, key, env_var = self._wiz_fields_pending
         _save_key_to_env(env_var, key)
         prov_cfg = {"base_url": url, "api_key_env": env_var,
-                    "label": f"Custom ({name})", "api_format": fmt}
+                    "label": f"Custom ({name})", "api_format": fmt,
+                    "active": False}
         save_custom_provider(name, prov_cfg, {})
         PROVIDERS[name] = prov_cfg
         load_custom_providers()
@@ -1223,7 +1253,9 @@ class ProviderTUI:
             if self._app:
                 self._app.layout = self._build_layout()
                 self._app.invalidate()
-        elif cur == 4:  # Delete Provider
+        elif cur == 4:
+            self._toggle_provider_active(pname)
+        elif cur == 5:  # Delete Provider
             if pname in _BUILTIN:
                 self._detail_status = "Cannot delete built-in providers."
                 self._detail_status_style = "class:warning"
@@ -1250,11 +1282,12 @@ class ProviderTUI:
         env_var = f"{name.upper().replace('-','_').replace(' ','_')}_API_KEY"
         _save_key_to_env(env_var, key)
         prov_cfg = {"base_url": url, "api_key_env": env_var,
-                    "label": f"Custom ({name})", "api_format": fmt}
+                    "label": f"Custom ({name})", "api_format": fmt,
+                    "active": False}
         save_custom_provider(name, prov_cfg, {})
         PROVIDERS[name] = prov_cfg
         load_custom_providers()
-        self._wiz_status = "✅ Saved. Use Test Connection or Fetch/Sync Models from the detail panel."
+        self._wiz_status = "✅ Saved inactive. Activate it from the detail panel to show models in /model."
         self._wiz_status_style = "class:success"
         self._panel = "main"
         if self._app:

@@ -43,8 +43,10 @@ from prompt_toolkit import prompt as ptk_prompt
 from config import (
     CUSTOM_PROVIDERS_PATH, MODELS, PROVIDERS,
     get_api_format, get_provider_config, list_vision_models,
+    is_provider_active,
     models_url_from_base_url,
     remove_custom_provider, save_custom_provider,
+    set_provider_active,
     validate_api_key,
 )
 from config.paths import VERSION
@@ -238,7 +240,8 @@ def _visible_models() -> dict:
     return {
         alias: cfg
         for alias, cfg in MODELS.items()
-        if os.getenv(PROVIDERS.get(cfg.get("provider", ""), {}).get("api_key_env", ""), "")
+        if is_provider_active(cfg.get("provider", ""))
+        and os.getenv(PROVIDERS.get(cfg.get("provider", ""), {}).get("api_key_env", ""), "")
     }
 
 
@@ -270,6 +273,7 @@ def _provider_list() -> None:
                 "base_url":   pinfo.get("base_url", ""),
                 "key_env":    env,
                 "key_set":    bool(os.environ.get(env, "")) if env else True,
+                "active":     is_provider_active(pname),
                 "models":     models_for_provider,
             })
         sink.print_json(data)
@@ -288,12 +292,31 @@ def _provider_list() -> None:
         else:
             ktag = c(RED, "✗ 未配置")
         fmt_tag = c(MAGENTA, "[Anthropic]") if fmt == "anthropic" else c(GRAY, "[OpenAI]")
+        active_tag = c(GREEN, "active") if is_provider_active(pname) else c(GRAY, "inactive")
         hint = pinfo.get("models_hint", "")
-        print(f"  {c(CYAN, f'{pname:16}')}{fmt_tag:14} {label:24} {ktag}")
+        print(f"  {c(CYAN, f'{pname:16}')}{fmt_tag:14} {label:24} {ktag}  {active_tag}")
         if hint:
             print(f"  {'':16}{c(GRAY, hint)}")
     print(c(GRAY, f"\n  自定义配置: {CUSTOM_PROVIDERS_PATH}"))
     print()
+
+
+def _provider_set_active(alias: str, active: bool) -> None:
+    if not alias:
+        verb = "activate" if active else "deactivate"
+        print(c(RED, f"  用法: /provider {verb} <别名>"))
+        return
+    if alias not in PROVIDERS:
+        print(c(RED, f"  ✗ 未找到 Provider: {alias}"))
+        return
+    if alias == "deepseek" and not active:
+        print(c(YELLOW, "  ⚠ deepseek 是默认 provider，始终保持 active。"))
+        return
+    if not set_provider_active(alias, active):
+        print(c(RED, f"  ✗ 无法更新 Provider 状态: {alias}"))
+        return
+    state = "active" if active else "inactive"
+    print(c(GREEN, f"  ✓ Provider '{alias}' 已设置为 {state}。"))
 
 
 def _provider_add() -> None:
@@ -452,11 +475,13 @@ def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str =
         "api_key_env": env_key,
         "label":       f"Custom ({alias})",
         "api_format":  fmt,
+        "active":      False,
     }
     _save_cp(alias, prov_cfg, {})
     PROVIDERS[alias] = prov_cfg
     load_custom_providers()
     print(c(GREEN, f"  ✓ 供应商注册成功！请确保已在 .env 中配置了 {env_key}。"))
+    print(c(CYAN, f"  需要显示在 /model 时，请运行 /provider activate {alias}。"))
     if not os.getenv(env_key, ""):
         print(c(CYAN, f"  接下来请运行 /provider fetch {alias} 以拉取模型。"))
         return False
@@ -729,12 +754,16 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session) -> None:
             print(c(RED, "  用法: /provider update <别名>"))
         else:
             await _provider_fetch(sub_arg.strip())  # update = re-fetch
+    elif sub in ("activate", "active"):
+        _provider_set_active(sub_arg.strip(), True)
+    elif sub == "deactivate":
+        _provider_set_active(sub_arg.strip(), False)
     elif sub == "remove":
         _provider_remove(sub_arg)
     elif sub == "test":
         _provider_test(session, sub_arg)
     else:
-        print(c(RED, f"  ✗ 未知子命令 '{sub}'。可用: list · add · fetch · update · remove · test"))
+        print(c(RED, f"  ✗ 未知子命令 '{sub}'。可用: list · add · fetch · update · activate · deactivate · remove · test"))
 
 
 # ════════════════════════════════════════════════════════
@@ -942,6 +971,10 @@ async def cmd_model(ctx: CommandContext) -> None:
                     print(f"    {c(_cfg_m['color'], f'{_alias:14}')}{_cfg_m['desc']:30} {ktag}{vtag}{ftag}{tick}")
             print(c(GRAY, "\n  用法: /model <alias>  📷=支持视觉  [A]=Anthropic 格式"))
     elif arg in MODELS:
+        provider_name = MODELS[arg].get("provider", "")
+        if not is_provider_active(provider_name):
+            print(c(YELLOW, f"  ⚠ Provider '{provider_name}' 未 active。先运行 /provider activate {provider_name}。"))
+            return
         session.model_alias = arg
         ok, env = validate_api_key(arg)
         if not ok:

@@ -85,6 +85,75 @@ def test_provider_model_name_filter_hides_non_chat_and_legacy_models():
     assert provider_tui._model_is_chat_candidate("tts-1") is False
 
 
+def test_provider_active_state_defaults_deepseek_only_for_model_visibility(monkeypatch):
+    monkeypatch.setattr(
+        provider_config,
+        "PROVIDERS",
+        {
+            "deepseek": {"api_key_env": "DEEPSEEK_API_KEY", "active": True},
+            "relay": {"api_key_env": "RELAY_API_KEY", "active": False},
+            "xiaomi": {"api_key_env": "XIAOMI_API_KEY", "active": True},
+        },
+    )
+    monkeypatch.setattr(provider_cmd, "PROVIDERS", provider_config.PROVIDERS)
+    monkeypatch.setattr(
+        provider_cmd,
+        "MODELS",
+        {
+            "ds-v4-flash": {"id": "deepseek-v4-flash", "provider": "deepseek"},
+            "relay-chat": {"id": "relay-chat", "provider": "relay"},
+            "mimo": {"id": "mimo", "provider": "xiaomi"},
+        },
+    )
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setenv("RELAY_API_KEY", "test-key")
+    monkeypatch.setenv("XIAOMI_API_KEY", "test-key")
+
+    visible = provider_cmd._visible_models()
+
+    assert sorted(visible) == ["ds-v4-flash", "mimo"]
+
+
+def test_load_custom_providers_defaults_only_deepseek_active_without_config(tmp_path, monkeypatch):
+    path = tmp_path / "custom_providers.json"
+    monkeypatch.setattr(provider_config, "CUSTOM_PROVIDERS_PATH", path)
+    monkeypatch.setattr(
+        provider_config,
+        "PROVIDERS",
+        {
+            "deepseek": {"api_key_env": "DEEPSEEK_API_KEY"},
+            "openai": {"api_key_env": "OPENAI_API_KEY"},
+        },
+    )
+    monkeypatch.setattr(provider_config, "MODELS", {})
+
+    provider_config.load_custom_providers()
+
+    assert provider_config.PROVIDERS["deepseek"]["active"] is True
+    assert provider_config.PROVIDERS["openai"]["active"] is False
+
+
+def test_provider_set_active_persists_and_deepseek_cannot_deactivate(tmp_path, monkeypatch):
+    path = tmp_path / "custom_providers.json"
+    monkeypatch.setattr(provider_config, "CUSTOM_PROVIDERS_PATH", path)
+    monkeypatch.setattr(
+        provider_config,
+        "PROVIDERS",
+        {
+            "deepseek": {"api_key_env": "DEEPSEEK_API_KEY", "active": True},
+            "relay": {"api_key_env": "RELAY_API_KEY", "active": False},
+        },
+    )
+
+    assert provider_config.set_provider_active("relay", True) is True
+    assert provider_config.PROVIDERS["relay"]["active"] is True
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["provider_states"]["relay"]["active"] is True
+
+    assert provider_config.set_provider_active("deepseek", False) is False
+    assert provider_config.PROVIDERS["deepseek"]["active"] is True
+
+
 def test_provider_model_probe_rejects_explicit_unsupported_response():
     assert (
         provider_tui._model_rejection_reason(
@@ -374,6 +443,38 @@ def test_provider_tui_save_models_prefixes_builtin_alias_collisions(monkeypatch)
     assert sorted(saved["models_cfg"]) == ["relay-chat", "relay:gpt-5.4-mini"]
     assert saved["models_cfg"]["relay:gpt-5.4-mini"]["id"] == "gpt-5.4-mini"
     assert saved["replace_models"] is True
+
+
+def test_provider_tui_toggle_active_updates_provider_state(monkeypatch):
+    alias = "relay"
+    tui = provider_tui.ProviderTUI()
+    tui._detail_provider = alias
+    monkeypatch.setattr(
+        provider_tui,
+        "PROVIDERS",
+        {
+            alias: {
+                "base_url": "https://api.example.com/v1",
+                "api_key_env": "RELAY_API_KEY",
+                "active": False,
+            }
+        },
+    )
+    seen = {}
+
+    def fake_set_provider_active(name, active):
+        seen["name"] = name
+        seen["active"] = active
+        provider_tui.PROVIDERS[name]["active"] = active
+        return True
+
+    monkeypatch.setattr(provider_tui, "set_provider_active", fake_set_provider_active)
+    monkeypatch.setattr(provider_tui, "load_custom_providers", lambda: None)
+
+    tui._toggle_provider_active(alias)
+
+    assert seen == {"name": alias, "active": True}
+    assert tui._detail_status == "✅ Provider is now active."
 
 
 def test_provider_tui_connection_accepts_nonstandard_success_response():
@@ -697,6 +798,56 @@ def test_provider_fetch_prints_filter_and_alias_summary(monkeypatch, capsys):
         "relay-chat",
     ]
     assert saved["replace_models"] is True
+
+
+def test_provider_activate_command_updates_active_state(monkeypatch, capsys):
+    alias = "pytest_active_cmd"
+    provider_cmd.PROVIDERS[alias] = {"api_key_env": "PYTEST_ACTIVE_CMD_API_KEY", "active": False}
+    seen = {}
+
+    def fake_set_provider_active(name, active):
+        seen["name"] = name
+        seen["active"] = active
+        provider_cmd.PROVIDERS[name]["active"] = active
+        return True
+
+    monkeypatch.setattr(provider_cmd, "set_provider_active", fake_set_provider_active)
+
+    try:
+        asyncio.run(provider_cmd._handle_provider_cmd("activate", alias, SimpleNamespace()))
+    finally:
+        provider_cmd.PROVIDERS.pop(alias, None)
+
+    out = capsys.readouterr().out
+    assert seen == {"name": alias, "active": True}
+    assert "已设置为 active" in out
+
+
+def test_model_command_rejects_inactive_provider_model(monkeypatch, capsys):
+    alias = "inactive-model"
+    provider_name = "inactive-provider"
+    session = SimpleNamespace(model_alias="ds-v4-flash")
+    monkeypatch.setattr(
+        provider_config,
+        "PROVIDERS",
+        {provider_name: {"api_key_env": "INACTIVE_PROVIDER_API_KEY", "active": False}},
+    )
+    monkeypatch.setattr(provider_cmd, "PROVIDERS", provider_config.PROVIDERS)
+    monkeypatch.setattr(
+        provider_cmd,
+        "MODELS",
+        {alias: {"id": alias, "provider": provider_name, "color": "\033[37m"}},
+    )
+
+    asyncio.run(
+        provider_cmd.cmd_model(
+            SimpleNamespace(arg=alias, arg2="", session=session, sink=None)
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert "未 active" in out
+    assert session.model_alias == "ds-v4-flash"
 
 
 def test_provider_add_cli_does_not_prompt_for_fetch_on_piped_input(monkeypatch):

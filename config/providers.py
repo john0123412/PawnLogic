@@ -141,6 +141,7 @@ VISION_PRIORITY = ["gpt-5.5", "gpt-4o", "claude-sonnet"]
 CUSTOM_PROVIDERS_PATH = PAWNLOGIC_HOME / "custom_providers.json"
 BUILTIN_PROVIDER_NAMES = set(PROVIDERS)
 BUILTIN_MODEL_ALIASES = set(MODELS)
+ALWAYS_ACTIVE_PROVIDERS = {"deepseek"}
 NON_CHAT_MODEL_KEYWORDS = {
     "embedding",
     "embed",
@@ -195,6 +196,51 @@ def custom_model_alias(
     if not force_prefix and raw_alias not in BUILTIN_MODEL_ALIASES:
         return raw_alias
     return f"{_alias_prefix(provider_name)}:{raw_model_id or raw_alias}"
+
+
+def _provider_active_from_data(name: str, prov_cfg: dict | None, data: dict) -> bool:
+    if name in ALWAYS_ACTIVE_PROVIDERS:
+        return True
+    states = data.get("provider_states", {})
+    state = states.get(name, {}) if isinstance(states, dict) else {}
+    if isinstance(state, dict) and "active" in state:
+        return bool(state.get("active"))
+    if prov_cfg and "active" in prov_cfg:
+        return bool(prov_cfg.get("active"))
+    return False
+
+
+def is_provider_active(name: str) -> bool:
+    """Return whether a provider's models should be visible in /model."""
+    if name in ALWAYS_ACTIVE_PROVIDERS:
+        return True
+    return bool(PROVIDERS.get(name, {}).get("active", False))
+
+
+def set_provider_active(name: str, active: bool) -> bool:
+    """Persist a provider's active flag. DeepSeek stays active by design."""
+    if name not in PROVIDERS:
+        return False
+    if name in ALWAYS_ACTIVE_PROVIDERS and not active:
+        PROVIDERS[name]["active"] = True
+        return False
+
+    CUSTOM_PROVIDERS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    data: dict = {"providers": {}, "models": {}, "provider_states": {}}
+    if CUSTOM_PROVIDERS_PATH.exists():
+        try:
+            data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    data.setdefault("providers", {})
+    data.setdefault("models", {})
+    data.setdefault("provider_states", {})
+    data["provider_states"][name] = {"active": bool(active)}
+    CUSTOM_PROVIDERS_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    PROVIDERS[name]["active"] = bool(active) or name in ALWAYS_ACTIVE_PROVIDERS
+    return True
 
 
 def _normalise_custom_model_entries(
@@ -360,6 +406,8 @@ def load_custom_providers() -> None:
     except ImportError:
         pass
     if not CUSTOM_PROVIDERS_PATH.exists():
+        for name, prov in PROVIDERS.items():
+            prov["active"] = name in ALWAYS_ACTIVE_PROVIDERS
         for name in list(PROVIDERS):
             if name not in BUILTIN_PROVIDER_NAMES:
                 del PROVIDERS[name]
@@ -373,6 +421,8 @@ def load_custom_providers() -> None:
         return
     custom_providers = data.get("providers", {})
     custom_models = data.get("models", {})
+    for name, prov in PROVIDERS.items():
+        prov["active"] = _provider_active_from_data(name, prov, data)
     for name in list(PROVIDERS):
         if name not in BUILTIN_PROVIDER_NAMES and name not in custom_providers:
             del PROVIDERS[name]
@@ -383,6 +433,7 @@ def load_custom_providers() -> None:
         if name in BUILTIN_PROVIDER_NAMES:
             continue
         prov.setdefault("api_format", "openai")
+        prov["active"] = _provider_active_from_data(name, prov, data)
         PROVIDERS[name] = prov
     normalised_models: dict = {}
     for name in custom_providers:
@@ -422,6 +473,9 @@ def save_custom_provider(
             pass
     data.setdefault("providers", {})
     data.setdefault("models", {})
+    data.setdefault("provider_states", {})
+    prov_cfg = dict(prov_cfg)
+    prov_cfg["active"] = _provider_active_from_data(name, prov_cfg, data)
     data["providers"][name] = prov_cfg
     if replace_models:
         data["models"] = {
@@ -448,6 +502,7 @@ def remove_custom_provider(name: str) -> bool:
     if name not in data.get("providers", {}):
         return False
     del data["providers"][name]
+    data.get("provider_states", {}).pop(name, None)
     to_remove = [a for a, m in data.get("models", {}).items()
                  if m.get("provider") == name]
     for a in to_remove:
