@@ -529,9 +529,29 @@ class PawnCompleter(Completer):
     · 无需 FuzzyCompleter 包装
     """
 
-    def __init__(self, words: list[str], meta_dict: dict[str, str] | None = None):
+    def __init__(
+        self,
+        words: list[str],
+        meta_dict: dict[str, str] | None = None,
+        dynamic_model_provider=None,
+    ):
         self.words    = words
         self.meta_dict = meta_dict or {}
+        self.dynamic_model_provider = dynamic_model_provider
+
+    def _completion_words(self) -> tuple[list[str], dict[str, str]]:
+        words = list(self.words)
+        meta = dict(self.meta_dict)
+        if self.dynamic_model_provider:
+            try:
+                for alias, minfo in self.dynamic_model_provider().items():
+                    word = f"/model {alias}"
+                    if word not in meta:
+                        words.append(word)
+                    meta[word] = minfo.get("desc", "")
+            except Exception:
+                pass
+        return words, meta
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
@@ -541,8 +561,9 @@ class PawnCompleter(Completer):
             return
 
         results: list[tuple[bool, list[int], str]] = []  # (exact_prefix, indices, word)
+        words, meta = self._completion_words()
 
-        for word in self.words:
+        for word in words:
             matched, indices = _pawn_fuzzy_match(text, word)
             if not matched:
                 continue
@@ -568,7 +589,7 @@ class PawnCompleter(Completer):
                 word,
                 start_position=-len(text),   # 替换整行 / 开头的内容
                 display=display,
-                display_meta=self.meta_dict.get(word, ""),
+                display_meta=meta.get(word, ""),
             )
 
 
@@ -1145,13 +1166,9 @@ async def main():
         "/exit":          "退出 PawnLogic",
     }
 
-    # 合并一级命令 + 模型别名（仅已配置 Key 的模型）+ 子命令
+    # 合并一级命令 + 子命令；模型别名由补全器实时读取 active provider。
     _all_words = list(_all_cmd_words)
     _all_meta  = dict(_cmd_meta)
-    for _alias, _minfo in _visible_models().items():
-        _w = f"/model {_alias}"
-        _all_words.append(_w)
-        _all_meta[_w] = _minfo.get("desc", "")
     # 常用子命令
     for _sub in ("list", "view", "export", "find", "tag", "untag",
                  "bytag", "link", "unlink", "related"):
@@ -1212,7 +1229,11 @@ async def main():
 
     if prompt_toolkit_enabled:
         # ── 直接使用 PawnCompleter，内置模糊匹配，无需 FuzzyCompleter ──
-        _pawn_completer = PawnCompleter(_all_words, meta_dict=_all_meta)
+        _pawn_completer = PawnCompleter(
+            _all_words,
+            meta_dict=_all_meta,
+            dynamic_model_provider=_visible_models,
+        )
 
         try:
             _pt_history = FileHistory(_history_path)
