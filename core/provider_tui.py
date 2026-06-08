@@ -252,6 +252,23 @@ class ProviderTUI:
         self._wiz_fields[1] = self._wiz_inputs[1].text.strip()
         self._wiz_fields[3] = self._wiz_inputs[2].text.strip()
 
+    def _active_focus_target(self):
+        if self._panel == "detail" and self._detail_key_active:
+            return self._key_ta
+        if self._panel == "wizard" and self._wiz_focus in (0, 1, 3) and not self._dialog:
+            return self._wiz_inputs[{0: 0, 1: 1, 3: 2}[self._wiz_focus]]
+        if self._panel == "models" and self._ms_search_focus:
+            return self._ms_search_ta
+        return None
+
+    def _focus_active_input(self) -> None:
+        if not self._app:
+            return
+        target = self._active_focus_target()
+        if target is not None:
+            self._app.layout.focus(target)
+        self._app.invalidate()
+
     # ── render: main ─────────────────────────────────────────────────────────
 
     def _render_main(self) -> StyleAndTextTuples:
@@ -526,14 +543,7 @@ class ProviderTUI:
             ]),
             floats=floats,
         )
-        if self._panel == "detail" and self._detail_key_active:
-            focused = self._key_ta
-        elif self._panel == "wizard" and self._wiz_focus in (0, 1, 3) and not self._dialog:
-            focused = self._wiz_inputs[{0: 0, 1: 1, 3: 2}[self._wiz_focus]]
-        elif self._panel == "models" and self._ms_search_focus:
-            focused = self._ms_search_ta
-        else:
-            focused = body_win
+        focused = self._active_focus_target() or body_win
         return Layout(root, focused_element=focused)
 
     # ── key bindings ──────────────────────────────────────────────────────────
@@ -706,11 +716,17 @@ class ProviderTUI:
 
         @kb.add("tab",   filter=_wiz_nav)
         @kb.add("down",  filter=_wiz_nav)
-        def _w_next(e): self._wiz_fmt_open = False; self._wiz_focus = (self._wiz_focus + 1) % 5; inv()
+        def _w_next(e):
+            self._wiz_fmt_open = False
+            self._wiz_focus = (self._wiz_focus + 1) % 5
+            self._focus_active_input()
 
         @kb.add("s-tab", filter=_wiz_nav)
         @kb.add("up",    filter=_wiz_nav)
-        def _w_prev(e): self._wiz_fmt_open = False; self._wiz_focus = (self._wiz_focus - 1) % 5; inv()
+        def _w_prev(e):
+            self._wiz_fmt_open = False
+            self._wiz_focus = (self._wiz_focus - 1) % 5
+            self._focus_active_input()
 
         _fmt_closed = Condition(lambda: self._panel == "wizard" and self._wiz_focus == 2
                                 and not self._wiz_fmt_open and not self._dialog)
@@ -733,7 +749,7 @@ class ProviderTUI:
         @kb.add("space", filter=_fmt_open)
         def _w_fmt_pick(e):
             self._wiz_fields[2] = "anthropic" if self._wiz_fmt_cursor == 1 else "openai"
-            self._wiz_fmt_open = False; inv()
+            self._wiz_fmt_open = False; self._focus_active_input()
 
         _btn = Condition(lambda: self._panel == "wizard" and self._wiz_focus == 4
                          and not self._wiz_fmt_open and not self._dialog)
@@ -749,6 +765,7 @@ class ProviderTUI:
             self._sync_wizard_fields_from_inputs()
             self._wiz_focus = 2 if self._wiz_focus == 1 else self._wiz_focus + 1
             rebuild()
+            self._focus_active_input()
 
         # ── model selector ────────────────────────────────────────────────────
         _ms = Condition(lambda: self._panel == "models")
@@ -808,7 +825,7 @@ class ProviderTUI:
         def _ms_to_search(e):
             self._ms_search_ta.text = self._ms_search
             self._ms_search_focus = True
-            rebuild()
+            self._focus_active_input()
 
         @kb.add("enter", filter=_ms_list)
         def _ms_enter(e):
@@ -821,7 +838,7 @@ class ProviderTUI:
         def _ms_esc(e):
             if self._ms_search_focus:
                 self._ms_search_focus = False; self._ms_search = ""; self._ms_search_ta.text = ""
-                self._ms_cursor = 0; self._ms_viewport = 0; inv()
+                self._ms_cursor = 0; self._ms_viewport = 0; rebuild()
             else:
                 self._panel = self._ms_caller
                 if self._app:
@@ -862,7 +879,7 @@ class ProviderTUI:
         @kb.add("tab",    filter=_ms_srch)
         def _ms_srch_tab(e):
             self._ms_search_focus = False; self._ms_search = ""; self._ms_search_ta.text = ""
-            self._ms_cursor = 0; self._ms_viewport = 0; inv()
+            self._ms_cursor = 0; self._ms_viewport = 0; rebuild()
 
         return kb
 

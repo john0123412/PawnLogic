@@ -8,6 +8,8 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from prompt_toolkit.application import Application
+
 from config import providers as provider_config
 from core import provider_tui
 from core.commands import provider as provider_cmd
@@ -30,6 +32,33 @@ def test_provider_tui_add_wizard_api_key_field_accepts_pasted_text():
         "openai",
         pasted_key,
     ]
+
+
+def test_provider_tui_add_wizard_navigation_moves_real_input_focus():
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "wizard"
+    kb = tui._build_kb()
+    app = Application(
+        layout=tui._build_layout(),
+        key_bindings=kb,
+        style=provider_tui.TUI_STYLE,
+        full_screen=False,
+    )
+    tui._app = app
+    next_handler = next(binding.handler for binding in kb.bindings if binding.handler.__name__ == "_w_next")
+
+    assert app.layout.current_control is tui._wiz_inputs[0].control
+
+    next_handler(SimpleNamespace(app=app))
+
+    assert tui._wiz_focus == 1
+    assert app.layout.current_control is tui._wiz_inputs[1].control
+
+    next_handler(SimpleNamespace(app=app))
+    next_handler(SimpleNamespace(app=app))
+
+    assert tui._wiz_focus == 3
+    assert app.layout.current_control is tui._wiz_inputs[2].control
 
 
 def test_provider_tui_model_search_field_accepts_pasted_text():
