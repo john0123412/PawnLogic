@@ -1,8 +1,8 @@
-# PawnLogic - Claude Code Instructions
+# PawnLogic - Agent Instructions
 
-This file is the repository-level operating guide for Claude Code sessions.
-Keep it in sync with `AGENT.md` whenever project workflow, provider behavior,
-documentation policy, or verification requirements change.
+This file is the repository-level operating guide for coding agents working on
+PawnLogic. Keep it in sync with `CLAUDE.md` whenever project workflow, provider
+behavior, documentation policy, or verification requirements change.
 
 ## Project Summary
 
