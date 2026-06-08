@@ -67,6 +67,8 @@ jobs:
 
     env:
       PAWNLOGIC_TEST_MODE: "true"
+      MCP_ENABLED: "false"
+      PAWNLOGIC_HOME: ${{ runner.temp }}/pawnlogic-${{ matrix.python-version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -81,13 +83,25 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+          python --version
+          python -m pip --version
 
       # FIX #1: 原来 compileall -q . 扫描全目录（含 venv），改为只扫描源码
       - name: Syntax check (source only)
         run: python -m compileall -q core/ tools/ utils/ tests/
 
       - name: Run tests
-        run: pytest tests/ -v --tb=short --timeout=60  # FIX #2: 单测超时 60s
+        run: |
+          set -o pipefail
+          pytest tests/ -v --tb=short --timeout=60 2>&1 | tee "pytest-main-${{ matrix.python-version }}.log"
+
+      - name: Upload pytest logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-main-${{ matrix.python-version }}
+          path: pytest-main-${{ matrix.python-version }}.log
+          retention-days: 7
 
   # ── 动态 E2E 测试（Agent 测试 Agent）──────────────────────
   dynamic-test:
@@ -98,6 +112,8 @@ jobs:
 
     env:
       PAWNLOGIC_TEST_MODE: "true"
+      MCP_ENABLED: "false"
+      PAWNLOGIC_HOME: ${{ runner.temp }}/pawnlogic-e2e
       DEEPSEEK_API_KEY: "sk-test-fake-key-for-ci"
       PAWN_API_KEY: "test-fake-key"
       ANTHROPIC_API_KEY: "sk-ant-test-fake"
