@@ -13,6 +13,7 @@ Targets zero-dependency or minimal-dependency functions only:
 
 import sys
 import inspect
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -335,6 +336,60 @@ def test_count_turns_with_tool_messages():
     turns = s._count_turns(s.messages)
     assert len(turns) == 1
     assert turns[0][0] == 1   # start after system
+
+
+def test_run_turn_injects_plan_missing_for_non_exempt_tool(monkeypatch):
+    import json
+    from config import DYNAMIC_CONFIG
+    import core.session as session_mod
+
+    s = _make_session()
+    s._time_budget_sec = 0
+    s._turn_prompt_tokens = 0
+    s._turn_completion_tokens = 0
+    s._turn_tool_calls = 0
+    s.total_prompt_tokens = 0
+    s.total_completion_tokens = 0
+    s.total_tool_calls = 0
+    s._save_lock = threading.Lock()
+    s._naming_lock = threading.Lock()
+
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 3)
+    monkeypatch.setattr(session_mod, "validate_api_key", lambda _m: (True, ""))
+    monkeypatch.setattr(s, "_reset_system_prompt", MagicMock())
+    monkeypatch.setattr(s, "_maybe_update_summary", MagicMock())
+    monkeypatch.setattr(s, "_autosave", MagicMock())
+    monkeypatch.setitem(session_mod.TOOL_MAP, "write_file", lambda _args: "OK: fake write")
+
+    calls = iter([
+        [{
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_missing_plan",
+                        "function": {
+                            "name": "write_file",
+                            "arguments": json.dumps({"path": "x.txt", "content": "x"}),
+                        },
+                    }],
+                },
+            }],
+        }],
+        [{"choices": [{"delta": {"content": "done"}}]}],
+    ])
+
+    def fake_stream_request(*_args, **_kwargs):
+        return iter(next(calls))
+
+    monkeypatch.setattr(session_mod, "stream_request", fake_stream_request)
+
+    s.run_turn("write a file")
+
+    assert any(
+        m.get("role") == "user" and "PLAN_MISSING" in str(m.get("content", ""))
+        for m in s.messages
+    )
 
 
 # ══════════════════════════════════════════════════════════
