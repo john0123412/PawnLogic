@@ -245,9 +245,18 @@ def test_packaging_entry_point_uses_package_cli():
     )
 
 
-def test_built_wheel_does_not_ship_top_level_main_module():
-    wheels = sorted((ROOT / "dist").glob("pawnlogic-*.whl"))
-    assert wheels, "run `python -m build` before this deployment check"
+def test_built_wheel_does_not_ship_top_level_main_module(tmp_path):
+    subprocess.run(
+        [sys.executable, "-m", "build", "--wheel", "--outdir", str(tmp_path)],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+        timeout=120,
+    )
+    wheels = sorted(tmp_path.glob("pawnlogic-*.whl"))
+    assert wheels
 
     with zipfile.ZipFile(wheels[-1]) as wheel:
         names = set(wheel.namelist())

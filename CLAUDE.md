@@ -209,8 +209,28 @@ provider behavior, CLI help, or tests.
   config, or database files.
 - Use staged leak scans before committing.
 - Confirm `git status --short --branch --untracked-files=all` after commit.
-- If the task requires remote delivery, push `main` and confirm the new remote
-  HEAD in the final report.
+- For fixes, release preparation, and any change that affects packaging or CI,
+  create and push a remote test branch first. Do not push directly to `main`
+  until the remote branch Actions are green or the user explicitly instructs a
+  main-branch hotfix.
+- If the task requires remote delivery after branch validation, push the target
+  branch and confirm the new remote HEAD in the final report.
+
+## Release And PyPI Publishing Rules
+
+- Version release work must start on a new remote test branch such as
+  `test/release-<version>` or `fix/<issue>-<version>`.
+- The remote test branch Actions must pass before publishing a new PyPI
+  version.
+- Publish to PyPI only after the package has passed local verification and
+  remote Actions on the test branch.
+- Create or update the GitHub Release only after the PyPI upload succeeds.
+  Release notes must not be treated as complete before the package exists on
+  PyPI.
+- Do not create a release tag or trigger production publishing from an untested
+  `main` commit.
+- Record the PyPI publish result and release URL in the final report for any
+  release task.
 
 ## Architecture Notes
 

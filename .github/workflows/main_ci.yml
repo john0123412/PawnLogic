@@ -11,6 +11,7 @@ on:
     branches:
       - main
       - "chore/**"            # 允许 pre-release 清理分支自验
+      - "fix/**"              # 允许修复分支自验
       - "test/**"             # 允许临时测试分支手动触发
     paths-ignore:             # 纯文档改动不触发 CI
       - "**.md"
