@@ -221,15 +221,46 @@ provider behavior, CLI help, or tests.
 - `tests/test_deployment_friendly.py` protects startup, first-run, packaging,
   and deployment behavior.
 
-## Release Notes
+## Version Bump Fixed Locations
 
-For version bumps:
+All agents must treat version updates as a fixed-location operation. Do not add
+or edit scattered version literals.
 
-- Change only `config/paths.py:VERSION`.
-- Update README badges in both languages.
-- Update `SECURITY.md` supported versions.
-- Add a new section to `CHANGELOG.md`.
-- `pyproject.toml` must continue to read the version dynamically.
+Allowed version-bump edits:
+
+1. `config/paths.py`
+   - Change only `VERSION`.
+   - This is the only runtime source of truth.
+2. `README.md` and `README_CN.md`
+   - Update only the version badge when the badge contains a literal version.
+   - Keep both language files aligned.
+3. `SECURITY.md`
+   - Update only the Supported Versions table.
+4. `CHANGELOG.md`
+   - Add exactly one new release section for the new version.
+   - Keep existing historical sections unchanged unless correcting a proven
+     factual error.
+
+Forbidden version-bump edits:
+
+- Do not hardcode a version in `pyproject.toml`; it must continue to read
+  `config.paths.VERSION` dynamically.
+- Do not update version strings in comments, docstrings, help text, command
+  output, tests, package metadata, or generated files unless a failing test
+  proves that location is an intentional release artifact.
+- Do not edit build output in `dist/`, `build/`, or `*.egg-info/`.
+- Do not create a second version source of truth.
+
+Version-bump validation:
+
+```bash
+rg -n "0\.[0-9]+\.[0-9]+|[1-9][0-9]*\.[0-9]+\.[0-9]+" \
+  --glob '!dist/**' --glob '!build/**' --glob '!*.egg-info/**'
+git diff --stat
+```
+
+The diff should be limited to the fixed locations above unless the task
+explicitly includes additional release work.
 
 Build verification:
 
