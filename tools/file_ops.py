@@ -711,6 +711,7 @@ def tool_run_interactive(a: dict) -> str:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             cwd=cwd, bufsize=0,
+            env=_get_shell_env(),
         )
     except Exception as e:
         return f"ERROR: 启动进程失败: {e}"

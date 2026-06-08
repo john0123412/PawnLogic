@@ -308,6 +308,57 @@ def test_file_ops_resolve_and_patch_are_workspace_bound(monkeypatch, tmp_path):
     assert target.read_text(encoding="utf-8") == "print('new')\n"
 
 
+def test_run_interactive_uses_scrubbed_shell_env(monkeypatch, tmp_path):
+    _drop_project_modules("config", "utils.ansi", "core.logger")
+    _drop_project_modules("tools.file_ops", force=True)
+    from tools import file_ops
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
+    monkeypatch.setenv("NORMAL_VALUE", "ok")
+    monkeypatch.setattr(file_ops, "_session_cwd", [str(tmp_path)])
+    monkeypatch.setattr(file_ops, "_env_cache_initialized", False)
+    monkeypatch.setattr(file_ops, "_env_cache", {})
+
+    captured = {}
+
+    class FakeStdout:
+        def read(self, _size):
+            return b""
+
+    class FakeStdin:
+        def write(self, _data):
+            return None
+
+        def flush(self):
+            return None
+
+    class FakeProc:
+        stdout = FakeStdout()
+        stdin = FakeStdin()
+
+        def wait(self, timeout=None):
+            return 0
+
+        def terminate(self):
+            return None
+
+    def fake_popen(*args, **kwargs):
+        captured["env"] = kwargs.get("env", {})
+        return FakeProc()
+
+    monkeypatch.setattr(file_ops.subprocess, "Popen", fake_popen)
+    result = file_ops.tool_run_interactive({
+        "command": "printf ok",
+        "inputs": [],
+        "timeout": 1,
+        "cwd": str(tmp_path),
+    })
+
+    assert result == "(no output)"
+    assert captured["env"]["NORMAL_VALUE"] == "ok"
+    assert "OPENAI_API_KEY" not in captured["env"]
+
+
 def test_sandbox_drops_pythonpath_and_validates_package_names(monkeypatch, tmp_path):
     _drop_project_modules("tools.sandbox", force=True)
     from tools import sandbox
