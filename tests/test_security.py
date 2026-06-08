@@ -22,7 +22,14 @@ for _key in list(sys.modules):
         if ROOT not in _f:
             del sys.modules[_key]
 
-from config.security import DANGEROUS_PATTERNS, READ_BLACKLIST, WRITE_BLACKLIST, smart_truncate  # noqa: E402
+from config import PAWNLOGIC_HOME  # noqa: E402
+from config.security import (  # noqa: E402
+    DANGEROUS_PATTERNS,
+    READ_BLACKLIST,
+    WRITE_BLACKLIST,
+    scrub_sensitive_env,
+    smart_truncate,
+)
 
 
 def _is_blocked(cmd: str) -> bool:
@@ -113,9 +120,27 @@ def test_read_blacklist_contains_ssh():
     assert any(".ssh" in p for p in READ_BLACKLIST)
 
 
+def test_read_blacklist_contains_pawnlogic_env():
+    assert str(PAWNLOGIC_HOME / ".env") in READ_BLACKLIST
+
+
 def test_write_blacklist_contains_etc():
     assert "/etc" in WRITE_BLACKLIST
 
 
 def test_write_blacklist_contains_bin():
     assert "/bin" in WRITE_BLACKLIST
+
+
+def test_scrub_sensitive_env_removes_credentials():
+    env = {
+        "PATH": "/usr/bin",
+        "OPENAI_API_KEY": "sk-secret",
+        "CUSTOM_TOKEN": "token-secret",
+        "NORMAL_VALUE": "ok",
+    }
+    scrubbed = scrub_sensitive_env(env)
+    assert scrubbed["PATH"] == "/usr/bin"
+    assert scrubbed["NORMAL_VALUE"] == "ok"
+    assert "OPENAI_API_KEY" not in scrubbed
+    assert "CUSTOM_TOKEN" not in scrubbed

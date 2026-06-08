@@ -1,14 +1,44 @@
 """config/security.py — 安全名单与输出工具函数"""
 import os
+from .paths import PAWNLOGIC_HOME
 from core.state import state as _state
 
 READ_BLACKLIST = [os.path.expanduser(p) for p in
     ["~/.ssh", "~/.gnupg", "~/.config/gcloud", "~/.aws", "~/.kube"]]
+READ_BLACKLIST.extend([
+    str(PAWNLOGIC_HOME / ".env"),
+])
 
 WRITE_BLACKLIST = [
     "/etc", "/bin", "/sbin", "/usr/bin", "/usr/sbin",
     "/boot", "/lib", "/lib64", "/dev", "/proc", "/sys",
 ]
+
+SENSITIVE_ENV_KEYS = {
+    "PAWN_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY",
+    "QWEN_API_KEY", "ZHIPU_API_KEY", "SILICON_API_KEY", "OPENROUTER_API_KEY",
+    "MOONSHOT_API_KEY", "MINIMAX_API_KEY", "GROQ_API_KEY", "LOCAL_API_KEY",
+    "XIAOMI_API_KEY", "TAVILY_API_KEY", "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN", "GITHUB_TOKEN", "GH_TOKEN",
+}
+
+SENSITIVE_ENV_MARKERS = (
+    "API_KEY", "ACCESS_KEY", "SECRET", "TOKEN", "PASSWORD", "PRIVATE_KEY",
+)
+
+
+def scrub_sensitive_env(env: dict | None = None) -> dict:
+    """Return a copy of env with credentials removed for tool subprocesses."""
+    source = os.environ if env is None else env
+    clean = {}
+    for key, value in source.items():
+        upper = str(key).upper()
+        if upper in SENSITIVE_ENV_KEYS:
+            continue
+        if any(marker in upper for marker in SENSITIVE_ENV_MARKERS):
+            continue
+        clean[key] = value
+    return clean
 
 DANGEROUS_PATTERNS = [
     r"rm\s+-rf\s+[/~]", r"sudo\s+rm\s+-rf", r"mkfs\.",

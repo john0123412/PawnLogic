@@ -480,6 +480,15 @@ def _is_plan_exempt(tc_buf: dict) -> bool:
                 return False
     return True
 
+
+def _tool_call_missing_plan(text_buf: str, tc_buf: dict) -> bool:
+    """Return True when a non-exempt tool call was emitted without a plan."""
+    if not tc_buf:
+        return False
+    if _is_plan_exempt(tc_buf):
+        return False
+    return "<plan>" not in text_buf or "</plan>" not in text_buf
+
 # ════════════════════════════════════════════════════════
 # GSA 辅助：读取 global_skills.md TOC
 # ════════════════════════════════════════════════════════
@@ -2111,6 +2120,12 @@ class AgentSession:
                 #   · 信号以 "user" 角色追加在工具结果之后（attention 贴近推理层）
                 # ════════════════════════════════════════════════
                 _plan_signal_injected = False
+                _missing_required_plan = _tool_call_missing_plan(text_buf, tc_buf)
+
+                if _missing_required_plan:
+                    _plan_rejected += 1
+                else:
+                    _plan_rejected = 0
 
                 if _plan_rejected > _MAX_SOFT_CORRECTIONS:
                     # ── 硬终止：软拦截已耗尽 ──────────────────
@@ -2141,9 +2156,6 @@ class AgentSession:
                         _plan_rejected, self.model_alias, self.session_id[:8], iteration,
                     )
                     _plan_signal_injected = True
-
-                else:
-                    _plan_rejected = 0   # 成功输出 <plan>，重置计数
 
                 # ── 模块 1B：并发截断 ──────────────────────────
                 if len(tc_buf) > _MAX_CONCURRENT_TOOLS:

@@ -12,7 +12,14 @@ tools/file_ops.py — 文件读写、目录列出、文件搜索
 
 import os, re, difflib, subprocess
 from pathlib import Path
-from config import DYNAMIC_CONFIG, READ_BLACKLIST, WRITE_BLACKLIST, DANGEROUS_PATTERNS, WORKSPACE_DIR
+from config import (
+    DYNAMIC_CONFIG,
+    READ_BLACKLIST,
+    WRITE_BLACKLIST,
+    DANGEROUS_PATTERNS,
+    WORKSPACE_DIR,
+    scrub_sensitive_env,
+)
 from utils.ansi import c, YELLOW, BLUE, GRAY
 from core.logger import logger
 
@@ -31,7 +38,7 @@ def _init_env_cache():
     if _env_cache_initialized:
         return
     _env_cache_initialized = True
-    _env_cache = dict(os.environ)  # 继承当前进程环境
+    _env_cache = scrub_sensitive_env(os.environ)
 
     # 探测 HOST_IP（容器/渗透场景常用）
     try:

@@ -15,7 +15,7 @@ from .providers import (
 from .tiers import TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX
 from .security import (
     READ_BLACKLIST, WRITE_BLACKLIST, DANGEROUS_PATTERNS,
-    smart_truncate, user_friendly_error,
+    smart_truncate, user_friendly_error, scrub_sensitive_env,
 )
 from .sandbox import SANDBOX_LANGS, DOCKER_IMAGES, BROWSER_CONFIG, USER_AGENTS
 from .phases import AGENT_PHASES
@@ -34,7 +34,7 @@ __all__ = [
     "is_fast_model", "find_fast_peer",
     "TIER_LOW", "TIER_MID", "TIER_DEEP", "TIER_MAX",
     "READ_BLACKLIST", "WRITE_BLACKLIST", "DANGEROUS_PATTERNS",
-    "smart_truncate", "user_friendly_error",
+    "smart_truncate", "user_friendly_error", "scrub_sensitive_env",
     "SANDBOX_LANGS", "DOCKER_IMAGES", "BROWSER_CONFIG", "USER_AGENTS",
     "AGENT_PHASES",
     "VERSION", "PAWNLOGIC_HOME", "SESSIONS_DIR", "DB_PATH", "GLOBAL_SKILLS_PATH",

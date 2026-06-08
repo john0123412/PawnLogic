@@ -87,6 +87,7 @@ from core.session import (  # noqa: E402
     _ctx_chars,
     _trim_and_compact_context,
     _is_plan_exempt,
+    _tool_call_missing_plan,
     _PlanRenderer,
 )
 
@@ -206,6 +207,26 @@ def test_is_plan_exempt_mixed_fails():
         1: {"name": "run_shell", "args": "{}"},
     }
     assert _is_plan_exempt(tc_buf) is False
+
+
+def test_tool_call_missing_plan_false_without_tool_calls():
+    assert _tool_call_missing_plan("plain text", {}) is False
+
+
+def test_tool_call_missing_plan_false_for_exempt_tool():
+    tc_buf = {0: {"name": "list_dir", "args": "{}"}}
+    assert _tool_call_missing_plan("", tc_buf) is False
+
+
+def test_tool_call_missing_plan_true_for_write_tool_without_plan():
+    tc_buf = {0: {"name": "write_file", "args": "{}"}}
+    assert _tool_call_missing_plan("I will write the file", tc_buf) is True
+
+
+def test_tool_call_missing_plan_false_when_required_plan_present():
+    tc_buf = {0: {"name": "run_shell", "args": "{}"}}
+    text = "<plan><intent>Run verification</intent></plan>"
+    assert _tool_call_missing_plan(text, tc_buf) is False
 
 
 # ══════════════════════════════════════════════════════════
