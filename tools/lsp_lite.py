@@ -15,6 +15,7 @@ tools/lsp_lite.py — LSP-lite: Semantic Code Indexing
 
 import ast, os, re, subprocess
 from pathlib import Path
+from config import scrub_sensitive_env
 from utils.ansi import c, BLUE
 
 # ── 支持的文件扩展名 ──────────────────────────────────────
@@ -106,6 +107,7 @@ def _grep_defs(symbol: str, filepath: str) -> list[dict]:
         res = subprocess.run(
             ["grep", "-nE", regex, filepath],
             capture_output=True, text=True, timeout=5,
+            env=scrub_sensitive_env(),
         )
         results = []
         for line in res.stdout.splitlines():
@@ -132,6 +134,7 @@ def _grep_refs(symbol: str, root: str, max_results: int = 30) -> list[dict]:
         res = subprocess.run(
             ["grep", "-rn", "--color=never", "-w", symbol, root] + include_args,
             capture_output=True, text=True, timeout=12,
+            env=scrub_sensitive_env(),
         )
         results = []
         for line in res.stdout.splitlines():

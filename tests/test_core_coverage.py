@@ -359,6 +359,57 @@ def test_run_interactive_uses_scrubbed_shell_env(monkeypatch, tmp_path):
     assert "OPENAI_API_KEY" not in captured["env"]
 
 
+def test_git_op_uses_scrubbed_env(monkeypatch, tmp_path):
+    _drop_project_modules("config", "utils.ansi")
+    _drop_project_modules("tools.web_ops", "tools.file_ops", force=True)
+    from tools import file_ops, web_ops
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
+    monkeypatch.setenv("NORMAL_VALUE", "ok")
+    monkeypatch.setattr(file_ops, "_session_cwd", [str(tmp_path)])
+    captured = {}
+
+    class FakeResult:
+        stdout = "clean"
+        stderr = ""
+
+    def fake_run(*args, **kwargs):
+        captured["env"] = kwargs.get("env", {})
+        return FakeResult()
+
+    monkeypatch.setattr(web_ops.subprocess, "run", fake_run)
+    assert web_ops.tool_git_op({"action": "status"}) == "clean"
+    assert captured["env"]["NORMAL_VALUE"] == "ok"
+    assert "OPENAI_API_KEY" not in captured["env"]
+
+
+def test_skill_manager_subprocess_uses_scrubbed_env(monkeypatch, tmp_path):
+    _drop_project_modules("config")
+    _drop_project_modules("core.skill_manager", force=True)
+    from core import skill_manager
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
+    monkeypatch.setenv("NORMAL_VALUE", "ok")
+    skill_dir = tmp_path / "skills" / "pack"
+    (skill_dir / ".git").mkdir(parents=True)
+    captured_envs = []
+
+    class FakeResult:
+        returncode = 0
+        stdout = "Already up to date.\n"
+        stderr = ""
+
+    def fake_run(*args, **kwargs):
+        captured_envs.append(kwargs.get("env", {}))
+        return FakeResult()
+
+    monkeypatch.setattr(skill_manager.subprocess, "run", fake_run)
+    scanner = skill_manager.SkillScanner(tmp_path / "skills")
+    assert scanner.sync_packs()[0]["status"] == "ok"
+    assert captured_envs[0]["NORMAL_VALUE"] == "ok"
+    assert "OPENAI_API_KEY" not in captured_envs[0]
+
+
 def test_sandbox_drops_pythonpath_and_validates_package_names(monkeypatch, tmp_path):
     _drop_project_modules("tools.sandbox", force=True)
     from tools import sandbox

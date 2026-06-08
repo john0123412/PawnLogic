@@ -26,6 +26,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from config import scrub_sensitive_env
 
 
 class SkillScanner:
@@ -61,6 +62,7 @@ class SkillScanner:
                     cwd=str(skill_dir),
                     capture_output=True, text=True,
                     timeout=30, errors="ignore",
+                    env=scrub_sensitive_env(),
                 )
                 if proc.returncode == 0:
                     detail = proc.stdout.strip().split("\n")[-1][:100]
@@ -105,6 +107,7 @@ class SkillScanner:
                 ["git", "clone", "--depth=1", repo_url, str(target_dir)],
                 capture_output=True, text=True,
                 timeout=60, errors="ignore",
+                env=scrub_sensitive_env(),
             )
             if proc.returncode != 0:
                 # 清理失败的克隆目录
@@ -118,6 +121,7 @@ class SkillScanner:
             subprocess.run(
                 ["chmod", "-R", "u+rwX,go+rX", str(target_dir)],
                 capture_output=True, timeout=10,
+                env=scrub_sensitive_env(),
             )
 
             # 自动忽略非技能仓库的冗余文件

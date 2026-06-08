@@ -21,7 +21,7 @@ import random
 import urllib.request
 import urllib.parse
 import urllib.error
-from config import DYNAMIC_CONFIG, USER_AGENTS
+from config import DYNAMIC_CONFIG, USER_AGENTS, scrub_sensitive_env
 from utils.ansi import c, BLUE, YELLOW, GRAY, GREEN
 
 # ── 检测本地工具 ─────────────────────────────────────────
@@ -204,7 +204,7 @@ def _fetch_pandoc(raw_html: str, max_chars: int) -> str | None:
         proc = subprocess.run(
             ["pandoc", "-f", "html", "-t", "markdown_strict", "--wrap=none"],
             input=raw_html, capture_output=True, text=True, timeout=15,
-            encoding="utf-8", errors="replace"
+            encoding="utf-8", errors="replace", env=scrub_sensitive_env(),
         )
         text = proc.stdout.strip()
         if not text:
@@ -318,7 +318,14 @@ def tool_git_op(a: dict) -> str:
 
     print(c(YELLOW, f"  🌿 {' '.join(argv)}"))
     try:
-        res = subprocess.run(argv, capture_output=True, text=True, timeout=60, cwd=rp)
+        res = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=rp,
+            env=scrub_sensitive_env(),
+        )
         return (res.stdout + res.stderr).strip() or "(no output)"
     except subprocess.TimeoutExpired:
         return "ERROR: git 超时"

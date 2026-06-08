@@ -8,8 +8,9 @@ tools/pwn_chain.py — CTF / Pwn 工具链
 import re, shlex, shutil, subprocess, tempfile, os
 from collections import OrderedDict
 from pathlib import Path
+from config import scrub_sensitive_env
 from utils.ansi import c, YELLOW, MAGENTA, GRAY, GREEN, RED
-from tools.file_ops import _run, _check_read, _session_cwd
+from tools.file_ops import _run, _check_read, _session_cwd, _get_shell_env
 
 # ── ELF 分析结果缓存（进程内，最多 10 条，按 (path, mtime) 键控） ──
 _ELF_CACHE: OrderedDict[tuple, dict] = OrderedDict()
@@ -83,13 +84,15 @@ def tool_pwn_env(a: dict) -> str:
             if name == "gcc-multilib":
                 r = subprocess.run(
                     "echo 'int main(){}' | gcc -m32 -x c - -o /dev/null 2>&1",
-                    shell=True, capture_output=True, text=True, timeout=5
+                    shell=True, capture_output=True, text=True, timeout=5,
+                    env=scrub_sensitive_env(),
                 )
                 avail = r.returncode == 0
             elif name == "pwntools":
                 r = subprocess.run(
                     ["python3", "-c", "import pwn; print(pwn.__version__)"],
-                    capture_output=True, text=True, timeout=5
+                    capture_output=True, text=True, timeout=5,
+                    env=scrub_sensitive_env(),
                 )
                 avail = r.returncode == 0
             else:
@@ -725,6 +728,7 @@ def tool_pwn_timed_debug(a: dict) -> str:
             stderr=subprocess.STDOUT,
             cwd=_session_cwd[0],
             bufsize=0,
+            env=_get_shell_env(),
         )
     except FileNotFoundError:
         return f"ERROR: 命令不存在: {command.split()[0]}"

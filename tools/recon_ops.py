@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from config import scrub_sensitive_env
 
 
 def _clean(text: str) -> str:
@@ -28,6 +29,7 @@ def _find_pid_by_port_lsof(port: int) -> list[dict]:
         result = subprocess.run(
             ["lsof", "-i", f":{port}", "-sTCP:LISTEN", "-nP"],
             capture_output=True, text=True, timeout=5, errors="ignore",
+            env=scrub_sensitive_env(),
         )
         if result.returncode != 0:
             return []
