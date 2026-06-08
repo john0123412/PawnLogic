@@ -136,20 +136,38 @@
 
 ### WSL2 / Ubuntu（推荐）
 
+包安装：
+
+```bash
+pip install pawnlogic
+pawn
+```
+
+一行安装脚本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/john0123412/PawnLogic/main/install.sh | bash
+pawn
+```
+
+安装脚本会创建 `~/.local/share/pawnlogic/venv`，通过 pip 安装正式包，并写入
+`~/.local/bin/pawn`。
+
+源码 checkout 开发安装：
+
 ```bash
 git clone https://github.com/john0123412/PawnLogic.git && cd PawnLogic
 python3 -m venv venv && source venv/bin/activate
-pip install --upgrade pip && pip install -e .
-python main.py
+pip install --upgrade pip && pip install -e ".[dev]"
+pawn
 ```
 
 首次运行自动进入配置向导。
 
-### 全局 `pawn` 命令
+### 源码 checkout 启动器备用方式
 
 ```bash
-chmod +x pawn.sh
-ln -sf "$(pwd)/pawn.sh" ~/.local/bin/pawn
+./pawn.sh
 ```
 
 如果提示 `pawn: command not found`，运行：
@@ -163,7 +181,7 @@ export PATH="$HOME/.local/bin:$PATH"
 ```bash
 cp mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
 # 编辑 mcp_configs.json，在 ~/.pawnlogic/.env 中填入对应 Key
-python main.py   # MCP 服务自动加载
+pawn   # MCP 服务自动加载
 ```
 
 ---
@@ -297,7 +315,8 @@ MYRELAY_API_KEY=...
 
 ```
 PawnLogic/
-├── main.py              # 入口、命令解析、交互循环
+├── main.py              # 源码 checkout 兼容薄包装
+├── pawnlogic/cli.py     # pawn 与 python -m pawnlogic 共用的唯一 CLI 运行实现
 ├── config/
 │   ├── paths.py         # ★ 版本号唯一定义处
 │   ├── providers.py     # Provider 与模型注册表

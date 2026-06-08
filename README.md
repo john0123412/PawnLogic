@@ -3,7 +3,7 @@
 # 🤖 PawnLogic
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.0.6-blue.svg)](config/paths.py)
+[![Version](https://img.shields.io/badge/version-0.0.7-blue.svg)](config/paths.py)
 [![PyPI](https://img.shields.io/pypi/v/pawnlogic.svg?cache=no)](https://pypi.org/project/pawnlogic/)
 [![CI](https://github.com/john0123412/PawnLogic/actions/workflows/main_ci.yml/badge.svg)](https://github.com/john0123412/PawnLogic/actions/workflows/main_ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
@@ -26,12 +26,22 @@ pip install pawnlogic
 pawn   # first run launches the API configuration wizard
 ```
 
-**Option B — from source**
+**Option B — one-line installer**
+```bash
+curl -fsSL https://raw.githubusercontent.com/john0123412/PawnLogic/main/install.sh | bash
+pawn
+```
+
+The installer creates an isolated venv under `~/.local/share/pawnlogic`, installs
+the official `pawnlogic` package with pip, and writes a `~/.local/bin/pawn`
+launcher. It does not copy the source tree or store runtime data in the project.
+
+**Option C — from source for development**
 ```bash
 git clone https://github.com/john0123412/PawnLogic.git && cd PawnLogic
 python3 -m venv venv && source venv/bin/activate
-pip install -e .
-python main.py   # first run launches the API configuration wizard
+pip install -e ".[dev]"
+pawn             # first run launches the API configuration wizard
 ```
 
 **Optional CTF skill pack** (pwntools / ROPgadget / ropper + the `skills/ctf_*` markdown):
@@ -39,11 +49,12 @@ python main.py   # first run launches the API configuration wizard
 pip install -e ".[ctf]"
 ```
 
-Global `pawn` command:
+Source-checkout launcher fallback:
 ```bash
-chmod +x pawn.sh && ln -sf "$(pwd)/pawn.sh" ~/.local/bin/pawn
+./pawn.sh
 ```
-If `pawn` is not found, run `export PATH="$HOME/.local/bin:$PATH"` and add that line to your shell profile.
+If `pawn` is not found after package or installer setup, run
+`export PATH="$HOME/.local/bin:$PATH"` and add that line to your shell profile.
 
 **CLI usage:**
 ```bash
@@ -113,7 +124,7 @@ All keys are stored in `~/.pawnlogic/.env`. Provider configs (no keys) go to `~/
 ```bash
 cp mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
 # edit mcp_configs.json, add TAVILY_API_KEY= etc. to ~/.pawnlogic/.env
-python main.py   # MCP servers load automatically
+pawn   # MCP servers load automatically
 ```
 
 Supported MCP servers: **Tavily** (search), **Playwright** (browser automation), **Filesystem** (file bridge).

@@ -7,7 +7,7 @@ from pathlib import Path
 import os
 
 # ── 唯一版本号定义 ──────────────────────────────────────
-VERSION = "0.0.6"
+VERSION = "0.0.7"
 
 def _safe_home() -> Path:
     try:

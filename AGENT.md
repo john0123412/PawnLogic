@@ -9,7 +9,11 @@ behavior, documentation policy, or verification requirements change.
 - Product: a terminal AI agent with multi-provider model routing, persistent
   SQLite memory, real tool execution, MCP integrations, and CTF-oriented tools.
 - Installed CLI entry point: `pawn` -> `pawnlogic.cli:run`.
-- Source checkout entry point: `python main.py`.
+- Source checkout compatibility entry point: `python main.py` -> `pawnlogic.cli`.
+- Module entry point: `python -m pawnlogic` -> `pawnlogic.cli:run`.
+- Shell launcher: `pawn.sh` -> `python -m pawnlogic`.
+- Curl installer: `install.sh` creates an isolated venv, installs the package
+  with pip, and writes a `pawn` launcher.
 - Runtime data: `~/.pawnlogic/` by default. Tests must use a temporary
   `PAWNLOGIC_HOME`.
 - Version source of truth: `config/paths.py:VERSION`.
@@ -78,20 +82,23 @@ across code, tests, and documentation.
   - If the provider is active, say the models are available in `/model`.
   - If inactive, tell the user to run `/provider activate <name>`.
 
-## Completion And Entry-Point Parity
+## Completion And Runtime Entry Points
 
-The repository has two runnable entry points. Keep them behaviorally aligned.
+The repository has one CLI runtime implementation.
 
-- `main.py` is used by source checkout workflows and legacy tests.
-- `pawnlogic/cli.py` is used by the installed `pawn` command.
-- Any CLI help, parser option, completer, provider command guidance, or startup
-  behavior changed in one entry point must be changed in the other.
+- `pawnlogic/cli.py` owns CLI help, parser options, completer behavior,
+  provider command guidance, startup behavior, `PawnCompleter`, and `run()`.
+- `main.py`, `pawnlogic/__main__.py`, and `pawn.sh` are thin adapters. Do not
+  duplicate CLI runtime logic into them.
+- `main.py` must keep legacy `import main` compatibility by exposing the same
+  implementation as `pawnlogic.cli`.
 - Dynamic `/model <alias>` completions must be read live from `_visible_models`.
 - Do not cache fetched provider models into a static completer `meta_dict`.
 - Add or update tests for both `main.PawnCompleter` and
   `pawnlogic.cli.PawnCompleter` when changing completion behavior.
-- `pawn --help` and `python main.py --help` must both work and show current
-  model examples such as `ds-v4-flash`.
+- `python main.py --help`, `python -m pawnlogic --help`, `pawn --help`, and
+  `./pawn.sh --help` must work and show the same CLI parser output.
+- Fresh-venv `pip install .` must expose a working `pawn` command.
 
 ## Documentation Synchronization Policy
 
@@ -113,7 +120,6 @@ Documentation drift is considered a bug.
   - `GUIDE_EN.md`
   - `GUIDE_CN.md`
   - `CONTRIBUTING.md` if contributor workflow is affected
-  - `main.py` help text
   - `pawnlogic/cli.py` help text
   - `core/commands/provider.py` user-facing messages
 - Do not leave obsolete examples such as `ds-chat`, `ds-r1`, `gpt-3.5-turbo`,
@@ -125,10 +131,10 @@ Useful drift scans:
 
 ```bash
 rg -n "appear automatically|only shows configured|ds-chat|ds-r1|gpt-3\.5-turbo|myrelay/gpt-4o" \
-  README.md README_CN.md GUIDE_EN.md GUIDE_CN.md CONTRIBUTING.md main.py pawnlogic/cli.py core tests
+  README.md README_CN.md GUIDE_EN.md GUIDE_CN.md CONTRIBUTING.md pawnlogic/cli.py core tests
 
 rg -n "<name>|/provider activate|/provider deactivate|active provider" \
-  README.md README_CN.md GUIDE_EN.md GUIDE_CN.md main.py pawnlogic/cli.py core/commands/provider.py
+  README.md README_CN.md GUIDE_EN.md GUIDE_CN.md pawnlogic/cli.py core/commands/provider.py
 ```
 
 ## Configuration And Database Cleanliness
@@ -179,8 +185,12 @@ venv/bin/python -m ruff check .
 CLI smoke checks:
 
 ```bash
-PAWNLOGIC_HOME="$(mktemp -d)" PAWNLOGIC_TEST_MODE=true pawn --help
-PAWNLOGIC_HOME="$(mktemp -d)" PAWNLOGIC_TEST_MODE=true venv/bin/python main.py --help
+PAWNLOGIC_HOME="$(mktemp -d)" PAWNLOGIC_TEST_MODE=true MCP_ENABLED=false \
+  PROMPT_TOOLKIT_ENABLED=0 venv/bin/python main.py --help
+PAWNLOGIC_HOME="$(mktemp -d)" PAWNLOGIC_TEST_MODE=true MCP_ENABLED=false \
+  PROMPT_TOOLKIT_ENABLED=0 venv/bin/python -m pawnlogic --help
+PAWNLOGIC_HOME="$(mktemp -d)" PAWNLOGIC_TEST_MODE=true MCP_ENABLED=false \
+  PROMPT_TOOLKIT_ENABLED=0 ./pawn.sh --help
 ```
 
 Diff integrity:

@@ -5,6 +5,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.0.7] - 2026-06-08
+
+### Added
+- `install.sh` one-line installer that creates an isolated venv under
+  `~/.local/share/pawnlogic`, installs the official package with pip, and
+  writes a permission-safe `~/.local/bin/pawn` launcher.
+- Deployment tests for `python main.py --help`, `python -m pawnlogic --help`,
+  fresh-venv `pip install .`, and the generated `pawn` command.
+
+### Changed
+- `main.py` is now a thin source-checkout compatibility wrapper. The single
+  CLI runtime implementation lives in `pawnlogic/cli.py`, and `pawn.sh` now
+  launches `python -m pawnlogic`.
+- README, README_CN, GUIDE_EN, GUIDE_CN, AGENT, CLAUDE, and CONTRIBUTING now
+  document pip as the official install path and `install.sh` as a pip-based
+  installer wrapper.
+
+### Tests
+- 279 tests passing.
+- `ruff check .` passing.
+
+---
+
 ## [0.0.6] - 2026-06-07
 
 ### Fixed

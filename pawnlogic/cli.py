@@ -21,7 +21,7 @@ def _fatal_startup_import_error(exc: ImportError) -> None:
     print(
         "PawnLogic 启动失败：缺少依赖或配置模块无法导入。\n"
         f"错误: {exc}\n"
-        "请在项目目录运行: pip install -r requirements.txt\n"
+        "请在项目目录运行: pip install -e .\n"
         "如果是 pip 安装，请运行: pip install --upgrade pawnlogic",
         file=sys.stderr,
     )

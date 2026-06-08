@@ -136,20 +136,38 @@
 
 ### WSL2 / Ubuntu (recommended)
 
+Package install:
+
+```bash
+pip install pawnlogic
+pawn
+```
+
+One-line installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/john0123412/PawnLogic/main/install.sh | bash
+pawn
+```
+
+The installer creates `~/.local/share/pawnlogic/venv`, installs the official
+package with pip, and writes `~/.local/bin/pawn`.
+
+Source checkout for development:
+
 ```bash
 git clone https://github.com/john0123412/PawnLogic.git && cd PawnLogic
 python3 -m venv venv && source venv/bin/activate
-pip install --upgrade pip && pip install -e .
-python main.py
+pip install --upgrade pip && pip install -e ".[dev]"
+pawn
 ```
 
 The first run launches the configuration wizard automatically.
 
-### Global `pawn` command
+### Source-checkout launcher fallback
 
 ```bash
-chmod +x pawn.sh
-ln -sf "$(pwd)/pawn.sh" ~/.local/bin/pawn
+./pawn.sh
 ```
 
 If `pawn` is not found, run:
@@ -163,7 +181,7 @@ export PATH="$HOME/.local/bin:$PATH"
 ```bash
 cp mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
 # Edit mcp_configs.json and add keys to ~/.pawnlogic/.env
-python main.py   # MCP servers load automatically
+pawn   # MCP servers load automatically
 ```
 
 ---
@@ -297,7 +315,8 @@ Analyze ./challenge, use pwn_debug to inspect registers at main breakpoint.
 
 ```
 PawnLogic/
-├── main.py              # Entry point, REPL loop
+├── main.py              # Thin source-checkout compatibility wrapper
+├── pawnlogic/cli.py     # Single CLI runtime used by pawn and python -m pawnlogic
 ├── config/
 │   ├── paths.py         # ★ VERSION defined here
 │   ├── providers.py     # Provider & model registry

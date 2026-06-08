@@ -8,7 +8,12 @@ Thank you for your interest in contributing! Please read this guide before openi
 git clone https://github.com/john0123412/PawnLogic.git && cd PawnLogic
 python3 -m venv venv && source venv/bin/activate
 pip install -e ".[dev]"
+pawn --help
 ```
+
+The installed `pawn` command, `python -m pawnlogic`, `./pawn.sh`, and the
+compatibility `python main.py` path all use the same runtime implementation in
+`pawnlogic/cli.py`.
 
 ## Running Tests
 

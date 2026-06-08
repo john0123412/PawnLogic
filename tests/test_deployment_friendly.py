@@ -59,7 +59,7 @@ def test_paths_fall_back_when_home_is_unavailable(tmp_path, monkeypatch):
 
 def test_pawn_sh_uses_detected_dot_venv_python(tmp_path):
     shutil.copy(ROOT / "pawn.sh", tmp_path / "pawn.sh")
-    (tmp_path / "main.py").write_text("print('should not run real python')\n", encoding="utf-8")
+    (tmp_path / "pawnlogic").mkdir()
     venv_bin = tmp_path / ".venv" / "bin"
     venv_bin.mkdir(parents=True)
     (venv_bin / "activate").write_text("export VIRTUAL_ENV=dotvenv\n", encoding="utf-8")
@@ -77,7 +77,7 @@ def test_pawn_sh_uses_detected_dot_venv_python(tmp_path):
     )
 
     assert result.stdout.startswith("DOTVENV ")
-    assert str(tmp_path / "main.py") in result.stdout
+    assert "-m pawnlogic --help" in result.stdout
 
 
 def test_pawn_sh_is_executable_in_checkout():
@@ -85,11 +85,131 @@ def test_pawn_sh_is_executable_in_checkout():
     assert mode & stat.S_IXUSR
 
 
+def test_install_sh_is_executable_in_checkout():
+    mode = ROOT.joinpath("install.sh").stat().st_mode
+    assert mode & stat.S_IXUSR
+
+
+def test_install_sh_installs_package_launcher_with_venv(tmp_path):
+    install_dir = tmp_path / "app"
+    bin_dir = tmp_path / "bin"
+    env = os.environ.copy()
+    env.update({
+        "PAWNLOGIC_INSTALL_DIR": str(install_dir),
+        "PAWNLOGIC_BIN_DIR": str(bin_dir),
+        "PAWNLOGIC_PACKAGE_SPEC": str(ROOT),
+        "PYTHON": sys.executable,
+    })
+
+    result = subprocess.run(
+        [str(ROOT / "install.sh")],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        check=False,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    launcher = bin_dir / "pawn"
+    assert launcher.exists()
+    assert stat.S_IMODE(launcher.stat().st_mode) == 0o755
+    assert (install_dir / "venv" / "bin" / "pawn").exists()
+
+    help_result = subprocess.run(
+        [str(launcher), "--help"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={
+            **env,
+            "PAWNLOGIC_HOME": str(tmp_path / "home" / ".pawnlogic"),
+            "PAWNLOGIC_TEST_MODE": "true",
+            "MCP_ENABLED": "false",
+            "PROMPT_TOOLKIT_ENABLED": "0",
+        },
+        check=False,
+        timeout=30,
+    )
+
+    assert help_result.returncode == 0, help_result.stdout + help_result.stderr
+    assert "PawnLogic" in help_result.stdout
+
+
+def test_source_and_module_help_use_same_runtime(tmp_path):
+    env = _clean_runtime_env(tmp_path)
+    env["PAWNLOGIC_TEST_MODE"] = "true"
+
+    main_result = subprocess.run(
+        [sys.executable, str(ROOT / "main.py"), "--help"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=15,
+    )
+    module_result = subprocess.run(
+        [sys.executable, "-m", "pawnlogic", "--help"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=15,
+    )
+
+    assert main_result.returncode == 0, main_result.stdout + main_result.stderr
+    assert module_result.returncode == 0, module_result.stdout + module_result.stderr
+    assert main_result.stdout == module_result.stdout
+    assert "PawnLogic" in main_result.stdout
+
+
+def test_fresh_venv_pip_install_exposes_pawn_command(tmp_path):
+    install_venv = tmp_path / "install-venv"
+    subprocess.run(
+        [sys.executable, "-m", "venv", str(install_venv)],
+        check=True,
+        timeout=60,
+    )
+
+    py = install_venv / "bin" / "python"
+    pawn = install_venv / "bin" / "pawn"
+    subprocess.run(
+        [str(py), "-m", "pip", "install", "--upgrade", str(ROOT)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+        timeout=120,
+    )
+
+    result = subprocess.run(
+        [str(pawn), "--help"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={
+            **_clean_runtime_env(tmp_path),
+            "PAWNLOGIC_TEST_MODE": "true",
+        },
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PawnLogic" in result.stdout
+
+
 def test_pawn_symlink_launcher_executes_checkout_script(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
     shutil.copy(ROOT / "pawn.sh", project / "pawn.sh")
-    shutil.copy(ROOT / "main.py", project / "main.py")
+    (project / "pawnlogic").mkdir()
     (project / "pawn.sh").chmod(0o755)
 
     venv_bin = project / "venv" / "bin"
@@ -112,7 +232,7 @@ def test_pawn_symlink_launcher_executes_checkout_script(tmp_path):
     )
 
     assert result.stdout.startswith("SYMLINK_PAWN ")
-    assert str(project / "main.py") in result.stdout
+    assert "-m pawnlogic --help" in result.stdout
 
 
 def test_packaging_entry_point_uses_package_cli():
