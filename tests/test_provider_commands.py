@@ -101,6 +101,47 @@ def test_provider_tui_connection_reports_http_400_body_when_json_invalid():
     assert "Extra data" not in message
 
 
+def test_provider_tui_add_wizard_saves_without_testing_connection(monkeypatch):
+    alias = "pytest_save_only"
+    env_key = "PYTEST_SAVE_ONLY_API_KEY"
+    tui = provider_tui.ProviderTUI()
+    tui._wiz_inputs[0].text = alias
+    tui._wiz_inputs[1].text = "http://127.0.0.1:8080/v1"
+    tui._wiz_fields[2] = "openai"
+    tui._wiz_inputs[2].text = "test-key"
+    provider_tui.PROVIDERS.pop(alias, None)
+
+    saved = {}
+
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("add wizard should not test connection")
+
+    def fake_save_key_to_env(env_var, key):
+        saved["env_var"] = env_var
+        saved["key"] = key
+
+    def fake_save_custom_provider(name, provider_cfg, models_cfg):
+        saved["name"] = name
+        saved["provider_cfg"] = provider_cfg
+        saved["models_cfg"] = models_cfg
+
+    monkeypatch.setattr(provider_tui, "_test_connection", fail_if_called)
+    monkeypatch.setattr(provider_tui, "_save_key_to_env", fake_save_key_to_env)
+    monkeypatch.setattr(provider_tui, "save_custom_provider", fake_save_custom_provider)
+    monkeypatch.setattr(provider_tui, "load_custom_providers", lambda: None)
+
+    try:
+        asyncio.run(tui._wizard_confirm())
+    finally:
+        provider_tui.PROVIDERS.pop(alias, None)
+
+    assert saved["name"] == alias
+    assert saved["env_var"] == env_key
+    assert saved["key"] == "test-key"
+    assert saved["provider_cfg"]["base_url"] == "http://127.0.0.1:8080/v1"
+    assert tui._panel == "main"
+
+
 def test_models_url_from_base_url_preserves_proxy_path():
     assert (
         provider_config.models_url_from_base_url(

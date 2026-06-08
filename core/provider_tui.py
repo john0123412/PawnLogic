@@ -388,7 +388,7 @@ class ProviderTUI:
                     f.append((fs, f"       {cur}{opt}\n"))
         f.append(("", "\n"))
         bs = "class:btn-focus" if self._wiz_focus == 4 else "class:btn-normal"
-        f.append((bs, "  [ Confirm & Test Connection ]\n\n"))
+        f.append((bs, "  [ Save Provider ]\n\n"))
         if self._wiz_error:
             f.append(("class:error", f"  ✗ {self._wiz_error}\n"))
         if self._wiz_status:
@@ -398,7 +398,7 @@ class ProviderTUI:
     def _render_status_wizard(self) -> StyleAndTextTuples:
         return [("class:status-key", " Tab "), ("class:status", "Next Field  "),
                 ("class:status-key", "↑↓ "), ("class:status", "Move/Select  "),
-                ("class:status-key", "Enter "), ("class:status", "Confirm  "),
+                ("class:status-key", "Enter "), ("class:status", "Save  "),
                 ("class:status-key", "Esc "), ("class:status", "Cancel ")]
 
     # ── render: model selector ────────────────────────────────────────────────
@@ -1038,35 +1038,19 @@ class ProviderTUI:
             self._wiz_error = "API Key is required."; self._app and self._app.invalidate(); return
 
         self._wiz_error = ""
-        self._wiz_status = "⟳ Testing connection..."
-        self._wiz_status_style = "class:spinner"
-        if self._app: self._app.invalidate()
-
-        ok, msg, _ = await _test_connection(url, key, fmt)
         env_var = f"{name.upper().replace('-','_').replace(' ','_')}_API_KEY"
-
-        if ok:
-            self._wiz_status = f"✅ {msg}"
-            self._wiz_status_style = "class:success"
-            if self._app: self._app.invalidate()
-            _save_key_to_env(env_var, key)
-            prov_cfg = {"base_url": url, "api_key_env": env_var,
-                        "label": f"Custom ({name})", "api_format": fmt}
-            save_custom_provider(name, prov_cfg, {})
-            PROVIDERS[name] = prov_cfg
-            load_custom_providers()
-            await asyncio.sleep(0.3)
-            self._wiz_status = f"✅ Saved. Use Fetch/Sync Models in the detail panel to load models."
-            self._panel = "main"
-            if self._app:
-                self._app.layout = self._build_layout()
-                self._app.invalidate()
-        else:
-            self._wiz_status = f"✗ Connection failed: {msg}"
-            self._wiz_status_style = "class:error"
-            self._wiz_fields_pending = (name, url, fmt, key, env_var)
-            self._dialog = "save_anyway"; self._dialog_cursor = 0
-            if self._app: self._app.invalidate()
+        _save_key_to_env(env_var, key)
+        prov_cfg = {"base_url": url, "api_key_env": env_var,
+                    "label": f"Custom ({name})", "api_format": fmt}
+        save_custom_provider(name, prov_cfg, {})
+        PROVIDERS[name] = prov_cfg
+        load_custom_providers()
+        self._wiz_status = "✅ Saved. Use Test Connection or Fetch/Sync Models from the detail panel."
+        self._wiz_status_style = "class:success"
+        self._panel = "main"
+        if self._app:
+            self._app.layout = self._build_layout()
+            self._app.invalidate()
 
     # ── run ───────────────────────────────────────────────────────────────────
 
