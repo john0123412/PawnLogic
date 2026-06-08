@@ -43,6 +43,7 @@ except ImportError:
 
 from core.logger import logger
 from config.paths import PAWNLOGIC_HOME
+from config.security import scrub_sensitive_env
 
 
 # ════════════════════════════════════════════════════════
@@ -55,6 +56,14 @@ WORKSPACE_ASSETS = PAWNLOGIC_HOME / "workspace" / "mcp_assets"
 
 _ENV_VAR_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 _warned_vars: set[str] = set()             # 避免同一 var 重复告警
+
+_MCP_BASE_ENV_KEYS = {
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL",
+    "LANG", "LC_ALL", "LC_CTYPE", "TERM",
+    "TMPDIR", "TEMP", "TMP",
+    "SYSTEMROOT", "COMSPEC", "PATHEXT",
+}
+_TRUTHY_CONFIG_VALUES = {"1", "true", "yes", "on"}
 
 
 # ════════════════════════════════════════════════════════
@@ -72,6 +81,43 @@ def _expand_env(s: str) -> str:
             return ""
         return val
     return _ENV_VAR_RE.sub(repl, s)
+
+
+def _config_truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in _TRUTHY_CONFIG_VALUES
+
+
+def _minimal_mcp_env(source_env: dict[str, str]) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in source_env.items()
+        if key in _MCP_BASE_ENV_KEYS or key.startswith("LC_")
+    }
+
+
+def _build_mcp_env(conf: dict) -> dict[str, str]:
+    """
+    Build an explicit environment for MCP subprocesses.
+
+    Default: pass only non-sensitive runtime basics such as PATH/HOME/TMP.
+    Opt-in: `inherit_env: true` passes the parent environment after secret
+    scrubbing. In both modes, `env` config entries are deliberate overrides and
+    may reference `${VAR}` from the current process.
+    """
+    parent_env = scrub_sensitive_env(os.environ)
+    base_env = (
+        parent_env
+        if _config_truthy(conf.get("inherit_env"))
+        else _minimal_mcp_env(parent_env)
+    )
+    env_overrides = {
+        str(k): _expand_env(str(v)) for k, v in (conf.get("env") or {}).items()
+    }
+    return {**base_env, **env_overrides}
 
 
 def _save_binary_asset(data_b64: str, mime: str, server: str) -> str:
@@ -297,11 +343,7 @@ class MCPClientManager:
             raise ValueError(f"missing 'command' field")
 
         args = [_expand_env(str(a)) for a in (conf.get("args") or [])]
-        env_overrides = {
-            k: _expand_env(str(v)) for k, v in (conf.get("env") or {}).items()
-        }
-        # 合并系统 env，让用户配置覆盖
-        full_env = ({**os.environ, **env_overrides} if env_overrides else None)
+        full_env = _build_mcp_env(conf)
 
         params = StdioServerParameters(command=cmd, args=args, env=full_env)
 
