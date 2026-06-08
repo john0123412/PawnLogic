@@ -72,6 +72,35 @@ def test_provider_tui_model_search_field_accepts_pasted_text():
     assert tui._ms_search == pasted_model_name
 
 
+def test_provider_tui_connection_accepts_nonstandard_success_response():
+    response = SimpleNamespace(
+        status_code=200,
+        text='{"id":"one"}{"id":"two"}',
+        json=lambda: json.loads('{"id":"one"}{"id":"two"}'),
+    )
+
+    ok, message, ms = provider_tui._connection_result_from_response(response, 12)
+
+    assert ok is True
+    assert ms == 12
+    assert message == "Connected (12ms; non-standard response)"
+
+
+def test_provider_tui_connection_reports_http_400_body_when_json_invalid():
+    response = SimpleNamespace(
+        status_code=400,
+        text='{"error":"bad request"}{"extra":"chunk"}',
+        json=lambda: json.loads('{"error":"bad request"}{"extra":"chunk"}'),
+    )
+
+    ok, message, ms = provider_tui._connection_result_from_response(response, 34)
+
+    assert ok is False
+    assert ms == 34
+    assert message.startswith('HTTP 400: {"error":"bad request"}')
+    assert "Extra data" not in message
+
+
 def test_models_url_from_base_url_preserves_proxy_path():
     assert (
         provider_config.models_url_from_base_url(

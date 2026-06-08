@@ -111,6 +111,30 @@ def _normalize_base_url(raw: str, api_format: str = "openai") -> str:
         return raw + suffix
     return raw + "/v1" + suffix
 
+
+def _response_excerpt(text: str, limit: int = 120) -> str:
+    return " ".join(text.split())[:limit]
+
+
+def _connection_result_from_response(resp, ms: int) -> tuple[bool, str, int]:
+    if 200 <= resp.status_code < 300:
+        try:
+            resp.json()
+        except ValueError:
+            return True, f"Connected ({ms}ms; non-standard response)", ms
+        return True, f"Connected ({ms}ms)", ms
+
+    if resp.status_code == 400:
+        try:
+            body = resp.json()
+        except ValueError:
+            return False, f"HTTP 400: {_response_excerpt(resp.text)}", ms
+        if isinstance(body, dict) and "error" in body:
+            return True, f"Connected ({ms}ms; API returned validation error)", ms
+
+    return False, f"HTTP {resp.status_code}: {_response_excerpt(resp.text)}", ms
+
+
 async def _test_connection(base_url: str, api_key: str, api_format: str) -> tuple[bool, str, int]:
     import httpx
     t0 = time.monotonic()
@@ -128,11 +152,7 @@ async def _test_connection(base_url: str, api_key: str, api_format: str) -> tupl
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(endpoint, json=payload, headers=headers)
         ms = int((time.monotonic() - t0) * 1000)
-        if resp.status_code in (200, 400):
-            body = resp.json()
-            if resp.status_code == 200 or "error" in body:
-                return True, f"Connected ({ms}ms)", ms
-        return False, f"HTTP {resp.status_code}: {resp.text[:100]}", ms
+        return _connection_result_from_response(resp, ms)
     except Exception as e:
         return False, str(e)[:100], int((time.monotonic() - t0) * 1000)
 
