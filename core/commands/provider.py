@@ -573,7 +573,12 @@ async def _provider_fetch_selector(entries: list[tuple[str, dict]]) -> list[str]
 
 async def _provider_fetch(alias: str) -> None:
     """/provider fetch <alias>: 分页请求 /v1/models，交互多选后批量注册。"""
-    from core.provider_tui import _filter_supported_chat_models, _model_is_chat_candidate
+    from core.provider_tui import (
+        _filter_supported_chat_models,
+        _format_alias_preview,
+        _model_alias_changes,
+        _model_is_chat_candidate,
+    )
     from config.providers import (
         custom_model_alias,
         save_custom_provider as _save_cp,
@@ -605,9 +610,11 @@ async def _provider_fetch(alias: str) -> None:
         return
 
     candidates: list[tuple[str, dict]] = []
+    hidden_by_name = 0
     for item in data:
         mid = item.get("id", "")
         if not mid or not _model_is_chat_candidate(mid):
+            hidden_by_name += 1
             continue
         vision = any(k in mid.lower() for k in ("vision", "vl", "visual"))
         candidates.append((mid, {
@@ -629,8 +636,22 @@ async def _provider_fetch(alias: str) -> None:
         print(c(YELLOW, "  ⚠ 未获取到任何可用模型，请检查接口返回格式。"))
         return
 
-    if removed:
-        print(c(GRAY, f"  已隐藏 {removed} 个不可用于聊天的模型。"))
+    print(
+        c(
+            GRAY,
+            f"  同步摘要：接口返回 {len(data)} 个；按类型/名称隐藏 {hidden_by_name} 个；"
+            f"连通探测隐藏 {removed} 个；可选择 {len(candidates)} 个。",
+        )
+    )
+    alias_changes = _model_alias_changes(alias, candidates)
+    if alias_changes:
+        print(
+            c(
+                GRAY,
+                f"  别名说明：{len(alias_changes)} 个模型会保存为 provider 前缀别名："
+                f"{_format_alias_preview(alias_changes)}。",
+            )
+        )
     print(c(GREEN, f"  ✓ 获取到 {len(candidates)} 个模型，请选择要注册的模型：\n"))
     chosen_ids = await _provider_fetch_selector(candidates)
 

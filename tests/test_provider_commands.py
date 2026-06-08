@@ -119,6 +119,19 @@ def test_provider_filter_supported_chat_models_removes_unsupported(monkeypatch):
     assert removed == 1
 
 
+def test_provider_sync_notice_reports_hidden_and_alias_changes():
+    lines = provider_tui._format_model_sync_notice(
+        {"returned": 5, "hidden_by_name": 2, "hidden_by_probe": 1, "selectable": 2},
+        [("gpt-5.4-mini", "relay:gpt-5.4-mini")],
+    )
+
+    assert lines[0] == (
+        "Sync summary: 5 returned; 2 hidden by type/name; "
+        "1 hidden by chat probe; 2 selectable."
+    )
+    assert "gpt-5.4-mini -> relay:gpt-5.4-mini" in lines[1]
+
+
 def test_provider_first_chat_model_prefers_registered_provider_chat_model(monkeypatch):
     monkeypatch.setattr(
         provider_tui,
@@ -244,6 +257,84 @@ def test_provider_tui_model_selector_enter_toggles_row_and_confirms_on_button(mo
     enter_handler(SimpleNamespace(app=app))
 
     assert saved["called"] is True
+
+
+def test_provider_tui_model_selector_cancel_button_returns_to_caller():
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "models"
+    tui._ms_caller = "detail"
+    tui._ms_all = [("model-a", {"id": "model-a", "provider": "relay"})]
+    tui._ms_cursor = len(tui._ms_all) + 2
+    kb = tui._build_kb()
+    app = Application(
+        layout=tui._build_layout(),
+        key_bindings=kb,
+        style=provider_tui.TUI_STYLE,
+        full_screen=False,
+    )
+    tui._app = app
+    enter_handler = next(binding.handler for binding in kb.bindings if binding.handler.__name__ == "_ms_enter")
+
+    enter_handler(SimpleNamespace(app=app))
+
+    assert tui._panel == "detail"
+    assert tui._detail_status == "Model sync cancelled."
+
+
+def test_provider_tui_model_selector_renders_prefixed_alias_hint():
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "models"
+    tui._ms_provider = "relay"
+    tui._ms_all = [("gpt-5.4-mini", {"id": "gpt-5.4-mini", "provider": "relay"})]
+
+    rendered = "".join(text for _style, text in tui._render_model_select())
+
+    assert "gpt-5.4-mini -> relay:gpt-5.4-mini" in rendered
+
+
+def test_provider_tui_model_selector_load_close_exits_after_save(monkeypatch):
+    alias = "relay"
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "models"
+    tui._ms_provider = alias
+    tui._ms_all = [("model-a", {"id": "model-a", "provider": alias})]
+    tui._ms_selected = {"model-a"}
+    tui._ms_cursor = len(tui._ms_all) + 1
+    monkeypatch.setattr(
+        provider_tui,
+        "PROVIDERS",
+        {
+            alias: {
+                "base_url": "https://api.example.com/v1",
+                "api_key_env": "RELAY_API_KEY",
+                "api_format": "openai",
+            }
+        },
+    )
+    kb = tui._build_kb()
+    app = Application(
+        layout=tui._build_layout(),
+        key_bindings=kb,
+        style=provider_tui.TUI_STYLE,
+        full_screen=False,
+    )
+    tui._app = app
+    enter_handler = next(binding.handler for binding in kb.bindings if binding.handler.__name__ == "_ms_enter")
+    saved = {"called": False}
+    exited = {"called": False}
+
+    def fake_save_custom_provider(*_args, **_kwargs):
+        saved["called"] = True
+
+    monkeypatch.setattr(provider_tui, "save_custom_provider", fake_save_custom_provider)
+    monkeypatch.setattr(provider_tui, "_record_sync_time", lambda _pname: None)
+    monkeypatch.setattr(provider_tui, "_sync_models_to_runtime", lambda: None)
+    monkeypatch.setattr(app, "exit", lambda *args, **kwargs: exited.__setitem__("called", True))
+
+    enter_handler(SimpleNamespace(app=app))
+
+    assert saved["called"] is True
+    assert exited["called"] is True
 
 
 def test_provider_tui_save_models_prefixes_builtin_alias_collisions(monkeypatch):
@@ -550,6 +641,62 @@ def test_provider_add_cli_fetches_without_nested_event_loop(monkeypatch):
     assert saved["name"] == alias
     assert saved["provider_cfg"]["api_key_env"] == env_key
     fetch.assert_awaited_once_with(alias)
+
+
+def test_provider_fetch_prints_filter_and_alias_summary(monkeypatch, capsys):
+    alias = "pytest_fetch_summary"
+    env_key = "PYTEST_FETCH_SUMMARY_API_KEY"
+    monkeypatch.setenv(env_key, "test-key")
+    provider_cmd.PROVIDERS[alias] = {
+        "base_url": "https://api.example.com/v1",
+        "api_key_env": env_key,
+        "label": "Relay",
+        "api_format": "openai",
+    }
+    saved = {}
+
+    async def fake_filter(_base_url, _api_key, candidates, _api_format="openai"):
+        return [(mid, cfg) for mid, cfg in candidates if mid != "unsupported-chat"], 1
+
+    async def fake_selector(entries):
+        return [mid for mid, _cfg in entries]
+
+    def fake_save_custom_provider(name, _provider_cfg, models_cfg, replace_models=False):
+        saved["name"] = name
+        saved["models_cfg"] = models_cfg
+        saved["replace_models"] = replace_models
+
+    monkeypatch.setattr(
+        provider_cmd,
+        "_fetch_models_paginated",
+        lambda _models_url, _api_key: [
+            {"id": "gpt-5.4-mini"},
+            {"id": "gpt-image-2"},
+            {"id": "unsupported-chat"},
+            {"id": "relay-chat"},
+        ],
+    )
+    monkeypatch.setattr(provider_tui, "_filter_supported_chat_models", fake_filter)
+    monkeypatch.setattr(provider_cmd, "_provider_fetch_selector", fake_selector)
+    monkeypatch.setattr(provider_config, "save_custom_provider", fake_save_custom_provider)
+    monkeypatch.setattr(provider_config, "load_custom_providers", lambda: None)
+
+    try:
+        asyncio.run(provider_cmd._provider_fetch(alias))
+    finally:
+        provider_cmd.PROVIDERS.pop(alias, None)
+
+    out = capsys.readouterr().out
+    assert "接口返回 4 个" in out
+    assert "按类型/名称隐藏 1 个" in out
+    assert "连通探测隐藏 1 个" in out
+    assert "gpt-5.4-mini -> pytest_fetch_summary:gpt-5.4-mini" in out
+    assert saved["name"] == alias
+    assert sorted(saved["models_cfg"]) == [
+        "pytest_fetch_summary:gpt-5.4-mini",
+        "relay-chat",
+    ]
+    assert saved["replace_models"] is True
 
 
 def test_provider_add_cli_does_not_prompt_for_fetch_on_piped_input(monkeypatch):

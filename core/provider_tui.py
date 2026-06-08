@@ -144,6 +144,45 @@ def _model_is_chat_candidate(model_id: str) -> bool:
     return is_chat_model_candidate(model_id)
 
 
+def _candidate_save_alias(pname: str, mid: str, cfg: dict) -> str:
+    return custom_model_alias(pname, str(cfg.get("id") or mid), mid)
+
+
+def _model_alias_changes(pname: str, entries: list[tuple[str, dict]]) -> list[tuple[str, str]]:
+    changes = []
+    for mid, cfg in entries:
+        alias = _candidate_save_alias(pname, mid, cfg)
+        if alias != mid:
+            changes.append((mid, alias))
+    return changes
+
+
+def _format_alias_preview(changes: list[tuple[str, str]], limit: int = 3) -> str:
+    preview = ", ".join(f"{mid} -> {alias}" for mid, alias in changes[:limit])
+    if len(changes) > limit:
+        preview += f", ... +{len(changes) - limit} more"
+    return preview
+
+
+def _format_model_sync_notice(stats: dict, alias_changes: list[tuple[str, str]]) -> list[str]:
+    returned = int(stats.get("returned", 0))
+    hidden_name = int(stats.get("hidden_by_name", 0))
+    hidden_probe = int(stats.get("hidden_by_probe", 0))
+    selectable = int(stats.get("selectable", 0))
+    lines = [
+        (
+            f"Sync summary: {returned} returned; {hidden_name} hidden by type/name; "
+            f"{hidden_probe} hidden by chat probe; {selectable} selectable."
+        )
+    ]
+    if alias_changes:
+        lines.append(
+            f"Alias note: {len(alias_changes)} model IDs will be saved with provider prefix: "
+            f"{_format_alias_preview(alias_changes)}."
+        )
+    return lines
+
+
 def _first_provider_chat_model(pname: str) -> str:
     for alias, cfg in MODELS.items():
         if cfg.get("provider") != pname:
@@ -242,10 +281,11 @@ async def _fetch_models(
     base_url: str,
     api_key: str,
     api_format: str = "openai",
-) -> tuple[list[tuple[str, dict]], str]:
+) -> tuple[list[tuple[str, dict]], str, dict]:
     import httpx
     models_url = models_url_from_base_url(base_url)
     all_data: list = []
+    stats = {"returned": 0, "hidden_by_name": 0, "hidden_by_probe": 0, "selectable": 0}
     url = f"{models_url}?limit=200"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -259,11 +299,13 @@ async def _fetch_models(
                 cursor = body.get("next_cursor") or body.get("next_page")
                 url = f"{models_url}?limit=200&after={cursor}" if cursor else None
     except Exception as e:
-        return [], str(e)[:100]
+        return [], str(e)[:100], stats
+    stats["returned"] = len(all_data)
     candidates = []
     for item in all_data:
         mid = item.get("id", "")
         if not mid or not _model_is_chat_candidate(mid):
+            stats["hidden_by_name"] += 1
             continue
         ml = mid.lower()
         vision    = any(k in ml for k in ("vision", "vl", "visual"))
@@ -272,10 +314,12 @@ async def _fetch_models(
                                   "color": "\033[37m", "vision": vision,
                                   "reasoning": reasoning}))
     filtered, removed = await _filter_supported_chat_models(base_url, api_key, candidates, api_format)
+    stats["hidden_by_probe"] = removed
+    stats["selectable"] = len(filtered)
     if removed:
         for _mid, cfg in filtered:
             cfg["desc"] = f"fetched; {removed} unsupported hidden"
-    return filtered, ""
+    return filtered, "", stats
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ProviderTUI
@@ -324,6 +368,8 @@ class ProviderTUI:
         self._ms_search_ta = TextArea(multiline=False, height=1, style="class:field-focus")
         self._ms_search_focus: bool = False
         self._ms_filter_cache: tuple = ("", [])
+        self._ms_notice: list[str] = []
+        self._ms_save_exit: bool = False
         # manage models panel
         self._mm_models: list[str] = []   # alias list for current provider
         self._mm_cursor: int = 0
@@ -501,6 +547,10 @@ class ProviderTUI:
             ("class:title", f"\n  📦 Select Models — {self._ms_provider}\n"),
             ("class:subtitle", f"  {len(self._ms_all)} models available. Choose which to load.\n\n"),
         ]
+        for line in self._ms_notice:
+            f.append(("class:warning", f"  {line}\n"))
+        if self._ms_notice:
+            f.append(("", "\n"))
         sb_s = "class:field-focus" if self._ms_search_focus else "class:field-normal"
         f.append((sb_s, f"  🔍 Search: {self._ms_search}{'▌' if self._ms_search_focus else ''}\n\n"))
         # Only render the visible viewport window — never all rows
@@ -512,13 +562,19 @@ class ProviderTUI:
             cur = "▶" if i == self._ms_cursor and not self._ms_search_focus else " "
             vtag = " 📷" if cfg.get("vision") else ""
             manual = " [+]" if mid in self._ms_manual else ""
+            alias = _candidate_save_alias(self._ms_provider, mid, cfg)
+            alias_note = f" -> {alias}" if alias != mid else ""
             cs = "class:cursor" if i == self._ms_cursor and not self._ms_search_focus else ""
-            f.append((cs, f"  {cur} [{checked}] {mid}{vtag}{manual}\n"))
+            f.append((cs, f"  {cur} [{checked}] {mid}{alias_note}{vtag}{manual}\n"))
         if total > _PAGE:
             f.append(("class:subtitle", f"\n  Showing {start+1}–{end} of {total}\n"))
         f.append(("", f"\n  {len(self._ms_selected)} selected\n\n"))
-        btn_style = "class:btn-focus" if self._ms_cursor == total and not self._ms_search_focus else "class:btn-normal"
-        f.append((btn_style, "  [ Load Selected Models ]  (Enter to confirm)\n"))
+        load_style = "class:btn-focus" if self._ms_cursor == total and not self._ms_search_focus else "class:btn-normal"
+        close_style = "class:btn-focus" if self._ms_cursor == total + 1 and not self._ms_search_focus else "class:btn-normal"
+        cancel_style = "class:btn-focus" if self._ms_cursor == total + 2 and not self._ms_search_focus else "class:btn-normal"
+        f.append((load_style, "  [ Load Selected ]  "))
+        f.append((close_style, "[ Load & Close ]  "))
+        f.append((cancel_style, "[ Cancel ]\n"))
         if self._ms_error:
             f.append(("class:error", f"\n  ⚠ {self._ms_error}\n"))
         return f
@@ -530,7 +586,8 @@ class ProviderTUI:
                 ("class:status-key", "A "), ("class:status", "All  "),
                 ("class:status-key", "C "), ("class:status", "Clear  "),
                 ("class:status-key", "Enter "), ("class:status", "Confirm  "),
-                ("class:status-key", "Esc "), ("class:status", "Cancel ")]
+                ("class:status-key", "Esc "), ("class:status", "Back  "),
+                ("class:status-key", "Q "), ("class:status", "Quit ")]
 
     # ── render: dialogs ───────────────────────────────────────────────────────
 
@@ -894,7 +951,7 @@ class ProviderTUI:
         def _ms_dn(e):
             filtered = self._ms_filtered()
             total = len(filtered)
-            self._ms_cursor = min(total, self._ms_cursor + 1)  # total = confirm btn
+            self._ms_cursor = min(total + 2, self._ms_cursor + 1)
             if self._ms_cursor >= self._ms_viewport + _PAGE:
                 self._ms_viewport = self._ms_cursor - _PAGE + 1
             inv()
@@ -907,7 +964,7 @@ class ProviderTUI:
         @kb.add("pagedown", filter=_ms_list)
         def _ms_pgdn(e):
             filtered = self._ms_filtered()
-            self._ms_cursor = min(len(filtered), self._ms_cursor + _PAGE)
+            self._ms_cursor = min(len(filtered) + 2, self._ms_cursor + _PAGE)
             self._ms_viewport = min(max(0, len(filtered) - _PAGE),
                                     self._ms_viewport + _PAGE); inv()
 
@@ -941,6 +998,7 @@ class ProviderTUI:
         @kb.add("enter", filter=_ms_list)
         def _ms_enter(e):
             filtered = self._ms_filtered()
+            total = len(filtered)
             if self._ms_cursor < len(filtered):
                 mid = filtered[self._ms_cursor][0]
                 if mid in self._ms_selected:
@@ -949,9 +1007,14 @@ class ProviderTUI:
                     self._ms_selected.add(mid)
                 inv()
                 return
+            if self._ms_cursor == total + 2:
+                self._cancel_model_selector()
+                return
             if not self._ms_selected:
                 self._ms_error = "Select at least one model."; inv(); return
-            self._ms_error = ""; self._do_save_models()
+            self._ms_error = ""
+            self._ms_save_exit = self._ms_cursor == total + 1
+            self._do_save_models()
 
         @kb.add("escape", filter=_ms)
         def _ms_esc(e):
@@ -959,14 +1022,11 @@ class ProviderTUI:
                 self._ms_search_focus = False; self._ms_search = ""; self._ms_search_ta.text = ""
                 self._ms_cursor = 0; self._ms_viewport = 0; rebuild()
             else:
-                self._panel = self._ms_caller
-                if self._app:
-                    self._app.layout = self._build_layout()
-                    self._app.invalidate()
+                self._cancel_model_selector()
 
         @kb.add("q", filter=_ms)
         @kb.add("Q", filter=_ms)
-        def _ms_quit(e): e.app.exit()
+        def _ms_quit(e): self._cancel_model_selector(close=True)
 
         @kb.add("enter", filter=_ms_srch)
         def _ms_srch_enter(e):
@@ -1019,18 +1079,43 @@ class ProviderTUI:
             self._app.layout = self._build_layout()
             self._app.invalidate()
 
+    def _cancel_model_selector(self, close: bool = False):
+        if close:
+            if self._app:
+                self._app.exit()
+            return
+        self._panel = self._ms_caller
+        self._detail_status = "Model sync cancelled."
+        self._detail_status_style = "class:warning"
+        if self._app:
+            self._app.layout = self._build_layout()
+            self._app.invalidate()
+
     def _do_save_models(self):
         pname = self._ms_provider
         models_cfg = {}
+        alias_changes = []
         for mid in self._ms_selected:
             cfg = next((c for m, c in self._ms_all if m == mid), None)
             if cfg:
-                alias = custom_model_alias(pname, str(cfg.get("id") or mid), mid)
+                alias = _candidate_save_alias(pname, mid, cfg)
+                if alias != mid:
+                    alias_changes.append((mid, alias))
                 models_cfg[alias] = {**cfg, "provider": pname}
         prov_cfg = PROVIDERS.get(pname, {})
         save_custom_provider(pname, prov_cfg, models_cfg, replace_models=True)
         _record_sync_time(pname)
         _sync_models_to_runtime()
+        self._detail_status = f"✅ Loaded {len(models_cfg)} model(s)."
+        if alias_changes:
+            self._detail_status += f" {len(alias_changes)} alias(es) prefixed."
+        self._detail_status_style = "class:success"
+        close_after_save = self._ms_save_exit
+        self._ms_save_exit = False
+        if close_after_save:
+            if self._app:
+                self._app.exit()
+            return
         self._panel = self._ms_caller
         if self._app:
             self._app.layout = self._build_layout()
@@ -1074,13 +1159,17 @@ class ProviderTUI:
         self._detail_status = "⟳ Fetching model list..."
         self._detail_status_style = "class:spinner"
         if self._app: self._app.invalidate()
-        candidates, err = await _fetch_models(
+        candidates, err, stats = await _fetch_models(
             pinfo.get("base_url", ""),
             key,
             pinfo.get("api_format", "openai"),
         )
         if err or not candidates:
-            self._detail_status = f"✗ Failed: {err or 'No models returned'}"
+            if err:
+                self._detail_status = f"✗ Failed: {err}"
+            else:
+                summary = _format_model_sync_notice(stats, [])
+                self._detail_status = f"✗ No selectable chat models. {summary[0]}"
             self._detail_status_style = "class:error"
             if self._app: self._app.invalidate()
             return
@@ -1092,11 +1181,16 @@ class ProviderTUI:
         }
         self._ms_all = candidates
         self._ms_selected = {mid for mid, _ in candidates if mid in existing}
+        self._ms_notice = _format_model_sync_notice(
+            stats,
+            _model_alias_changes(pname, candidates),
+        )
         # do NOT pre-select all — user must choose
         self._ms_manual = []
         self._ms_cursor = 0; self._ms_viewport = 0
         self._ms_provider = pname; self._ms_caller = caller
         self._ms_error = ""; self._ms_search = ""; self._ms_search_focus = False
+        self._ms_save_exit = False
         self._detail_status = ""
         self._panel = "models"
         if self._app:
