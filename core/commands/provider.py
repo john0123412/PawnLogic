@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 from prompt_toolkit import prompt as ptk_prompt
@@ -42,6 +43,7 @@ from prompt_toolkit import prompt as ptk_prompt
 from config import (
     CUSTOM_PROVIDERS_PATH, MODELS, PROVIDERS,
     get_api_format, get_provider_config, list_vision_models,
+    models_url_from_base_url,
     remove_custom_provider, save_custom_provider,
     validate_api_key,
 )
@@ -439,7 +441,7 @@ def _provider_test(session, model_alias: str = "") -> None:
         print(c(GREEN, f"  ✓ 连通成功！响应: {text[:80]}"))
 
 
-def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str = "openai") -> None:
+def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str = "openai") -> bool:
     """非交互式：/provider add <alias> <base_url> <ENV_KEY> [anthropic]"""
     from config.providers import save_custom_provider as _save_cp, load_custom_providers
     if alias in PROVIDERS:
@@ -455,17 +457,17 @@ def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str =
     PROVIDERS[alias] = prov_cfg
     load_custom_providers()
     print(c(GREEN, f"  ✓ 供应商注册成功！请确保已在 .env 中配置了 {env_key}。"))
-    if os.getenv(env_key, ""):
-        try:
-            ans = input(cp(BOLD, f"  是否立即拉取 {alias} 的模型列表？[Y/n]: ")).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            ans = "n"
-        if ans in ("", "y"):
-            # _provider_fetch is async; this CLI helper is sync, so dispatch via asyncio
-            import asyncio
-            asyncio.get_event_loop().run_until_complete(_provider_fetch(alias))
-    else:
+    if not os.getenv(env_key, ""):
         print(c(CYAN, f"  接下来请运行 /provider fetch {alias} 以拉取模型。"))
+        return False
+    if not sys.stdin.isatty():
+        print(c(CYAN, f"  接下来请运行 /provider fetch {alias} 以拉取模型。"))
+        return False
+    try:
+        ans = input(cp(BOLD, f"  是否立即拉取 {alias} 的模型列表？[Y/n]: ")).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        ans = "n"
+    return ans in ("", "y")
 
 
 def _fetch_models_paginated(models_url: str, api_key: str) -> list:
@@ -571,7 +573,6 @@ async def _provider_fetch_selector(entries: list[tuple[str, dict]]) -> list[str]
 
 async def _provider_fetch(alias: str) -> None:
     """/provider fetch <alias>: 分页请求 /v1/models，交互多选后批量注册。"""
-    from urllib.parse import urlparse
     from config.providers import save_custom_provider as _save_cp, load_custom_providers
 
     _BUILTIN = {"deepseek", "openai", "anthropic"}
@@ -589,8 +590,7 @@ async def _provider_fetch(alias: str) -> None:
         print(c(RED, f"  ✗ {prov.get('api_key_env')} 未配置，请先在 ~/.pawnlogic/.env 中设置该变量。"))
         return
 
-    parsed = urlparse(prov["base_url"])
-    models_url = f"{parsed.scheme}://{parsed.netloc}/v1/models"
+    models_url = models_url_from_base_url(prov["base_url"])
     print(c(GRAY, f"  正在请求 {models_url} ..."))
 
     try:
@@ -626,7 +626,7 @@ async def _provider_fetch(alias: str) -> None:
         return
 
     models_cfg = {mid: cfg for mid, cfg in candidates if mid in set(chosen_ids)}
-    _save_cp(alias, PROVIDERS[alias], models_cfg)
+    _save_cp(alias, PROVIDERS[alias], models_cfg, replace_models=True)
     load_custom_providers()
 
     print(c(GREEN, f"  ✓ 成功注册了 {len(models_cfg)} 个模型！输入 /model 即可无缝切换。"))
@@ -675,8 +675,10 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session) -> None:
     elif sub == "add":
         parts_add = sub_arg.split() if sub_arg else []
         if len(parts_add) >= 3:
-            _provider_add_cli(parts_add[0], parts_add[1], parts_add[2],
-                              parts_add[3] if len(parts_add) > 3 else "openai")
+            should_fetch = _provider_add_cli(parts_add[0], parts_add[1], parts_add[2],
+                                             parts_add[3] if len(parts_add) > 3 else "openai")
+            if should_fetch:
+                await _provider_fetch(parts_add[0])
         else:
             _provider_add()
     elif sub == "fetch":

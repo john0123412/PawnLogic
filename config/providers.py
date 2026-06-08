@@ -139,6 +139,8 @@ NAMING_MODEL_CHAIN: list = [
 VISION_PRIORITY = ["gpt-5.5", "gpt-4o", "claude-sonnet"]
 
 CUSTOM_PROVIDERS_PATH = PAWNLOGIC_HOME / "custom_providers.json"
+BUILTIN_PROVIDER_NAMES = set(PROVIDERS)
+BUILTIN_MODEL_ALIASES = set(MODELS)
 
 
 def _normalize_url(raw: str, api_format: str = "openai") -> str:
@@ -150,6 +152,25 @@ def _normalize_url(raw: str, api_format: str = "openai") -> str:
     if raw.endswith("/v1"):
         return raw + suffix
     return raw + "/v1" + suffix
+
+
+def models_url_from_base_url(raw: str) -> str:
+    """Return the provider's OpenAI-compatible model-list endpoint."""
+    from urllib.parse import urlparse, urlunparse
+
+    parsed = urlparse(raw.strip().rstrip("/"))
+    path = parsed.path.rstrip("/")
+    if path.endswith("/v1/models"):
+        models_path = path
+    else:
+        for suffix in ("/chat/completions", "/messages"):
+            if path.endswith(suffix):
+                path = path[: -len(suffix)]
+                break
+        if path.endswith("/v1"):
+            path = path[: -len("/v1")]
+        models_path = f"{path}/v1/models" if path else "/v1/models"
+    return urlunparse((parsed.scheme, parsed.netloc, models_path, "", "", ""))
 
 
 _FAST_KEYWORDS = {"flash", "haiku", "mini", "turbo", "lite"}
@@ -255,23 +276,45 @@ def load_custom_providers() -> None:
     except ImportError:
         pass
     if not CUSTOM_PROVIDERS_PATH.exists():
+        for name in list(PROVIDERS):
+            if name not in BUILTIN_PROVIDER_NAMES:
+                del PROVIDERS[name]
+        for alias in list(MODELS):
+            if alias not in BUILTIN_MODEL_ALIASES:
+                del MODELS[alias]
         return
     try:
         data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
     except Exception:
         return
-    for name, prov in data.get("providers", {}).items():
-        if name not in PROVIDERS:
-            prov.setdefault("api_format", "openai")
-            PROVIDERS[name] = prov
-    for alias, model in data.get("models", {}).items():
-        if alias not in MODELS:
-            model.setdefault("color", "\033[37m")
-            model.setdefault("vision", False)
-            MODELS[alias] = model
+    custom_providers = data.get("providers", {})
+    custom_models = data.get("models", {})
+    for name in list(PROVIDERS):
+        if name not in BUILTIN_PROVIDER_NAMES and name not in custom_providers:
+            del PROVIDERS[name]
+    for alias in list(MODELS):
+        if alias not in BUILTIN_MODEL_ALIASES and alias not in custom_models:
+            del MODELS[alias]
+    for name, prov in custom_providers.items():
+        if name in BUILTIN_PROVIDER_NAMES:
+            continue
+        prov.setdefault("api_format", "openai")
+        PROVIDERS[name] = prov
+    for alias, model in custom_models.items():
+        if alias in BUILTIN_MODEL_ALIASES:
+            continue
+        model.setdefault("color", "\033[37m")
+        model.setdefault("vision", False)
+        MODELS[alias] = model
 
 
-def save_custom_provider(name: str, prov_cfg: dict, models_cfg: dict) -> None:
+def save_custom_provider(
+    name: str,
+    prov_cfg: dict,
+    models_cfg: dict,
+    *,
+    replace_models: bool = False,
+) -> None:
     """将自定义 provider 持久化到 custom_providers.json（不含 Key）。"""
     CUSTOM_PROVIDERS_PATH.parent.mkdir(parents=True, exist_ok=True)
     data: dict = {"providers": {}, "models": {}}
@@ -280,7 +323,15 @@ def save_custom_provider(name: str, prov_cfg: dict, models_cfg: dict) -> None:
             data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
         except Exception:
             pass
+    data.setdefault("providers", {})
+    data.setdefault("models", {})
     data["providers"][name] = prov_cfg
+    if replace_models:
+        data["models"] = {
+            alias: model
+            for alias, model in data.get("models", {}).items()
+            if model.get("provider") != name
+        }
     data["models"].update(models_cfg)
     CUSTOM_PROVIDERS_PATH.write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"

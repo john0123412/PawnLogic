@@ -6,7 +6,6 @@ All UI text in English. API Keys never displayed in plain text.
 from __future__ import annotations
 import asyncio, json, os, time, datetime
 from typing import Optional
-from urllib.parse import urlparse
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.key_binding import KeyBindings
@@ -22,6 +21,7 @@ from config.paths import PAWNLOGIC_HOME
 from config.providers import (
     PROVIDERS, MODELS, CUSTOM_PROVIDERS_PATH,
     save_custom_provider, load_custom_providers, remove_custom_provider,
+    models_url_from_base_url,
 )
 
 _PAWNLOGIC_DIR = PAWNLOGIC_HOME
@@ -83,6 +83,7 @@ def _save_key_to_env(env_var: str, key: str) -> None:
     lines = [l for l in existing.splitlines() if not l.startswith(f"{env_var}=")]
     lines.append(f"{env_var}={key}")
     _ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.chmod(_ENV_PATH, 0o600)
     os.environ[env_var] = key
 
 def _record_sync_time(pname: str) -> None:
@@ -137,8 +138,7 @@ async def _test_connection(base_url: str, api_key: str, api_format: str) -> tupl
 
 async def _fetch_models(base_url: str, api_key: str) -> tuple[list[tuple[str, dict]], str]:
     import httpx
-    parsed = urlparse(base_url)
-    models_url = f"{parsed.scheme}://{parsed.netloc}/v1/models"
+    models_url = models_url_from_base_url(base_url)
     all_data: list = []
     url = f"{models_url}?limit=200"
     try:
@@ -190,6 +190,11 @@ class ProviderTUI:
         self._wiz_fields_pending: tuple = ()
         # wizard
         self._wiz_fields: list = ["", "", "openai", ""]
+        self._wiz_inputs = [
+            TextArea(multiline=False, height=1, style="class:field-focus"),
+            TextArea(multiline=False, height=1, style="class:field-focus"),
+            TextArea(password=True, multiline=False, height=1, style="class:field-focus"),
+        ]
         self._wiz_focus: int = 0
         self._wiz_fmt_open: bool = False
         self._wiz_fmt_cursor: int = 0
@@ -206,6 +211,7 @@ class ProviderTUI:
         self._ms_caller: str = "main"
         self._ms_error: str = ""
         self._ms_search: str = ""
+        self._ms_search_ta = TextArea(multiline=False, height=1, style="class:field-focus")
         self._ms_search_focus: bool = False
         self._ms_filter_cache: tuple = ("", [])
         # manage models panel
@@ -220,12 +226,31 @@ class ProviderTUI:
 
     def _ms_filtered(self) -> list[tuple[str, dict]]:
         """Return entries filtered by search string. Result cached per search query."""
-        q = self._ms_search.lower()
+        q = self._ms_search.strip().lower()
         if not q:
             return self._ms_all
         if not hasattr(self, "_ms_filter_cache") or self._ms_filter_cache[0] != q:
             self._ms_filter_cache = (q, [(mid, cfg) for mid, cfg in self._ms_all if q in mid.lower()])
         return self._ms_filter_cache[1]
+
+    def _sync_model_search_from_input(self) -> None:
+        self._ms_search = self._ms_search_ta.text
+
+    def _reset_wizard(self) -> None:
+        self._wiz_fields = ["", "", "openai", ""]
+        for field in self._wiz_inputs:
+            field.text = ""
+        self._wiz_focus = 0
+        self._wiz_fmt_open = False
+        self._wiz_fmt_cursor = 0
+        self._wiz_error = ""
+        self._wiz_status = ""
+        self._wiz_status_style = ""
+
+    def _sync_wizard_fields_from_inputs(self) -> None:
+        self._wiz_fields[0] = self._wiz_inputs[0].text.strip()
+        self._wiz_fields[1] = self._wiz_inputs[1].text.strip()
+        self._wiz_fields[3] = self._wiz_inputs[2].text.strip()
 
     # ── render: main ─────────────────────────────────────────────────────────
 
@@ -307,6 +332,7 @@ class ProviderTUI:
     def _render_wizard(self) -> StyleAndTextTuples:
         labels = ["Name", "Base URL", "Format", "API Key"]
         f: StyleAndTextTuples = [("class:title", "\n  ✚ Add Provider\n\n")]
+        self._sync_wizard_fields_from_inputs()
         for i, label in enumerate(labels):
             focused = (i == self._wiz_focus)
             s = "class:field-focus" if focused else "class:field-normal"
@@ -341,6 +367,7 @@ class ProviderTUI:
     # ── render: model selector ────────────────────────────────────────────────
 
     def _render_model_select(self) -> StyleAndTextTuples:
+        self._sync_model_search_from_input()
         filtered = self._ms_filtered()
         total = len(filtered)
         f: StyleAndTextTuples = [
@@ -455,6 +482,25 @@ class ProviderTUI:
             content=HSplit([Window(height=1), self._key_ta, Window(height=1)]),
             filter=Condition(lambda: self._panel == "detail" and self._detail_key_active),
         )
+        wiz_name_input = ConditionalContainer(
+            content=HSplit([Window(height=1), self._wiz_inputs[0], Window(height=1)]),
+            filter=Condition(lambda: self._panel == "wizard" and self._wiz_focus == 0
+                             and not self._dialog),
+        )
+        wiz_url_input = ConditionalContainer(
+            content=HSplit([Window(height=1), self._wiz_inputs[1], Window(height=1)]),
+            filter=Condition(lambda: self._panel == "wizard" and self._wiz_focus == 1
+                             and not self._dialog),
+        )
+        wiz_key_input = ConditionalContainer(
+            content=HSplit([Window(height=1), self._wiz_inputs[2], Window(height=1)]),
+            filter=Condition(lambda: self._panel == "wizard" and self._wiz_focus == 3
+                             and not self._dialog),
+        )
+        model_search_input = ConditionalContainer(
+            content=HSplit([Window(height=1), self._ms_search_ta, Window(height=1)]),
+            filter=Condition(lambda: self._panel == "models" and self._ms_search_focus),
+        )
 
         # Dialog: opaque background so text doesn't bleed through
         floats = []
@@ -469,10 +515,25 @@ class ProviderTUI:
             )]
 
         root = FloatContainer(
-            content=HSplit([body_win, key_input, status_win]),
+            content=HSplit([
+                body_win,
+                key_input,
+                wiz_name_input,
+                wiz_url_input,
+                wiz_key_input,
+                model_search_input,
+                status_win,
+            ]),
             floats=floats,
         )
-        focused = self._key_ta if (self._panel == "detail" and self._detail_key_active) else body_win
+        if self._panel == "detail" and self._detail_key_active:
+            focused = self._key_ta
+        elif self._panel == "wizard" and self._wiz_focus in (0, 1, 3) and not self._dialog:
+            focused = self._wiz_inputs[{0: 0, 1: 1, 3: 2}[self._wiz_focus]]
+        elif self._panel == "models" and self._ms_search_focus:
+            focused = self._ms_search_ta
+        else:
+            focused = body_win
         return Layout(root, focused_element=focused)
 
     # ── key bindings ──────────────────────────────────────────────────────────
@@ -565,9 +626,7 @@ class ProviderTUI:
         @kb.add("n", filter=_main)
         @kb.add("N", filter=_main)
         def _m_add(e):
-            self._wiz_fields = ["", "", "openai", ""]
-            self._wiz_focus = 0; self._wiz_fmt_open = False
-            self._wiz_error = ""; self._wiz_status = ""
+            self._reset_wizard()
             self._panel = "wizard"; rebuild()
 
         @kb.add("d", filter=_main)
@@ -642,6 +701,8 @@ class ProviderTUI:
         _wiz = Condition(lambda: self._panel == "wizard" and not self._dialog)
         _wiz_nav = Condition(lambda: self._panel == "wizard" and not self._dialog
                              and not (self._wiz_focus == 2 and self._wiz_fmt_open))
+        _wiz_text = Condition(lambda: self._panel == "wizard" and self._wiz_focus in (0, 1, 3)
+                              and not self._dialog and not self._wiz_fmt_open)
 
         @kb.add("tab",   filter=_wiz_nav)
         @kb.add("down",  filter=_wiz_nav)
@@ -683,17 +744,11 @@ class ProviderTUI:
         @kb.add("escape", filter=_wiz)
         def _w_esc(e): self._panel = "main"; rebuild()
 
-        @kb.add("<any>", filter=Condition(lambda: self._panel == "wizard"
-                                          and self._wiz_focus in (0, 1, 3)
-                                          and not self._dialog and not self._wiz_fmt_open))
-        def _w_char(e):
-            k = e.key_sequence[0].key
-            fi = self._wiz_focus
-            if len(k) == 1:
-                self._wiz_fields[fi] += k
-            elif k in ("backspace", "c-h"):
-                self._wiz_fields[fi] = self._wiz_fields[fi][:-1]
-            inv()
+        @kb.add("enter", filter=_wiz_text)
+        def _w_text_enter(e):
+            self._sync_wizard_fields_from_inputs()
+            self._wiz_focus = 2 if self._wiz_focus == 1 else self._wiz_focus + 1
+            rebuild()
 
         # ── model selector ────────────────────────────────────────────────────
         _ms = Condition(lambda: self._panel == "models")
@@ -750,7 +805,10 @@ class ProviderTUI:
 
         @kb.add("/",   filter=_ms_list)
         @kb.add("tab", filter=_ms_list)
-        def _ms_to_search(e): self._ms_search_focus = True; inv()
+        def _ms_to_search(e):
+            self._ms_search_ta.text = self._ms_search
+            self._ms_search_focus = True
+            rebuild()
 
         @kb.add("enter", filter=_ms_list)
         def _ms_enter(e):
@@ -762,7 +820,7 @@ class ProviderTUI:
         @kb.add("escape", filter=_ms)
         def _ms_esc(e):
             if self._ms_search_focus:
-                self._ms_search_focus = False; self._ms_search = ""
+                self._ms_search_focus = False; self._ms_search = ""; self._ms_search_ta.text = ""
                 self._ms_cursor = 0; self._ms_viewport = 0; inv()
             else:
                 self._panel = self._ms_caller
@@ -774,19 +832,9 @@ class ProviderTUI:
         @kb.add("Q", filter=_ms)
         def _ms_quit(e): e.app.exit()
 
-        # search bar input
-        @kb.add("<any>", filter=_ms_srch)
-        def _ms_srch_char(e):
-            k = e.key_sequence[0].key
-            if len(k) == 1:
-                self._ms_search += k
-            elif k in ("backspace", "c-h"):
-                self._ms_search = self._ms_search[:-1]
-            # reset viewport when filter changes
-            self._ms_cursor = 0; self._ms_viewport = 0; inv()
-
         @kb.add("enter", filter=_ms_srch)
         def _ms_srch_enter(e):
+            self._sync_model_search_from_input()
             q = self._ms_search.strip()
             if not q:
                 self._ms_search_focus = False; inv(); return
@@ -796,7 +844,7 @@ class ProviderTUI:
                 mid = filtered[0][0]
                 if mid in self._ms_selected: self._ms_selected.discard(mid)
                 else: self._ms_selected.add(mid)
-                self._ms_search = ""; self._ms_search_focus = False
+                self._ms_search = ""; self._ms_search_ta.text = ""; self._ms_search_focus = False
             elif len(filtered) == 0:
                 # manual add
                 if q not in self._ms_manual:
@@ -805,7 +853,7 @@ class ProviderTUI:
                                                 "desc": "manual", "color": "\033[37m", "vision": False,
                                                 "reasoning": any(k in q.lower() for k in _REASONING_KEYWORDS)}))
                 self._ms_selected.add(q)
-                self._ms_search = ""; self._ms_search_focus = False
+                self._ms_search = ""; self._ms_search_ta.text = ""; self._ms_search_focus = False
             else:
                 # multiple matches — move focus to list
                 self._ms_search_focus = False
@@ -813,7 +861,7 @@ class ProviderTUI:
 
         @kb.add("tab",    filter=_ms_srch)
         def _ms_srch_tab(e):
-            self._ms_search_focus = False; self._ms_search = ""
+            self._ms_search_focus = False; self._ms_search = ""; self._ms_search_ta.text = ""
             self._ms_cursor = 0; self._ms_viewport = 0; inv()
 
         return kb
@@ -843,7 +891,7 @@ class ProviderTUI:
             if cfg:
                 models_cfg[mid] = {**cfg, "provider": pname}
         prov_cfg = PROVIDERS.get(pname, {})
-        save_custom_provider(pname, prov_cfg, models_cfg)
+        save_custom_provider(pname, prov_cfg, models_cfg, replace_models=True)
         _record_sync_time(pname)
         _sync_models_to_runtime()
         self._panel = self._ms_caller
@@ -941,6 +989,7 @@ class ProviderTUI:
                     self._app.invalidate()
 
     async def _wizard_confirm(self):
+        self._sync_wizard_fields_from_inputs()
         name, url, fmt, key = self._wiz_fields
         if not name:
             self._wiz_error = "Name is required."; self._app and self._app.invalidate(); return

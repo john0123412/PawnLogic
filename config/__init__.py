@@ -10,7 +10,7 @@ from .providers import (
     validate_api_key, list_configured_models,
     get_best_vision_model, list_vision_models,
     load_custom_providers, save_custom_provider, remove_custom_provider,
-    is_fast_model, find_fast_peer,
+    is_fast_model, find_fast_peer, models_url_from_base_url,
 )
 from .tiers import TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX
 from .security import (
@@ -31,7 +31,7 @@ __all__ = [
     "validate_api_key", "list_configured_models",
     "get_best_vision_model", "list_vision_models",
     "load_custom_providers", "save_custom_provider", "remove_custom_provider",
-    "is_fast_model", "find_fast_peer",
+    "is_fast_model", "find_fast_peer", "models_url_from_base_url",
     "TIER_LOW", "TIER_MID", "TIER_DEEP", "TIER_MAX",
     "READ_BLACKLIST", "WRITE_BLACKLIST", "DANGEROUS_PATTERNS",
     "smart_truncate", "user_friendly_error", "scrub_sensitive_env",
