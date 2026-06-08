@@ -207,7 +207,7 @@ HELP_TEXT = f"""
 
 {c(BOLD,"── 对话控制 ──")}
   {c(YELLOW,"/mode")}            切换 USER / DEV 输出模式
-  {c(YELLOW,"/model [alias]")}   切换模型  支持: {", ".join(MODELS.keys())}
+  {c(YELLOW,"/model [alias]")}   切换模型（仅显示 active 且已配置 Key 的 Provider）
   {c(YELLOW,"/clear")}           清空上下文（保留 Pin 消息，State.md 持续注入）
   {c(YELLOW,"/context")}         上下文大小 / token 估算
   {c(YELLOW,"/pin [n]")}         从尾部固定最近 n 条（默认 2）
@@ -226,10 +226,14 @@ HELP_TEXT = f"""
   {c(CYAN,"/keys")}              显示各 Provider Key 配置状态
 
 {c(BOLD,"── API Provider 管理 ──")}
-  {c(CYAN,"/provider")}            Provider 管理面板（查看/添加/删除/测试）
+  {c(CYAN,"/provider")}            Provider 管理面板（查看/添加/激活/拉取/测试）
   {c(CYAN,"/provider list")}       列出所有 Provider 状态
   {c(CYAN,"/provider add")}        添加自定义 Provider（支持 OpenAI / Anthropic 格式）
-  {c(CYAN,"/provider remove <n>")} 删除自定义 Provider
+  {c(CYAN,"/provider fetch <name>")} 拉取并选择 Provider 模型
+  {c(CYAN,"/provider update <name>")} 重新拉取 Provider 模型
+  {c(CYAN,"/provider activate <name>")} 显示该 Provider 的已选模型
+  {c(CYAN,"/provider deactivate <name>")} 隐藏该 Provider 的模型
+  {c(CYAN,"/provider remove <name>")} 删除自定义 Provider
   {c(CYAN,"/provider test <model>")} 测试 Provider 连通性
 
 {c(BOLD,"── 会话持久化（SQLite）──")}
@@ -250,7 +254,7 @@ HELP_TEXT = f"""
   {c(CYAN,"/sp rescan")}          重新扫描 skills/ 目录
   {c(CYAN,"/sp sync")}            同步所有带 .git 的技能包（git pull）
   {c(CYAN,"/sp install <url>")}   从远程仓库安装新技能包
-  {c(CYAN,"/sp <名称>")}          查看指定技能包详情
+  {c(CYAN,"/sp <name>")}          查看指定技能包详情
   {c(CYAN,"/skills")}             查看全局技能存档（GSA）
 
 {c(BOLD,"── 项目状态（GSD）──")}
@@ -322,7 +326,7 @@ HELP_TEXT_EN = f"""
 
 {c(BOLD, "Conversation")}
   {c(YELLOW, "/mode")}            Toggle USER / DEV output mode
-  {c(YELLOW, "/model [alias]")}   Switch model. Available: {", ".join(MODELS.keys())}
+  {c(YELLOW, "/model [alias]")}   Switch model; only active providers with keys are shown
   {c(YELLOW, "/clear")}           Clear context while keeping pinned messages
   {c(YELLOW, "/context")}         Show context size and token estimate
   {c(YELLOW, "/pin [n]")}         Pin the last n messages
@@ -338,6 +342,10 @@ HELP_TEXT_EN = f"""
   {c(CYAN, "/provider")}          Open provider management panel
   {c(CYAN, "/provider list")}     List provider status
   {c(CYAN, "/provider add")}      Add a custom provider
+  {c(CYAN, "/provider fetch <name>")} Fetch and select provider models
+  {c(CYAN, "/provider update <name>")} Re-fetch provider models
+  {c(CYAN, "/provider activate <name>")} Show selected provider models
+  {c(CYAN, "/provider deactivate <name>")} Hide provider models
   {c(CYAN, "/provider test <model>")} Test provider connectivity
 
 {c(BOLD, "Sessions & Memory")}
@@ -523,7 +531,7 @@ class PawnCompleter(Completer):
     PawnLogic 自定义补全器（内置模糊匹配版）。
 
     · 输入以 / 开头 → 始终激活，退格到单个 '/' 也不消失
-    · 模糊匹配：'/mdl' 能命中 '/model'，'/model d' 能命中 '/model ds-chat'
+    · 模糊匹配：'/mdl' 能命中 '/model'，'/model d' 能命中 '/model ds-v4-flash'
     · start_position 始终为 -len(text)，替换整行输入，绝无冲突
     · display 高亮命中字符（荧光绿），display_meta 保留右侧灰色描述
     · 无需 FuzzyCompleter 包装
@@ -863,7 +871,7 @@ async def main():
         "--model", "-m",
         metavar="ALIAS",
         default=None,
-        help="Start with a specific model alias (e.g. --model ds-chat).",
+        help="Start with a specific model alias (e.g. --model ds-v4-flash).",
     )
     parser.add_argument(
         "--eval", "-e",
@@ -1113,7 +1121,7 @@ async def main():
 
     _cmd_meta = {
         "/mode":          "切换 USER / DEV 输出模式",
-        "/model":         "切换 AI 模型（/model ds-r1）",
+        "/model":         "切换 AI 模型（/model ds-v4-flash）",
         "/clear":         "清空上下文（保留 Pin 消息）",
         "/context":       "查看上下文大小 / token 估算",
         "/pin":           "固定最近 N 条消息（/pin msg 5 按序号）",
@@ -1166,7 +1174,7 @@ async def main():
         "/exit":          "退出 PawnLogic",
     }
 
-    # 合并一级命令 + 子命令；模型别名由补全器实时读取 active provider。
+    # 合并一级命令 + 子命令；模型别名由补全器实时读取 active 且已配置 Key 的 Provider。
     _all_words = list(_all_cmd_words)
     _all_meta  = dict(_cmd_meta)
     # 常用子命令
@@ -1215,8 +1223,10 @@ async def main():
     for _sub, _desc in [
         ("list",   "列出所有 Provider 状态"),
         ("add",    "注册自定义 Provider（交互式或 add <alias> <url> <KEY> [anthropic]）"),
-        ("fetch",  "自动嗅探并注册 Provider 的所有模型（交互多选）"),
+        ("fetch",  "拉取可用模型并交互选择注册"),
         ("update", "重新拉取并更新已注册 Provider 的模型列表"),
+        ("activate", "显示该 Provider 的已选模型"),
+        ("deactivate", "隐藏该 Provider 的模型"),
         ("remove", "删除自定义 Provider"),
         ("test",   "测试 Provider 连通性"),
     ]:

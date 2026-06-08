@@ -103,12 +103,13 @@
 - Arrow keys to navigate, Enter for details
 - `N` — add new provider
 - `D` — delete provider
-- Detail view: update key, fetch models, test connectivity
+- Detail view: update key, activate/deactivate, fetch models, test connectivity, manage models
 
 **Option B — CLI**
 ```bash
 /provider add myrelay https://api.myrelay.com/v1/chat/completions MYRELAY_API_KEY
 /provider fetch myrelay    # interactive multi-select
+/provider activate myrelay # make selected models visible in /model
 /provider update myrelay   # re-fetch model list
 /provider remove myrelay
 ```
@@ -120,7 +121,7 @@
 
 ### Model Visibility
 
-`/model` and Tab completion only show models whose API key is configured.
+`/model` and Tab completion only show DeepSeek plus providers that are active and have a configured API key. Custom providers are inactive by default; run `/provider activate <name>` after fetching the models you want.
 
 ---
 
@@ -196,7 +197,7 @@ Check key status at runtime: `/keys`
 
 | Command | Description |
 |---------|-------------|
-| `/model [alias]` | Switch model (only shows configured) |
+| `/model [alias]` | Switch model (only shows active providers with configured keys) |
 | `/mode` | Toggle USER / DEV output mode |
 | `/clear` | Clear context, keep pins |
 | `/context` | Context size + token estimate |
@@ -218,6 +219,8 @@ Check key status at runtime: `/keys`
 | `/provider add <name> <url> <KEY>` | Register provider |
 | `/provider fetch <name>` | Fetch model list |
 | `/provider update <name>` | Re-fetch model list |
+| `/provider activate <name>` | Show this provider's selected models in `/model` |
+| `/provider deactivate <name>` | Hide this provider's models from `/model` |
 | `/provider remove <name>` | Delete custom provider |
 | `/provider test <model>` | Test connectivity |
 | `/keys` | Show all key status |
@@ -262,7 +265,8 @@ Check key status at runtime: `/keys`
 /provider add myrelay https://api.myrelay.com/v1/chat/completions MYRELAY_API_KEY
 /provider fetch myrelay
 # Select models with Space, confirm with Enter
-/model myrelay/gpt-4o
+/provider activate myrelay
+/model <alias shown by /provider fetch>
 ```
 
 ### Vision analysis
@@ -328,10 +332,10 @@ PawnLogic/
 ## FAQ
 
 **Q: Added a provider but `/model` doesn't show new models?**  
-A: Run `/provider fetch <name>` to pull the model list, then select models in the interactive prompt.
+A: Configure its key, run `/provider fetch <name>`, select models in the prompt, then run `/provider activate <name>`. `/model` hides inactive providers.
 
 **Q: Test Connection fails but fetch succeeds?**  
-A: Normal. `/v1/models` is a GET request that many relay services don't authenticate. As long as fetch works and the key is valid, actual usage is unaffected.
+A: Fetch only reads `/v1/models`; Test Connection sends a minimal chat request using a loaded chat model. If no chat model is loaded yet, fetch first. If it still fails, the selected model, key, or base URL is not accepted by that provider.
 
 **Q: HTTP 305 after switching to a custom model?**  
 A: Base URL format issue. Go to `/provider` → detail view → Update API Key to re-save. Or edit `~/.pawnlogic/custom_providers.json` directly.

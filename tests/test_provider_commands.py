@@ -12,6 +12,7 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.application import Application
 
 import main as pawn_main
+import pawnlogic.cli as pawn_cli
 from config import providers as provider_config
 from core import provider_tui
 from core.commands import provider as provider_cmd
@@ -76,6 +77,24 @@ def test_provider_tui_model_search_field_accepts_pasted_text():
 
 def test_pawn_completer_includes_live_visible_models_without_rebuild():
     completer = pawn_main.PawnCompleter(
+        ["/model", "/model ds-v4-flash"],
+        meta_dict={"/model": "switch", "/model ds-v4-flash": "DeepSeek"},
+        dynamic_model_provider=lambda: {
+            "1:gpt-5.5": {"desc": "fetched"},
+        },
+    )
+
+    completions = list(completer.get_completions(Document("/model"), None))
+    words = [completion.text for completion in completions]
+    meta_by_word = {completion.text: completion.display_meta_text for completion in completions}
+
+    assert "/model 1:gpt-5.5" in words
+    assert meta_by_word["/model 1:gpt-5.5"] == "fetched"
+    assert "/model 1:gpt-5.5" not in completer.meta_dict
+
+
+def test_packaged_cli_completer_includes_live_visible_models_without_rebuild():
+    completer = pawn_cli.PawnCompleter(
         ["/model", "/model ds-v4-flash"],
         meta_dict={"/model": "switch", "/model ds-v4-flash": "DeepSeek"},
         dynamic_model_provider=lambda: {

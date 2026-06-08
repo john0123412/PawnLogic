@@ -25,11 +25,11 @@
 |------|------|
 | `/chat list [n]` | 列出最近 n 个会话（默认 20） |
 | `/chat view <id\|n>` | 查看完整对话内容 |
-| `/chat export <id\|n> [路径]` | 导出为 Markdown 文件 |
-| `/chat find <关键词>` | 跨所有会话全文搜索 |
-| `/chat tag <id\|n> <标签>` | 给会话打标签（逗号分隔） |
-| `/chat untag <id\|n> <标签>` | 移除标签 |
-| `/chat bytag <标签>` | 按标签筛选会话 |
+| `/chat export <id\|n> [path]` | 导出为 Markdown 文件 |
+| `/chat find <keyword>` | 跨所有会话全文搜索 |
+| `/chat tag <id\|n> <tags>` | 给会话打标签（逗号分隔） |
+| `/chat untag <id\|n> <tags>` | 移除标签 |
+| `/chat bytag <tag>` | 按标签筛选会话 |
 | `/chat link <id1> <id2>` | 关联两个会话 |
 | `/chat related <id\|n>` | 查看关联会话 |
 
@@ -48,21 +48,21 @@
 ### 4. GSD 工程架构
 
 - **规格驱动规划**：Agent 在任何工具调用前必须输出包含 `<action>` 和 `<verify>` 的 `<plan>` XML
-- `/init_project [描述]` — 在当前目录生成 `.pawn_state.md`（项目大目标）
+- `/init_project [desc]` — 在当前目录生成 `.pawn_state.md`
 - `/state` — 查看当前目录的 `.pawn_state.md`
 
 ### 5. 上下文管理
 
 - **滑动窗口**：自动摘要旧历史，防止长任务 API 超时
-- `/compact` — 手动压缩：轻量模型总结 + 清空历史
+- `/compact` — 手动压缩上下文
 - `/clear` — 清空上下文（保留 Pin 消息）
 - `/pin [n]` — 固定最近 n 条消息（默认 2）
 - `/context` — 查看上下文大小和 Token 估算
 
 ### 6. 知识库 RAG
 
-- `/memorize [主题]` — AI 总结对话 → 存入知识库（每次新会话自动召回）
-- `/knowledge [查询]` — 搜索/列出知识条目
+- `/memorize [topic]` — AI 总结对话 → 存入知识库
+- `/knowledge [query]` — 搜索或列出知识条目
 - `/forget <id>` — 删除指定知识条目
 
 ---
@@ -103,14 +103,15 @@
 - 上下键导航，Enter 进入详情
 - `N` 新增 Provider
 - `D` 删除自定义 Provider
-- 详情页：更新 Key、拉取模型、测试连通性、管理模型
+- 详情页：更新 Key、active/deactivate、拉取模型、测试连通性、管理模型
 
 **方式二：命令行**
 ```bash
-/provider add siliconflow https://api.siliconflow.cn/v1/chat/completions SILICON_API_KEY
-/provider fetch siliconflow    # 交互多选
-/provider update siliconflow   # 重新拉取
-/provider remove siliconflow
+/provider add myrelay https://api.myrelay.com/v1/chat/completions MYRELAY_API_KEY
+/provider fetch myrelay    # 交互多选
+/provider activate myrelay # 让选中的模型显示在 /model
+/provider update myrelay   # 重新拉取
+/provider remove myrelay
 ```
 
 **Base URL 规则：**
@@ -120,7 +121,7 @@
 
 ### 模型过滤机制
 
-`/model` 命令和 Tab 补全只显示**已配置 API Key 的模型**。
+`/model` 命令和 Tab 补全只显示 DeepSeek，以及 active 且已配置 API Key 的 Provider。自定义 Provider 默认 inactive，拉取并选择模型后需要运行 `/provider activate <name>`。
 
 ---
 
@@ -142,14 +143,13 @@ pip install --upgrade pip && pip install -e .
 python main.py
 ```
 
-首次运行自动进入配置向导，无需手动编辑配置文件。
+首次运行自动进入配置向导。
 
 ### 全局 `pawn` 命令
 
 ```bash
 chmod +x pawn.sh
 ln -sf "$(pwd)/pawn.sh" ~/.local/bin/pawn
-# 之后在任意目录输入 pawn 即可启动
 ```
 
 如果提示 `pawn: command not found`，运行：
@@ -197,7 +197,7 @@ MYRELAY_API_KEY=...
 
 | 命令 | 说明 |
 |------|------|
-| `/model [别名]` | 切换模型（只显示已配置 Key 的模型） |
+| `/model [alias]` | 切换模型（只显示 active 且已配置 Key 的 Provider） |
 | `/mode` | 切换 USER / DEV 输出模式 |
 | `/clear` | 清空上下文（保留 Pin 消息） |
 | `/context` | 上下文大小 / Token 估算 |
@@ -205,9 +205,9 @@ MYRELAY_API_KEY=...
 | `/unpin` | 解除所有 Pin |
 | `/undo [n]` | 撤回最近 n 轮（默认 1） |
 | `/compact` | 压缩上下文 |
-| `/think <问题>` | 单次深度推理 |
-| `/cd <路径>` | 切换工作目录 |
-| `/file <路径>` | 载入文件到上下文 |
+| `/think <prompt>` | 单次深度推理 |
+| `/cd <path>` | 切换工作目录 |
+| `/file <path>` | 载入文件到上下文 |
 | `/history` | 消息历史（含序号） |
 
 ### Provider 管理
@@ -216,11 +216,13 @@ MYRELAY_API_KEY=...
 |------|------|
 | `/provider` | 打开交互式 TUI 面板 |
 | `/provider list` | 列出所有 Provider 状态 |
-| `/provider add <名称> <url> <KEY>` | 注册 Provider |
-| `/provider fetch <名称>` | 拉取模型列表（交互多选） |
-| `/provider update <名称>` | 重新拉取模型列表 |
-| `/provider remove <名称>` | 删除自定义 Provider |
-| `/provider test <模型>` | 测试连通性 |
+| `/provider add <name> <url> <KEY>` | 注册 Provider |
+| `/provider fetch <name>` | 拉取模型列表（交互多选） |
+| `/provider update <name>` | 重新拉取模型列表 |
+| `/provider activate <name>` | 让该 Provider 的已选模型显示在 `/model` |
+| `/provider deactivate <name>` | 从 `/model` 隐藏该 Provider 的模型 |
+| `/provider remove <name>` | 删除自定义 Provider |
+| `/provider test <model>` | 测试连通性 |
 | `/keys` | 查看所有 Key 状态 |
 | `/setkey` | 重新运行 Key 配置向导 |
 
@@ -228,11 +230,11 @@ MYRELAY_API_KEY=...
 
 | 命令 | 说明 |
 |------|------|
-| `/save [名称]` | 保存当前会话 |
-| `/load <名称\|n>` | 加载历史会话 |
+| `/save [name]` | 保存当前会话 |
+| `/load <name\|n>` | 加载历史会话 |
 | `/sessions` | 列出所有会话 |
-| `/del <名称\|n>` | 删除指定会话 |
-| `/rename <n> <名称>` | 重命名会话 |
+| `/del <name\|n>` | 删除指定会话 |
+| `/rename <n> <name>` | 重命名会话 |
 | `/resume [n]` | 恢复会话并显示历史 |
 
 ### 算力档位
@@ -263,7 +265,8 @@ MYRELAY_API_KEY=...
 /provider add myrelay https://api.myrelay.com/v1/chat/completions MYRELAY_API_KEY
 /provider fetch myrelay
 # Space 选中，Enter 确认
-/model myrelay/gpt-4o
+/provider activate myrelay
+/model <alias shown by /provider fetch>
 ```
 
 ### 视觉分析
@@ -282,8 +285,8 @@ MYRELAY_API_KEY=...
 ### 项目工程（GSD）
 
 ```
-/init_project 实现一个命令行 JSON 美化工具
-→ Agent 自动 plan → write → verify → git commit
+/init_project Build a CLI JSON formatter
+→ Agent: plan → write → verify → git commit
 ```
 
 ---
@@ -329,10 +332,10 @@ PawnLogic/
 ## 常见问题
 
 **Q: 添加了 Provider 但 `/model` 看不到新模型？**  
-A: 需要先运行 `/provider fetch <名称>` 拉取模型列表，然后在多选界面选择并确认。
+A: 需要先配置 Key，运行 `/provider fetch <name>` 拉取并选择模型，再运行 `/provider activate <name>`。`/model` 会隐藏 inactive Provider。
 
 **Q: Test Connection 失败但 fetch 成功？**  
-A: 正常现象。`/v1/models` 很多中转服务不鉴权。只要 fetch 成功、Key 有效，实际使用不受影响。
+A: Fetch 只读取 `/v1/models`；Test Connection 会用已加载的聊天模型发送一次最小请求。如果还没加载聊天模型，请先 fetch。若仍失败，说明该 Provider 不接受当前模型、Key 或 Base URL。
 
 **Q: 切换到自定义模型后报 HTTP 305？**  
 A: Base URL 格式问题。通过 `/provider` 详情页重新保存，或直接编辑 `~/.pawnlogic/custom_providers.json`。

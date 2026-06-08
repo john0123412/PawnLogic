@@ -2103,7 +2103,7 @@ class AgentSession:
                             f"  ⛔ [CoT Guard] 连续 {_plan_rejected} 次未提供 <plan>，任务已终止。"
                             ))
                     print(c(GRAY,
-                            "  建议：1. 简化指令  2. 切换更强模型（/model ds-chat）"
+                            "  建议：1. 简化指令  2. 切换更强模型（/model ds-v4-pro）"
                             ))
                     logger.warning(
                         "CoT Guard: hard kill triggered | "

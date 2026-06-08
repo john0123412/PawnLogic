@@ -4,7 +4,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.0.6-blue.svg)](config/paths.py)
-[![PyPI](https://img.shields.io/pypi/v/pawnlogic.svg)](https://pypi.org/project/pawnlogic/)
+[![PyPI](https://img.shields.io/pypi/v/pawnlogic.svg?cache=no)](https://pypi.org/project/pawnlogic/)
+[![CI](https://github.com/john0123412/PawnLogic/actions/workflows/main_ci.yml/badge.svg)](https://github.com/john0123412/PawnLogic/actions/workflows/main_ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
@@ -75,14 +76,17 @@ pawn --eval "prompt" --json       # JSON 输出（供脚本调用）
 | OpenAI | `gpt-5.5` `gpt-5.4` `gpt-5.4-mini` `gpt-5.4-nano` `gpt-4o` `gpt-4.1` `o3` | 旗舰、编程、视觉、推理 |
 | Anthropic | `claude-opus` `claude-sonnet` `claude-haiku` | 前沿推理、均衡、快速 |
 
-通过 `/provider fetch` 添加的自定义 Provider 会自动出现在 `/model` 和 Tab 补全中。
+DeepSeek 默认 active。自定义 Provider 只有在 Key 已配置、模型已拉取并手动 active 后，才会出现在 `/model` 和 Tab 补全中。
 
 ## Provider 管理
 
 ```bash
 /provider              # 打开交互式 TUI 面板
 /provider add <name> <base_url> <ENV_KEY> [anthropic]
-/provider fetch <name> # 自动发现模型并交互多选
+/provider fetch <name> # 拉取可用模型并交互选择
+/provider update <name>
+/provider activate <name>
+/provider deactivate <name>
 /provider list         # 显示所有 Provider 及 Key 状态
 /provider test <model> # 测试连通性
 ```
@@ -92,7 +96,7 @@ pawn --eval "prompt" --json       # JSON 输出（供脚本调用）
 ## 快速命令参考
 
 ```bash
-/model [alias]          # 切换模型
+/model [alias]          # 切换模型，只显示 active 且已配置 Key 的 Provider
 /mode                   # 切换 USER / DEV 输出模式
 /chat find <keyword>    # 跨所有会话全文搜索
 /think <prompt>         # 单次深度推理
@@ -135,10 +139,13 @@ python main.py   # MCP 服务器自动加载
 
 | 文档 | 描述 |
 |------|------|
-| **README.md** | English version |
+| **README.md** | 英文版 |
 | **README_CN.md** | 本页 |
-| **GUIDE_EN.md** | Full reference — commands, architecture, FAQ |
+| **GUIDE_EN.md** | 完整参考手册 — 命令、架构、常见问题 |
 | **GUIDE_CN.md** | 完整参考手册 — 命令、架构、常见问题 |
+| **CHANGELOG.md** | 版本历史和发布说明 |
+| **CONTRIBUTING.md** | 如何贡献、添加 Provider、运行测试 |
+| **SECURITY.md** | 漏洞报告策略 |
 
 ## 支持
 

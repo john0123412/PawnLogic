@@ -6,7 +6,7 @@ Migrated from main.py's _legacy_slash_dispatch in stage-1 step 4.
 Commands in this module:
     /setkey                       run the interactive key configuration wizard
     /keys                         show API key status for every provider
-    /provider [sub] [args]        TUI / list / add / fetch / update / remove / test
+    /provider [sub] [args]        TUI / list / add / fetch / update / activate / deactivate / remove / test
     /model [alias]                switch the session's model (interactive picker)
 
 Module-private helpers (provider/key/model setup; only used by these
@@ -16,12 +16,13 @@ commands and by main.py's startup wizard, which imports `_run_key_wizard`,
     _detect_shell_config       detect ~/.bashrc, ~/.zshrc, etc.
     _write_key_to_shell        append `export KEY=...` to shell config
     _run_key_wizard            interactive first-run / /setkey wizard
-    _visible_models            MODELS subset whose API key is configured
+    _visible_models            MODELS subset whose provider is active and key is configured
 
     _handle_provider_cmd       dispatcher for /provider sub-commands
     _provider_list             display all providers and their key status
     _provider_add              interactive: add a custom provider
     _provider_add_cli          non-interactive: /provider add <a> <url> <env>
+    _provider_set_active       show or hide a provider's models in /model
     _provider_remove           remove a custom provider
     _provider_test             smoke-test an API connection
     _fetch_models_paginated    GET /v1/models with pagination
@@ -86,7 +87,7 @@ _ENV_PATH = _PAWNLOGIC_DIR / ".env"
 # (序号标签, env_var, label, hint, 是否可跳过 key)
 _WIZARD_PROVIDERS = [
     ("1", "PAWN_API_KEY",       "PawnLogic Engine",  "hermes · hermes405",                  False),
-    ("2", "DEEPSEEK_API_KEY",   "DeepSeek",          "ds-chat (V3 强推理)",                 False),
+    ("2", "DEEPSEEK_API_KEY",   "DeepSeek",          "ds-v4-flash / ds-v4-pro",             False),
     ("3", "OPENROUTER_API_KEY", "OpenRouter",        "多模型聚合，含 gpt-4o 视觉",          False),
     ("4", "SILICON_API_KEY",    "SiliconFlow",       "ds-coder · qwen 等国产模型",          False),
     ("5", "ZHIPU_API_KEY",      "ZhipuAI 智谱",      "glm-4v-plus 视觉识图（国内直连）",    False),
@@ -304,7 +305,7 @@ def _provider_list() -> None:
 def _provider_set_active(alias: str, active: bool) -> None:
     if not alias:
         verb = "activate" if active else "deactivate"
-        print(c(RED, f"  用法: /provider {verb} <别名>"))
+        print(c(RED, f"  用法: /provider {verb} <name>"))
         return
     if alias not in PROVIDERS:
         print(c(RED, f"  ✗ 未找到 Provider: {alias}"))
@@ -692,7 +693,11 @@ async def _provider_fetch(alias: str) -> None:
     _save_cp(alias, PROVIDERS[alias], models_cfg, replace_models=True)
     load_custom_providers()
 
-    print(c(GREEN, f"  ✓ 成功注册了 {len(models_cfg)} 个模型！输入 /model 即可无缝切换。"))
+    print(c(GREEN, f"  ✓ 成功注册了 {len(models_cfg)} 个模型！"))
+    if is_provider_active(alias):
+        print(c(CYAN, "  Provider 已 active，可直接在 /model 中选择。"))
+    else:
+        print(c(CYAN, f"  需要显示在 /model 时，请运行 /provider activate {alias}。"))
 
 
 # ════════════════════════════════════════════════════════
@@ -746,12 +751,12 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session) -> None:
             _provider_add()
     elif sub == "fetch":
         if not sub_arg:
-            print(c(RED, "  用法: /provider fetch <别名>"))
+            print(c(RED, "  用法: /provider fetch <name>"))
         else:
             await _provider_fetch(sub_arg.strip())
     elif sub == "update":
         if not sub_arg:
-            print(c(RED, "  用法: /provider update <别名>"))
+            print(c(RED, "  用法: /provider update <name>"))
         else:
             await _provider_fetch(sub_arg.strip())  # update = re-fetch
     elif sub in ("activate", "active"):
@@ -936,7 +941,7 @@ async def cmd_model(ctx: CommandContext) -> None:
                 _prov_label = PROVIDERS.get(_cfg_m.get("provider", ""), {}).get("label", _cfg_m.get("provider", ""))
                 _groups[_prov_label].append((_alias, _cfg_m))
 
-            print(c(BOLD, "\n  可用模型（仅已配置 Key）："))
+            print(c(BOLD, "\n  可用模型（active 且已配置 Key）："))
             for _prov_label, _entries in _groups.items():
                 print(c(CYAN, f"  {_prov_label}") + c(GRAY, f"  [{len(_entries)} 个]"))
 
@@ -951,7 +956,7 @@ async def cmd_model(ctx: CommandContext) -> None:
             else:
                 print(c(GRAY, "  已取消"))
         else:
-            # readline 降级：按 provider 分组的纯文本列表（仅已配置 Key 的模型）
+            # readline 降级：按 provider 分组的纯文本列表（active 且已配置 Key 的模型）
             from collections import defaultdict
             _groups: dict[str, list] = defaultdict(list)
             for _alias, _cfg_m in _vm.items():

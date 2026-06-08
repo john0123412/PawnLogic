@@ -23,12 +23,12 @@ class APIEmptyResponseError(Exception):
 # ════════════════════════════════════════════════════════
 # ★ thinking-mode 支持：reasoning_content 字段处理
 #
-# 推理模型（mimo / ds-r1 / qwq 等）在响应中返回 reasoning_content，
+# 推理模型可能在响应中返回 reasoning_content，
 # 并且严格校验下一轮请求里对应 assistant 消息必须原样回传此字段，
 # 否则返回 HTTP 400 "The reasoning_content in the thinking mode
 # must be passed back to the API."
 #
-# 非推理模型（gpt-4o-mini / ds-chat 等）对未知字段态度不一：
+# 非推理模型对未知字段态度不一：
 #   · 部分 API 忽略 unknown field
 #   · 部分 API 返回 400 unknown parameter
 # 为避免误伤，对非推理模型一律 strip reasoning_content。
@@ -574,7 +574,7 @@ def stream_request(
         payload = _anthropic_build_payload(messages, model_id, _max_tok, tools_schema)
     else:
         # ★ thinking-mode: 推理模型保留 reasoning_content 回传，
-        # 非推理模型 strip 掉，避免 mimo/ds-r1 的 HTTP 400 严格校验。
+        # 非推理模型 strip 掉，避免部分 provider 的 HTTP 400 严格校验。
         clean = _sanitize_messages_for_model(messages, model_alias, model_id)
         payload = {
             "model":      model_id,

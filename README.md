@@ -76,14 +76,17 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 | OpenAI | `gpt-5.5` `gpt-5.4` `gpt-5.4-mini` `gpt-5.4-nano` `gpt-4o` `gpt-4.1` `o3` | Flagship, coding, vision, reasoning |
 | Anthropic | `claude-opus` `claude-sonnet` `claude-haiku` | Frontier reasoning, balanced, fast |
 
-Custom providers added via `/provider fetch` appear automatically in `/model` and Tab completion.
+DeepSeek is active by default. Custom providers appear in `/model` and Tab completion only after their key is configured, models are fetched, and the provider is activated.
 
 ## Provider Management
 
 ```bash
 /provider              # open interactive TUI panel
 /provider add <name> <base_url> <ENV_KEY> [anthropic]
-/provider fetch <name> # auto-discover models with interactive multi-select
+/provider fetch <name> # fetch available models and select interactively
+/provider update <name>
+/provider activate <name>
+/provider deactivate <name>
 /provider list         # show all providers and key status
 /provider test <model> # test connectivity
 ```
@@ -93,7 +96,7 @@ All keys are stored in `~/.pawnlogic/.env`. Provider configs (no keys) go to `~/
 ## Quick Command Reference
 
 ```bash
-/model [alias]          # switch model
+/model [alias]          # switch model, showing active configured providers
 /mode                   # toggle USER / DEV output mode
 /chat find <keyword>    # full-text search across all sessions
 /think <prompt>         # single deep-reasoning turn

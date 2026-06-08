@@ -626,7 +626,7 @@ async def cmd_think(ctx: CommandContext) -> None:
         return
     # 单次触发：在本次请求中切换到推理 Worker 或增加 thinking 预算
     _think_alias = None
-    for _candidate in ("ds-r1", "qwq", "ds-chat"):
+    for _candidate in ("ds-v4-pro", "ds-v4-flash"):
         _ok, _ = validate_api_key(_candidate)
         if _ok:
             _think_alias = _candidate

@@ -41,10 +41,11 @@ docker compose -f docker-compose.test.yml down --volumes --remove-orphans
 
 ```bash
 /provider add my-relay https://api.example.com/v1/chat/completions MY_API_KEY
-/provider fetch my-relay   # auto-discover models with interactive multi-select
+/provider fetch my-relay   # fetch available models and select interactively
+/provider activate my-relay
 ```
 
-Keys are written to `~/.pawnlogic/.env`. Provider configs go to `~/.pawnlogic/custom_providers.json`. Neither file is committed.
+Keys are written to `~/.pawnlogic/.env`. Provider configs go to `~/.pawnlogic/custom_providers.json`. Custom providers are inactive by default; activate only the providers whose fetched models should appear in `/model`. Neither file is committed.
 
 **Option B — Built-in (for PRs):**
 
