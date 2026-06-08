@@ -150,13 +150,13 @@ The project directory contains no secrets and is safe to commit or share.
 
 | Document | Description |
 |----------|-------------|
-| **README.md** | This page |
-| **README_CN.md** | 中文版 |
-| **GUIDE_EN.md** | Full reference — commands, architecture, FAQ |
-| **GUIDE_CN.md** | 完整参考手册 — 命令、架构、常见问题 |
-| **CHANGELOG.md** | Version history and release notes |
-| **CONTRIBUTING.md** | How to contribute, add providers, run tests |
-| **SECURITY.md** | Vulnerability reporting policy |
+| [**README.md**](README.md) | This page |
+| [**README_CN.md**](README_CN.md) | 中文版 |
+| [**GUIDE_EN.md**](GUIDE_EN.md) | Full reference — commands, architecture, FAQ |
+| [**GUIDE_CN.md**](GUIDE_CN.md) | 完整参考手册 — 命令、架构、常见问题 |
+| [**CHANGELOG.md**](CHANGELOG.md) | Version history and release notes |
+| [**CONTRIBUTING.md**](CONTRIBUTING.md) | How to contribute, add providers, run tests |
+| [**SECURITY.md**](SECURITY.md) | Vulnerability reporting policy |
 
 ## Support
 

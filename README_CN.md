@@ -149,13 +149,13 @@ pawn   # MCP 服务器自动加载
 
 | 文档 | 描述 |
 |------|------|
-| **README.md** | 英文版 |
-| **README_CN.md** | 本页 |
-| **GUIDE_EN.md** | 完整参考手册 — 命令、架构、常见问题 |
-| **GUIDE_CN.md** | 完整参考手册 — 命令、架构、常见问题 |
-| **CHANGELOG.md** | 版本历史和发布说明 |
-| **CONTRIBUTING.md** | 如何贡献、添加 Provider、运行测试 |
-| **SECURITY.md** | 漏洞报告策略 |
+| [**README.md**](README.md) | 英文版 |
+| [**README_CN.md**](README_CN.md) | 本页 |
+| [**GUIDE_EN.md**](GUIDE_EN.md) | 完整参考手册 — 命令、架构、常见问题 |
+| [**GUIDE_CN.md**](GUIDE_CN.md) | 完整参考手册 — 命令、架构、常见问题 |
+| [**CHANGELOG.md**](CHANGELOG.md) | 版本历史和发布说明 |
+| [**CONTRIBUTING.md**](CONTRIBUTING.md) | 如何贡献、添加 Provider、运行测试 |
+| [**SECURITY.md**](SECURITY.md) | 漏洞报告策略 |
 
 ## 支持
 
