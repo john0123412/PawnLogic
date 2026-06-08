@@ -141,6 +141,90 @@ VISION_PRIORITY = ["gpt-5.5", "gpt-4o", "claude-sonnet"]
 CUSTOM_PROVIDERS_PATH = PAWNLOGIC_HOME / "custom_providers.json"
 BUILTIN_PROVIDER_NAMES = set(PROVIDERS)
 BUILTIN_MODEL_ALIASES = set(MODELS)
+NON_CHAT_MODEL_KEYWORDS = {
+    "embedding",
+    "embed",
+    "rerank",
+    "tts",
+    "whisper",
+    "moderation",
+    "davinci",
+    "babbage",
+    "image",
+    "dall-e",
+    "dalle",
+    "audio",
+    "video",
+    "realtime",
+    "transcribe",
+    "transcription",
+    "speech",
+    "sora",
+}
+LEGACY_MODEL_KEYWORDS = ("instruct", "babbage", "davinci", "curie", "ada", "legacy")
+
+
+def is_chat_model_candidate(model_id: str) -> bool:
+    """Return whether a discovered model id is suitable for chat completions."""
+    ml = str(model_id).lower()
+    if any(noise in ml for noise in NON_CHAT_MODEL_KEYWORDS):
+        return False
+    if any(legacy in ml for legacy in LEGACY_MODEL_KEYWORDS):
+        return False
+    return True
+
+
+def _alias_prefix(provider_name: str) -> str:
+    prefix = "".join(
+        ch if ch.isalnum() or ch in "._-" else "-"
+        for ch in str(provider_name).strip()
+    ).strip("-")
+    return prefix or "custom"
+
+
+def custom_model_alias(
+    provider_name: str,
+    model_id: str,
+    alias: str | None = None,
+    *,
+    force_prefix: bool = False,
+) -> str:
+    """Return a custom model alias that cannot hide or be hidden by built-ins."""
+    raw_alias = str(alias or model_id).strip()
+    raw_model_id = str(model_id or raw_alias).strip()
+    if not force_prefix and raw_alias not in BUILTIN_MODEL_ALIASES:
+        return raw_alias
+    return f"{_alias_prefix(provider_name)}:{raw_model_id or raw_alias}"
+
+
+def _normalise_custom_model_entries(
+    provider_name: str,
+    models_cfg: dict,
+    existing_models: dict | None = None,
+) -> dict:
+    normalised: dict = {}
+    existing_models = existing_models or {}
+    for alias, model in models_cfg.items():
+        if not isinstance(model, dict):
+            continue
+        model_copy = dict(model)
+        model_copy.setdefault("id", alias)
+        model_provider = model_copy.get("provider") or provider_name
+        model_copy["provider"] = model_provider
+        model_id = str(model_copy.get("id") or alias)
+        if not is_chat_model_candidate(model_id):
+            continue
+        resolved_alias = custom_model_alias(model_provider, model_id, str(alias))
+        existing_owner = existing_models.get(resolved_alias, {}).get("provider")
+        if existing_owner and existing_owner != model_provider:
+            resolved_alias = custom_model_alias(
+                model_provider,
+                model_id,
+                str(alias),
+                force_prefix=True,
+            )
+        normalised[resolved_alias] = model_copy
+    return normalised
 
 
 def _normalize_url(raw: str, api_format: str = "openai") -> str:
@@ -293,14 +377,27 @@ def load_custom_providers() -> None:
         if name not in BUILTIN_PROVIDER_NAMES and name not in custom_providers:
             del PROVIDERS[name]
     for alias in list(MODELS):
-        if alias not in BUILTIN_MODEL_ALIASES and alias not in custom_models:
+        if alias not in BUILTIN_MODEL_ALIASES:
             del MODELS[alias]
     for name, prov in custom_providers.items():
         if name in BUILTIN_PROVIDER_NAMES:
             continue
         prov.setdefault("api_format", "openai")
         PROVIDERS[name] = prov
-    for alias, model in custom_models.items():
+    normalised_models: dict = {}
+    for name in custom_providers:
+        normalised_models.update(
+            _normalise_custom_model_entries(
+                name,
+                {
+                    alias: model
+                    for alias, model in custom_models.items()
+                    if isinstance(model, dict) and model.get("provider") == name
+                },
+                normalised_models,
+            )
+        )
+    for alias, model in normalised_models.items():
         if alias in BUILTIN_MODEL_ALIASES:
             continue
         model.setdefault("color", "\033[37m")
@@ -332,7 +429,9 @@ def save_custom_provider(
             for alias, model in data.get("models", {}).items()
             if model.get("provider") != name
         }
-    data["models"].update(models_cfg)
+    data["models"].update(
+        _normalise_custom_model_entries(name, models_cfg, data.get("models", {}))
+    )
     CUSTOM_PROVIDERS_PATH.write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
     )

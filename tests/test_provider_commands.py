@@ -74,9 +74,15 @@ def test_provider_tui_model_search_field_accepts_pasted_text():
 
 def test_provider_model_name_filter_hides_non_chat_and_legacy_models():
     assert provider_tui._model_is_chat_candidate("gpt-4o") is True
+    assert provider_tui._model_is_chat_candidate("gpt-4o-mini-vision") is True
     assert provider_tui._model_is_chat_candidate("text-embedding-3-large") is False
     assert provider_tui._model_is_chat_candidate("gpt-3.5-turbo-instruct") is False
     assert provider_tui._model_is_chat_candidate("davinci-002") is False
+    assert provider_tui._model_is_chat_candidate("gpt-image-2") is False
+    assert provider_tui._model_is_chat_candidate("gpt-image-1") is False
+    assert provider_tui._model_is_chat_candidate("gpt-image-1.5") is False
+    assert provider_tui._model_is_chat_candidate("gpt-4o-realtime-preview") is False
+    assert provider_tui._model_is_chat_candidate("tts-1") is False
 
 
 def test_provider_model_probe_rejects_explicit_unsupported_response():
@@ -113,6 +119,99 @@ def test_provider_filter_supported_chat_models_removes_unsupported(monkeypatch):
     assert removed == 1
 
 
+def test_provider_first_chat_model_prefers_registered_provider_chat_model(monkeypatch):
+    monkeypatch.setattr(
+        provider_tui,
+        "MODELS",
+        {
+            "gpt-image-2": {"id": "gpt-image-2", "provider": "relay"},
+            "relay-chat": {"id": "relay-chat-id", "provider": "relay"},
+            "other-chat": {"id": "other-chat-id", "provider": "other"},
+        },
+    )
+
+    assert provider_tui._first_provider_chat_model("relay") == "relay-chat-id"
+
+
+def test_provider_detail_test_uses_registered_provider_model(monkeypatch):
+    alias = "pytest_detail_test"
+    env_key = "PYTEST_DETAIL_TEST_API_KEY"
+    tui = provider_tui.ProviderTUI()
+    tui._detail_provider = alias
+    monkeypatch.setenv(env_key, "test-key")
+    monkeypatch.setattr(
+        provider_tui,
+        "PROVIDERS",
+        {
+            alias: {
+                "base_url": "https://api.example.com/v1",
+                "api_key_env": env_key,
+                "api_format": "openai",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        provider_tui,
+        "MODELS",
+        {
+            "relay-chat": {"id": "relay-chat-id", "provider": alias},
+        },
+    )
+    seen = {}
+
+    async def fake_test_connection(base_url, api_key, api_format, model_id=None):
+        seen["base_url"] = base_url
+        seen["api_key"] = api_key
+        seen["api_format"] = api_format
+        seen["model_id"] = model_id
+        return True, "Connected", 1
+
+    monkeypatch.setattr(provider_tui, "_test_connection", fake_test_connection)
+
+    asyncio.run(tui._run_test_detail(alias))
+
+    assert seen == {
+        "base_url": "https://api.example.com/v1",
+        "api_key": "test-key",
+        "api_format": "openai",
+        "model_id": "relay-chat-id",
+    }
+    assert tui._detail_status == "✅ Connected"
+
+
+def test_provider_detail_test_without_models_does_not_use_fallback_model(monkeypatch):
+    alias = "pytest_detail_empty"
+    env_key = "PYTEST_DETAIL_EMPTY_API_KEY"
+    tui = provider_tui.ProviderTUI()
+    monkeypatch.setenv(env_key, "test-key")
+    monkeypatch.setattr(
+        provider_tui,
+        "PROVIDERS",
+        {
+            alias: {
+                "base_url": "https://api.example.com/v1",
+                "api_key_env": env_key,
+                "api_format": "openai",
+            }
+        },
+    )
+    monkeypatch.setattr(provider_tui, "MODELS", {})
+    called = False
+
+    async def fake_test_connection(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return True, "Connected", 1
+
+    monkeypatch.setattr(provider_tui, "_test_connection", fake_test_connection)
+
+    asyncio.run(tui._run_test_detail(alias))
+
+    assert called is False
+    assert "Fetch / Sync Models first" in tui._detail_status
+    assert tui._detail_status_style == "class:warning"
+
+
 def test_provider_tui_model_selector_enter_toggles_row_and_confirms_on_button(monkeypatch):
     tui = provider_tui.ProviderTUI()
     tui._panel = "models"
@@ -145,6 +244,45 @@ def test_provider_tui_model_selector_enter_toggles_row_and_confirms_on_button(mo
     enter_handler(SimpleNamespace(app=app))
 
     assert saved["called"] is True
+
+
+def test_provider_tui_save_models_prefixes_builtin_alias_collisions(monkeypatch):
+    alias = "relay"
+    tui = provider_tui.ProviderTUI()
+    tui._ms_provider = alias
+    tui._ms_all = [
+        ("gpt-5.4-mini", {"id": "gpt-5.4-mini", "provider": alias}),
+        ("relay-chat", {"id": "relay-chat", "provider": alias}),
+    ]
+    tui._ms_selected = {"gpt-5.4-mini", "relay-chat"}
+    monkeypatch.setattr(
+        provider_tui,
+        "PROVIDERS",
+        {
+            alias: {
+                "base_url": "https://api.example.com/v1",
+                "api_key_env": "RELAY_API_KEY",
+                "api_format": "openai",
+            }
+        },
+    )
+    saved = {}
+
+    def fake_save_custom_provider(name, provider_cfg, models_cfg, replace_models=False):
+        saved["name"] = name
+        saved["models_cfg"] = models_cfg
+        saved["replace_models"] = replace_models
+
+    monkeypatch.setattr(provider_tui, "save_custom_provider", fake_save_custom_provider)
+    monkeypatch.setattr(provider_tui, "_record_sync_time", lambda _pname: None)
+    monkeypatch.setattr(provider_tui, "_sync_models_to_runtime", lambda: None)
+
+    tui._do_save_models()
+
+    assert saved["name"] == alias
+    assert sorted(saved["models_cfg"]) == ["relay-chat", "relay:gpt-5.4-mini"]
+    assert saved["models_cfg"]["relay:gpt-5.4-mini"]["id"] == "gpt-5.4-mini"
+    assert saved["replace_models"] is True
 
 
 def test_provider_tui_connection_accepts_nonstandard_success_response():
@@ -317,6 +455,62 @@ def test_save_custom_provider_can_replace_models_for_same_provider(tmp_path, mon
 
     data = json.loads(path.read_text(encoding="utf-8"))
     assert sorted(data["models"]) == ["new-relay-model", "other-model"]
+
+
+def test_save_custom_provider_prefixes_builtin_model_alias_collision(tmp_path, monkeypatch):
+    path = tmp_path / "custom_providers.json"
+    monkeypatch.setattr(provider_config, "CUSTOM_PROVIDERS_PATH", path)
+
+    provider_config.save_custom_provider(
+        "relay",
+        {
+            "base_url": "https://api.example.com/v1/chat/completions",
+            "api_key_env": "RELAY_API_KEY",
+            "label": "Relay",
+            "api_format": "openai",
+        },
+        {"gpt-5.4-mini": {"id": "gpt-5.4-mini", "provider": "relay"}},
+    )
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert "gpt-5.4-mini" not in data["models"]
+    assert data["models"]["relay:gpt-5.4-mini"]["id"] == "gpt-5.4-mini"
+
+
+def test_load_custom_providers_ignores_existing_non_chat_models(tmp_path, monkeypatch):
+    path = tmp_path / "custom_providers.json"
+    monkeypatch.setattr(provider_config, "CUSTOM_PROVIDERS_PATH", path)
+    provider_config.MODELS.pop("relay:gpt-5.4-mini", None)
+    provider_config.MODELS.pop("gpt-image-2", None)
+    path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "relay": {
+                        "base_url": "https://api.example.com/v1/chat/completions",
+                        "api_key_env": "RELAY_API_KEY",
+                        "label": "Relay",
+                        "api_format": "openai",
+                    }
+                },
+                "models": {
+                    "gpt-5.4-mini": {"id": "gpt-5.4-mini", "provider": "relay"},
+                    "gpt-image-2": {"id": "gpt-image-2", "provider": "relay"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        provider_config.load_custom_providers()
+
+        assert "relay:gpt-5.4-mini" in provider_config.MODELS
+        assert "gpt-image-2" not in provider_config.MODELS
+    finally:
+        provider_config.PROVIDERS.pop("relay", None)
+        provider_config.MODELS.pop("relay:gpt-5.4-mini", None)
+        provider_config.MODELS.pop("gpt-image-2", None)
 
 
 def test_provider_add_cli_fetches_without_nested_event_loop(monkeypatch):

@@ -21,14 +21,12 @@ from config.paths import PAWNLOGIC_HOME
 from config.providers import (
     PROVIDERS, MODELS, CUSTOM_PROVIDERS_PATH,
     save_custom_provider, load_custom_providers, remove_custom_provider,
-    models_url_from_base_url,
+    models_url_from_base_url, custom_model_alias, is_chat_model_candidate,
 )
 
 _PAWNLOGIC_DIR = PAWNLOGIC_HOME
 _ENV_PATH = _PAWNLOGIC_DIR / ".env"
 _BUILTIN = {"deepseek", "openai", "anthropic"}
-_NOISE = {"embedding", "rerank", "tts", "whisper", "moderation", "davinci", "babbage"}
-_LEGACY_MODEL_KEYWORDS = ("instruct", "babbage", "davinci", "curie", "ada", "legacy")
 _UNSUPPORTED_MODEL_MARKERS = (
     "not supported", "unsupported", "model_not_found", "model not found",
     "does not exist", "unknown model", "invalid model", "not available",
@@ -130,6 +128,8 @@ def _connection_result_from_response(resp, ms: int) -> tuple[bool, str, int]:
         return True, f"Connected ({ms}ms)", ms
 
     if resp.status_code == 400:
+        if _model_rejection_reason(resp.text):
+            return False, f"HTTP 400: {_response_excerpt(resp.text)}", ms
         try:
             body = resp.json()
         except ValueError:
@@ -141,12 +141,17 @@ def _connection_result_from_response(resp, ms: int) -> tuple[bool, str, int]:
 
 
 def _model_is_chat_candidate(model_id: str) -> bool:
-    ml = model_id.lower()
-    if any(noise in ml for noise in _NOISE):
-        return False
-    if any(legacy in ml for legacy in _LEGACY_MODEL_KEYWORDS):
-        return False
-    return True
+    return is_chat_model_candidate(model_id)
+
+
+def _first_provider_chat_model(pname: str) -> str:
+    for alias, cfg in MODELS.items():
+        if cfg.get("provider") != pname:
+            continue
+        model_id = str(cfg.get("id") or alias)
+        if _model_is_chat_candidate(model_id):
+            return model_id
+    return ""
 
 
 def _model_rejection_reason(response_text: str) -> str:
@@ -203,18 +208,27 @@ async def _filter_supported_chat_models(
     return supported, len(candidates) - len(supported)
 
 
-async def _test_connection(base_url: str, api_key: str, api_format: str) -> tuple[bool, str, int]:
+async def _test_connection(
+    base_url: str,
+    api_key: str,
+    api_format: str,
+    model_id: str,
+) -> tuple[bool, str, int]:
     import httpx
     t0 = time.monotonic()
+    if not api_key:
+        return False, "API key is not configured.", 0
+    if not model_id:
+        return False, "No chat models loaded. Use Fetch / Sync Models first.", 0
     endpoint = _normalize_base_url(base_url, api_format)
     try:
         if api_format == "anthropic":
-            payload = {"model": "claude-haiku-4-5-20251001", "max_tokens": 1,
+            payload = {"model": model_id, "max_tokens": 1,
                        "messages": [{"role": "user", "content": "hi"}]}
             headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01",
                        "content-type": "application/json"}
         else:
-            payload = {"model": "gpt-3.5-turbo", "max_tokens": 1,
+            payload = {"model": model_id, "max_tokens": 1,
                        "messages": [{"role": "user", "content": "hi"}]}
             headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
         async with httpx.AsyncClient(timeout=10) as client:
@@ -224,7 +238,11 @@ async def _test_connection(base_url: str, api_key: str, api_format: str) -> tupl
     except Exception as e:
         return False, str(e)[:100], int((time.monotonic() - t0) * 1000)
 
-async def _fetch_models(base_url: str, api_key: str) -> tuple[list[tuple[str, dict]], str]:
+async def _fetch_models(
+    base_url: str,
+    api_key: str,
+    api_format: str = "openai",
+) -> tuple[list[tuple[str, dict]], str]:
     import httpx
     models_url = models_url_from_base_url(base_url)
     all_data: list = []
@@ -253,7 +271,7 @@ async def _fetch_models(base_url: str, api_key: str) -> tuple[list[tuple[str, di
         candidates.append((mid, {"id": mid, "provider": "", "desc": "fetched",
                                   "color": "\033[37m", "vision": vision,
                                   "reasoning": reasoning}))
-    filtered, removed = await _filter_supported_chat_models(base_url, api_key, candidates)
+    filtered, removed = await _filter_supported_chat_models(base_url, api_key, candidates, api_format)
     if removed:
         for _mid, cfg in filtered:
             cfg["desc"] = f"fetched; {removed} unsupported hidden"
@@ -1007,7 +1025,8 @@ class ProviderTUI:
         for mid in self._ms_selected:
             cfg = next((c for m, c in self._ms_all if m == mid), None)
             if cfg:
-                models_cfg[mid] = {**cfg, "provider": pname}
+                alias = custom_model_alias(pname, str(cfg.get("id") or mid), mid)
+                models_cfg[alias] = {**cfg, "provider": pname}
         prov_cfg = PROVIDERS.get(pname, {})
         save_custom_provider(pname, prov_cfg, models_cfg, replace_models=True)
         _record_sync_time(pname)
@@ -1035,8 +1054,15 @@ class ProviderTUI:
     async def _run_test_detail(self, pname: str):
         pinfo = PROVIDERS.get(pname, {})
         key = _provider_key(pname)
+        model_id = _first_provider_chat_model(pname)
+        if not model_id:
+            self._detail_status = "⚠ No chat models loaded. Use Fetch / Sync Models first."
+            self._detail_status_style = "class:warning"
+            if self._app:
+                self._app.invalidate()
+            return
         ok, msg, _ = await _test_connection(
-            pinfo.get("base_url", ""), key, pinfo.get("api_format", "openai"))
+            pinfo.get("base_url", ""), key, pinfo.get("api_format", "openai"), model_id)
         self._detail_status = f"✅ {msg}" if ok else f"✗ {msg}"
         self._detail_status_style = "class:success" if ok else "class:error"
         if self._app:
@@ -1048,14 +1074,22 @@ class ProviderTUI:
         self._detail_status = "⟳ Fetching model list..."
         self._detail_status_style = "class:spinner"
         if self._app: self._app.invalidate()
-        candidates, err = await _fetch_models(pinfo.get("base_url", ""), key)
+        candidates, err = await _fetch_models(
+            pinfo.get("base_url", ""),
+            key,
+            pinfo.get("api_format", "openai"),
+        )
         if err or not candidates:
             self._detail_status = f"✗ Failed: {err or 'No models returned'}"
             self._detail_status_style = "class:error"
             if self._app: self._app.invalidate()
             return
         # Bug 4: start all unchecked; pre-check only previously saved models
-        existing = {a for a, m in MODELS.items() if m.get("provider") == pname}
+        existing = {
+            str(m.get("id") or a)
+            for a, m in MODELS.items()
+            if m.get("provider") == pname
+        }
         self._ms_all = candidates
         self._ms_selected = {mid for mid, _ in candidates if mid in existing}
         # do NOT pre-select all — user must choose

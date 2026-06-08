@@ -574,7 +574,11 @@ async def _provider_fetch_selector(entries: list[tuple[str, dict]]) -> list[str]
 async def _provider_fetch(alias: str) -> None:
     """/provider fetch <alias>: 分页请求 /v1/models，交互多选后批量注册。"""
     from core.provider_tui import _filter_supported_chat_models, _model_is_chat_candidate
-    from config.providers import save_custom_provider as _save_cp, load_custom_providers
+    from config.providers import (
+        custom_model_alias,
+        save_custom_provider as _save_cp,
+        load_custom_providers,
+    )
 
     _BUILTIN = {"deepseek", "openai", "anthropic"}
     if alias in _BUILTIN:
@@ -634,7 +638,11 @@ async def _provider_fetch(alias: str) -> None:
         print(c(GRAY, "  已取消，未注册任何模型。"))
         return
 
-    models_cfg = {mid: cfg for mid, cfg in candidates if mid in set(chosen_ids)}
+    models_cfg = {
+        custom_model_alias(alias, str(cfg.get("id") or mid), mid): cfg
+        for mid, cfg in candidates
+        if mid in set(chosen_ids)
+    }
     _save_cp(alias, PROVIDERS[alias], models_cfg, replace_models=True)
     load_custom_providers()
 
