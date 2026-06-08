@@ -72,6 +72,81 @@ def test_provider_tui_model_search_field_accepts_pasted_text():
     assert tui._ms_search == pasted_model_name
 
 
+def test_provider_model_name_filter_hides_non_chat_and_legacy_models():
+    assert provider_tui._model_is_chat_candidate("gpt-4o") is True
+    assert provider_tui._model_is_chat_candidate("text-embedding-3-large") is False
+    assert provider_tui._model_is_chat_candidate("gpt-3.5-turbo-instruct") is False
+    assert provider_tui._model_is_chat_candidate("davinci-002") is False
+
+
+def test_provider_model_probe_rejects_explicit_unsupported_response():
+    assert (
+        provider_tui._model_rejection_reason(
+            '{"error":{"message":"The gpt-3.5-turbo model is not supported"}}'
+        )
+        == "unsupported"
+    )
+
+
+def test_provider_model_probe_accepts_non_model_specific_400():
+    assert provider_tui._model_rejection_reason('{"error":{"message":"missing field"}}') == ""
+
+
+def test_provider_filter_supported_chat_models_removes_unsupported(monkeypatch):
+    async def fake_probe(_client, _endpoint, _api_key, model_id):
+        return (model_id != "old-model", "unsupported" if model_id == "old-model" else "")
+
+    monkeypatch.setattr(provider_tui, "_probe_openai_chat_model", fake_probe)
+
+    supported, removed = asyncio.run(
+        provider_tui._filter_supported_chat_models(
+            "https://api.example.com/v1",
+            "test-key",
+            [
+                ("new-model", {"id": "new-model"}),
+                ("old-model", {"id": "old-model"}),
+            ],
+        )
+    )
+
+    assert [mid for mid, _cfg in supported] == ["new-model"]
+    assert removed == 1
+
+
+def test_provider_tui_model_selector_enter_toggles_row_and_confirms_on_button(monkeypatch):
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "models"
+    tui._ms_all = [
+        ("model-a", {"id": "model-a", "provider": "relay"}),
+        ("model-b", {"id": "model-b", "provider": "relay"}),
+    ]
+    kb = tui._build_kb()
+    app = Application(
+        layout=tui._build_layout(),
+        key_bindings=kb,
+        style=provider_tui.TUI_STYLE,
+        full_screen=False,
+    )
+    tui._app = app
+    enter_handler = next(binding.handler for binding in kb.bindings if binding.handler.__name__ == "_ms_enter")
+    saved = {"called": False}
+
+    def fake_save_models():
+        saved["called"] = True
+
+    monkeypatch.setattr(tui, "_do_save_models", fake_save_models)
+
+    enter_handler(SimpleNamespace(app=app))
+
+    assert tui._ms_selected == {"model-a"}
+    assert saved["called"] is False
+
+    tui._ms_cursor = len(tui._ms_all)
+    enter_handler(SimpleNamespace(app=app))
+
+    assert saved["called"] is True
+
+
 def test_provider_tui_connection_accepts_nonstandard_success_response():
     response = SimpleNamespace(
         status_code=200,

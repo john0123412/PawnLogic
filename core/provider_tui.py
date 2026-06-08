@@ -28,6 +28,11 @@ _PAWNLOGIC_DIR = PAWNLOGIC_HOME
 _ENV_PATH = _PAWNLOGIC_DIR / ".env"
 _BUILTIN = {"deepseek", "openai", "anthropic"}
 _NOISE = {"embedding", "rerank", "tts", "whisper", "moderation", "davinci", "babbage"}
+_LEGACY_MODEL_KEYWORDS = ("instruct", "babbage", "davinci", "curie", "ada", "legacy")
+_UNSUPPORTED_MODEL_MARKERS = (
+    "not supported", "unsupported", "model_not_found", "model not found",
+    "does not exist", "unknown model", "invalid model", "not available",
+)
 _REASONING_KEYWORDS = ("mimo", "deepseek", "qwq")  # 与 api_client._REASONING_MODEL_PATTERNS 保持同步
 _PAGE = 20  # rows per page in model selector
 
@@ -135,6 +140,69 @@ def _connection_result_from_response(resp, ms: int) -> tuple[bool, str, int]:
     return False, f"HTTP {resp.status_code}: {_response_excerpt(resp.text)}", ms
 
 
+def _model_is_chat_candidate(model_id: str) -> bool:
+    ml = model_id.lower()
+    if any(noise in ml for noise in _NOISE):
+        return False
+    if any(legacy in ml for legacy in _LEGACY_MODEL_KEYWORDS):
+        return False
+    return True
+
+
+def _model_rejection_reason(response_text: str) -> str:
+    text = response_text.lower()
+    if any(marker in text for marker in _UNSUPPORTED_MODEL_MARKERS):
+        return "unsupported"
+    return ""
+
+
+async def _probe_openai_chat_model(client, endpoint: str, api_key: str, model_id: str) -> tuple[bool, str]:
+    payload = {
+        "model": model_id,
+        "max_tokens": 1,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
+    try:
+        resp = await client.post(endpoint, json=payload, headers=headers)
+    except Exception as e:
+        return False, str(e)[:80]
+    if 200 <= resp.status_code < 300:
+        return True, ""
+    reason = _model_rejection_reason(resp.text)
+    if reason:
+        return False, reason
+    if resp.status_code in (400, 401, 403):
+        return True, ""
+    return False, f"HTTP {resp.status_code}"
+
+
+async def _filter_supported_chat_models(
+    base_url: str,
+    api_key: str,
+    candidates: list[tuple[str, dict]],
+    api_format: str = "openai",
+) -> tuple[list[tuple[str, dict]], int]:
+    if api_format == "anthropic" or not candidates:
+        return candidates, 0
+
+    import httpx
+    endpoint = _normalize_base_url(base_url, api_format)
+    sem = asyncio.Semaphore(8)
+
+    async def probe(entry: tuple[str, dict]) -> tuple[bool, tuple[str, dict]]:
+        mid, _cfg = entry
+        async with sem:
+            ok, _reason = await _probe_openai_chat_model(client, endpoint, api_key, mid)
+        return ok, entry
+
+    async with httpx.AsyncClient(timeout=8) as client:
+        results = await asyncio.gather(*(probe(entry) for entry in candidates))
+
+    supported = [entry for ok, entry in results if ok]
+    return supported, len(candidates) - len(supported)
+
+
 async def _test_connection(base_url: str, api_key: str, api_format: str) -> tuple[bool, str, int]:
     import httpx
     t0 = time.monotonic()
@@ -177,7 +245,7 @@ async def _fetch_models(base_url: str, api_key: str) -> tuple[list[tuple[str, di
     candidates = []
     for item in all_data:
         mid = item.get("id", "")
-        if not mid or any(n in mid.lower() for n in _NOISE):
+        if not mid or not _model_is_chat_candidate(mid):
             continue
         ml = mid.lower()
         vision    = any(k in ml for k in ("vision", "vl", "visual"))
@@ -185,7 +253,11 @@ async def _fetch_models(base_url: str, api_key: str) -> tuple[list[tuple[str, di
         candidates.append((mid, {"id": mid, "provider": "", "desc": "fetched",
                                   "color": "\033[37m", "vision": vision,
                                   "reasoning": reasoning}))
-    return candidates, ""
+    filtered, removed = await _filter_supported_chat_models(base_url, api_key, candidates)
+    if removed:
+        for _mid, cfg in filtered:
+            cfg["desc"] = f"fetched; {removed} unsupported hidden"
+    return filtered, ""
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ProviderTUI
@@ -427,7 +499,8 @@ class ProviderTUI:
         if total > _PAGE:
             f.append(("class:subtitle", f"\n  Showing {start+1}–{end} of {total}\n"))
         f.append(("", f"\n  {len(self._ms_selected)} selected\n\n"))
-        f.append(("class:btn-normal", "  [ Load Selected Models ]  (Enter to confirm)\n"))
+        btn_style = "class:btn-focus" if self._ms_cursor == total and not self._ms_search_focus else "class:btn-normal"
+        f.append((btn_style, "  [ Load Selected Models ]  (Enter to confirm)\n"))
         if self._ms_error:
             f.append(("class:error", f"\n  ⚠ {self._ms_error}\n"))
         return f
@@ -849,7 +922,15 @@ class ProviderTUI:
 
         @kb.add("enter", filter=_ms_list)
         def _ms_enter(e):
-            # Enter always confirms — Space is for toggling
+            filtered = self._ms_filtered()
+            if self._ms_cursor < len(filtered):
+                mid = filtered[self._ms_cursor][0]
+                if mid in self._ms_selected:
+                    self._ms_selected.discard(mid)
+                else:
+                    self._ms_selected.add(mid)
+                inv()
+                return
             if not self._ms_selected:
                 self._ms_error = "Select at least one model."; inv(); return
             self._ms_error = ""; self._do_save_models()

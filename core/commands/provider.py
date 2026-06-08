@@ -573,6 +573,7 @@ async def _provider_fetch_selector(entries: list[tuple[str, dict]]) -> list[str]
 
 async def _provider_fetch(alias: str) -> None:
     """/provider fetch <alias>: 分页请求 /v1/models，交互多选后批量注册。"""
+    from core.provider_tui import _filter_supported_chat_models, _model_is_chat_candidate
     from config.providers import save_custom_provider as _save_cp, load_custom_providers
 
     _BUILTIN = {"deepseek", "openai", "anthropic"}
@@ -599,11 +600,10 @@ async def _provider_fetch(alias: str) -> None:
         print(c(RED, f"  ✗ 请求失败: {e}"))
         return
 
-    _NOISE = {"embedding", "rerank", "tts", "whisper", "moderation", "davinci", "babbage"}
     candidates: list[tuple[str, dict]] = []
     for item in data:
         mid = item.get("id", "")
-        if not mid or any(n in mid.lower() for n in _NOISE):
+        if not mid or not _model_is_chat_candidate(mid):
             continue
         vision = any(k in mid.lower() for k in ("vision", "vl", "visual"))
         candidates.append((mid, {
@@ -614,10 +614,19 @@ async def _provider_fetch(alias: str) -> None:
             "vision":   vision,
         }))
 
+    candidates, removed = await _filter_supported_chat_models(
+        prov["base_url"],
+        api_key,
+        candidates,
+        prov.get("api_format", "openai"),
+    )
+
     if not candidates:
         print(c(YELLOW, "  ⚠ 未获取到任何可用模型，请检查接口返回格式。"))
         return
 
+    if removed:
+        print(c(GRAY, f"  已隐藏 {removed} 个不可用于聊天的模型。"))
     print(c(GREEN, f"  ✓ 获取到 {len(candidates)} 个模型，请选择要注册的模型：\n"))
     chosen_ids = await _provider_fetch_selector(candidates)
 
