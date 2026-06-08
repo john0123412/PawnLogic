@@ -15,6 +15,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the process env. Custom providers from `custom_providers.json` are now
   recognised on the same footing as built-in providers — `_has_any_api_key()`
   uses no hardcoded provider names.
+- **Top-level `main` module name conflict resolved** for installed wheels:
+  the `pawn` console script now targets `pawnlogic.cli:run`, and the wheel no
+  longer ships `main.py` as an importable top-level module. The source checkout
+  keeps a small root `main.py` compatibility wrapper for `python main.py` and
+  legacy tests.
 
 ### Added
 - Two regression tests in `tests/test_deployment_friendly.py` for the
@@ -40,13 +45,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `.env.example` clarifies that `XIAOMI_API_KEY` is for a custom provider
   registered in `~/.pawnlogic/custom_providers.json`, not a built-in.
 - Workflow header comments no longer pin a specific version number.
-
-### Known Issues
-- **Top-level `main` module name conflict**: the `pawn` console script
-  resolves correctly, but installing pawnlogic also exposes a top-level
-  `main` module. Any user script doing `import main` from a fresh
-  interpreter (with no local `main.py` shadow) will resolve to PawnLogic's
-  module. Will be refactored to `pawnlogic/__main__.py` in a future minor.
 
 ### Tests
 - 217 tests passing (was 215; +2 regression tests).

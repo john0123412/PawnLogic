@@ -63,22 +63,18 @@ Changelog = "https://github.com/john0123412/PawnLogic/blob/main/CHANGELOG.md"
 Documentation = "https://github.com/john0123412/PawnLogic/blob/main/GUIDE_EN.md"
 
 [project.scripts]
-pawn = "main:run"
+pawn = "pawnlogic.cli:run"
 
 [tool.setuptools.dynamic]
 version = {attr = "config.paths.VERSION"}
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["config*", "core*", "tools*", "utils*", "skills*"]
+include = ["pawnlogic*", "config*", "core*", "tools*", "utils*", "skills*"]
 # CTF skill packs are large and optional; install via `pip install pawnlogic[ctf]`
 # to opt into pwntools/ROPgadget/ropper. The skill markdown lives outside the wheel
 # and ships separately (see CONTRIBUTING.md for the ctf-skills add-on).
 exclude = ["skills.ctf_*"]
-
-# main.py lives at root — declare it explicitly as a py-module
-[tool.setuptools]
-py-modules = ["main"]
 
 [tool.setuptools.package-data]
 "*" = ["*.md", "*.json", "*.sh", "*.txt"]

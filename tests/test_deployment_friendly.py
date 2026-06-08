@@ -10,7 +10,9 @@ import shutil
 import stat
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
+from importlib.metadata import PathDistribution
 from unittest.mock import patch
 
 
@@ -76,6 +78,28 @@ def test_pawn_sh_uses_detected_dot_venv_python(tmp_path):
 
     assert result.stdout.startswith("DOTVENV ")
     assert str(tmp_path / "main.py") in result.stdout
+
+
+def test_packaging_entry_point_uses_package_cli():
+    dist = PathDistribution.at(ROOT / "pawnlogic.egg-info")
+    scripts = [ep for ep in dist.entry_points if ep.group == "console_scripts"]
+
+    assert any(
+        ep.name == "pawn" and ep.value == "pawnlogic.cli:run"
+        for ep in scripts
+    )
+
+
+def test_built_wheel_does_not_ship_top_level_main_module():
+    wheels = sorted((ROOT / "dist").glob("pawnlogic-*.whl"))
+    assert wheels, "run `python -m build` before this deployment check"
+
+    with zipfile.ZipFile(wheels[-1]) as wheel:
+        names = set(wheel.namelist())
+
+    assert "main.py" not in names
+    assert "pawnlogic/cli.py" in names
+    assert "pawnlogic/__main__.py" in names
 
 
 def test_json_first_run_exits_with_clean_json_error(tmp_path):

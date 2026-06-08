@@ -54,9 +54,9 @@ from core.commands._common import EXIT_SENTINEL, fmt_config
 
 @register("/help")
 async def cmd_help(ctx: CommandContext) -> None:
-    # HELP_TEXT lives in main.py because it embeds VERSION; lazy import
+    # HELP_TEXT lives in the CLI module because it embeds VERSION; lazy import
     # avoids a circular dependency at module load time.
-    from main import HELP_TEXT
+    from pawnlogic.cli import HELP_TEXT
     print(HELP_TEXT)
 
 

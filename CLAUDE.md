@@ -5,7 +5,7 @@ Project-level guidance for Claude Code sessions working on this repo.
 ## Project at a Glance
 
 - **What**: A fully autonomous terminal AI agent — multi-model routing, persistent memory, real tool execution.
-- **Entry point**: `pawn` CLI command (`main:run` in `pyproject.toml`).
+- **Entry point**: `pawn` CLI command (`pawnlogic.cli:run` in `pyproject.toml`).
 - **Runtime data**: lives in `~/.pawnlogic/` (sessions, db, env, custom providers). **Never** in the repo dir.
 - **Build backend**: setuptools (PEP 517). `VERSION` defined only in `config/paths.py`.
 
@@ -95,7 +95,7 @@ The **only** place version lives: `config/paths.py:VERSION`. Then update:
 
 ## Known Architectural Pitfalls
 
-1. **Top-level `main` module pollution**: `pawn = "main:run"` makes `main` a top-level installable module. Any user script doing `import main` from a fresh interpreter will resolve to PawnLogic's `main.py`. Documented as known issue in CHANGELOG `[0.0.6]`. Target fix: move to `pawnlogic/__main__.py`.
+1. **Source-tree `main.py` compatibility wrapper**: installed wheels no longer expose a top-level `main` module; `pawn` targets `pawnlogic.cli:run`. The repository still keeps root `main.py` so `python main.py`, `pawn.sh`, and older tests keep working in a checkout.
 
 2. **`first_run` gate must use `_has_any_api_key()` alone** (not `_ENV_PATH.exists()`). Custom providers from `custom_providers.json` are merged into `PROVIDERS` at module-import time, so the gate treats them on equal footing — no provider name is or should be hardcoded. See regression tests in `tests/test_deployment_friendly.py::test_first_run_gate_*`.
 

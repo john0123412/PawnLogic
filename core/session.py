@@ -1982,7 +1982,7 @@ class AgentSession:
                     # ── P2: rich Markdown 渲染（仅对非 plan 文本）──
                     if leftover:
                         try:
-                            from main import render_agent_output
+                            from pawnlogic.cli import render_agent_output
                             render_agent_output(leftover)
                         except (ImportError, Exception):
                             sys.stdout.write(leftover)
