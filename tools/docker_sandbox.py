@@ -112,6 +112,43 @@ DEFAULT_DOCKER_IMAGES = {
     "gcc":        "gcc:latest",
 }
 
+_TRUTHY_POLICY_VALUES = {"1", "true", "yes", "on"}
+_RISKY_NETWORK_MODES = {"bridge", "host"}
+
+
+def _policy_truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in _TRUTHY_POLICY_VALUES
+
+
+def _docker_policy_enabled(arg_value: object, env_name: str) -> bool:
+    return _policy_truthy(arg_value) or _policy_truthy(os.environ.get(env_name))
+
+
+def _check_network_policy(a: dict, network: str) -> str | None:
+    mode = (network or "none").strip().lower()
+    if mode not in _RISKY_NETWORK_MODES:
+        return None
+    if _docker_policy_enabled(a.get("allow_network"), "PAWNLOGIC_DOCKER_ALLOW_NETWORK"):
+        return None
+    return (
+        f"SECURITY BLOCK: Docker network='{mode}' requires explicit approval. "
+        "Set allow_network=true for this tool call or PAWNLOGIC_DOCKER_ALLOW_NETWORK=true."
+    )
+
+
+def _check_auto_pull_policy(a: dict, image: str) -> str | None:
+    if _docker_policy_enabled(a.get("allow_auto_pull"), "PAWNLOGIC_DOCKER_ALLOW_AUTO_PULL"):
+        return None
+    return (
+        f"SECURITY BLOCK: Docker image '{image}' is not available locally and automatic "
+        "pull is disabled. Pull it manually with /docker pull, set allow_auto_pull=true "
+        "for this tool call, or set PAWNLOGIC_DOCKER_ALLOW_AUTO_PULL=true."
+    )
+
 
 def _resolve_image(name: str) -> str:
     """将别名解析为完整镜像名。"""
@@ -165,20 +202,12 @@ def tool_run_code_docker(a: dict) -> str:
     -------
     str — 执行结果（stdout + stderr）+ 容器销毁状态
     """
-    client = _get_docker_client()
-    if not client:
-        return (
-            f"ERROR: Docker 不可用 — {_docker_error}\n"
-            f"请确保 Docker CE 已启动: sudo systemctl start docker\n"
-            f"并安装 Python SDK: pip install docker"
-        )
-
     language     = a.get("language", "python").lower().strip()
     code         = a.get("code", "")
     raw_image    = a.get("image", "")
     timeout      = int(a.get("timeout", 30))
     mount_files  = a.get("mount_files", {})
-    network      = a.get("network", "none")
+    network      = (a.get("network", "none") or "none").strip().lower()
     stdin_data   = a.get("stdin", "")
     install_deps = a.get("install_deps", "").strip()
 
@@ -187,6 +216,9 @@ def tool_run_code_docker(a: dict) -> str:
 
     # 安全检查
     err = _check_docker_cmd(code)
+    if err:
+        return err
+    err = _check_network_policy(a, network)
     if err:
         return err
 
@@ -223,6 +255,14 @@ def tool_run_code_docker(a: dict) -> str:
         image_name = _resolve_image(raw_image)
     else:
         image_name = _resolve_image(_LANG_IMAGE_MAP.get(language, "pwndocker"))
+
+    client = _get_docker_client()
+    if not client:
+        return (
+            f"ERROR: Docker 不可用 — {_docker_error}\n"
+            f"请确保 Docker CE 已启动: sudo systemctl start docker\n"
+            f"并安装 Python SDK: pip install docker"
+        )
 
     # ── Python 依赖安装 ──────────────────────────────────
     if language == "python" and install_deps:
@@ -272,6 +312,9 @@ def tool_run_code_docker(a: dict) -> str:
         try:
             client.images.get(image_name)
         except Exception:
+            err = _check_auto_pull_policy(a, image_name)
+            if err:
+                return err
             print(c(YELLOW, f"  📥 正在拉取轻量级镜像 {image_name}，请稍候..."))
             try:
                 client.images.pull(image_name)
@@ -374,16 +417,21 @@ def tool_pwn_container(a: dict) -> str:
     -------
     str — 操作结果
     """
-    client = _get_docker_client()
-    if not client:
-        return f"ERROR: Docker 不可用 — {_docker_error}"
-
     action  = a.get("action", "").lower().strip()
     name    = a.get("name", "").strip()
     image   = _resolve_image(a.get("image", "pwndocker"))
     command = a.get("command", "").strip()
-    network    = a.get("network", "none")
+    network    = (a.get("network", "none") or "none").strip().lower()
     mount_files = a.get("mount_files", {})  # P4.1: 挂载配置
+
+    if action == "create":
+        err = _check_network_policy(a, network)
+        if err:
+            return err
+
+    client = _get_docker_client()
+    if not client:
+        return f"ERROR: Docker 不可用 — {_docker_error}"
 
     if action == "list":
         if not _active_containers:
@@ -408,6 +456,9 @@ def tool_pwn_container(a: dict) -> str:
         try:
             client.images.get(image)
         except Exception:
+            err = _check_auto_pull_policy(a, image)
+            if err:
+                return err
             print(c(YELLOW, f"  📥 正在拉取轻量级镜像 {image}，请稍候..."))
             try:
                 client.images.pull(image)
@@ -715,7 +766,18 @@ DOCKER_SCHEMAS = [
                     },
                     "network": {
                         "type": "string",
-                        "description": "网络模式：none（默认断网）/ bridge / host",
+                        "description": (
+                            "网络模式：none（默认断网）/ bridge / host。"
+                            "bridge/host 需要 allow_network=true 或环境策略放行。"
+                        ),
+                    },
+                    "allow_network": {
+                        "type": "boolean",
+                        "description": "显式允许 bridge/host Docker 网络模式（默认 false）",
+                    },
+                    "allow_auto_pull": {
+                        "type": "boolean",
+                        "description": "显式允许缺失镜像时自动 docker pull（默认 false）",
                     },
                     "stdin": {
                         "type": "string",
@@ -769,7 +831,18 @@ DOCKER_SCHEMAS = [
                     },
                     "network": {
                         "type": "string",
-                        "description": "网络模式（create 时，默认 none）",
+                        "description": (
+                            "网络模式（create 时，默认 none）。"
+                            "bridge/host 需要 allow_network=true 或环境策略放行。"
+                        ),
+                    },
+                    "allow_network": {
+                        "type": "boolean",
+                        "description": "显式允许 create 使用 bridge/host Docker 网络模式（默认 false）",
+                    },
+                    "allow_auto_pull": {
+                        "type": "boolean",
+                        "description": "显式允许缺失镜像时自动 docker pull（默认 false）",
                     },
                 },
                 "required": ["action"],
