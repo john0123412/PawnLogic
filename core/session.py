@@ -53,6 +53,7 @@ from core.naming import (
     stable_workspace_dir, should_name_session, generate_session_name,
     create_workspace_alias, pick_naming_model,
 )
+from core import plan_guard as _plan_guard
 from tools.web_ops   import tool_web_search, tool_fetch_url, tool_git_op, WEB_SCHEMAS
 from tools.sandbox   import tool_run_code, SANDBOX_SCHEMAS
 from tools.pwn_chain import (tool_pwn_env, tool_inspect_binary, tool_pwn_rop,
@@ -455,39 +456,8 @@ _PLAN_MISSING_SIGNAL = (
     "then re-emit your tool call. Do NOT apologize or repeat previous text."
 )
 
-# ── 豁免名单：以下工具无副作用，允许跳过 <plan> 检查 ─────────────
-# 可减轻轻量模型在简单只读操作上的认知负担。
-_PLAN_EXEMPT_TOOLS = {
-    "pwn_env",        # 环境探测，无副作用
-    "list_dir",       # 目录列出，无副作用
-    "search_skills",  # P6: 技能包检索，只读操作
-    "check_service",  # P6: 环境嗅探，只读操作
-    # git_op 仅只读操作豁免（见 _is_plan_exempt）
-}
-
-def _is_plan_exempt(tc_buf: dict) -> bool:
-    """若本次所有工具调用均属于豁免名单（只读），允许跳过 <plan> 检查。"""
-    for idx in tc_buf:
-        name = tc_buf[idx]["name"]
-        if name not in _PLAN_EXEMPT_TOOLS and name != "git_op":
-            return False
-        if name == "git_op":
-            try:
-                args = json.loads(tc_buf[idx]["args"])
-                if args.get("action") not in ("status", "log", "diff", "branch"):
-                    return False
-            except Exception:
-                return False
-    return True
-
-
-def _tool_call_missing_plan(text_buf: str, tc_buf: dict) -> bool:
-    """Return True when a non-exempt tool call was emitted without a plan."""
-    if not tc_buf:
-        return False
-    if _is_plan_exempt(tc_buf):
-        return False
-    return "<plan>" not in text_buf or "</plan>" not in text_buf
+_is_plan_exempt = _plan_guard.is_plan_exempt
+_tool_call_missing_plan = _plan_guard.tool_call_missing_plan
 
 # ════════════════════════════════════════════════════════
 # GSA 辅助：读取 global_skills.md TOC
