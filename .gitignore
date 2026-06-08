@@ -8,8 +8,17 @@
 *.Key
 *.key
 *.token
+*.pem
+*.crt
+*.p12
+id_rsa*
+id_ed25519*
+.envrc
 mcp_configs.json
 custom_providers.smoke.json
+secrets.json
+secrets.yaml
+*.secret
 
 # --- Python 环境与缓存 ---
 .venv/
@@ -49,6 +58,14 @@ Thumbs.db
 .ruff_cache/
 htmlcov/
 .coverage
+
+# --- 历史与备份（防 filter-repo / 手动 backup 误提）---
+*.gitbackup-*
+*.git-backup-*
+.git-rewrite/
+*-original/
+*.orig
+*.rej
 
 # --- 项目特定排除 (如日志或临时数据) ---
 logs/
