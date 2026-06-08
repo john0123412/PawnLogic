@@ -68,7 +68,7 @@ jobs:
     env:
       PAWNLOGIC_TEST_MODE: "true"
       MCP_ENABLED: "false"
-      PAWNLOGIC_HOME: ${{ runner.temp }}/pawnlogic-${{ matrix.python-version }}
+      PAWNLOGIC_HOME: /tmp/pawnlogic-ci-${{ matrix.python-version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -113,7 +113,7 @@ jobs:
     env:
       PAWNLOGIC_TEST_MODE: "true"
       MCP_ENABLED: "false"
-      PAWNLOGIC_HOME: ${{ runner.temp }}/pawnlogic-e2e
+      PAWNLOGIC_HOME: /tmp/pawnlogic-e2e
       DEEPSEEK_API_KEY: "sk-test-fake-key-for-ci"
       PAWN_API_KEY: "test-fake-key"
       ANTHROPIC_API_KEY: "sk-ant-test-fake"
