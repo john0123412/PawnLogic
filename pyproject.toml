@@ -42,6 +42,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "build>=1.0",
     "pytest>=8.0",
     "pytest-timeout>=2.0",
     "pexpect>=4.8; sys_platform != 'win32'",
