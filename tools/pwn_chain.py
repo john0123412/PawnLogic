@@ -1,8 +1,8 @@
 """
-tools/pwn_chain.py — CTF / Pwn 工具链
+tools/pwn_chain.py - CTF / Pwn toolchain.
   inspect_binary · pwn_rop · pwn_cyclic · pwn_disasm · pwn_libc · pwn_env
-  pwn_debug — GDB 批处理动态调试
-  pwn_one_gadget — one_gadget 一键 execve 跳板搜索
+  pwn_debug - GDB batch dynamic debugging
+  pwn_one_gadget - one_gadget execve trampoline search
 """
 
 import re, shlex, shutil, subprocess, tempfile, os
@@ -12,7 +12,7 @@ from config import scrub_sensitive_env
 from utils.ansi import c, YELLOW, MAGENTA, GRAY, GREEN, RED
 from tools.file_ops import _run, _check_read, _session_cwd, _get_shell_env
 
-# ── ELF 分析结果缓存（进程内，最多 10 条，按 (path, mtime) 键控） ──
+# ELF analysis cache, keyed by (path, mtime), capped at 10 entries.
 _ELF_CACHE: OrderedDict[tuple, dict] = OrderedDict()
 _ELF_CACHE_MAX = 10
 _ADDR_RANGE_RE = re.compile(r"^(?:0x[0-9a-fA-F]+|[0-9]+)(?::(?:0x[0-9a-fA-F]+|[0-9]+))?$")
@@ -23,7 +23,7 @@ def _q(value: str) -> str:
 
 
 def _cache_get(path: str, slot: str) -> str | None:
-    """命中返回缓存字符串，未命中返回 None。"""
+    """Return cached string on hit, otherwise None."""
     try:
         mtime = os.path.getmtime(path)
     except OSError:
@@ -31,13 +31,13 @@ def _cache_get(path: str, slot: str) -> str | None:
     key = (os.path.abspath(path), mtime)
     entry = _ELF_CACHE.get(key)
     if entry and slot in entry:
-        _ELF_CACHE.move_to_end(key)   # LRU 刷新
+        _ELF_CACHE.move_to_end(key)
         return entry[slot]
     return None
 
 
 def _cache_set(path: str, slot: str, value: str) -> None:
-    """写入缓存，超限时淘汰最旧条目。"""
+    """Write cache entry and evict the oldest item when over capacity."""
     try:
         mtime = os.path.getmtime(path)
     except OSError:
@@ -46,34 +46,34 @@ def _cache_set(path: str, slot: str, value: str) -> None:
     if key not in _ELF_CACHE:
         _ELF_CACHE[key] = {}
         if len(_ELF_CACHE) > _ELF_CACHE_MAX:
-            _ELF_CACHE.popitem(last=False)   # 淘汰最旧
+            _ELF_CACHE.popitem(last=False)
     _ELF_CACHE[key][slot] = value
     _ELF_CACHE.move_to_end(key)
 
 # ════════════════════════════════════════════════════════
-# pwn_env — 环境完整性检测
+# pwn_env: environment completeness check.
 # ════════════════════════════════════════════════════════
 
 PWN_TOOLS = {
-    "file":         ("file",        "基础格式识别",      "sudo apt install file"),
-    "checksec":     ("checksec",    "安全机制检查",      "sudo apt install checksec"),
-    "strings":      ("strings",     "字符串提取",        "sudo apt install binutils"),
-    "objdump":      ("objdump",     "反汇编",            "sudo apt install binutils"),
-    "readelf":      ("readelf",     "ELF 结构解析",      "sudo apt install binutils"),
-    "xxd":          ("xxd",         "十六进制查看",      "sudo apt install xxd"),
-    "gdb":          ("gdb",         "动态调试",          "sudo apt install gdb"),
-    "ROPgadget":    ("ROPgadget",   "ROP 链搜索",        "pip3 install ROPgadget"),
-    "ropper":       ("ropper",      "ROP 链搜索 (备)",   "pip3 install ropper"),
-    "one_gadget":   ("one_gadget",  "execve 跳板搜索",   "gem install one_gadget"),
-    "gcc":          ("gcc",         "C 编译器",          "sudo apt install gcc"),
-    "gcc-multilib": (None,          "32bit 编译支持",    "sudo apt install gcc-multilib"),
-    "g++":          ("g++",         "C++ 编译器",        "sudo apt install g++"),
+    "file":         ("file",        "basic file format identification", "sudo apt install file"),
+    "checksec":     ("checksec",    "binary security mitigation check", "sudo apt install checksec"),
+    "strings":      ("strings",     "string extraction",                "sudo apt install binutils"),
+    "objdump":      ("objdump",     "disassembly",                      "sudo apt install binutils"),
+    "readelf":      ("readelf",     "ELF structure parsing",            "sudo apt install binutils"),
+    "xxd":          ("xxd",         "hex view",                         "sudo apt install xxd"),
+    "gdb":          ("gdb",         "dynamic debugging",                "sudo apt install gdb"),
+    "ROPgadget":    ("ROPgadget",   "ROP gadget search",                "pip3 install ROPgadget"),
+    "ropper":       ("ropper",      "ROP gadget search fallback",       "pip3 install ropper"),
+    "one_gadget":   ("one_gadget",  "execve trampoline search",         "gem install one_gadget"),
+    "gcc":          ("gcc",         "C compiler",                       "sudo apt install gcc"),
+    "gcc-multilib": (None,          "32-bit compilation support",        "sudo apt install gcc-multilib"),
+    "g++":          ("g++",         "C++ compiler",                     "sudo apt install g++"),
     "python3":      ("python3",     "Python 3",          "sudo apt install python3"),
-    "pwntools":     (None,          "Pwn Python 库",     "无需全局安装，仅在 run_code(use_venv=true) 沙箱中可用"),
-    "patchelf":     ("patchelf",    "ELF 动态修改",      "sudo apt install patchelf"),
-    "strace":       ("strace",      "系统调用追踪",      "sudo apt install strace"),
-    "ltrace":       ("ltrace",      "库调用追踪",        "sudo apt install ltrace"),
-    "r2":           ("r2",          "Radare2 逆向框架",  "sudo apt install radare2"),
+    "pwntools":     (None,          "Pwn Python library", "No global install required; available in run_code(use_venv=true) sandbox"),
+    "patchelf":     ("patchelf",    "ELF patching",       "sudo apt install patchelf"),
+    "strace":       ("strace",      "syscall tracing",    "sudo apt install strace"),
+    "ltrace":       ("ltrace",      "library call tracing", "sudo apt install ltrace"),
+    "r2":           ("r2",          "Radare2 reverse engineering framework", "sudo apt install radare2"),
     "node":         ("node",        "JavaScript",        "sudo apt install nodejs"),
 }
 
@@ -103,10 +103,10 @@ def tool_pwn_env(a: dict) -> str:
         lines.append(f"  {status} {name:18} {c(GRAY, desc)}")
         (present if avail else missing).append((name, hint))
 
-    summary = [c(MAGENTA, "\n  === Pwn 环境检测 ==="), "\n".join(lines), ""]
-    summary.append(c(GREEN, f"  已安装: {len(present)} / {len(PWN_TOOLS)}"))
+    summary = [c(MAGENTA, "\n  === Pwn environment check ==="), "\n".join(lines), ""]
+    summary.append(c(GREEN, f"  Installed: {len(present)} / {len(PWN_TOOLS)}"))
     if missing:
-        summary.append(c(RED, f"  缺失 ({len(missing)} 项):"))
+        summary.append(c(RED, f"  Missing ({len(missing)} items):"))
         for name, hint in missing:
             summary.append(c(GRAY, f"    [{name}]  {hint}"))
     return "\n".join(summary)
@@ -124,25 +124,25 @@ def tool_inspect_binary(a: dict) -> str:
     path = a["path"]; grep = a.get("strings_grep", "")
     ok, reason = _check_read(path)
     if not ok: return reason
-    if not Path(path).expanduser().exists(): return f"ERROR: 不存在: {path}"
+    if not Path(path).expanduser().exists(): return f"ERROR: path does not exist: {path}"
 
-    # ── 🚨 物理拦截：严禁对文本源码文件使用二进制分析工具 ──────────
+    # Hard block: do not run binary analysis tools on source/text files.
     _suffix = Path(path).suffix.lower()
     if _suffix in _TEXT_EXTENSIONS:
         return (
-            f"🚨 [HARD BLOCK] inspect_binary 拒绝处理文本文件！\n"
-            f"  文件: {path}  (检测到文本扩展名: '{_suffix}')\n\n"
-            f"  ❌ 错误原因: inspect_binary 是二进制分析工具（file/checksec/hexdump/readelf），\n"
-            f"     对源码文本文件执行这些命令毫无意义，属于严重的工具误用。\n\n"
-            f"  ✅ 正确做法（根据你的实际需求选择）：\n"
-            f"     · 阅读源码内容  → read_file(path='{path}')\n"
-            f"     · 搜索函数/符号 → run_shell('grep -n <关键词> {path}')\n"
-            f"     · 搜索全项目引用→ run_shell('grep -rn <关键词> .')\n"
-            f"     · 查找相关文件  → find_files('<pattern>')\n\n"
-            f"  📌 记住：inspect_binary 只能用于 ELF / PE / so / o 等真正的二进制文件！"
+            f"[HARD BLOCK] inspect_binary refuses to process text/source files.\n"
+            f"  File: {path}  (detected text extension: '{_suffix}')\n\n"
+            f"  Reason: inspect_binary is a binary-analysis tool (file/checksec/hexdump/readelf).\n"
+            f"  Running these tools on source files is meaningless and is considered tool misuse.\n\n"
+            f"  Correct alternatives:\n"
+            f"  - Read source content: read_file(path='{path}')\n"
+            f"  - Search functions/symbols: run_shell('grep -n <keyword> {path}')\n"
+            f"  - Search project references: run_shell('grep -rn <keyword> .')\n"
+            f"  - Find related files: find_files('<pattern>')\n\n"
+            f"  inspect_binary is only for real binaries such as ELF / PE / so / o files."
         )
 
-    # ── 缓存命中 ──────────────────────────────────────────
+    # Cache hit.
     cache_slot = f"inspect:{grep}"
     cached = _cache_get(path, cache_slot)
     if cached is not None:
@@ -156,13 +156,13 @@ def tool_inspect_binary(a: dict) -> str:
         res.append("\n=== checksec ===");  res.append(cs.strip())
     grep_pipe = f" | grep -i {_q(grep)}" if grep else " | head -60"
     res.append("\n=== strings ===");       res.append(_run(f"strings {q_path}{grep_pipe}").strip())
-    res.append("\n=== hexdump (前128B) ==="); res.append(_run(f"xxd {q_path} | head -8").strip())
+    res.append("\n=== hexdump (first 128B) ==="); res.append(_run(f"xxd {q_path} | head -8").strip())
     res.append("\n=== readelf -S ===");    res.append(_run(f"readelf -S {q_path} 2>/dev/null | head -30").strip())
     res.append("\n=== ldd ===");           res.append(_run(f"ldd {q_path} 2>/dev/null").strip())
     result = "\n".join(res)
     _cache_set(path, cache_slot, result)
 
-    # ★ 自动写入 .pawn_state.md（若存在于工作目录）
+    # Auto-append a short summary to .pawn_state.md when it exists in cwd.
     try:
         from tools.file_ops import _session_cwd
         _state_path = Path(_session_cwd[0]) / ".pawn_state.md"
@@ -172,7 +172,7 @@ def tool_inspect_binary(a: dict) -> str:
             with open(_state_path, "a", encoding="utf-8") as _sf:
                 _sf.write(_header + _body)
     except Exception:
-        pass  # 非关键路径，静默降级
+        pass
 
     return result
 
@@ -185,7 +185,7 @@ def tool_pwn_rop(a: dict) -> str:
     ok, reason = _check_read(path)
     if not ok: return reason
 
-    # ── 缓存命中 ──────────────────────────────────────────
+    # Cache hit.
     cache_slot = f"rop:{grep}:{depth}"
     cached = _cache_get(path, cache_slot)
     if cached is not None:
@@ -199,7 +199,7 @@ def tool_pwn_rop(a: dict) -> str:
         cmd = f"ropper --file {q_path}"
         if grep: cmd += f" --search {_q(grep)}"
     else:
-        return ("ROPgadget / ropper 均未安装。\n"
+        return ("Neither ROPgadget nor ropper is installed.\n"
                 "  pip3 install ROPgadget\n  pip3 install ropper")
     print(c(MAGENTA, f"  🔗 {cmd[:80]}"))
     result = _run(cmd, timeout=90)
@@ -207,7 +207,7 @@ def tool_pwn_rop(a: dict) -> str:
     return result
 
 # ════════════════════════════════════════════════════════
-# pwn_cyclic — 内置 de Bruijn
+# pwn_cyclic: built-in de Bruijn pattern.
 # ════════════════════════════════════════════════════════
 
 def tool_pwn_cyclic(a: dict) -> str:
@@ -241,14 +241,14 @@ def tool_pwn_cyclic(a: dict) -> str:
         big = b""
         while len(big) < 8192: big += pat
         for i in range(len(big)-k+1):
-            if big[i:i+k] == raw:      return f"偏移 (小端): {i}  (hex: {raw.hex()})"
-            if big[i:i+k] == raw[::-1]: return f"偏移 (大端): {i}"
-        return f"'{val_str}' 未找到，请检查格式（0x61616161 或 aaab）。"
+            if big[i:i+k] == raw:      return f"Offset (little-endian): {i}  (hex: {raw.hex()})"
+            if big[i:i+k] == raw[::-1]: return f"Offset (big-endian): {i}"
+        return f"'{val_str}' not found. Check format, e.g. 0x61616161 or aaab."
 
     if action == "gen":   return f"Cyclic ({a.get('length',200)} bytes):\n{gen(int(a.get('length',200)))}"
     if action == "find":
         val = a.get("value","")
-        if not val: return "ERROR: find 需要 'value'"
+        if not val: return "ERROR: find requires 'value'"
         return find(val)
     return "ERROR: action = gen | find"
 
@@ -269,7 +269,7 @@ def tool_pwn_disasm(a: dict) -> str:
         return f"=== nm ===\n{nm.strip()}\n\n=== disasm ===\n{asm}"
     if addr:
         if not _ADDR_RANGE_RE.match(addr):
-            return "ERROR: address 必须是 0xADDR 或 0xSTART:0xEND"
+            return "ERROR: address must be 0xADDR or 0xSTART:0xEND"
         pts = addr.split(":")
         cmd = (
             f"objdump -d -M intel --start-address={pts[0]} --stop-address={pts[1]} {q_path}"
@@ -302,21 +302,20 @@ def tool_pwn_libc(a: dict) -> str:
     return "ERROR: action = detect | symbols"
 
 # ════════════════════════════════════════════════════════
-# pwn_debug — GDB 批处理动态调试（1.9.0 NEW）
+# pwn_debug: GDB batch dynamic debugging.
 # ════════════════════════════════════════════════════════
 
 def tool_pwn_debug(a: dict) -> str:
     """
-    用 GDB -batch 模式动态调试二进制。
-    参数：
-      path        — 目标程序路径（必须）
-      breakpoints — 断点地址列表，如 ["0x40068e", "main"]（可选）
-      input_data  — 直接传给 stdin 的字节串，如 "AAAA...\\x00"（可选）
-      input_file  — stdin 重定向文件路径（与 input_data 二选一）
-      commands    — 断点触发后执行的 GDB 命令列表（可选）
-                    默认: ["info registers", "x/20wx $rsp", "backtrace"]
-      timeout     — 超时秒数（默认30）
-      use_pwndbg  — True 时尝试用 pwndbg 扩展（若已安装）
+    Dynamically debug a binary with GDB -batch.
+    Args:
+      path: target program path (required)
+      breakpoints: breakpoint list, e.g. ["0x40068e", "main"]
+      input_data: bytes-like stdin string, e.g. "AAAA...\\x00"
+      input_file: stdin redirect file path; mutually exclusive with input_data
+      commands: GDB commands to run after breakpoint
+      timeout: timeout seconds (default 30)
+      use_pwndbg: try loading pwndbg when true
     """
     path        = a["path"]
     breakpoints = a.get("breakpoints", [])
@@ -330,11 +329,11 @@ def tool_pwn_debug(a: dict) -> str:
     ok, reason = _check_read(path)
     if not ok: return reason
     if not Path(path).expanduser().exists():
-        return f"ERROR: 文件不存在: {path}"
+        return f"ERROR: file does not exist: {path}"
     if not shutil.which("gdb"):
-        return "ERROR: gdb 未安装。\n  sudo apt install gdb"
+        return "ERROR: gdb is not installed.\n  sudo apt install gdb"
 
-    # ── 交互式模式：委托给 tool_run_interactive ────────────
+    # Interactive mode delegates to tool_run_interactive.
     if interactive_mode:
         from tools.file_ops import tool_run_interactive
         bp_cmds = []
@@ -352,31 +351,31 @@ def tool_pwn_debug(a: dict) -> str:
             "timeout": timeout,
         })
 
-    # ── 构建 GDB 脚本 ──────────────────────────────────
+    # Build GDB script.
     script_lines = ["set pagination off", "set confirm off", "set debuginfod enabled off"]
 
-    # pwndbg 支持
+    # pwndbg support.
     if use_pwndbg:
         pwndbg_init = os.path.expanduser("~/.gdbinit.pwndbg")
         gdbinit     = os.path.expanduser("~/.gdbinit")
         if os.path.exists(pwndbg_init):
             script_lines.insert(0, f"source {pwndbg_init}")
         elif os.path.exists(gdbinit):
-            pass  # 系统 gdbinit 可能已加载 pwndbg
+            pass
 
-    # 设置断点
+    # Set breakpoints.
     for bp in breakpoints:
         if bp.startswith("0x") or bp.isdigit():
             script_lines.append(f"b *{bp}")
         else:
             script_lines.append(f"b {bp}")
 
-    # 写入 input_data 到临时文件
+    # Write input_data to a temporary file.
     tmp_input = None
     if input_data and not input_file:
         tmp = tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".input",
                                           prefix="pawn_gdb_")
-        # 支持 \x?? 转义
+        # Support \x?? escapes.
         try:
             raw_bytes = bytes(input_data, "utf-8").decode("unicode_escape").encode("latin-1")
         except Exception:
@@ -385,17 +384,17 @@ def tool_pwn_debug(a: dict) -> str:
         tmp_input  = tmp.name
         input_file = tmp_input
 
-    # run 命令
+    # run command.
     if input_file:
         script_lines.append(f"run < '{input_file}'")
     else:
         script_lines.append("run")
 
-    # 调试命令（断点后）
+    # Debug commands after breakpoint.
     script_lines.extend(commands)
     script_lines.append("quit")
 
-    # ── 写 GDB 脚本文件 ────────────────────────────────
+    # Write GDB script file.
     with tempfile.NamedTemporaryFile(mode="w", delete=False,
                                      suffix=".gdb", prefix="pawn_gdb_") as f:
         f.write("\n".join(script_lines) + "\n")
@@ -404,8 +403,8 @@ def tool_pwn_debug(a: dict) -> str:
     gdb_opts = "" if use_pwndbg else "-nx "
     q_path = _q(path)
     q_script_path = _q(script_path)
-    print(c(MAGENTA, f"  🐛 gdb {gdb_opts}-batch -x {q_script_path} {q_path}"))
-    print(c(GRAY, f"  断点: {breakpoints}  命令: {commands}"))
+    print(c(MAGENTA, f"  gdb {gdb_opts}-batch -x {q_script_path} {q_path}"))
+    print(c(GRAY, f"  Breakpoints: {breakpoints}  Commands: {commands}"))
 
     try:
         cmd = f"gdb {gdb_opts}-batch -x {q_script_path} {q_path} 2>&1"
@@ -417,19 +416,19 @@ def tool_pwn_debug(a: dict) -> str:
             try: os.unlink(tmp_input)
             except Exception: pass
 
-    # ★ 检测 SIGSEGV → 自动追加 bt full 获取完整回溯（含局部变量）
+    # If a fatal signal appears, auto-run bt full for a complete backtrace.
     if re.search(r"SIGSEGV|SIGABRT|SIGBUS", result):
         _bt_script = script_path + ".bt"
         try:
-            _bt_cmds = list(script_lines[:-2])  # 去掉原 commands + quit
+            _bt_cmds = list(script_lines[:-2])
             _bt_cmds.extend(["bt full", "quit"])
             with open(_bt_script, "w") as _bf:
                 _bf.write("\n".join(_bt_cmds) + "\n")
             _bt_cmd = f"gdb {gdb_opts}-batch -x {_q(_bt_script)} {q_path} 2>&1"
             if input_file:
-                pass  # input_file 已在脚本中通过 run < 指定
+                pass
             _bt_out = _run(_bt_cmd, timeout=timeout, cwd=_session_cwd[0])
-            # 提取 bt full 输出部分
+            # Append bt full output.
             if "bt full" in _bt_out.lower() or "#0" in _bt_out:
                 result += "\n\n=== bt full (auto-triggered by signal) ===\n" + _bt_out
         except Exception:
@@ -438,7 +437,7 @@ def tool_pwn_debug(a: dict) -> str:
             try: os.unlink(_bt_script)
             except Exception: pass
 
-    # ── 关键信息高亮提取 ──────────────────────────────
+    # Extract highlighted key information.
     highlights = []
     for line in result.splitlines():
         low = line.lower()
@@ -451,32 +450,24 @@ def tool_pwn_debug(a: dict) -> str:
 
     out = f"=== GDB Batch Output ===\n{result}"
     if summary:
-        out += f"\n\n=== 关键信息摘要 ===\n{summary}"
+        out += f"\n\n=== Key information summary ===\n{summary}"
     return out
 
 # ════════════════════════════════════════════════════════
-# pwn_one_gadget — execve 跳板一键搜索
+# pwn_one_gadget: one-shot execve trampoline search.
 # ════════════════════════════════════════════════════════
 
 def tool_pwn_one_gadget(a: dict) -> str:
     """
-    调用系统 one_gadget 工具在 libc 中搜索可直接 get-shell 的 execve 跳板地址。
+    Call system one_gadget to search libc for execve gadgets.
 
-    参数：
-      libc_path    — libc.so 路径（必须），如 '/lib/x86_64-linux-gnu/libc.so.6'
-      buildid      — （可选）通过 Build ID 查询（需联网或本地数据库）
-      level        — 搜索深度 0-3（默认 0），数字越大候选越多但约束越宽松
-      only_near    — （可选）仅输出约束接近 null 的候选（传 true 启用 --near 模式）
+    Args:
+      libc_path: libc.so path, e.g. '/lib/x86_64-linux-gnu/libc.so.6'
+      buildid: optional Build ID lookup when supported
+      level: search depth 0-3; higher gives more candidates with looser constraints
+      only_near: output only candidates near null constraints via --near mode
 
-    返回：
-      one_gadget 输出，包含每个候选地址及其寄存器/内存约束。
-      配合 pwn_libc(action='detect') 获取 libc 版本以便核验。
-
-    使用建议：
-      1. 先 inspect_binary → 确认 NX enabled + PIE disabled（或已知 base）
-      2. 先 pwn_libc(detect) → 确认 libc 路径
-      3. pwn_one_gadget(libc_path) → 获取候选地址
-      4. 在 exploit 中逐一尝试（one_gadget 约束必须满足才能成功）
+    Use pwn_libc(action='detect') first to confirm libc path/version.
     """
     libc_path = a.get("libc_path", "").strip()
     level     = int(a.get("level", 0))
@@ -484,38 +475,38 @@ def tool_pwn_one_gadget(a: dict) -> str:
 
     if not libc_path:
         return (
-            "ERROR: 缺少 'libc_path' 参数。\n"
-            "示例: pwn_one_gadget({'libc_path': '/lib/x86_64-linux-gnu/libc.so.6'})\n"
-            "可先用 pwn_libc({'path': '<binary>', 'action': 'detect'}) 确认 libc 路径。"
+            "ERROR: missing 'libc_path' parameter.\n"
+            "Example: pwn_one_gadget({'libc_path': '/lib/x86_64-linux-gnu/libc.so.6'})\n"
+            "You can first use pwn_libc({'path': '<binary>', 'action': 'detect'}) to confirm libc path."
         )
 
     if not shutil.which("one_gadget"):
         return (
-            "ERROR: one_gadget 未安装。\n"
-            "安装方法:\n"
+            "ERROR: one_gadget is not installed.\n"
+            "Install:\n"
             "  gem install one_gadget\n"
-            "  # 若无 ruby: sudo apt install ruby && gem install one_gadget\n\n"
-            "one_gadget 用于在 libc 中找到满足条件即可直接 execve('/bin/sh') 的 gadget 地址，\n"
-            "通常在 ret2libc / FSOP 场景中用于替代手动构造 ROP 链。"
+            "  # without ruby: sudo apt install ruby && gem install one_gadget\n\n"
+            "one_gadget finds libc gadget offsets that can directly execve('/bin/sh') when constraints are met. "
+            "It is commonly used in ret2libc / FSOP instead of building a manual ROP chain."
         )
 
     ok, reason = _check_read(libc_path)
     if not ok: return reason
     if not Path(libc_path).expanduser().exists():
-        return f"ERROR: libc 文件不存在: {libc_path}"
+        return f"ERROR: libc file does not exist: {libc_path}"
 
-    # 构建命令
+    # Build command.
     cmd = f"one_gadget {_q(libc_path)}"
     if level > 0:
         cmd += f" --level {level}"
     if only_near:
-        cmd += " --near 0"   # 约束接近 null：更容易满足
+        cmd += " --near 0"
 
     print(c(MAGENTA, f"  💊 {cmd}"))
 
     raw = _run(cmd, timeout=30, cwd=_session_cwd[0])
 
-    # ── 简单高亮解析：提取地址 ────────────────────────
+    # Highlight address lines.
     gadget_lines = []
     for line in raw.splitlines():
         if re.match(r'\s*0x[0-9a-fA-F]+', line):
@@ -524,8 +515,8 @@ def tool_pwn_one_gadget(a: dict) -> str:
             gadget_lines.append(line)
 
     header = (
-        f"[one_gadget — {Path(libc_path).name}  level={level}]\n"
-        f"注意：地址为 libc 内偏移（需加 libc base），只有约束满足时才可用。\n"
+        f"[one_gadget - {Path(libc_path).name}  level={level}]\n"
+        f"Note: addresses are libc offsets and require adding libc base; usable only when constraints are satisfied.\n"
         f"{'─'*60}\n"
     )
     return header + "\n".join(gadget_lines)
@@ -537,16 +528,16 @@ def tool_pwn_one_gadget(a: dict) -> str:
 PWN_SCHEMAS = [
     {"type":"function","function":{
         "name":"pwn_env",
-        "description":"检测 CTF/Pwn 工具链完整性（含 one_gadget），给出安装建议。首次使用时调用。",
+        "description":"Check CTF/Pwn toolchain completeness, including one_gadget, and provide install hints. Call this first.",
         "parameters":{"type":"object","properties":{},"required":[]}}},
 
     {"type":"function","function":{
         "name":"inspect_binary",
         "description":(
-            "对二进制运行 file/checksec/strings/hexdump/readelf/ldd。\n"
-            "🚨 严禁：绝对不要对源码文件（.c .cpp .py .js .sh .md .txt 等文本文件）使用此工具！"
-            "源码请用 grep 或 read_file。此工具仅对 ELF/PE/so/o 等真正的二进制文件有意义，"
-            "对文本文件调用将被系统硬性拦截并返回错误。"
+            "Run file/checksec/strings/hexdump/readelf/ldd on a binary.\n"
+            "Never use this tool on source/text files (.c .cpp .py .js .sh .md .txt, etc.). "
+            "Use grep or read_file for source. This tool is meaningful only for real ELF/PE/so/o binaries, "
+            "and text-file calls are hard-blocked."
         ),
         "parameters":{"type":"object","properties":{
             "path":{"type":"string"},
@@ -555,34 +546,34 @@ PWN_SCHEMAS = [
 
     {"type":"function","function":{
         "name":"pwn_rop",
-        "description":"用 ROPgadget/ropper 搜索 ROP gadget。",
+        "description":"Search ROP gadgets with ROPgadget or ropper.",
         "parameters":{"type":"object","properties":{
             "path":{"type":"string"},
-            "grep":{"type":"string","description":"过滤词，如 'pop rdi'"},
+            "grep":{"type":"string","description":"Filter string, e.g. 'pop rdi'."},
             "depth":{"type":"integer"}},
         "required":["path"]}}},
 
     {"type":"function","function":{
         "name":"pwn_cyclic",
-        "description":"生成/查找 cyclic 偏移模式（内置 de Bruijn，无需 pwntools）。",
+        "description":"Generate or find cyclic pattern offsets using built-in de Bruijn logic; pwntools not required.",
         "parameters":{"type":"object","properties":{
             "action":{"type":"string","enum":["gen","find"]},
             "length":{"type":"integer"},
-            "value": {"type":"string","description":"如 '0x61616161' 或 'aaab'"}},
+            "value": {"type":"string","description":"Example: '0x61616161' or 'aaab'."}},
         "required":["action"]}}},
 
     {"type":"function","function":{
         "name":"pwn_disasm",
-        "description":"objdump 反汇编：按函数名或地址范围。",
+        "description":"Disassemble with objdump by function name or address range.",
         "parameters":{"type":"object","properties":{
             "path":{"type":"string"},
             "function":{"type":"string"},
-            "address": {"type":"string","description":"如 '0x401234:0x401280'"}},
+            "address": {"type":"string","description":"Example: '0x401234:0x401280'."}},
         "required":["path"]}}},
 
     {"type":"function","function":{
         "name":"pwn_libc",
-        "description":"检测 libc 版本或列出关键符号偏移。",
+        "description":"Detect libc version or list key symbol offsets.",
         "parameters":{"type":"object","properties":{
             "path":{"type":"string"},
             "action":{"type":"string","enum":["detect","symbols"]}},
@@ -591,99 +582,97 @@ PWN_SCHEMAS = [
     {"type":"function","function":{
         "name":"pwn_debug",
         "description":(
-            "GDB 批处理动态调试。设置断点，喂入输入，输出寄存器/栈/回溯。\n"
-            "input_data 支持 \\x?? 转义（如 'AAAA\\x00\\x00'）。\n"
-            "commands 默认: ['info registers', 'x/20wx $rsp', 'backtrace 5']。"
+            "GDB batch dynamic debugging. Set breakpoints, feed input, and output registers/stack/backtrace.\n"
+            "input_data supports \\x?? escapes, e.g. 'AAAA\\x00\\x00'.\n"
+            "Default commands: ['info registers', 'x/20wx $rsp', 'backtrace 5']."
         ),
         "parameters":{"type":"object","properties":{
-            "path":        {"type":"string","description":"目标程序路径"},
+            "path":        {"type":"string","description":"Target program path."},
             "breakpoints": {"type":"array","items":{"type":"string"},
-                            "description":"断点列表，如 ['0x40068e','main']"},
-            "input_data":  {"type":"string","description":"stdin 输入（支持 \\x??）"},
-            "input_file":  {"type":"string","description":"stdin 重定向文件路径"},
+                            "description":"Breakpoint list, e.g. ['0x40068e','main']."},
+            "input_data":  {"type":"string","description":"stdin input; supports \\x?? escapes."},
+            "input_file":  {"type":"string","description":"stdin redirect file path."},
             "commands":    {"type":"array","items":{"type":"string"},
-                            "description":"断点后执行的 GDB 命令"},
+                            "description":"GDB commands to run after breakpoints."},
             "timeout":     {"type":"integer"},
-            "use_pwndbg":  {"type":"boolean","description":"是否尝试加载 pwndbg 扩展"}},
+            "use_pwndbg":  {"type":"boolean","description":"Try loading the pwndbg extension."}},
         "required":["path"]}}},
 
     {"type":"function","function":{
         "name":"pwn_one_gadget",
         "description":(
-            "在 libc 中搜索 execve('/bin/sh') 单跳 gadget 地址（one_gadget 工具封装）。\n"
-            "适用场景：已知 libc base（ret2libc / FSOP），需要一个满足约束即可 get-shell 的跳板。\n"
-            "使用前提：inspect_binary 确认 NX enabled；pwn_libc detect 确认 libc 路径。\n"
-            "RULE: 若 checksec 显示 'NX enabled'，禁止向栈注入 shellcode，改用本工具。"
+            "Search libc for one-shot execve('/bin/sh') gadget offsets through one_gadget.\n"
+            "Use when libc base is known (ret2libc / FSOP) and a constraint-satisfying get-shell trampoline is needed.\n"
+            "Prerequisites: inspect_binary confirms NX enabled; pwn_libc detect confirms libc path.\n"
+            "RULE: when checksec shows NX enabled, do not inject shellcode on the stack; use this tool instead."
         ),
         "parameters":{"type":"object","properties":{
-            "libc_path": {"type":"string","description":"libc.so 文件路径"},
+            "libc_path": {"type":"string","description":"libc.so file path."},
             "level":     {"type":"integer",
-                          "description":"搜索深度 0-3（默认 0），越大候选越多但约束越松"},
-            "only_near": {"type":"boolean","description":"仅输出约束接近 null 的候选"},
+                          "description":"Search depth 0-3 (default 0); higher yields more candidates with looser constraints."},
+            "only_near": {"type":"boolean","description":"Output only candidates whose constraints are near null."},
         },"required":["libc_path"]}}},
 
-    # ── P1: pwn_timed_debug — 倒计时感知的交互式调试 ──────
+    # P1: pwn_timed_debug - countdown-aware interactive debugging.
     {"type":"function","function":{
         "name":"pwn_timed_debug",
         "description":(
-            "带倒计时感知的交互式动态调试。适用于 CTF 动态靶机（有时间限制）。\n"
-            "内部封装 run_interactive，自动管控超时并返回已收集的结果。\n"
-            "适用场景：连接远程靶机 nc host port，发送 exploit，读取 flag。\n"
-            "当 time_limit_sec 到期时自动终止并返回已收集的所有输出。"
+            "Countdown-aware interactive dynamic debugging for time-limited CTF targets.\n"
+            "Wraps run_interactive-style behavior, controls timeout, and returns collected output.\n"
+            "Use for connecting to remote targets, sending exploits, and reading flags.\n"
+            "When time_limit_sec expires, it terminates automatically and returns all collected output."
         ),
         "parameters":{"type":"object","properties":{
-            "command":       {"type":"string","description":"Shell 命令，如 'nc target.ctf.site 1337'"},
+            "command":       {"type":"string","description":"Shell command, e.g. 'nc target.ctf.site 1337'."},
             "inputs":        {"type":"array","items":{"type":"string"},
-                              "description":"有序输入列表。'SLEEP:N' = 等待 N 秒"},
-            "time_limit_sec":{"type":"integer","description":"总时间上限秒数（默认 60）"},
-            "poll_interval": {"type":"number","description":"每次发送后等待响应的秒数（默认 0.5）"},
+                              "description":"Ordered input list. 'SLEEP:N' waits N seconds."},
+            "time_limit_sec":{"type":"integer","description":"Total time limit seconds (default 60)."},
+            "poll_interval": {"type":"number","description":"Seconds to wait for response after each send (default 0.5)."},
         },"required":["command"]}}},
 ]
 
 
 # ════════════════════════════════════════════════════════
-# P1: pwn_timed_debug — 倒计时感知的交互式调试
+# P1: pwn_timed_debug - countdown-aware interactive debugging.
 #
-# 全阶段可用（RECON / VULN_DEV / EXPLOIT / GENERAL）。
-# 不使用装饰器——通过 TOOL_MAP 手动注册 + AGENT_PHASES 白名单暴露。
+# Available in all phases (RECON / VULN_DEV / EXPLOIT / GENERAL).
+# Registered manually through TOOL_MAP + AGENT_PHASES allowlist.
 # ════════════════════════════════════════════════════════
 
 def tool_pwn_timed_debug(a: dict) -> str:
     """
-    带倒计时感知的交互式动态调试工具。
+    Countdown-aware interactive dynamic debugging tool.
 
-    适用场景：
-      · CTF 动态靶机（有倒计时限制的 nc 交互）
-      · 需要在限定时间内完成 exploit 发送并收集 flag
-      · 自动化 Pwn 验证流水线
+    Use cases:
+      - CTF dynamic targets with countdown-limited nc interactions.
+      - Sending an exploit and collecting a flag within a fixed time window.
+      - Automated Pwn verification pipelines.
 
-    与 pwn_debug 的区别：
-      · pwn_debug    — GDB 批处理，本地二进制静态/动态分析
-      · pwn_timed_debug — 网络交互，连接远程靶机，带倒计时管控
+    Difference from pwn_debug:
+      - pwn_debug: GDB batch mode for local binary analysis.
+      - pwn_timed_debug: network/process interaction with deadline control.
 
-    与 run_interactive 的区别：
-      · run_interactive   — 通用交互式进程，无倒计时意识
-      · pwn_timed_debug   — 专为 CTF 设计，deadline 到期自动终止并返回部分结果
+    Difference from run_interactive:
+      - run_interactive: generic interactive process, no countdown awareness.
+      - pwn_timed_debug: CTF-oriented, terminates at deadline and returns partial results.
 
     Parameters
     ----------
     command : str
-        Shell 命令，如 'nc target.ctf.site 1337' 或 './exploit.py'
+        Shell command, e.g. 'nc target.ctf.site 1337' or './exploit.py'.
     inputs : list[str]
-        有序输入列表。每项是一个字符串，将在收到响应后依次发送。
-        特殊指令 'SLEEP:N' 表示等待 N 秒（如 'SLEEP:0.5'）。
-        示例: ["1\\n", "SLEEP:0.5", "payload\\n", "cat /flag\\n"]
+        Ordered input list. Each item is sent after collecting a response.
+        Special instruction 'SLEEP:N' waits N seconds, e.g. 'SLEEP:0.5'.
+        Example: ["1\\n", "SLEEP:0.5", "payload\\n", "cat /flag\\n"]
     time_limit_sec : int
-        总时间上限（秒），默认 60。到期后自动终止进程并返回已收集的输出。
+        Total time limit in seconds, default 60. Terminates at deadline and returns collected output.
     poll_interval : float
-        每次发送输入后等待响应的秒数，默认 0.5。
+        Seconds to wait for response after each send, default 0.5.
 
     Returns
     -------
     str
-        格式化输出，包含：
-        · 状态头（正常结束 / 倒计时终止 + 耗时统计）
-        · 进程的全部 stdout/stderr 输出
+        Formatted output containing a status header and collected stdout/stderr.
 
     Examples
     --------
@@ -703,23 +692,23 @@ def tool_pwn_timed_debug(a: dict) -> str:
     poll_interval: float  = float(a.get("poll_interval", 0.5))
 
     if not command:
-        return "ERROR: 'command' 参数不能为空。示例: 'nc target.ctf.site 1337'"
+        return "ERROR: 'command' parameter is required. Example: 'nc target.ctf.site 1337'"
 
-    # ── 安全检查 ──────────────────────────────────────────
+    # Security checks.
     from tools.file_ops import DANGEROUS_PATTERNS, _session_cwd
     for pat in DANGEROUS_PATTERNS:
         if _re.search(pat, command):
-            return f"SECURITY BLOCK: 危险命令模式 '{pat}'"
+            return f"SECURITY BLOCK: dangerous command pattern '{pat}'"
 
-    print(c(MAGENTA, f"  ⏱  [timed-debug] $ {command[:100]}"))
-    print(c(GRAY,    f"  时间上限: {time_limit_sec}s  输入数: {len(inputs)}  轮询: {poll_interval}s"))
+    print(c(MAGENTA, f"  [timed-debug] $ {command[:100]}"))
+    print(c(GRAY,    f"  Time limit: {time_limit_sec}s  Inputs: {len(inputs)}  Poll interval: {poll_interval}s"))
 
     output_chunks: list[str] = []
     deadline   = _time.time() + time_limit_sec
     timed_out  = False
     start_time = _time.time()
 
-    # ── 启动子进程 ────────────────────────────────────────
+    # Start subprocess.
     try:
         proc = subprocess.Popen(
             command, shell=True,
@@ -731,11 +720,11 @@ def tool_pwn_timed_debug(a: dict) -> str:
             env=_get_shell_env(),
         )
     except FileNotFoundError:
-        return f"ERROR: 命令不存在: {command.split()[0]}"
+        return f"ERROR: command not found: {command.split()[0]}"
     except Exception as e:
-        return f"ERROR: 启动进程失败: {type(e).__name__}: {e}"
+        return f"ERROR: failed to start process: {type(e).__name__}: {e}"
 
-    # ── 后台 stdout 读取线程 ──────────────────────────────
+    # Background stdout reader thread.
     output_q: queue.Queue[str] = queue.Queue()
 
     def _reader() -> None:
@@ -751,7 +740,7 @@ def tool_pwn_timed_debug(a: dict) -> str:
     threading.Thread(target=_reader, daemon=True).start()
 
     def _drain(wait: float = 0.3) -> str:
-        """等待 wait 秒后收集所有可用输出。"""
+        """Wait for wait seconds, then collect all available output."""
         _time.sleep(wait)
         parts: list[str] = []
         while not output_q.empty():
@@ -761,13 +750,13 @@ def tool_pwn_timed_debug(a: dict) -> str:
                 break
         return "".join(parts)
 
-    # ── 主交互循环 ────────────────────────────────────────
+    # Main interaction loop.
     try:
-        # 收集初始 banner / 提示符
+        # Collect initial banner / prompt.
         output_chunks.append(_drain(0.6))
 
         for inp in inputs:
-            # 每次操作前检查倒计时
+            # Check deadline before each operation.
             remaining = deadline - _time.time()
             if remaining <= 0:
                 output_chunks.append(
@@ -776,18 +765,18 @@ def tool_pwn_timed_debug(a: dict) -> str:
                 timed_out = True
                 break
 
-            # 处理 SLEEP 指令
+            # Handle SLEEP instruction.
             if isinstance(inp, str) and inp.upper().startswith("SLEEP:"):
                 try:
                     sleep_sec = float(inp.split(":", 1)[1])
-                    # 确保 sleep 不超过剩余时间
+                    # Do not sleep beyond the remaining deadline.
                     _time.sleep(min(sleep_sec, max(0, remaining)))
                 except (ValueError, IndexError):
                     pass
                 output_chunks.append(_drain(0.1))
                 continue
 
-            # 发送输入
+            # Send input.
             data = inp.encode() if isinstance(inp, str) else inp
             try:
                 proc.stdin.write(data)
@@ -798,7 +787,7 @@ def tool_pwn_timed_debug(a: dict) -> str:
 
             output_chunks.append(_drain(poll_interval))
 
-        # 最终收集 + 优雅退出
+        # Final drain and graceful exit.
         if not timed_out:
             try:
                 proc.wait(timeout=2)
@@ -814,19 +803,19 @@ def tool_pwn_timed_debug(a: dict) -> str:
         except Exception:
             pass
 
-    # ── 格式化输出 ────────────────────────────────────────
+    # Format output.
     full = "".join(output_chunks)
 
     from config import DYNAMIC_CONFIG
     limit = DYNAMIC_CONFIG["tool_max_chars"]
     if len(full) > limit:
         half = limit // 2
-        full = full[:half] + f"\n...[截断至 {limit} 字符]...\n" + full[-half // 4:]
+        full = full[:half] + f"\n...[truncated to {limit} chars]...\n" + full[-half // 4:]
 
     elapsed = min(time_limit_sec, int(_time.time() - start_time))
-    status  = "⏰ 倒计时终止（部分结果）" if timed_out else "✓ 正常结束"
+    status  = "time limit reached (partial results)" if timed_out else "completed normally"
     header  = (
-        f"[pwn_timed_debug — {status} | 耗时: {elapsed}s / {time_limit_sec}s]\n"
+        f"[pwn_timed_debug - {status} | elapsed: {elapsed}s / {time_limit_sec}s]\n"
         f"{'─' * 50}\n"
     )
-    return header + (full or "(无输出)")
+    return header + (full or "(no output)")

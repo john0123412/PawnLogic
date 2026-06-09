@@ -1,19 +1,19 @@
 """
-tools/docker_sandbox.py — P3: Docker 动态容器化沙箱
-====================================================
-提供两个核心工具：
-  · run_code_docker — 在 Docker 容器中执行代码（一次性，执行后销毁）
-  · pwn_container   — 持久化容器管理（create/exec/destroy）
+tools/docker_sandbox.py - P3 dynamic Docker sandbox.
 
-设计原则：
-  · Docker 不可用时静默降级，返回明确安装指引
-  · 默认断网（network_mode="none"），防止 CTF flag 泄露
-  · 资源限制：内存 512MB、CPU 0.5 核、PID 256
-  · 文件双向挂载：宿主机 ↔ 容器
+Core tools:
+  - run_code_docker: run code in a disposable Docker container.
+  - pwn_container: manage persistent containers (create/exec/destroy).
 
-依赖：
-  · pip install docker（可选，不强制）
-  · 本地 Docker CE 运行时（dockerd）
+Design notes:
+  - Degrades clearly when Docker is unavailable.
+  - Defaults to network_mode="none" to prevent CTF flag leakage.
+  - Resource limits: 512 MB memory, 0.5 CPU, 256 PIDs.
+  - Supports host/container file mounts.
+
+Dependencies:
+  - pip install docker (optional).
+  - Local Docker CE runtime (dockerd).
 """
 
 import os, re, tempfile
@@ -22,7 +22,7 @@ from config import DYNAMIC_CONFIG, DANGEROUS_PATTERNS, WORKSPACE_DIR
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN, MAGENTA, BOLD
 
 # ════════════════════════════════════════════════════════
-# P4.1  安全工作区定义（One-Way Glass）
+# P4.1 safe workspace definition (one-way glass).
 # ════════════════════════════════════════════════════════
 
 SAFE_WORKSPACE = os.path.abspath(os.path.expanduser(WORKSPACE_DIR))
@@ -31,11 +31,11 @@ os.makedirs(SAFE_WORKSPACE, exist_ok=True)
 
 def _check_path_safety(host_path: str, mode: str) -> str:
     """
-    校验挂载路径安全性。
-    - 解析绝对路径（消除 .. 与软链接）
-    - rw 模式：路径必须在 SAFE_WORKSPACE 内，否则抛出 PermissionError
-    - ro 模式：仅做存在性检查，允许任意宿主机路径
-    返回规范化的绝对路径字符串。
+    Validate mount path safety.
+    - Resolve absolute paths, removing .. and symlinks.
+    - rw mode: path must be inside SAFE_WORKSPACE or PermissionError is raised.
+    - ro mode: only existence is checked by callers; any host path is allowed.
+    Returns the canonical absolute path string.
     """
     real = os.path.realpath(os.path.abspath(os.path.expanduser(host_path)))
     if mode == "rw":
@@ -45,14 +45,14 @@ def _check_path_safety(host_path: str, mode: str) -> str:
             common = ""
         if common != SAFE_WORKSPACE:
             raise PermissionError(
-                f"RW 权限仅限 /workspace 目录 ({SAFE_WORKSPACE})，"
-                f"拒绝路径: {real}"
+                f"RW mode is limited to the workspace directory ({SAFE_WORKSPACE}); "
+                f"denied path: {real}"
             )
     return real
 
 
 # ════════════════════════════════════════════════════════
-# Docker 可用性检测（惰性初始化）
+# Docker availability check with lazy initialization.
 # ════════════════════════════════════════════════════════
 
 _docker_client = None
@@ -61,7 +61,7 @@ _docker_checked = False
 
 
 def _get_docker_client():
-    """惰性获取 Docker 客户端。不可用时返回 None。"""
+    """Lazily get the Docker client. Returns None when unavailable."""
     global _docker_client, _docker_error, _docker_checked
     if _docker_checked:
         return _docker_client
@@ -72,15 +72,15 @@ def _get_docker_client():
         _docker_client.ping()
         return _docker_client
     except ImportError:
-        _docker_error = "未安装 docker-py。修复: pip install docker"
+        _docker_error = "docker-py is not installed. Fix: pip install docker"
         return None
     except Exception as e:
-        _docker_error = f"Docker 连接失败: {type(e).__name__}: {e}"
+        _docker_error = f"Docker connection failed: {type(e).__name__}: {e}"
         return None
 
 
 def docker_status() -> str:
-    """返回 Docker 连接状态的格式化字符串。"""
+    """Return formatted Docker connection status."""
     client = _get_docker_client()
     if client:
         try:
@@ -88,19 +88,19 @@ def docker_status() -> str:
             containers = len(client.containers.list(all=True))
             images = len(client.images.list())
             return (
-                f"  ✓ Docker 连接正常\n"
-                f"  版本: {info.get('ServerVersion', '?')}\n"
-                f"  容器: {containers} 个  |  镜像: {images} 个\n"
-                f"  存储: {info.get('DockerRootDir', '?')}"
+                f"  OK Docker connected\n"
+                f"  Version: {info.get('ServerVersion', '?')}\n"
+                f"  Containers: {containers}  |  Images: {images}\n"
+                f"  Storage: {info.get('DockerRootDir', '?')}"
             )
         except Exception as e:
-            return f"  ✗ Docker 连接异常: {e}"
+            return f"  ERROR Docker connection error: {e}"
     else:
-        return f"  ✗ Docker 不可用: {_docker_error}"
+        return f"  ERROR Docker unavailable: {_docker_error}"
 
 
 # ════════════════════════════════════════════════════════
-# 镜像注册表（config.py 中也可定义，此处为本地副本）
+# Image registry. config.py may also define this; this is the local copy.
 # ════════════════════════════════════════════════════════
 
 DEFAULT_DOCKER_IMAGES = {
@@ -151,56 +151,56 @@ def _check_auto_pull_policy(a: dict, image: str) -> str | None:
 
 
 def _resolve_image(name: str) -> str:
-    """将别名解析为完整镜像名。"""
+    """Resolve an alias to a full Docker image name."""
     if name in DEFAULT_DOCKER_IMAGES:
         return DEFAULT_DOCKER_IMAGES[name]
     if "/" in name or ":" in name:
-        return name  # 已经是完整镜像名
+        return name
     return name
 
 
 # ════════════════════════════════════════════════════════
-# 安全检查
+# Security checks.
 # ════════════════════════════════════════════════════════
 
 def _check_docker_cmd(cmd: str) -> str | None:
-    """检查命令是否匹配危险模式。返回 None 表示安全。"""
+    """Check whether a command matches dangerous patterns. None means safe."""
     for pat in DANGEROUS_PATTERNS:
         if re.search(pat, cmd):
-            return f"SECURITY BLOCK: 命令匹配危险模式 '{pat}'"
+            return f"SECURITY BLOCK: command matches dangerous pattern '{pat}'"
     return None
 
 
 # ════════════════════════════════════════════════════════
-# run_code_docker — 一次性容器执行
+# run_code_docker: disposable container execution.
 # ════════════════════════════════════════════════════════
 
 def tool_run_code_docker(a: dict) -> str:
     """
-    在 Docker 容器中执行代码，执行完毕后自动销毁容器。
+    Run code in a Docker container and destroy the container afterward.
 
     Parameters
     ----------
     language : str
-        编程语言（python / c / cpp / bash / javascript / rust / go / java）
+        Programming language (python / c / cpp / bash / javascript / rust / go / java).
     code : str
-        要执行的源代码
+        Source code to execute.
     image : str
-        Docker 镜像名或别名（默认 pwndocker）
+        Docker image name or alias (default: pwndocker).
     timeout : int
-        执行超时秒数（默认 30）
+        Execution timeout seconds (default 30).
     mount_files : dict
-        文件挂载映射 {宿主机路径: 容器内路径}
+        File mount mapping {host path: container path}.
     network : str
-        网络模式：none（默认断网）/ bridge / host
+        Network mode: none (default) / bridge / host.
     stdin : str
-        传给程序的标准输入
+        Standard input passed to the program.
     install_deps : str
-        空格分隔的 pip 包名（仅 Python）
+        Space-separated pip package names for Python only.
 
     Returns
     -------
-    str — 执行结果（stdout + stderr）+ 容器销毁状态
+    str: execution result (stdout + stderr) plus container cleanup status.
     """
     language     = a.get("language", "python").lower().strip()
     code         = a.get("code", "")
@@ -212,9 +212,9 @@ def tool_run_code_docker(a: dict) -> str:
     install_deps = a.get("install_deps", "").strip()
 
     if not code:
-        return "ERROR: code 参数不能为空"
+        return "ERROR: code parameter is required"
 
-    # 安全检查
+    # Security checks.
     err = _check_docker_cmd(code)
     if err:
         return err
@@ -222,7 +222,7 @@ def tool_run_code_docker(a: dict) -> str:
     if err:
         return err
 
-    # ── 语言 → 文件扩展名 + 执行命令 ────────────────────
+    # Language -> file extension + execution command.
     _LANG_MAP = {
         "python":     (".py",  "python3 /code/main.py"),
         "c":          (".c",   "gcc -O0 -g /code/main.c -o /code/main -lm && /code/main"),
@@ -235,12 +235,11 @@ def tool_run_code_docker(a: dict) -> str:
     }
 
     if language not in _LANG_MAP:
-        return f"ERROR: 不支持的语言 '{language}'。支持: {', '.join(_LANG_MAP.keys())}"
+        return f"ERROR: unsupported language '{language}'. Supported: {', '.join(_LANG_MAP.keys())}"
 
     ext, run_cmd = _LANG_MAP[language]
 
-    # ── 智能镜像选择 ─────────────────────────────────────
-    # 未指定 image 时，根据语言自动选择最合适的镜像
+    # Smart image selection when no explicit image is provided.
     _LANG_IMAGE_MAP = {
         "python":     "python",
         "c":          "gcc",
@@ -259,74 +258,74 @@ def tool_run_code_docker(a: dict) -> str:
     client = _get_docker_client()
     if not client:
         return (
-            f"ERROR: Docker 不可用 — {_docker_error}\n"
-            f"请确保 Docker CE 已启动: sudo systemctl start docker\n"
-            f"并安装 Python SDK: pip install docker"
+            f"ERROR: Docker unavailable - {_docker_error}\n"
+            f"Ensure Docker CE is running: sudo systemctl start docker\n"
+            f"Install the Python SDK: pip install docker"
         )
 
-    # ── Python 依赖安装 ──────────────────────────────────
+    # Python dependency installation.
     if language == "python" and install_deps:
         pkgs = install_deps.split()
         run_cmd = f"pip install {' '.join(pkgs)} -q && {run_cmd}"
 
-    # ── 准备临时目录 + 写入代码 ──────────────────────────
+    # Prepare temp directory and write code.
     with tempfile.TemporaryDirectory(prefix="pawn_docker_") as tmpdir:
         code_file = os.path.join(tmpdir, f"main{ext}")
         with open(code_file, "w", encoding="utf-8") as f:
             f.write(code)
 
-        # ── 构建挂载卷 ───────────────────────────────────
+        # Build mount volumes.
         volumes = {
             tmpdir: {"bind": "/code", "mode": "rw"},
         }
-        # 用户自定义挂载（P4.1）
-        # mount_files 格式: {"./vuln": {"bind": "/target", "mode": "ro"}}
+        # User-defined mounts (P4.1).
+        # mount_files format: {"./vuln": {"bind": "/target", "mode": "ro"}}
         for host_path, bind_spec in mount_files.items():
             if isinstance(bind_spec, str):
-                # 兼容旧格式 {host: container_path}
+                # Backward-compatible format: {host: container_path}.
                 bind_spec = {"bind": bind_spec, "mode": "ro"}
             mount_mode = bind_spec.get("mode", "ro").lower()
             try:
                 real_hp = _check_path_safety(host_path, mount_mode)
             except PermissionError as e:
-                return f"ERROR: 挂载安全校验失败 — {e}"
+                return f"ERROR: mount safety check failed - {e}"
             if os.path.exists(real_hp):
                 volumes[real_hp] = {"bind": bind_spec["bind"], "mode": mount_mode}
 
-        # ── stdin 文件 ───────────────────────────────────
+        # stdin file.
         stdin_file = None
         if stdin_data:
             stdin_file = os.path.join(tmpdir, "stdin.txt")
             with open(stdin_file, "w", encoding="utf-8") as f:
                 f.write(stdin_data)
 
-        # ── 完整执行命令 ─────────────────────────────────
+        # Full execution command.
         full_cmd = f"cd /code && {run_cmd}"
         if stdin_file:
             full_cmd = f"cd /code && {run_cmd} < /code/stdin.txt"
 
-        print(c(MAGENTA, f"  🐳 [docker] {image_name} → {language}"))
-        print(c(GRAY,    f"  网络: {network}  超时: {timeout}s  镜像: {image_name}"))
+        print(c(MAGENTA, f"  [docker] {image_name} -> {language}"))
+        print(c(GRAY,    f"  Network: {network}  Timeout: {timeout}s  Image: {image_name}"))
 
-        # ── 拉取镜像（如果本地不存在）──────────────────
+        # Pull image if it is not available locally.
         try:
             client.images.get(image_name)
         except Exception:
             err = _check_auto_pull_policy(a, image_name)
             if err:
                 return err
-            print(c(YELLOW, f"  📥 正在拉取轻量级镜像 {image_name}，请稍候..."))
+            print(c(YELLOW, f"  Pulling lightweight image {image_name}; please wait..."))
             try:
                 client.images.pull(image_name)
-                print(c(GREEN, f"  ✓ 镜像 {image_name} 拉取完成"))
+                print(c(GREEN, f"  Image {image_name} pulled"))
             except Exception as e:
                 return (
-                    f"ERROR: 镜像 '{image_name}' 拉取失败: {e}\n"
-                    f"可能原因: 网络不通或镜像名错误。\n"
-                    f"手动拉取: docker pull {image_name}"
+                    f"ERROR: failed to pull image '{image_name}': {e}\n"
+                    f"Possible causes: network unavailable or invalid image name.\n"
+                    f"Manual pull: docker pull {image_name}"
                 )
 
-        # ── 创建并运行容器 ───────────────────────────────
+        # Create and run container.
         container = None
         try:
             container = client.containers.run(
@@ -336,21 +335,21 @@ def tool_run_code_docker(a: dict) -> str:
                 network_mode=network,
                 mem_limit="512m",
                 cpu_period=100000,
-                cpu_quota=50000,       # 0.5 核
+                cpu_quota=50000,
                 pids_limit=256,
                 detach=True,
                 stderr=True,
                 stdout=True,
-                remove=False,          # 先不自动删除，等读完输出
+                remove=False,
             )
 
-            # 等待完成（带超时）
+            # Wait for completion with timeout.
             result = container.wait(timeout=timeout)
             exit_code = result.get("StatusCode", -1)
 
-            # 读取输出
-            stdout = container.logs(stdout=True, stderr=False).decode("utf-8", errors="ignore")  # 编码清洗：丢弃非 UTF-8
-            stderr = container.logs(stdout=False, stderr=True).decode("utf-8", errors="ignore")  # 编码清洗：丢弃非 UTF-8
+            # Read output.
+            stdout = container.logs(stdout=True, stderr=False).decode("utf-8", errors="ignore")
+            stderr = container.logs(stdout=False, stderr=True).decode("utf-8", errors="ignore")
             output = stdout + stderr
 
         except Exception as e:
@@ -359,70 +358,70 @@ def tool_run_code_docker(a: dict) -> str:
                     container.kill()
                 except Exception:
                     pass
-                return f"[执行超时 {timeout}s] 容器已被销毁"
-            return f"ERROR: 容器执行异常: {type(e).__name__}: {e}"
+                return f"[execution timed out after {timeout}s] container destroyed"
+            return f"ERROR: container execution failed: {type(e).__name__}: {e}"
         finally:
-            # 确保容器被清理
+            # Ensure container cleanup.
             if container:
                 try:
                     container.remove(force=True)
                 except Exception:
                     pass
 
-        # ── 格式化输出 ───────────────────────────────────
+        # Format output.
         limit = DYNAMIC_CONFIG["tool_max_chars"]
         if len(output) > limit:
             half = limit // 2
-            output = output[:half] + f"\n...[截断至 {limit} 字符]...\n" + output[-half // 4:]
+            output = output[:half] + f"\n...[truncated to {limit} chars]...\n" + output[-half // 4:]
 
-        status = "✓ 成功" if exit_code == 0 else f"✗ 失败 (exit {exit_code})"
-        header = f"[run_code_docker — {status} | 镜像: {image_name} | 网络: {network}]\n"
-        return header + (output or "(无输出)")
+        status = "OK" if exit_code == 0 else f"FAILED (exit {exit_code})"
+        header = f"[run_code_docker - {status} | image: {image_name} | network: {network}]\n"
+        return header + (output or "(no output)")
 
 
 # ════════════════════════════════════════════════════════
-# pwn_container — 持久化容器管理
+# pwn_container: persistent container management.
 # ════════════════════════════════════════════════════════
 
-# 运行中的持久化容器注册表（进程内）
+# In-process registry for running persistent containers.
 _active_containers: dict[str, object] = {}
 
 
 def tool_pwn_container(a: dict) -> str:
     """
-    持久化容器管理工具。
+    Persistent container management tool.
 
     Actions:
-      · create  — 创建并启动一个持久化容器（可 attach 多次 exec）
-      · exec    — 在运行中的容器内执行命令
-      · destroy — 停止并销毁指定容器
-      · list    — 列出所有活跃的持久化容器
+      - create: create and start a persistent container.
+      - exec: run a command inside a running container.
+      - destroy: stop and destroy a container.
+      - list: list active persistent containers.
 
     Parameters
     ----------
     action : str
         create / exec / destroy / list
     name : str
-        容器名称标识（用于 create/exec/destroy）
+        Container name identifier for create/exec/destroy.
     image : str
-        Docker 镜像（仅 create 时需要，默认 pwndocker）
+        Docker image for create, default pwndocker.
     command : str
-        要执行的命令（exec 时需要）
+        Command to execute for exec.
     timeout : int
-        命令执行超时秒数（exec 时，默认 30）
+        Command timeout seconds for exec, default 30.
     network : str
-        网络模式（create 时，默认 none）
+        Network mode for create, default none.
 
     Returns
     -------
-    str — 操作结果
+    str: operation result.
     """
     action  = a.get("action", "").lower().strip()
     name    = a.get("name", "").strip()
     image   = _resolve_image(a.get("image", "pwndocker"))
     command = a.get("command", "").strip()
     network    = (a.get("network", "none") or "none").strip().lower()
-    mount_files = a.get("mount_files", {})  # P4.1: 挂载配置
+    mount_files = a.get("mount_files", {})
 
     if action == "create":
         err = _check_network_policy(a, network)
@@ -431,47 +430,47 @@ def tool_pwn_container(a: dict) -> str:
 
     client = _get_docker_client()
     if not client:
-        return f"ERROR: Docker 不可用 — {_docker_error}"
+        return f"ERROR: Docker unavailable - {_docker_error}"
 
     if action == "list":
         if not _active_containers:
-            return "  (无活跃的持久化容器)"
-        lines = [c(BOLD, "\n  活跃的持久化容器：")]
+            return "  (no active persistent containers)"
+        lines = [c(BOLD, "\n  Active persistent containers:")]
         for cname, cid in _active_containers.items():
             try:
                 ctr = client.containers.get(cid)
                 status = ctr.status
                 lines.append(f"  {c(CYAN, cname):20} {c(GREEN, status):12} {c(GRAY, cid[:12])}")
             except Exception:
-                lines.append(f"  {c(RED, cname):20} {'已丢失':12}")
+                lines.append(f"  {c(RED, cname):20} {'missing':12}")
         return "\n".join(lines)
 
     if action == "create":
         if not name:
-            return "ERROR: create 需要 name 参数"
+            return "ERROR: create requires a name parameter"
         if name in _active_containers:
-            return f"ERROR: 容器 '{name}' 已存在。先 destroy 或使用其他名称。"
+            return f"ERROR: container '{name}' already exists. Destroy it first or use another name."
 
-        # 拉取镜像
+        # Pull image.
         try:
             client.images.get(image)
         except Exception:
             err = _check_auto_pull_policy(a, image)
             if err:
                 return err
-            print(c(YELLOW, f"  📥 正在拉取轻量级镜像 {image}，请稍候..."))
+            print(c(YELLOW, f"  Pulling lightweight image {image}; please wait..."))
             try:
                 client.images.pull(image)
-                print(c(GREEN, f"  ✓ 镜像 {image} 拉取完成"))
+                print(c(GREEN, f"  Image {image} pulled"))
             except Exception as e:
                 return (
-                    f"ERROR: 镜像 '{image}' 拉取失败: {e}\n"
-                    f"手动拉取: docker pull {image}"
+                    f"ERROR: failed to pull image '{image}': {e}\n"
+                    f"Manual pull: docker pull {image}"
                 )
 
-        print(c(MAGENTA, f"  🐳 [create] {name} ← {image}"))
+        print(c(MAGENTA, f"  [create] {name} <- {image}"))
 
-        # 构建挂载卷（P4.1）
+        # Build mount volumes (P4.1).
         volumes = {}
         for host_path, bind_spec in mount_files.items():
             if isinstance(bind_spec, str):
@@ -480,7 +479,7 @@ def tool_pwn_container(a: dict) -> str:
             try:
                 real_hp = _check_path_safety(host_path, mount_mode)
             except PermissionError as e:
-                return f"ERROR: 挂载安全校验失败 — {e}"
+                return f"ERROR: mount safety check failed - {e}"
             if os.path.exists(real_hp):
                 volumes[real_hp] = {"bind": bind_spec["bind"], "mode": mount_mode}
 
@@ -495,40 +494,40 @@ def tool_pwn_container(a: dict) -> str:
             detach=True,
             name=f"pawn_{name}",
             labels={"pawn": "true", "pawn_name": name},
-            volumes=volumes or None,   # P4.1：注入校验后的挂载
+            volumes=volumes or None,
         )
 
         _active_containers[name] = container.id
         return (
-            f"✓ 容器 '{name}' 已创建并启动\n"
+            f"OK: container '{name}' created and started\n"
             f"  ID: {container.id[:12]}\n"
-            f"  镜像: {image}\n"
-            f"  网络: {network}\n"
-            f"  用 /docker exec {name} <cmd> 执行命令"
+            f"  Image: {image}\n"
+            f"  Network: {network}\n"
+            f"  Run commands with /docker exec {name} <cmd>"
         )
 
     if action == "exec":
         if not name:
-            return "ERROR: exec 需要 name 参数"
+            return "ERROR: exec requires a name parameter"
         if not command:
-            return "ERROR: exec 需要 command 参数"
+            return "ERROR: exec requires a command parameter"
 
-        # 安全检查
+        # Security checks.
         err = _check_docker_cmd(command)
         if err:
             return err
 
         cid = _active_containers.get(name)
         if not cid:
-            return f"ERROR: 未找到容器 '{name}'。用 /docker list 查看活跃容器。"
+            return f"ERROR: container '{name}' not found. Use /docker list to view active containers."
 
         try:
             container = client.containers.get(cid)
         except Exception:
             _active_containers.pop(name, None)
-            return f"ERROR: 容器 '{name}' 已不存在（可能已被外部销毁）"
+            return f"ERROR: container '{name}' no longer exists; it may have been removed externally."
 
-        print(c(MAGENTA, f"  🐳 [exec] {name} $ {command[:80]}"))
+        print(c(MAGENTA, f"  [exec] {name} $ {command[:80]}"))
 
         try:
             exit_code, output = container.exec_run(
@@ -537,38 +536,38 @@ def tool_pwn_container(a: dict) -> str:
                 stderr=True,
                 demux=False,
             )
-            result = output.decode("utf-8", errors="ignore")  # 编码清洗：丢弃非 UTF-8
+            result = output.decode("utf-8", errors="ignore")
         except Exception as e:
-            return f"ERROR: exec 失败: {type(e).__name__}: {e}"
+            return f"ERROR: exec failed: {type(e).__name__}: {e}"
 
         limit = DYNAMIC_CONFIG["tool_max_chars"]
         if len(result) > limit:
             half = limit // 2
-            result = result[:half] + f"\n...[截断至 {limit} 字符]...\n" + result[-half // 4:]
+            result = result[:half] + f"\n...[truncated to {limit} chars]...\n" + result[-half // 4:]
 
         status = "✓" if exit_code == 0 else f"✗ (exit {exit_code})"
-        return f"[{status}] {name} $ {command}\n{result or '(无输出)'}"
+        return f"[{status}] {name} $ {command}\n{result or '(no output)'}"
 
     if action == "destroy":
         if not name:
-            return "ERROR: destroy 需要 name 参数"
+            return "ERROR: destroy requires a name parameter"
 
         cid = _active_containers.pop(name, None)
         if not cid:
-            return f"ERROR: 未找到容器 '{name}'"
+            return f"ERROR: container '{name}' not found"
 
         try:
             container = client.containers.get(cid)
             container.remove(force=True)
-            return f"✓ 容器 '{name}' 已销毁"
+            return f"OK: container '{name}' destroyed"
         except Exception as e:
-            return f"⚠ 容器 '{name}' 销毁时异常（可能已不存在）: {e}"
+            return f"WARNING: error while destroying container '{name}' (it may no longer exist): {e}"
 
-    return f"ERROR: 未知 action '{action}'。可用: create / exec / destroy / list"
+    return f"ERROR: unknown action '{action}'. Available: create / exec / destroy / list"
 
 
 # ════════════════════════════════════════════════════════
-# P4.2  气闸舱工具：tool_install_package（Airlock）
+# P4.2 Airlock package installation tool.
 # ════════════════════════════════════════════════════════
 
 _PKG_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
@@ -576,54 +575,54 @@ _PKG_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
 
 def tool_install_package(a: dict) -> str:
     """
-    在持久化容器内安装软件包（气闸舱模式）。
-    - 仅支持 apt / pip
-    - 包名严格校验，防止命令注入
-    - 临时接入 bridge 网络完成安装，finally 中强制断网
+    Install packages inside a persistent container in Airlock mode.
+    - Supports apt and pip only.
+    - Strict package-name validation prevents command injection.
+    - Temporarily connects to bridge for installation, then disconnects in finally.
     """
     client = _get_docker_client()
     if not client:
-        return f"ERROR: Docker 不可用 — {_docker_error}"
+        return f"ERROR: Docker unavailable - {_docker_error}"
 
     container_name = a.get("container_name", "").strip()
     pkg_manager    = a.get("pkg_manager", "").lower().strip()
     packages       = a.get("packages", [])
 
-    # ── 参数校验 ─────────────────────────────────────────
+    # Parameter validation.
     if not container_name:
-        return "ERROR: container_name 不能为空"
+        return "ERROR: container_name is required"
     if pkg_manager not in ("apt", "pip"):
-        return "ERROR: pkg_manager 仅支持 apt 或 pip"
+        return "ERROR: pkg_manager supports only apt or pip"
     if not packages:
-        return "ERROR: packages 不能为空"
+        return "ERROR: packages is required"
 
     invalid = [p for p in packages if not _PKG_NAME_RE.match(p)]
     if invalid:
-        return f"ERROR: 包名包含非法字符，拒绝安装: {invalid}"
+        return f"ERROR: package names contain invalid characters; install denied: {invalid}"
 
-    # ── 获取容器 ─────────────────────────────────────────
+    # Get container.
     cid = _active_containers.get(container_name)
     if not cid:
-        return f"ERROR: 未找到容器 '{container_name}'，请先 create"
+        return f"ERROR: container '{container_name}' not found; create it first"
     try:
         container = client.containers.get(cid)
     except Exception as e:
-        return f"ERROR: 容器获取失败: {e}"
+        return f"ERROR: failed to get container: {e}"
 
-    # ── 构建安装命令 ──────────────────────────────────────
+    # Build install command.
     pkg_str = " ".join(packages)
     if pkg_manager == "apt":
         install_cmd = f"apt-get update -qq && apt-get install -y --no-install-recommends {pkg_str}"
     else:
         install_cmd = f"pip install --quiet {pkg_str}"
 
-    # ── 气闸舱：临时接网 → 安装 → 强制断网 ──────────────
+    # Airlock: temporarily connect -> install -> force disconnect.
     bridge_net = None
-    _airlock_connected = False        # 标记：是否由本次气闸舱主动接入
+    _airlock_connected = False
     try:
         bridge_net = client.networks.get("bridge")
 
-        # 检查容器是否已在 bridge 网络上（避免重复连接 + 误断用户手动网络）
+        # Check whether the container is already on bridge to avoid touching user-managed networking.
         already_on_bridge = False
         try:
             net_attrs = bridge_net.attrs or {}
@@ -634,93 +633,93 @@ def tool_install_package(a: dict) -> str:
             pass
 
         if already_on_bridge:
-            print(c(GRAY, f"  ℹ [Airlock] 容器 '{container_name}' 已在 bridge 网络，跳过连接"))
+            print(c(GRAY, f"  [Airlock] container '{container_name}' is already on bridge; skipping connect"))
         else:
             try:
                 bridge_net.connect(container)
                 _airlock_connected = True
-                print(c(YELLOW, f"  🔌 [Airlock] 容器 '{container_name}' 临时接入 bridge 网络"))
+                print(c(YELLOW, f"  [Airlock] temporarily connected container '{container_name}' to bridge"))
             except Exception as conn_err:
-                return f"ERROR: bridge 网络连接失败: {type(conn_err).__name__}: {conn_err}"
+                return f"ERROR: bridge network connection failed: {type(conn_err).__name__}: {conn_err}"
 
         exit_code, output = container.exec_run(
             cmd=["bash", "-c", install_cmd],
             stdout=True, stderr=True, demux=False,
         )
-        result = output.decode("utf-8", errors="ignore") if output else ""  # 编码清洗
+        result = output.decode("utf-8", errors="ignore") if output else ""
         status = "✓" if exit_code == 0 else f"✗ (exit {exit_code})"
         return (
             f"[Airlock {status}] {pkg_manager} install {pkg_str}\n"
-            f"{result or '(无输出)'}"
+            f"{result or '(no output)'}"
         )
 
     except Exception as e:
-        return f"ERROR: 安装过程异常: {type(e).__name__}: {e}"
+        return f"ERROR: install process failed: {type(e).__name__}: {e}"
 
     finally:
-        # 仅断开由本次气闸舱主动接入的网络，不干扰用户手动开启的网络
+        # Only disconnect network connections made by this Airlock run.
         if bridge_net and _airlock_connected:
             try:
                 bridge_net.disconnect(container, force=True)
-                print(c(GREEN, f"  🔒 [Airlock] 容器 '{container_name}' 已强制断网"))
+                print(c(GREEN, f"  [Airlock] container '{container_name}' forcibly disconnected from network"))
             except Exception as disc_err:
-                print(c(RED, f"  ⚠ [Airlock] 断网失败（请手动检查）: {disc_err}"))
+                print(c(RED, f"  [Airlock] network disconnect failed; please check manually: {disc_err}"))
 
 
 # ════════════════════════════════════════════════════════
-# P4.3  资源回收：docker_prune_resources
+# P4.3 resource cleanup: docker_prune_resources.
 # ════════════════════════════════════════════════════════
 
 def docker_prune_resources() -> str:
     """
-    清理停止的容器和悬空镜像，返回释放空间（MB）。
+    Remove stopped containers and dangling images; return freed space in MB.
     """
     client = _get_docker_client()
     if not client:
-        return f"ERROR: Docker 不可用 — {_docker_error}"
+        return f"ERROR: Docker unavailable - {_docker_error}"
 
     freed_bytes = 0
     deleted_containers = []
     deleted_images = []
     errors = []
 
-    # ── 清理停止的容器 ─────────────────────────────────
+    # Remove stopped containers.
     try:
         container_result = client.containers.prune()
         freed_bytes += container_result.get("SpaceReclaimed", 0)
         deleted_containers = container_result.get("ContainersDeleted") or []
     except Exception as e:
-        errors.append(f"容器清理失败: {type(e).__name__}: {e}")
+        errors.append(f"container cleanup failed: {type(e).__name__}: {e}")
 
-    # ── 清理悬空镜像 ───────────────────────────────────
+    # Remove dangling images.
     try:
         image_result = client.images.prune(filters={"dangling": True})
         freed_bytes += image_result.get("SpaceReclaimed", 0)
         deleted_images = image_result.get("ImagesDeleted") or []
     except Exception as e:
-        errors.append(f"镜像清理失败: {type(e).__name__}: {e}")
+        errors.append(f"image cleanup failed: {type(e).__name__}: {e}")
 
     freed_mb = freed_bytes / (1024 * 1024)
 
     if errors:
         return (
-            f"⚠ 资源回收部分失败\n"
-            f"  已删除容器: {len(deleted_containers)} 个\n"
-            f"  已删除镜像层: {len(deleted_images)} 个\n"
-            f"  释放空间: {freed_mb:.2f} MB\n"
-            f"  错误: {'; '.join(errors)}"
+            f"WARNING: resource cleanup partially failed\n"
+            f"  Containers deleted: {len(deleted_containers)}\n"
+            f"  Image layers deleted: {len(deleted_images)}\n"
+            f"  Space reclaimed: {freed_mb:.2f} MB\n"
+            f"  Errors: {'; '.join(errors)}"
         )
 
     return (
-        f"✓ 资源回收完成\n"
-        f"  已删除容器: {len(deleted_containers)} 个\n"
-        f"  已删除镜像层: {len(deleted_images)} 个\n"
-        f"  释放空间: {freed_mb:.2f} MB"
+        f"OK: resource cleanup complete\n"
+        f"  Containers deleted: {len(deleted_containers)}\n"
+        f"  Image layers deleted: {len(deleted_images)}\n"
+        f"  Space reclaimed: {freed_mb:.2f} MB"
     )
 
 
 # ════════════════════════════════════════════════════════
-# Schema 定义
+# Schema definitions.
 # ════════════════════════════════════════════════════════
 
 DOCKER_SCHEMAS = [
@@ -729,63 +728,62 @@ DOCKER_SCHEMAS = [
         "function": {
             "name": "run_code_docker",
             "description": (
-                "在 Docker 容器中执行代码（一次性，执行后自动销毁）。\n"
-                "适用场景：Pwn 靶机 exploit 测试、多版本 libc 环境验证、隔离沙箱执行。\n"
-                "默认断网（network=none），防止 CTF flag 泄露。\n"
-                "资源限制：内存 512MB、CPU 0.5 核、PID 256。\n"
-                "支持语言：python / c / cpp / bash / javascript / rust / go / java。\n"
-                "如果 Docker 不可用，会返回明确的安装指引。"
+                "Run code inside a disposable Docker container.\n"
+                "Use for Pwn exploit testing, multi-libc environment checks, and isolated sandbox execution.\n"
+                "Defaults to no network (network=none) to prevent CTF flag leakage.\n"
+                "Resource limits: 512 MB memory, 0.5 CPU, 256 PIDs.\n"
+                "Supported languages: python / c / cpp / bash / javascript / rust / go / java.\n"
+                "Returns clear setup guidance when Docker is unavailable."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "language": {
                         "type": "string",
-                        "description": "编程语言（默认 python）",
+                        "description": "Programming language (default python).",
                     },
                     "code": {
                         "type": "string",
-                        "description": "要执行的源代码",
+                        "description": "Source code to execute.",
                     },
                     "image": {
                         "type": "string",
                         "description": (
-                            "执行镜像。纯 Python 逻辑指定 'python'，"
-                            "Pwn 题目分析使用 'pwndocker'。"
-                            "未指定时根据语言自动选择。"
-                            "可用别名: pwndocker / ubuntu18 / ubuntu22 / kali / python / gcc"
+                            "Execution image. Use 'python' for pure Python logic and 'pwndocker' for Pwn analysis. "
+                            "When omitted, an image is selected from the language. "
+                            "Available aliases: pwndocker / ubuntu18 / ubuntu22 / kali / python / gcc."
                         ),
                     },
                     "timeout": {
                         "type": "integer",
-                        "description": "执行超时秒数（默认 30）",
+                        "description": "Execution timeout seconds (default 30).",
                     },
                     "mount_files": {
                         "type": "object",
-                        "description": "文件挂载 {宿主机路径: 容器内路径}",
+                        "description": "File mounts {host path: container path}.",
                     },
                     "network": {
                         "type": "string",
                         "description": (
-                            "网络模式：none（默认断网）/ bridge / host。"
-                            "bridge/host 需要 allow_network=true 或环境策略放行。"
+                            "Network mode: none (default no network) / bridge / host. "
+                            "bridge/host requires allow_network=true or an environment policy override."
                         ),
                     },
                     "allow_network": {
                         "type": "boolean",
-                        "description": "显式允许 bridge/host Docker 网络模式（默认 false）",
+                        "description": "Explicitly allow bridge/host Docker network mode (default false).",
                     },
                     "allow_auto_pull": {
                         "type": "boolean",
-                        "description": "显式允许缺失镜像时自动 docker pull（默认 false）",
+                        "description": "Explicitly allow automatic docker pull when an image is missing (default false).",
                     },
                     "stdin": {
                         "type": "string",
-                        "description": "传给程序的标准输入",
+                        "description": "Standard input passed to the program.",
                     },
                     "install_deps": {
                         "type": "string",
-                        "description": "空格分隔的 pip 包名（仅 Python）",
+                        "description": "Space-separated pip package names for Python only.",
                     },
                 },
                 "required": ["language", "code"],
@@ -797,13 +795,13 @@ DOCKER_SCHEMAS = [
         "function": {
             "name": "pwn_container",
             "description": (
-                "持久化容器管理工具。用于 CTF 靶机环境的长期运行。\n"
+                "Persistent container management tool for long-running CTF target environments.\n"
                 "Actions:\n"
-                "  create  — 创建并启动一个持久化容器\n"
-                "  exec    — 在运行中的容器内执行命令\n"
-                "  destroy — 停止并销毁指定容器\n"
-                "  list    — 列出所有活跃的持久化容器\n"
-                "适用场景：需要多次交互的 Pwn 调试、多步 exploit 验证。"
+                "  create  - create and start a persistent container\n"
+                "  exec    - run a command inside a running container\n"
+                "  destroy - stop and destroy a container\n"
+                "  list    - list active persistent containers\n"
+                "Use for multi-step Pwn debugging and exploit verification."
             ),
             "parameters": {
                 "type": "object",
@@ -811,86 +809,86 @@ DOCKER_SCHEMAS = [
                     "action": {
                         "type": "string",
                         "enum": ["create", "exec", "destroy", "list"],
-                        "description": "操作类型",
+                        "description": "Operation type.",
                     },
                     "name": {
                         "type": "string",
-                        "description": "容器名称标识",
+                        "description": "Container name identifier.",
                     },
                     "image": {
                         "type": "string",
-                        "description": "Docker 镜像（仅 create，默认 pwndocker）",
+                        "description": "Docker image for create only (default pwndocker).",
                     },
                     "command": {
                         "type": "string",
-                        "description": "要执行的命令（exec 时需要）",
+                        "description": "Command to execute for exec.",
                     },
                     "timeout": {
                         "type": "integer",
-                        "description": "命令超时秒数（exec 时，默认 30）",
+                        "description": "Command timeout seconds for exec (default 30).",
                     },
                     "network": {
                         "type": "string",
                         "description": (
-                            "网络模式（create 时，默认 none）。"
-                            "bridge/host 需要 allow_network=true 或环境策略放行。"
+                            "Network mode for create (default none). "
+                            "bridge/host requires allow_network=true or an environment policy override."
                         ),
                     },
                     "allow_network": {
                         "type": "boolean",
-                        "description": "显式允许 create 使用 bridge/host Docker 网络模式（默认 false）",
+                        "description": "Explicitly allow create to use bridge/host Docker network mode (default false).",
                     },
                     "allow_auto_pull": {
                         "type": "boolean",
-                        "description": "显式允许缺失镜像时自动 docker pull（默认 false）",
+                        "description": "Explicitly allow automatic docker pull when an image is missing (default false).",
                     },
                 },
                 "required": ["action"],
             },
         },
     },
-    # ── P4.2: tool_install_package Schema ────────────────
+    # P4.2: tool_install_package schema.
     {
         "type": "function",
         "function": {
             "name": "tool_install_package",
             "description": (
-                "气闸舱软件安装工具（Airlock）。\n"
-                "在持久化容器内临时联网安装 apt/pip 包，安装完毕后立即强制断网。\n"
-                "包名经严格正则校验，防止命令注入。\n"
-                "仅对已通过 pwn_container create 创建的容器有效。"
+                "Airlock package installation tool.\n"
+                "Temporarily connects a persistent container to install apt/pip packages, then forces network disconnect.\n"
+                "Package names are strictly regex-validated to prevent command injection.\n"
+                "Works only for containers created through pwn_container create."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "container_name": {
                         "type": "string",
-                        "description": "目标持久化容器名称（pwn_container create 时指定的 name）",
+                        "description": "Target persistent container name (the name passed to pwn_container create).",
                     },
                     "pkg_manager": {
                         "type": "string",
                         "enum": ["apt", "pip"],
-                        "description": "包管理器：apt 或 pip",
+                        "description": "Package manager: apt or pip.",
                     },
                     "packages": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "要安装的包名列表，每个包名只允许 [a-zA-Z0-9_\\-\\.]+",
+                        "description": "Package names to install; each package may contain only [a-zA-Z0-9_\\-\\.]+.",
                     },
                 },
                 "required": ["container_name", "pkg_manager", "packages"],
             },
         },
     },
-    # ── P4.3: docker_prune_resources Schema ──────────────
+    # P4.3: docker_prune_resources schema.
     {
         "type": "function",
         "function": {
             "name": "docker_prune_resources",
             "description": (
-                "Docker 资源回收工具。\n"
-                "清理所有已停止的容器和悬空（dangling）镜像，返回释放的磁盘空间（MB）。\n"
-                "建议在完成 CTF 任务后或磁盘空间告急时调用。"
+                "Docker resource cleanup tool.\n"
+                "Removes all stopped containers and dangling images, returning reclaimed disk space in MB.\n"
+                "Use after CTF tasks or when disk space is low."
             ),
             "parameters": {
                 "type": "object",

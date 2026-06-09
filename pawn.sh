@@ -22,11 +22,11 @@ readlink_f() {
     fi
 }
 
-# 1. 追踪真实路径（解决软链接调用问题）
+# 1. Resolve the real path so symlinked launchers work.
 REAL_PATH=$(readlink_f "${BASH_SOURCE[0]}")
 SCRIPT_DIR="$(cd "$(dirname "$REAL_PATH")" && pwd)"
 
-# 2. 寻找 venv（仅保留相对路径，提高迁移性）
+# 2. Find a local virtual environment. Keep paths relative for portability.
 _PYTHON_CANDIDATES=(
     "$SCRIPT_DIR/venv/bin/python3"
     "$SCRIPT_DIR/venv/bin/python"
@@ -42,21 +42,21 @@ for _candidate in "${_PYTHON_CANDIDATES[@]}"; do
     fi
 done
 
-# 3. 环境准备检查
+# 3. Environment readiness check.
 if [ -z "$_PYTHON" ]; then
     if ! command -v python3 &> /dev/null; then
-        echo -e "\033[91m  ✗ 未找到 python3，请先安装 Python 3.10+。\033[0m"
+        echo -e "\033[91m  ✗ python3 was not found. Please install Python 3.10+.\033[0m"
         exit 1
     fi
     _PYTHON="$(command -v python3)"
 fi
 
-# 4. 运行检查：源码安装器需要包入口存在
+# 4. Runtime check: the source launcher needs the package entrypoint.
 if [ ! -d "$SCRIPT_DIR/pawnlogic" ]; then
-    echo -e "\033[91m  ✗ 错误: 找不到包目录 $SCRIPT_DIR/pawnlogic\033[0m"
+    echo -e "\033[91m  ✗ Error: package directory not found: $SCRIPT_DIR/pawnlogic\033[0m"
     exit 1
 fi
 
-# 5. 启动（使用 exec 替换进程，透传所有参数 $@）
+# 5. Start the CLI. exec replaces this process and forwards all arguments.
 export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 exec "$_PYTHON" -m pawnlogic "$@"

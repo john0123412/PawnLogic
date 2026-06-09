@@ -4,16 +4,16 @@ import json
 
 
 PLAN_EXEMPT_TOOLS = {
-    "pwn_env",        # 环境探测，无副作用
-    "list_dir",       # 目录列出，无副作用
-    "search_skills",  # P6: 技能包检索，只读操作
-    "check_service",  # P6: 环境嗅探，只读操作
-    # git_op 仅只读操作豁免（见 is_plan_exempt）
+    "pwn_env",        # Environment probing; no side effects.
+    "list_dir",       # Directory listing; no side effects.
+    "search_skills",  # P6 skill-pack retrieval; read-only.
+    "check_service",  # P6 environment sniffing; read-only.
+    # git_op is exempt only for read-only actions; see is_plan_exempt.
 }
 
 
 def is_plan_exempt(tc_buf: dict) -> bool:
-    """若本次所有工具调用均属于豁免名单（只读），允许跳过 <plan> 检查。"""
+    """Allow skipping <plan> when all tool calls are read-only exemptions."""
     for idx in tc_buf:
         name = tc_buf[idx]["name"]
         if name not in PLAN_EXEMPT_TOOLS and name != "git_op":

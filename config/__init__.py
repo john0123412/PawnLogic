@@ -1,7 +1,7 @@
 """
-config/__init__.py — 向后兼容入口
+config/__init__.py - backward-compatible import entry point.
 
-外部代码 `from config import X` 或 `import config; config.X` 无需任何修改。
+External code can keep using `from config import X` or `import config; config.X`.
 """
 from .providers import (
     PROVIDERS, MODELS, DEFAULT_MODEL, VISION_PRIORITY,
@@ -46,13 +46,13 @@ __all__ = [
     "DYNAMIC_CONFIG", "NORMAL_CONFIG", "WEB_STRATEGY", "USER_MODE", "QUIET_MODE",
 ]
 
-# ── 向后兼容：DYNAMIC_CONFIG / NORMAL_CONFIG ──────────────
-# 这两个可变 dict 由 main.py 在运行时修改（/mid /deep /low 等命令）。
-# 保留在此处以兼容所有 `from config import DYNAMIC_CONFIG` 的调用。
+# Backward compatibility: DYNAMIC_CONFIG / NORMAL_CONFIG.
+# These mutable dicts are changed at runtime by tier commands such as /mid.
+# Keep them here for existing `from config import DYNAMIC_CONFIG` imports.
 DYNAMIC_CONFIG: dict = dict(TIER_MID)
 NORMAL_CONFIG:  dict = dict(TIER_MID)
 
-# ── 向后兼容：WEB_STRATEGY ────────────────────────────────
+# Backward compatibility: WEB_STRATEGY.
 WEB_STRATEGY = {
     "jina_base":     "https://r.jina.ai/",
     "use_pandoc":    True,
@@ -60,10 +60,10 @@ WEB_STRATEGY = {
     "max_html_read": 600_000,
 }
 
-# ── 向后兼容：USER_MODE / QUIET_MODE ─────────────────────
-# 这两个标志现在由 core.state 管理。
-# 保留模块级变量以兼容 `import config; config.QUIET_MODE = True` 的写法。
-# 注意：直接赋值此处的变量不会影响 core.state.state，
-# 推荐新代码使用 `from core.state import state`。
+# Backward compatibility: USER_MODE / QUIET_MODE.
+# These flags are now managed by core.state.
+# Module-level variables remain for `import config; config.QUIET_MODE = True`.
+# Direct assignment here does not update core.state.state; new code should
+# import `state` from core.state instead.
 USER_MODE: bool = False
 QUIET_MODE: bool = False

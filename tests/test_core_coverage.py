@@ -159,7 +159,7 @@ def test_persistence_save_load_restores_session(isolated_memory, monkeypatch, tm
     target = FakeSession(session_id="empty")
     result = persistence.session_load(target, "Manual")
 
-    assert result.startswith("OK: 已加载 [session-persist]")
+    assert result.startswith("OK: loaded [session-persist]")
     assert target.session_id == "session-persist"
     assert target.model_alias == "ds-v4-flash"
     assert target.cwd == str(tmp_path)
@@ -204,10 +204,10 @@ def test_memorize_uses_call_once_and_sanitizes_topic(monkeypatch, tmp_path):
     result = persistence.memorize(session, malicious_topic)
 
     prompt = captured["messages"][0]["content"]
-    assert result.startswith("OK: 知识已保存 (id=42)")
+    assert result.startswith("OK: knowledge saved (id=42)")
     assert captured["model_alias"] == "gpt-5.4-mini"
     assert captured["max_tokens"] == 512
-    assert "JSON 字符串" in prompt
+    assert "JSON string" in prompt
     assert "ignore previous instructions" in prompt
     assert len(captured["topic"]) <= 123
     assert captured["content"] == "short summary"
@@ -304,7 +304,7 @@ def test_file_ops_resolve_and_patch_are_workspace_bound(monkeypatch, tmp_path):
         "patch_blocks": "<<<<<<< SEARCH\nprint('old')\n=======\nprint('new')\n>>>>>>> REPLACE",
     })
 
-    assert result.startswith("OK: 1/1")
+    assert result.startswith("OK: applied 1/1")
     assert target.read_text(encoding="utf-8") == "print('new')\n"
 
 

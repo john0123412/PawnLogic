@@ -311,7 +311,7 @@ def test_first_run_gate_accepts_process_env_key_without_dot_env_file(tmp_path):
 
     # The gate's user-facing signature is the wizard prompt; any sign of it
     # in stdout means the regression has returned.
-    assert "首次运行需要先完成 API 配置向导" not in result.stdout, (
+    assert "First run requires API setup" not in result.stdout, (
         "first_run gate fired even though DEEPSEEK_API_KEY was in process env "
         "— regression of pre-0.0.6 bug. stdout: " + result.stdout[:500]
     )
@@ -361,7 +361,7 @@ def test_first_run_gate_treats_custom_provider_keys_uniformly(tmp_path):
         timeout=15,
     )
 
-    assert "首次运行需要先完成 API 配置向导" not in result.stdout, (
+    assert "First run requires API setup" not in result.stdout, (
         "first_run gate fired with only a custom-provider key set — "
         "custom providers should be treated like built-ins. stdout: "
         + result.stdout[:500]

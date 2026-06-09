@@ -1,12 +1,12 @@
-"""config/paths.py — 路径与版本常量
+"""config/paths.py - path and version constants.
 
-版本号唯一定义处。全局通过 `from config import VERSION` 读取。
-升级时只需修改此处。
+VERSION is defined only here and consumed globally through `from config import
+VERSION`. Version bumps should edit this file only.
 """
 from pathlib import Path
 import os
 
-# ── 唯一版本号定义 ──────────────────────────────────────
+# Single source of truth for the package version.
 VERSION = "0.0.7"
 
 def _safe_home() -> Path:

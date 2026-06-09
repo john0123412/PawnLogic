@@ -1,15 +1,15 @@
 """
-tools/web_ops.py — Web 搜索 + 内容抓取
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【搜索三级降级策略】（按优先级）
-  1. Tavily API   https://api.tavily.com/search       → 专业 AI 搜索，需 TAVILY_API_KEY
-  2. Jina Search  https://s.jina.ai/<query>           → 免费 Markdown 搜索，无需 Key
-  3. DuckDuckGo   https://html.duckduckgo.com/html/   → 正则兜底，零依赖
+tools/web_ops.py - web search and content fetching.
 
-【抓取三级降级策略】（按优先级）
-  1. Jina Reader  https://r.jina.ai/<url>             → 反爬穿透，返回 Markdown
-  2. Pandoc       pandoc -f html -t markdown           → 本地 HTML→Markdown（若已安装）
-  3. 正则清洗     原版 regex strip                     → 零依赖兜底方案
+Search fallback chain:
+  1. Tavily API   https://api.tavily.com/search       AI search, requires TAVILY_API_KEY.
+  2. Jina Search  https://s.jina.ai/<query>           free Markdown search, no key required.
+  3. DuckDuckGo   https://html.duckduckgo.com/html/   regex fallback, zero dependency.
+
+Fetch fallback chain:
+  1. Jina Reader  https://r.jina.ai/<url>             anti-bot-friendly Markdown reader.
+  2. Pandoc       pandoc -f html -t markdown          local HTML-to-Markdown when installed.
+  3. Regex strip  original regex cleanup              zero-dependency fallback.
 """
 
 import os
@@ -24,21 +24,21 @@ import urllib.error
 from config import DYNAMIC_CONFIG, USER_AGENTS, scrub_sensitive_env
 from utils.ansi import c, BLUE, YELLOW, GRAY, GREEN
 
-# ── 检测本地工具 ─────────────────────────────────────────
+# Detect local tools.
 _has_pandoc = bool(shutil.which("pandoc"))
 _has_lynx   = bool(shutil.which("lynx"))
 
 def _ua() -> str:
-    """随机返回一个 User-Agent。"""
+    """Return a random User-Agent."""
     return random.choice(USER_AGENTS)
 
-# ── 搜索：第一级 Tavily API ──────────────────────────────
+# Search stage 1: Tavily API.
 
 def _search_tavily(query: str) -> str | None:
     """
-    通过 Tavily API 搜索。
-    需要环境变量 TAVILY_API_KEY。
-    成功返回格式化文本，失败或无 Key 返回 None。
+    Search through Tavily API.
+    Requires TAVILY_API_KEY.
+    Returns formatted text on success, otherwise None.
     """
     key = os.getenv("TAVILY_API_KEY")
     if not key:
@@ -80,13 +80,13 @@ def _search_tavily(query: str) -> str | None:
     except Exception:
         return None
 
-# ── 搜索：第二级 Jina Search ─────────────────────────────
+# Search stage 2: Jina Search.
 
 def _search_jina(query: str, max_chars: int = 4000) -> str | None:
     """
-    通过 Jina Search 搜索，返回 Markdown 格式摘要。
-    无需 API Key，但受限于免费额度。
-    成功返回截断后的 Markdown，失败返回 None。
+    Search through Jina Search and return a Markdown summary.
+    No API key required, subject to free-tier limits.
+    Returns truncated Markdown on success, otherwise None.
     """
     print(c(YELLOW, f"  🔍 [Jina Search] {query}"))
     jina_url = f"https://s.jina.ai/{urllib.parse.quote(query)}"
@@ -106,19 +106,19 @@ def _search_jina(query: str, max_chars: int = 4000) -> str | None:
             return None
 
         if len(text) > max_chars:
-            text = text[:max_chars] + f"\n...[Jina Search: 截断至 {max_chars} 字符]..."
+            text = text[:max_chars] + f"\n...[Jina Search: truncated to {max_chars} chars]..."
 
         return text
 
     except Exception:
         return None
 
-# ── 搜索：第三级 DuckDuckGo 正则兜底 ────────────────────
+# Search stage 3: DuckDuckGo regex fallback.
 
 def _search_ddg(query: str) -> str:
     """
-    通过 DuckDuckGo HTML 接口搜索，正则提取标题/URL/摘要。
-    零依赖，作为最终兜底方案。
+    Search via DuckDuckGo HTML and extract title/URL/snippet with regex.
+    Zero-dependency final fallback.
     """
     print(c(GRAY, f"  🔍 [DDG Fallback] {query}"))
     try:
@@ -141,40 +141,40 @@ def _search_ddg(query: str) -> str:
             uc = urllib.parse.unquote(urls[i]) if i < len(urls) else ""
             results.append(f"[{i+1}] {tc}\n    {uc}\n    {sc}")
 
-        return "\n\n".join(results) if results else "未找到结果。"
+        return "\n\n".join(results) if results else "No results found."
 
     except Exception as e:
-        return f"搜索失败: {e}"
+        return f"Search failed: {e}"
 
-# ── 主搜索入口（三级降级） ───────────────────────────────
+# Main search entry with three-stage fallback.
 
 def tool_web_search(a: dict) -> str:
     """
-    三级降级搜索主入口：
-      1. Tavily API   — 专业 AI 搜索（有 Key 时优先）
-      2. Jina Search  — 免费 Markdown 搜索
-      3. DuckDuckGo   — 正则兜底
+    Main three-stage fallback search:
+      1. Tavily API when configured.
+      2. Jina Search as free Markdown search.
+      3. DuckDuckGo regex fallback.
     """
     query = a["query"]
 
-    # ① Tavily
+    # 1. Tavily.
     result = _search_tavily(query)
     if result:
-        return f"[来源: Tavily AI Search]\n{result}"
+        return f"[Source: Tavily AI Search]\n{result}"
 
-    # ② Jina Search
+    # 2. Jina Search.
     result = _search_jina(query)
     if result:
-        return f"[来源: Jina Search]\n{result}"
+        return f"[Source: Jina Search]\n{result}"
 
-    # ③ DuckDuckGo 兜底
+    # 3. DuckDuckGo fallback.
     result = _search_ddg(query)
-    return f"[来源: DuckDuckGo Fallback]\n{result}"
+    return f"[Source: DuckDuckGo Fallback]\n{result}"
 
-# ── Jina Reader 抓取 ─────────────────────────────────────
+# Jina Reader fetch.
 
 def _fetch_jina(url: str, max_chars: int) -> str | None:
-    """通过 Jina Reader 抓取，返回 Markdown 或 None（失败时）。"""
+    """Fetch through Jina Reader and return Markdown, or None on failure."""
     jina_url = f"https://r.jina.ai/{url}"
     print(c(BLUE, f"  🌐 [Jina] {url[:70]}"))
     try:
@@ -189,15 +189,15 @@ def _fetch_jina(url: str, max_chars: int) -> str | None:
         if not text or len(text) < 50:
             return None
         if len(text) > max_chars:
-            text = text[:max_chars] + f"\n...[Jina: 截断至 {max_chars} 字符]..."
+            text = text[:max_chars] + f"\n...[Jina: truncated to {max_chars} chars]..."
         return text
     except Exception:
         return None
 
-# ── Pandoc 抓取 ──────────────────────────────────────────
+# Pandoc fetch.
 
 def _fetch_pandoc(raw_html: str, max_chars: int) -> str | None:
-    """用 pandoc 将 HTML 转为 Markdown。需要本地安装 pandoc。"""
+    """Convert HTML to Markdown with pandoc. Requires local pandoc."""
     if not _has_pandoc:
         return None
     try:
@@ -212,15 +212,15 @@ def _fetch_pandoc(raw_html: str, max_chars: int) -> str | None:
         text = re.sub(r'\\([`*_{}()\[\]#+.!|])', r'\1', text)
         text = re.sub(r'\n{3,}', '\n\n', text)
         if len(text) > max_chars:
-            text = text[:max_chars] + f"\n...[Pandoc: 截断至 {max_chars} 字符]..."
+            text = text[:max_chars] + f"\n...[Pandoc: truncated to {max_chars} chars]..."
         return text
     except Exception:
         return None
 
-# ── 正则兜底清洗 ─────────────────────────────────────────
+# Regex fallback cleanup.
 
 def _fetch_regex(raw_html: str, max_chars: int) -> str:
-    """零依赖 regex 清洗 HTML → 纯文本。"""
+    """Clean HTML into plain text with zero-dependency regex stripping."""
     raw = re.sub(r'<script[^>]*>.*?</script>', '', raw_html, flags=re.DOTALL | re.IGNORECASE)
     raw = re.sub(r'<style[^>]*>.*?</style>',  '', raw,      flags=re.DOTALL | re.IGNORECASE)
     raw = re.sub(r'<br\s*/?>', '\n',     raw, flags=re.IGNORECASE)
@@ -232,23 +232,23 @@ def _fetch_regex(raw_html: str, max_chars: int) -> str:
     raw = re.sub(r'[ \t]+', ' ', raw)
     text = raw.strip()
     if len(text) > max_chars:
-        text = text[:max_chars] + f"\n...[Regex: 截断至 {max_chars} 字符]..."
-    return text or "(页面为空)"
+        text = text[:max_chars] + f"\n...[Regex: truncated to {max_chars} chars]..."
+    return text or "(empty page)"
 
-# ── 主抓取入口 ───────────────────────────────────────────
+# Main fetch entry.
 
 def tool_fetch_url(a: dict) -> str:
     url       = a["url"]
     max_chars = int(a.get("max_chars", DYNAMIC_CONFIG["fetch_max_chars"]))
     strategy  = a.get("strategy", "auto")   # auto | jina | pandoc | direct
 
-    # ① Jina Reader（auto 或显式指定）
+    # 1. Jina Reader when auto or explicitly requested.
     if strategy in ("auto", "jina"):
         result = _fetch_jina(url, max_chars)
         if result:
-            return f"[来源: Jina Reader]\n{result}"
+            return f"[Source: Jina Reader]\n{result}"
 
-    # ② 直接抓取原始 HTML
+    # 2. Direct raw HTML fetch.
     print(c(BLUE, f"  🌐 [direct] {url[:70]}"))
     try:
         req = urllib.request.Request(url, headers={
@@ -260,16 +260,16 @@ def tool_fetch_url(a: dict) -> str:
         with urllib.request.urlopen(req, timeout=20) as resp:
             raw_html = resp.read(600_000).decode("utf-8", errors="replace")
     except Exception as e:
-        return f"抓取失败: {e}"
+        return f"Fetch failed: {e}"
 
-    # ③ Pandoc（若已安装）
+    # 3. Pandoc if installed.
     if strategy in ("auto", "pandoc") and _has_pandoc:
         result = _fetch_pandoc(raw_html, max_chars)
         if result:
-            return f"[来源: Pandoc 解析]\n{result}"
+            return f"[Source: Pandoc]\n{result}"
 
-    # ④ 正则兜底
-    return f"[来源: 正则清洗]\n{_fetch_regex(raw_html, max_chars)}"
+    # 4. Regex fallback.
+    return f"[Source: Regex cleanup]\n{_fetch_regex(raw_html, max_chars)}"
 
 # ── Git ──────────────────────────────────────────────────
 
@@ -278,7 +278,7 @@ def tool_git_op(a: dict) -> str:
     action = a["action"]
     rp     = a.get("repo_path") or _session_cwd[0]
 
-    # ── 安全构建参数列表（避免 shell 注入）─────────────────
+    # Build argv safely to avoid shell injection.
     if action == "status":
         argv = ["git", "status"]
     elif action == "diff":
@@ -292,7 +292,7 @@ def tool_git_op(a: dict) -> str:
         argv = ["git", "add"] + files.split()
     elif action == "commit":
         msg = a.get("message", "")
-        if not msg: return "ERROR: commit 需要 'message' 参数"
+        if not msg: return "ERROR: commit requires a 'message' parameter"
         argv = ["git", "commit", "-m", msg]
     elif action == "push":
         argv = ["git", "push", a.get("remote", "origin")]
@@ -300,21 +300,21 @@ def tool_git_op(a: dict) -> str:
         argv = ["git", "pull", a.get("remote", "origin")]
     elif action == "clone":
         url = a.get("url", "")
-        if not url: return "ERROR: clone 需要 'url' 参数"
+        if not url: return "ERROR: clone requires a 'url' parameter"
         argv = ["git", "clone", url]
     elif action == "branch":
         br = a.get("branch", "")
         argv = ["git", "branch"] + (br.split() if br else ["-a"])
     elif action == "checkout":
         br = a.get("branch", "")
-        if not br: return "ERROR: checkout 需要 'branch' 参数"
+        if not br: return "ERROR: checkout requires a 'branch' parameter"
         argv = ["git", "checkout", br]
     elif action == "raw":
         rc = a.get("raw_cmd", "")
-        if not rc: return "ERROR: raw 需要 'raw_cmd' 参数"
+        if not rc: return "ERROR: raw requires a 'raw_cmd' parameter"
         argv = ["git"] + rc.split()
     else:
-        return f"ERROR: 未知 action '{action}'"
+        return f"ERROR: unknown action '{action}'"
 
     print(c(YELLOW, f"  🌿 {' '.join(argv)}"))
     try:
@@ -328,7 +328,7 @@ def tool_git_op(a: dict) -> str:
         )
         return (res.stdout + res.stderr).strip() or "(no output)"
     except subprocess.TimeoutExpired:
-        return "ERROR: git 超时"
+        return "ERROR: git timed out"
     except Exception as e:
         return f"ERROR: {e}"
 
@@ -338,11 +338,11 @@ WEB_SCHEMAS = [
     {"type": "function", "function": {
         "name": "web_search",
         "description": (
-            "强力三级降级搜索：搜索能力极强，始终能返回结果。"
-            "① Tavily AI Search（配置 TAVILY_API_KEY 时优先，专业 AI 搜索，结果精准）；"
-            "② Jina Search（无 Key 时自动降级，免费 Markdown 搜索，覆盖广泛）；"
-            "③ DuckDuckGo 正则兜底（前两级均失败时使用，零依赖，保底可用）。"
-            "搜索后可用 fetch_url 进一步读取全文。"
+            "Three-stage fallback search that should usually return usable results. "
+            "1. Tavily AI Search when TAVILY_API_KEY is configured. "
+            "2. Jina Search as a free Markdown fallback. "
+            "3. DuckDuckGo regex fallback when the first two fail. "
+            "Use fetch_url after search to read full pages."
         ),
         "parameters": {
             "type": "object",
@@ -354,16 +354,16 @@ WEB_SCHEMAS = [
     {"type": "function", "function": {
         "name": "fetch_url",
         "description": (
-            "抓取 URL 并返回可读文本。"
-            "优先使用 Jina Reader（穿透反爬），备用 Pandoc，最后正则清洗。"
-            "strategy 可选 auto|jina|pandoc|direct。"
+            "Fetch a URL and return readable text. "
+            "Prefers Jina Reader, falls back to Pandoc, then regex cleanup. "
+            "strategy may be auto|jina|pandoc|direct."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "url":       {"type": "string"},
-                "max_chars": {"type": "integer", "description": "最大返回字符数"},
-                "strategy":  {"type": "string",  "description": "auto|jina|pandoc|direct，默认 auto"},
+                "max_chars": {"type": "integer", "description": "Maximum returned characters."},
+                "strategy":  {"type": "string",  "description": "auto|jina|pandoc|direct; default auto."},
             },
             "required": ["url"],
         },
@@ -371,7 +371,7 @@ WEB_SCHEMAS = [
 
     {"type": "function", "function": {
         "name": "git_op",
-        "description": "Git 操作：status/diff/log/add/commit/push/pull/clone/branch/checkout/stash/raw",
+        "description": "Git operations: status/diff/log/add/commit/push/pull/clone/branch/checkout/stash/raw",
         "parameters": {
             "type": "object",
             "properties": {
@@ -389,18 +389,18 @@ WEB_SCHEMAS = [
     }},
 ]
 
-# ── 启动时打印工具状态 ────────────────────────────────────
+# Startup tool status.
 
 def web_tool_status() -> str:
     _has_tavily = bool(os.getenv("TAVILY_API_KEY"))
 
     parts = [
-        ("Tavily Search API", _has_tavily,  "AI 精准搜索（首选）" if _has_tavily else "未配置 TAVILY_API_KEY，已跳过"),
-        ("Jina Search",       True,          "免费 Markdown 搜索（二级降级）"),
-        ("DuckDuckGo",        True,          "正则兜底搜索（三级降级）"),
-        ("Jina Reader",       True,          "URL 抓取，自动穿透反爬"),
-        ("Pandoc",            _has_pandoc,   "HTML→Markdown 高质量解析" if _has_pandoc else "未安装 (apt install pandoc)"),
-        ("Lynx",              _has_lynx,     "字符浏览器备用" if _has_lynx else "未安装"),
+        ("Tavily Search API", _has_tavily,  "AI search enabled" if _has_tavily else "TAVILY_API_KEY not configured; skipped"),
+        ("Jina Search",       True,          "free Markdown search fallback"),
+        ("DuckDuckGo",        True,          "regex search fallback"),
+        ("Jina Reader",       True,          "URL fetch with anti-bot reader"),
+        ("Pandoc",            _has_pandoc,   "high-quality HTML-to-Markdown parser" if _has_pandoc else "not installed (apt install pandoc)"),
+        ("Lynx",              _has_lynx,     "text browser fallback" if _has_lynx else "not installed"),
     ]
 
     lines = []

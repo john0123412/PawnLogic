@@ -181,7 +181,7 @@ def test_dispatch_unknown_verb_does_not_raise(cmd_pkg, fake_session, capsys):
     result = asyncio.run(cmd_pkg.dispatch(ctx))
     assert result is None
     captured = capsys.readouterr()
-    assert "未知命令" in captured.out
+    assert "Unknown command" in captured.out
 
 
 def test_dispatch_aliases_share_handler(cmd_pkg):

@@ -1,7 +1,8 @@
 """
-config/providers.py — API Provider 与模型注册表
+config/providers.py - API provider and model registry.
 
-所有 API Key 通过环境变量注入，代码中无任何硬编码凭证。
+All API keys are injected through environment variables. No credentials are
+hard-coded in source.
 """
 import os
 import json
@@ -33,15 +34,15 @@ MODELS: dict[str, dict] = {
     "ds-v4-flash": {
         "id":        "deepseek-v4-flash",
         "provider":  "deepseek",
-        "desc":      "DeepSeek V4 Flash — 默认主力，快速低成本",
+        "desc":      "DeepSeek V4 Flash - default primary model, fast and low-cost",
         "color":     "\033[32m",
         "vision":    False,
-        "reasoning": True,   # 返回 reasoning_content，必须回传
+        "reasoning": True,   # Returns reasoning_content and must be echoed back.
     },
     "ds-v4-pro": {
         "id":        "deepseek-v4-pro",
         "provider":  "deepseek",
-        "desc":      "DeepSeek V4 Pro — 旗舰推理",
+        "desc":      "DeepSeek V4 Pro - flagship reasoning model",
         "color":     "\033[92m",
         "vision":    False,
         "reasoning": True,
@@ -49,7 +50,7 @@ MODELS: dict[str, dict] = {
     "gpt-5.5": {
         "id":        "gpt-5.5",
         "provider":  "openai",
-        "desc":      "OpenAI GPT-5.5 — 最新旗舰，复杂推理与编码",
+        "desc":      "OpenAI GPT-5.5 - latest flagship for complex reasoning and coding",
         "color":     "\033[97m",
         "vision":    True,
         "reasoning": False,
@@ -57,7 +58,7 @@ MODELS: dict[str, dict] = {
     "gpt-5.4": {
         "id":        "gpt-5.4",
         "provider":  "openai",
-        "desc":      "OpenAI GPT-5.4 — 编程与专业工作",
+        "desc":      "OpenAI GPT-5.4 - coding and professional work",
         "color":     "\033[37m",
         "vision":    True,
         "reasoning": False,
@@ -65,7 +66,7 @@ MODELS: dict[str, dict] = {
     "gpt-5.4-mini": {
         "id":        "gpt-5.4-mini",
         "provider":  "openai",
-        "desc":      "OpenAI GPT-5.4 Mini — 低延迟低成本",
+        "desc":      "OpenAI GPT-5.4 Mini - low-latency and low-cost",
         "color":     "\033[36m",
         "vision":    True,
         "reasoning": False,
@@ -73,7 +74,7 @@ MODELS: dict[str, dict] = {
     "gpt-5.4-nano": {
         "id":        "gpt-5.4-nano",
         "provider":  "openai",
-        "desc":      "OpenAI GPT-5.4 Nano — 最低成本",
+        "desc":      "OpenAI GPT-5.4 Nano - lowest-cost option",
         "color":     "\033[90m",
         "vision":    True,
         "reasoning": False,
@@ -81,7 +82,7 @@ MODELS: dict[str, dict] = {
     "gpt-4o": {
         "id":        "gpt-4o",
         "provider":  "openai",
-        "desc":      "OpenAI GPT-4o — 视觉+多模态",
+        "desc":      "OpenAI GPT-4o - vision and multimodal",
         "color":     "\033[97m",
         "vision":    True,
         "reasoning": False,
@@ -89,7 +90,7 @@ MODELS: dict[str, dict] = {
     "gpt-4.1": {
         "id":        "gpt-4.1",
         "provider":  "openai",
-        "desc":      "OpenAI GPT-4.1 — 代码与指令跟随",
+        "desc":      "OpenAI GPT-4.1 - coding and instruction following",
         "color":     "\033[37m",
         "vision":    False,
         "reasoning": False,
@@ -97,15 +98,15 @@ MODELS: dict[str, dict] = {
     "o3": {
         "id":        "o3",
         "provider":  "openai",
-        "desc":      "OpenAI o3 — 复杂推理",
+        "desc":      "OpenAI o3 - complex reasoning",
         "color":     "\033[96m",
         "vision":    False,
-        "reasoning": False,  # OpenAI o系列推理内部化，不暴露 reasoning_content 字段
+        "reasoning": False,  # OpenAI o-series reasoning is internalized.
     },
     "claude-opus": {
         "id":        "claude-opus-4-6",
         "provider":  "anthropic",
-        "desc":      "Claude Opus 4.6 — 前沿推理旗舰",
+        "desc":      "Claude Opus 4.6 - frontier reasoning flagship",
         "color":     "\033[95m",
         "vision":    True,
         "reasoning": False,
@@ -113,15 +114,15 @@ MODELS: dict[str, dict] = {
     "claude-sonnet": {
         "id":        "claude-sonnet-4-6",
         "provider":  "anthropic",
-        "desc":      "Claude Sonnet 4.6 — 均衡主力",
+        "desc":      "Claude Sonnet 4.6 - balanced primary model",
         "color":     "\033[95m",
         "vision":    True,
-        "reasoning": False,  # Anthropic 格式走独立路径，不经过 sanitizer
+        "reasoning": False,  # Anthropic format uses its own API path.
     },
     "claude-haiku": {
         "id":        "claude-haiku-4-5-20251001",
         "provider":  "anthropic",
-        "desc":      "Claude Haiku 4.5 — 快速低成本",
+        "desc":      "Claude Haiku 4.5 - fast and low-cost",
         "color":     "\033[35m",
         "vision":    True,
         "reasoning": False,
@@ -334,7 +335,7 @@ def find_fast_peer(model_alias: str) -> str | None:
 
 
 def get_api_config(model_alias: str) -> tuple[str, str]:
-    """返回 (base_url, api_key)。Key 从环境变量读取，永不硬编码。"""
+    """Return (base_url, api_key). Keys are read from environment variables."""
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
     prov = PROVIDERS.get(m["provider"], list(PROVIDERS.values())[0])
     key  = os.getenv(prov["api_key_env"], "")
@@ -343,14 +344,14 @@ def get_api_config(model_alias: str) -> tuple[str, str]:
 
 
 def get_api_format(model_alias: str) -> str:
-    """返回 'openai' 或 'anthropic'。"""
+    """Return 'openai' or 'anthropic'."""
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
     prov = PROVIDERS.get(m["provider"], {})
     return prov.get("api_format", "openai")
 
 
 def get_provider_config(model_alias: str) -> dict:
-    """返回完整 provider 配置字典。"""
+    """Return the full provider configuration dictionary."""
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
     prov = PROVIDERS.get(m["provider"], list(PROVIDERS.values())[0])
     key  = os.getenv(prov["api_key_env"], "")
@@ -364,7 +365,7 @@ def get_provider_config(model_alias: str) -> dict:
 
 
 def validate_api_key(model_alias: str) -> tuple[bool, str]:
-    """检查指定模型的 Key 是否已正确配置。返回 (ok, missing_env_var)。"""
+    """Check whether the model's key is configured. Return (ok, missing_env_var)."""
     _, key = get_api_config(model_alias)
     if not key:
         m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
@@ -374,12 +375,12 @@ def validate_api_key(model_alias: str) -> tuple[bool, str]:
 
 
 def list_configured_models() -> list[str]:
-    """返回所有已配置 Key 的模型别名列表。"""
+    """Return all model aliases whose provider keys are configured."""
     return [alias for alias in MODELS if validate_api_key(alias)[0]]
 
 
 def get_best_vision_model() -> tuple[str | None, str | None, str | None]:
-    """按优先级找到第一个已配置 Key 的视觉模型。"""
+    """Return the first configured vision model by priority."""
     for alias in VISION_PRIORITY:
         m = MODELS.get(alias)
         if not m or not m.get("vision"):
@@ -391,12 +392,12 @@ def get_best_vision_model() -> tuple[str | None, str | None, str | None]:
 
 
 def list_vision_models() -> list[str]:
-    """返回所有标记了 vision=True 的模型别名。"""
+    """Return all model aliases marked with vision=True."""
     return [alias for alias, m in MODELS.items() if m.get("vision")]
 
 
 def load_custom_providers() -> None:
-    """从 custom_providers.json 加载用户自定义 provider，合并进 PROVIDERS/MODELS。"""
+    """Load custom providers from custom_providers.json into PROVIDERS/MODELS."""
     # Reload .env so keys added after startup (e.g. via wizard) are available
     try:
         from dotenv import load_dotenv
@@ -463,7 +464,7 @@ def save_custom_provider(
     *,
     replace_models: bool = False,
 ) -> None:
-    """将自定义 provider 持久化到 custom_providers.json（不含 Key）。"""
+    """Persist a custom provider to custom_providers.json without storing keys."""
     CUSTOM_PROVIDERS_PATH.parent.mkdir(parents=True, exist_ok=True)
     data: dict = {"providers": {}, "models": {}}
     if CUSTOM_PROVIDERS_PATH.exists():
@@ -492,7 +493,7 @@ def save_custom_provider(
 
 
 def remove_custom_provider(name: str) -> bool:
-    """从 JSON 文件删除自定义 provider。返回是否成功。"""
+    """Remove a custom provider from the JSON file. Return whether it changed."""
     if not CUSTOM_PROVIDERS_PATH.exists():
         return False
     try:
@@ -513,5 +514,5 @@ def remove_custom_provider(name: str) -> bool:
     return True
 
 
-# 模块加载时自动读取自定义 provider
+# Load custom providers when the module is imported.
 load_custom_providers()

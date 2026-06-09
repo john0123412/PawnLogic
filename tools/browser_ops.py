@@ -1,29 +1,28 @@
 """
-tools/browser_ops.py — P5: Scrapling 浏览器武器库
-=====================================================
-直接调用 Scrapling + Patchright 本地 Python API，无需 MCP 桥接。
-所有工具调用走"原生绿色通道"，零 MCP 开销。
+tools/browser_ops.py - P5 Scrapling/Patchright browser tools.
 
-核心能力：
-  · web_fetch      — StealthyFetcher 反爬抓取（自动解 Cloudflare）
-  · web_click      — 页面元素点击（自适应定位）
-  · web_screenshot — 页面截图（存至 SAFE_WORKSPACE）
-  · web_select     — 自适应 CSS 选择器提取
-  · web_type       — 表单输入
-  · web_navigate   — 页面导航
+Uses local Scrapling + Patchright Python APIs directly without an MCP bridge.
 
-架构：
-  · web_fetch   → StealthyFetcher（Camoufox 反爬引擎，无浏览器窗口）
-  · web_screenshot / click / select / type / navigate → Patchright（Playwright 反检测 fork）
-  · _current_url 桥接两个引擎：fetch 后自动同步 URL 到 patchright 页面
+Core capabilities:
+  - web_fetch: StealthyFetcher anti-bot page fetching.
+  - web_click: element clicks.
+  - web_screenshot: page screenshots stored under SAFE_WORKSPACE.
+  - web_select: CSS selector extraction.
+  - web_type: form input.
+  - web_navigate: page navigation.
 
-安全约束：
-  · 所有下载文件强制存入 SAFE_WORKSPACE (~/.pawnlogic/workspace)
-  · 编码清洗 errors='ignore'，防止终端崩溃
+Architecture:
+  - web_fetch uses StealthyFetcher/Camoufox without a browser window.
+  - screenshot/click/select/type/navigate use Patchright.
+  - _current_url bridges both engines so fetch can sync later screenshots.
 
-依赖：
-  · pip install 'pawnlogic[browser]'（含 scrapling、patchright）
-  · patchright install chromium（首次使用自动下载浏览器）
+Safety constraints:
+  - Downloaded/generated files are forced into SAFE_WORKSPACE.
+  - Output is cleaned with errors='ignore'.
+
+Dependencies:
+  - pip install 'pawnlogic[browser]' for scrapling and patchright.
+  - patchright install chromium for first-time browser setup.
 """
 
 import os
@@ -34,31 +33,30 @@ from datetime import datetime
 from config import BROWSER_CONFIG, WORKSPACE_DIR
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN
 
-# ── 常量 ──────────────────────────────────────────────────
+# Constants.
 SAFE_WORKSPACE = WORKSPACE_DIR
 SCREENSHOT_DIR = os.path.join(SAFE_WORKSPACE, "screenshots")
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
-# ── 跨引擎 URL 桥接 ──────────────────────────────────────
-# web_fetch（StealthyFetcher）→ 设置 _current_url
-# web_screenshot（Patchright）→ 读取 _current_url，自动同步导航
+# Cross-engine URL bridge:
+# web_fetch sets _current_url; web_screenshot reads it and syncs navigation.
 _current_url = None
 
-# ── 全局浏览器上下文（Patchright，惰性创建）─────────────
+# Global Patchright browser context, created lazily.
 _browser_lock = threading.Lock()
 _browser = None       # patchright Browser
 _context = None        # patchright BrowserContext
-_page = None           # patchright Page (当前活跃页面)
-_browser_error = None  # 错误信息
+_page = None           # active patchright Page
+_browser_error = None  # error message
 
-# ── StealthyFetcher 实例（惰性创建）────────────────────
+# StealthyFetcher instance, created lazily.
 _stealthy_fetcher = None
 _fetcher_error = None
 _fetcher_lock = threading.Lock()
 
 
 def _get_page():
-    """获取或创建 Patchright 浏览器页面（惰性初始化）。"""
+    """Get or create a Patchright browser page lazily."""
     global _browser, _context, _page, _browser_error
 
     with _browser_lock:
@@ -69,7 +67,7 @@ def _get_page():
             from patchright.sync_api import sync_playwright
         except ImportError:
             _browser_error = (
-                "浏览器依赖未安装。修复: pip install 'pawnlogic[browser]' && patchright install chromium"
+                "Browser dependencies are not installed. Fix: pip install 'pawnlogic[browser]' && patchright install chromium"
             )
             return None
 
@@ -91,44 +89,43 @@ def _get_page():
             return _page
 
         except Exception as e:
-            _browser_error = f"浏览器启动失败: {type(e).__name__}: {e}"
+            _browser_error = f"browser startup failed: {type(e).__name__}: {e}"
             return None
 
 
 def _ensure_page_url(url: str):
-    """确保 patchright 页面已导航到目标 URL（仅在 URL 变化时导航）。"""
+    """Ensure the Patchright page has navigated to the target URL."""
     global _current_url
     page = _get_page()
     if not page:
         return
     try:
         current = page.url
-        # about:blank 或 URL 不匹配时自动导航
+        # Navigate when about:blank or URL mismatch is detected.
         if not current or current == "about:blank" or current != url:
             timeout_ms = BROWSER_CONFIG["timeout"] * 1000
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
             _current_url = url
     except Exception:
-        pass  # 导航失败不阻断，截图可能仍有内容
+        pass  # Navigation failure should not block screenshots that may still have content.
 
 
 def _get_stealthy_fetcher():
-    """获取或创建 StealthyFetcher 实例（Camoufox 反爬引擎）。
-    使用 StealthyFetcher.configure() 全局预热，避免首次 fetch 时的冷启动超时。
+    """Get or create a StealthyFetcher instance.
+    StealthyFetcher.configure() warms global Camoufox state to avoid first-fetch cold-start timeouts.
     """
     global _stealthy_fetcher, _fetcher_error
     with _fetcher_lock:
         if _stealthy_fetcher is None:
             try:
                 from scrapling import StealthyFetcher
-                # 全局预热：configure() 会预加载 Camoufox 引擎配置，
-                # 后续 fetch() 调用直接复用，消除首次启动的 30s+ 超时
+                # Global warm-up; later fetch() calls reuse the preloaded engine configuration.
                 StealthyFetcher.configure()
                 _stealthy_fetcher = StealthyFetcher()
                 _fetcher_error = None
             except Exception as e:
                 if isinstance(e, ImportError):
-                    _fetcher_error = "ERROR: 浏览器依赖未安装。修复: pip install 'pawnlogic[browser]'"
+                    _fetcher_error = "ERROR: browser dependencies are not installed. Fix: pip install 'pawnlogic[browser]'"
                     return None
                 _fetcher_error = f"ERROR: {e}"
                 return None
@@ -136,8 +133,8 @@ def _get_stealthy_fetcher():
 
 
 def _retry_fetch(fetcher, url: str, timeout_ms: int, max_retries: int = 3):
-    """带递增间隔的重试装饰器：Page.goto 超时自动重试。
-    间隔序列: 2s, 5s, 10s（共最多 3 次尝试）。
+    """Retry fetches with increasing delays for timeout failures.
+    Delay sequence: 2s, 5s, 10s.
     """
     delays = [2, 5, 10]
     last_exc = None
@@ -152,37 +149,37 @@ def _retry_fetch(fetcher, url: str, timeout_ms: int, max_retries: int = 3):
                 raise
             delay = delays[min(attempt, len(delays) - 1)]
             print(c(YELLOW,
-                f"  ⏳ [Retry {attempt+1}/{max_retries}] {err_name}，"
-                f"{delay}s 后重试..."
+                f"  [Retry {attempt+1}/{max_retries}] {err_name}, "
+                f"retrying after {delay}s..."
             ))
             time.sleep(delay)
     raise last_exc
 
 
 def _safe_path(filename: str) -> str:
-    """确保文件路径在 SAFE_WORKSPACE 内。"""
+    """Ensure a file path stays inside SAFE_WORKSPACE."""
     full = os.path.abspath(os.path.join(SCREENSHOT_DIR, filename))
     if not full.startswith(os.path.abspath(SCREENSHOT_DIR)):
-        raise ValueError(f"路径越界: {filename}")
+        raise ValueError(f"path escapes screenshot directory: {filename}")
     return full
 
 
 def _clean(text: str) -> str:
-    """编码清洗，防止终端崩溃。"""
+    """Clean encoding to avoid terminal crashes."""
     if text is None:
         return ""
     return text.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
 
 
 # ════════════════════════════════════════════════════════
-# 工具实现
+# Tool implementations.
 # ════════════════════════════════════════════════════════
 
 def tool_web_fetch(a: dict) -> str:
     """
-    使用 StealthyFetcher 抓取网页（原生绿色通道，零 MCP）。
-    自动处理 Cloudflare 反爬、JS 渲染。
-    抓取后自动同步 URL 到 patchright 浏览器，确保后续 web_screenshot 一致。
+    Fetch a page with StealthyFetcher without MCP overhead.
+    Handles anti-bot pages and JS rendering where Scrapling can.
+    Syncs the URL to Patchright for later web_screenshot consistency.
     """
     global _current_url
     url = a["url"]
@@ -192,16 +189,16 @@ def tool_web_fetch(a: dict) -> str:
     try:
         fetcher = _get_stealthy_fetcher()
         if fetcher is None:
-            return _fetcher_error or "ERROR: 浏览器初始化失败"
+            return _fetcher_error or "ERROR: browser initialization failed"
 
-        # StealthyFetcher 基于 Camoufox（反检测 Playwright），timeout 单位为毫秒
-        # 超时自动重试：间隔 2s → 5s → 10s，最多 3 次
+        # StealthyFetcher is Camoufox-backed; timeout is in milliseconds.
+        # Timeout retry delays are 2s -> 5s -> 10s.
         resp = _retry_fetch(fetcher, url, timeout * 1000, max_retries=3)
 
-        _current_url = url  # 桥接：同步 URL 到全局状态
+        _current_url = url
 
         status = resp.status
-        # Scrapling TextHandler 可能为 None；多级 fallback
+        # Scrapling TextHandler may be None, so use multiple fallbacks.
         raw_text = str(resp.text) if resp.text else ""
         if not raw_text and resp.body:
             raw_text = resp.body.decode("utf-8", errors="ignore")
@@ -213,43 +210,43 @@ def tool_web_fetch(a: dict) -> str:
         text = raw_text
 
         if status >= 400:
-            return f"HTTP {status}: 请求失败\n{_clean(text[:2000])}"
+            return f"HTTP {status}: request failed\n{_clean(text[:2000])}"
 
-        # 截断输出
+        # Truncate output.
         max_chars = a.get("max_chars", 15000)
         if len(text) > max_chars:
-            result = _clean(text[:max_chars]) + f"\n\n[截断: 共 {len(text)} 字符，显示前 {max_chars}]"
+            result = _clean(text[:max_chars]) + f"\n\n[truncated: {len(text)} chars total, showing first {max_chars}]"
         else:
             result = _clean(text)
 
         return result
 
     except Exception as e:
-        return f"ERROR: Scrapling 抓取失败: {type(e).__name__}: {e}"
+        return f"ERROR: Scrapling fetch failed: {type(e).__name__}: {e}"
 
 
 def tool_web_click(a: dict) -> str:
-    """点击页面元素（Patchright 自适应定位，原生绿色通道）。"""
+    """Click a page element with Patchright."""
     selector = a["selector"]
     print(c(CYAN, f"  🖱 [Scrapling/Click] {selector[:60]}"))
 
     page = _get_page()
     if not page:
-        return f"ERROR: 浏览器不可用 — {_browser_error}"
+        return f"ERROR: browser unavailable - {_browser_error}"
 
     try:
         page.click(selector, timeout=10000)
         page.wait_for_load_state("domcontentloaded", timeout=5000)
-        return f"✓ 已点击: {selector}"
+        return f"OK: clicked {selector}"
     except Exception as e:
-        return f"ERROR: 点击失败 ({selector}): {type(e).__name__}: {e}"
+        return f"ERROR: click failed ({selector}): {type(e).__name__}: {e}"
 
 
 def tool_web_screenshot(a: dict) -> str:
     """
-    页面截图（原生绿色通道，零 MCP）。
-    强制存入 SAFE_WORKSPACE。
-    自动同步 _current_url：若 web_fetch 刚抓取过页面，截图会自动对齐到同一 URL。
+    Capture a page screenshot with Patchright.
+    Forces output under SAFE_WORKSPACE.
+    Syncs _current_url when web_fetch has just fetched a page.
     """
     global _current_url
     url = a.get("url", _current_url)
@@ -259,40 +256,40 @@ def tool_web_screenshot(a: dict) -> str:
         filename = f"screenshot_{ts}.png"
 
     save_path = _safe_path(filename)
-    print(c(CYAN, f"  📸 [Scrapling/Screenshot] {url or '(当前页面)'} → {save_path}"))
+    print(c(CYAN, f"  [Scrapling/Screenshot] {url or '(current page)'} -> {save_path}"))
 
     page = _get_page()
     if not page:
-        return f"ERROR: 浏览器不可用 — {_browser_error}"
+        return f"ERROR: browser unavailable - {_browser_error}"
 
     try:
-        # 桥接：若 fetch 过页面但 patchright 尚未导航，自动同步
+        # If fetch set a URL but Patchright has not navigated yet, sync it.
         if url:
             _ensure_page_url(url)
 
         page.screenshot(path=save_path, full_page=True)
         if os.path.exists(save_path):
             size_kb = os.path.getsize(save_path) / 1024
-            return f"✓ 截图已保存: {save_path} ({size_kb:.1f} KB)"
-        return "ERROR: 截图文件未生成"
+            return f"OK: screenshot saved: {save_path} ({size_kb:.1f} KB)"
+        return "ERROR: screenshot file was not generated"
     except Exception as e:
-        return f"ERROR: 截图失败: {type(e).__name__}: {e}"
+        return f"ERROR: screenshot failed: {type(e).__name__}: {e}"
 
 
 def tool_web_select(a: dict) -> str:
-    """使用自适应 CSS 选择器提取页面元素。"""
+    """Extract page elements with a CSS selector."""
     selector = a["selector"]
     attribute = a.get("attribute", "text")
     print(c(CYAN, f"  🔍 [Scrapling/Select] {selector[:60]}"))
 
     page = _get_page()
     if not page:
-        return f"ERROR: 浏览器不可用 — {_browser_error}"
+        return f"ERROR: browser unavailable - {_browser_error}"
 
     try:
         elements = page.query_selector_all(selector)
         if not elements:
-            return f"未找到匹配元素: {selector}"
+            return f"No matching elements found: {selector}"
 
         results = []
         for i, el in enumerate(elements):
@@ -308,51 +305,51 @@ def tool_web_select(a: dict) -> str:
                 val = el.get_attribute(attribute) or ""
             results.append(_clean(val.strip()))
 
-        return "\n".join(results) if results else f"元素存在但内容为空: {selector}"
+        return "\n".join(results) if results else f"Elements exist but content is empty: {selector}"
 
     except Exception as e:
-        return f"ERROR: 选择器查询失败 ({selector}): {type(e).__name__}: {e}"
+        return f"ERROR: selector query failed ({selector}): {type(e).__name__}: {e}"
 
 
 def tool_web_type(a: dict) -> str:
-    """在表单元素中输入文本。"""
+    """Fill text into a form element."""
     selector = a["selector"]
     text = a["text"]
-    print(c(CYAN, f"  ⌨ [Scrapling/Type] {selector[:40]} → {text[:40]}"))
+    print(c(CYAN, f"  [Scrapling/Type] {selector[:40]} -> {text[:40]}"))
 
     page = _get_page()
     if not page:
-        return f"ERROR: 浏览器不可用 — {_browser_error}"
+        return f"ERROR: browser unavailable - {_browser_error}"
 
     try:
         page.fill(selector, text, timeout=10000)
-        return f"✓ 已输入: {len(text)} 字符 → {selector}"
+        return f"OK: typed {len(text)} chars into {selector}"
     except Exception as e:
-        return f"ERROR: 输入失败 ({selector}): {type(e).__name__}: {e}"
+        return f"ERROR: type failed ({selector}): {type(e).__name__}: {e}"
 
 
 def tool_web_navigate(a: dict) -> str:
-    """导航到指定 URL（Patchright，原生绿色通道）。"""
+    """Navigate the browser to a URL with Patchright."""
     global _current_url
     url = a["url"]
     print(c(CYAN, f"  🧭 [Scrapling/Navigate] {url[:80]}"))
 
     page = _get_page()
     if not page:
-        return f"ERROR: 浏览器不可用 — {_browser_error}"
+        return f"ERROR: browser unavailable - {_browser_error}"
 
     try:
         timeout = int(a.get("timeout", BROWSER_CONFIG["timeout"]))
         page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
-        _current_url = url  # 桥接
+        _current_url = url
         title = page.title()
-        return f"✓ 已导航至: {url}\n  标题: {title}"
+        return f"OK: navigated to {url}\n  Title: {title}"
     except Exception as e:
-        return f"ERROR: 导航失败 ({url}): {type(e).__name__}: {e}"
+        return f"ERROR: navigation failed ({url}): {type(e).__name__}: {e}"
 
 
 # ════════════════════════════════════════════════════════
-# 状态检测
+# Status checks.
 # ════════════════════════════════════════════════════════
 
 _scrapling_ok = False
@@ -372,13 +369,13 @@ except ImportError:
 
 
 def browser_tool_status() -> str:
-    """返回浏览器工具可用性状态。"""
+    """Return browser tool availability status."""
     parts = [
-        ("Scrapling 库",    _scrapling_ok,    "pip install 'pawnlogic[browser]'" if not _scrapling_ok else "已安装"),
-        ("Patchright",      _patchright_ok,   "pip install 'pawnlogic[browser]' && patchright install chromium" if not _patchright_ok else "已安装"),
-        ("浏览器实例",       _page is not None and not (_page.is_closed() if _page else True),
-                                              "未启动（首次使用时自动启动）" if _page is None else "已连接"),
-        ("截图目录",         True,             SCREENSHOT_DIR),
+        ("Scrapling",       _scrapling_ok,    "pip install 'pawnlogic[browser]'" if not _scrapling_ok else "installed"),
+        ("Patchright",      _patchright_ok,   "pip install 'pawnlogic[browser]' && patchright install chromium" if not _patchright_ok else "installed"),
+        ("Browser instance", _page is not None and not (_page.is_closed() if _page else True),
+                                               "not started; starts automatically on first use" if _page is None else "connected"),
+        ("Screenshot dir",   True,             SCREENSHOT_DIR),
     ]
 
     lines = []
@@ -393,7 +390,7 @@ def browser_tool_status() -> str:
 
 
 # ════════════════════════════════════════════════════════
-# Schema 定义（注册到 BROWSER_SCHEMAS → session.py）
+# Schema definitions registered by session.py.
 # ════════════════════════════════════════════════════════
 
 BROWSER_SCHEMAS = [
@@ -402,17 +399,17 @@ BROWSER_SCHEMAS = [
         "function": {
             "name": "web_fetch",
             "description": (
-                "使用 Scrapling StealthyFetcher 抓取网页（原生绿色通道，零 MCP 开销）。\n"
-                "特性：Camoufox 反检测引擎，自动解 Cloudflare 拦截，返回纯文本。\n"
-                "抓取后自动同步 URL 到浏览器，后续 web_screenshot 自动对齐。\n"
-                "比 fetch_url 更强：能穿透 Cloudflare、JS 渲染等防护。"
+                "Fetch a web page with Scrapling StealthyFetcher without MCP overhead.\n"
+                "Uses the Camoufox anti-detection engine, handles some Cloudflare/JS-rendered pages, and returns plain text.\n"
+                "After fetching, automatically syncs the URL to the browser so web_screenshot aligns with it.\n"
+                "Stronger than fetch_url for Cloudflare and JS-rendered pages."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url":       {"type": "string", "description": "目标 URL"},
-                    "timeout":   {"type": "integer", "description": f"超时秒数（默认 {BROWSER_CONFIG['timeout']}）"},
-                    "max_chars": {"type": "integer", "description": "最大返回字符数（默认 15000）"},
+                    "url":       {"type": "string", "description": "Target URL."},
+                    "timeout":   {"type": "integer", "description": f"Timeout seconds (default {BROWSER_CONFIG['timeout']})."},
+                    "max_chars": {"type": "integer", "description": "Maximum returned characters (default 15000)."},
                 },
                 "required": ["url"],
             },
@@ -423,14 +420,14 @@ BROWSER_SCHEMAS = [
         "function": {
             "name": "web_click",
             "description": (
-                "点击页面元素（自适应定位）。\n"
-                "selector 支持 CSS 选择器或 Scrapling 自适应表达式。\n"
-                "需要先使用 web_navigate 或 web_fetch 打开页面。"
+                "Click a page element.\n"
+                "selector supports CSS selectors.\n"
+                "Use web_navigate or web_fetch first to open a page."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "selector": {"type": "string", "description": "CSS 选择器或自适应表达式"},
+                    "selector": {"type": "string", "description": "CSS selector."},
                 },
                 "required": ["selector"],
             },
@@ -441,16 +438,16 @@ BROWSER_SCHEMAS = [
         "function": {
             "name": "web_screenshot",
             "description": (
-                "对当前页面截图（原生 Patchright，零 MCP 开销）。\n"
-                "文件强制存入 ~/.pawnlogic/workspace/screenshots/。\n"
-                "自动同步 web_fetch 刚抓取过的 URL，无需手动 navigate。\n"
-                "返回本地文件路径，可用 analyze_local_image 进行视觉分析。"
+                "Capture a screenshot of the current page with Patchright.\n"
+                "Files are forced into ~/.pawnlogic/workspace/screenshots/.\n"
+                "Automatically syncs a URL recently fetched by web_fetch; no manual navigate is needed.\n"
+                "Returns a local file path that can be passed to analyze_local_image."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url":      {"type": "string", "description": "截图目标 URL（可选，默认使用最近 fetch/navigate 的 URL）"},
-                    "filename": {"type": "string", "description": "文件名（默认自动生成时间戳名）"},
+                    "url":      {"type": "string", "description": "Optional screenshot target URL; defaults to the last fetch/navigate URL."},
+                    "filename": {"type": "string", "description": "Filename; defaults to a generated timestamp name."},
                 },
             },
         },
@@ -460,15 +457,14 @@ BROWSER_SCHEMAS = [
         "function": {
             "name": "web_select",
             "description": (
-                "使用自适应 CSS 选择器提取页面元素内容。\n"
-                "Scrapling 的 adaptive_select 能自动应对 DOM 结构变化。\n"
-                "attribute 可选: text（默认）| href | src | value 等。"
+                "Extract page element content with a CSS selector.\n"
+                "attribute can be text (default), href, src, value, etc."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "selector":  {"type": "string", "description": "CSS 选择器或自适应表达式"},
-                    "attribute": {"type": "string", "description": "提取的属性，默认 text"},
+                    "selector":  {"type": "string", "description": "CSS selector."},
+                    "attribute": {"type": "string", "description": "Attribute to extract; default text."},
                 },
                 "required": ["selector"],
             },
@@ -479,14 +475,14 @@ BROWSER_SCHEMAS = [
         "function": {
             "name": "web_type",
             "description": (
-                "在页面表单元素中输入文本。\n"
-                "适用于登录框、搜索栏等输入场景。"
+                "Type text into a page form element.\n"
+                "Useful for login boxes, search fields, and similar inputs."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "selector": {"type": "string", "description": "目标输入框的 CSS 选择器"},
-                    "text":     {"type": "string", "description": "要输入的文本"},
+                    "selector": {"type": "string", "description": "Target input CSS selector."},
+                    "text":     {"type": "string", "description": "Text to type."},
                 },
                 "required": ["selector", "text"],
             },
@@ -497,13 +493,13 @@ BROWSER_SCHEMAS = [
         "function": {
             "name": "web_navigate",
             "description": (
-                "导航浏览器到指定 URL。\n"
-                "用于多步骤 Web 渗透流程中的页面跳转。"
+                "Navigate the browser to a URL.\n"
+                "Useful for multi-step web workflows."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "目标 URL"},
+                    "url": {"type": "string", "description": "Target URL."},
                 },
                 "required": ["url"],
             },

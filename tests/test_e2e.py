@@ -20,7 +20,7 @@ def _wait_for_prompt(child, timeout=15):
     try:
         # Try to match session selection screen first
         idx = child.expect([
-            "恢复会话", "Resume session", "Enter",  # Session selection
+            "Resume session", "Enter",              # Session selection
             "You >", "You>"                          # Direct prompt (no sessions)
         ], timeout=timeout)
         
@@ -101,7 +101,7 @@ def test_slash_keys(spawn_pawnlogic):
     try:
         _wait_for_prompt(child)
         child.sendline("/keys")
-        child.expect(["Provider", "API", "Key", "配置"], timeout=10)
+        child.expect(["Provider", "API", "Key"], timeout=10)
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
         pytest.fail(f"/keys failed: {e}")
@@ -113,7 +113,7 @@ def test_slash_mode(spawn_pawnlogic):
     try:
         _wait_for_prompt(child)
         child.sendline("/mode")
-        child.expect(["USER", "DEV", "模式"], timeout=10)
+        child.expect(["USER", "DEV", "mode", "Mode"], timeout=10)
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
         pytest.fail(f"/mode failed: {e}")
@@ -125,7 +125,7 @@ def test_slash_limits(spawn_pawnlogic):
     try:
         _wait_for_prompt(child)
         child.sendline("/limits")
-        child.expect(["tokens", "token", "ctx", "上下文"], timeout=10)
+        child.expect(["tokens", "token", "ctx", "Context"], timeout=10)
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
         pytest.fail(f"/limits failed: {e}")
@@ -137,7 +137,7 @@ def test_slash_sessions(spawn_pawnlogic):
     try:
         _wait_for_prompt(child)
         child.sendline("/sessions")
-        child.expect(["session", "Session", "暂无", r"\(无", "会话"], timeout=10)
+        child.expect(["session", "Session", "No saved", r"\(no"], timeout=10)
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
         pytest.fail(f"/sessions failed: {e}")
@@ -149,7 +149,7 @@ def test_slash_model_list(spawn_pawnlogic):
     try:
         _wait_for_prompt(child)
         child.sendline("/model")
-        child.expect(["ds-", "claude", "hermes", "模型"], timeout=10)
+        child.expect(["ds-", "claude", "hermes", "model", "Model"], timeout=10)
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
         pytest.fail(f"/model failed: {e}")

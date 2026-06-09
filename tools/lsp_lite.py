@@ -1,16 +1,16 @@
 """
-tools/lsp_lite.py — LSP-lite: Semantic Code Indexing
+tools/lsp_lite.py - LSP-lite semantic code indexing.
 
-无需完整语言服务器，提供：
-  · find_symbol  — 跨工作区查找函数/类定义（Python 用 ast，其他语言用 grep）
-  · find_refs    — 查找符号的所有引用/调用点
-  · class_tree   — 提取 Python 类继承层级
+Provides useful code-navigation features without requiring a full language server:
+  - find_symbol: find function/class definitions across the workspace.
+  - find_refs: find references and call sites.
+  - class_tree: extract Python class inheritance hierarchy.
 
-设计原则：
-  · Python 文件使用 ast.parse()，结果精确（带行号、类型标注）
-  · 其他语言（C/C++/JS/Go/Rust）使用正则 grep，覆盖主流 def/class/fn 关键字
-  · 结果数量限制（默认最多 25 条），防止大型工程刷爆 token
-  · 零外部依赖：只用标准库 + subprocess(grep)
+Design notes:
+  - Python files use ast.parse() for accurate line numbers and node types.
+  - Other languages use grep with common def/class/fn patterns.
+  - Results are capped to avoid flooding the model context.
+  - No external dependencies beyond the standard library and grep.
 """
 
 import ast, os, re, subprocess
@@ -18,14 +18,14 @@ from pathlib import Path
 from config import scrub_sensitive_env
 from utils.ansi import c, BLUE
 
-# ── 支持的文件扩展名 ──────────────────────────────────────
+# Supported file extensions.
 _PYTHON_EXTS = {".py"}
 _GREP_EXTS   = {".c", ".cpp", ".cc", ".cxx", ".h", ".hpp",
                 ".js", ".ts", ".jsx", ".tsx",
                 ".go", ".rs", ".java", ".swift", ".kt",
                 ".php", ".s", ".asm"}
 
-# 各语言的定义关键字正则（用于 grep 搜索）
+# Language-specific definition patterns for grep search.
 _LANG_DEF_PATTERNS = {
     ".c":    r"\b(void|int|char|double|float|struct|enum|typedef)\s+{sym}\s*[({]",
     ".cpp":  r"\b(class|struct|void|int|auto|template.*?)\s+{sym}\s*[(<{]",
@@ -39,7 +39,7 @@ _LANG_DEF_PATTERNS = {
 }
 _DEFAULT_DEF_PATTERN = r"\b(def|function|fn|func|class|struct)\s+{sym}\b"
 
-# ── 忽略目录 ──────────────────────────────────────────────
+# Ignored directories.
 _SKIP_DIRS = {".git", "__pycache__", "node_modules", ".tox", "venv",
               ".venv", "dist", "build", ".cache", ".mypy_cache"}
 

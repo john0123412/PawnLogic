@@ -1,10 +1,12 @@
 """
-core/api_client.py — 底层流式 API 客户端（双格式原生支持）
+core/api_client.py — low-level streaming API client with native dual-format support.
 
-原生支持 OpenAI Chat Completions 和 Anthropic Messages 两种 API 格式。
-每种格式有独立的请求构建和响应解析路径，不做格式转换。
+Natively supports OpenAI Chat Completions and Anthropic Messages API formats.
+Each format has an independent request-building and response-parsing path,
+without cross-format conversion.
 
-共享基础设施：连接管理、代理隧道、断路器、指数退避。
+Shared infrastructure: connection management, proxy tunneling, circuit breaker,
+and exponential backoff.
 """
 
 import copy
@@ -14,43 +16,44 @@ from urllib.parse import urlparse
 from config import get_provider_config, MODELS, DEFAULT_MODEL, DYNAMIC_CONFIG
 
 
-# ── 自定义异常 ──────────────────────────────────────────
+# Custom exceptions.
 class APIEmptyResponseError(Exception):
-    """模型返回空响应（无文本、无工具调用、0 Token）。"""
+    """Model returned an empty response: no text, no tool calls, and 0 tokens."""
     pass
 
 
 # ════════════════════════════════════════════════════════
-# ★ thinking-mode 支持：reasoning_content 字段处理
+# thinking-mode support: reasoning_content field handling.
 #
-# 推理模型可能在响应中返回 reasoning_content，
-# 并且严格校验下一轮请求里对应 assistant 消息必须原样回传此字段，
-# 否则返回 HTTP 400 "The reasoning_content in the thinking mode
-# must be passed back to the API."
+# Reasoning models may return reasoning_content and strictly require the
+# corresponding assistant message in the next request to pass it back unchanged.
+# Otherwise they can return HTTP 400:
+# "The reasoning_content in the thinking mode must be passed back to the API."
 #
-# 非推理模型对未知字段态度不一：
-#   · 部分 API 忽略 unknown field
-#   · 部分 API 返回 400 unknown parameter
-# 为避免误伤，对非推理模型一律 strip reasoning_content。
+# Non-reasoning models vary in how they handle unknown fields:
+#   · Some APIs ignore unknown fields.
+#   · Some APIs return 400 unknown parameter.
+# To avoid false failures, strip reasoning_content for non-reasoning models.
 # ════════════════════════════════════════════════════════
 
-# 推理模型特征：model_alias 或 model_id 包含任一关键词即视为推理模型
+# Reasoning model heuristic: model_alias or model_id contains one of these terms.
 _REASONING_MODEL_PATTERNS = (
-    "mimo",        # 小米 MiMo 全系（含 legacy alias）
-    "deepseek",    # DeepSeek 全系（v4-flash / v4-pro / reasoner / r1）
-    "qwq",         # 阿里 QwQ 推理系列
+    "mimo",        # Xiaomi MiMo family, including legacy aliases.
+    "deepseek",    # DeepSeek family: v4-flash / v4-pro / reasoner / r1.
+    "qwq",         # Alibaba QwQ reasoning series.
 )
 
 
 def _is_reasoning_model(model_alias: str, model_id: str = "") -> bool:
-    """判断是否为支持 reasoning_content 字段的推理模型。
-    优先读取 MODELS[alias].reasoning 显式声明；
-    未声明时（自定义 provider）fallback 到关键词匹配。
+    """Return whether a model supports the reasoning_content field.
+
+    Prefer explicit MODELS[alias].reasoning; fallback to keyword matching for
+    custom providers when it is not declared.
     """
     m = MODELS.get(model_alias)
     if m is not None and "reasoning" in m:
         return bool(m["reasoning"])
-    # fallback：关键词匹配（兼容自定义 provider）
+    # Fallback keyword matching for custom providers.
     combo = f"{(model_alias or '').lower()}|{(model_id or '').lower()}"
     return any(p in combo for p in _REASONING_MODEL_PATTERNS)
 
@@ -61,28 +64,25 @@ def _sanitize_messages_for_model(
     model_id: str = "",
 ) -> list:
     """
-    针对目标模型构造干净的 OpenAI 格式 messages 列表。
+    Build a clean OpenAI-format messages list for the target model.
 
-    签名兼容性：
-      · 简化调用 _sanitize_messages_for_model(messages, model_alias) 即可
-      · model_id 可选，仅在识别自定义 provider 时提升判准精度
+    Signature compatibility:
+      · Simple callers can use _sanitize_messages_for_model(messages, model_alias)
+      · model_id is optional and improves custom-provider detection
 
-    处理逻辑：
-      · 🔑 第一步（深度拷贝隔离）：copy.deepcopy(messages) —— 绝不在原始
-        session.messages 上原地修改，避免跨模型切换时污染嵌套结构。
-      · 第二步（识别）：_is_reasoning_model 优先读取 MODELS[alias].reasoning
-        显式声明；未声明时 fallback 到关键词匹配（mimo / deepseek / qwq）。
-      · 第三步（裁剪）：
-          - 私有字段（键以 '_' 开头，例 _pinned / _args_parsed）一律剥离
-          - 空 reasoning_content（"" / None / 0 / 空列表）→ del 键，避免
-            发送 null 导致推理模型 400
-          - 非推理模型 → 强制 del reasoning_content 键，避免未定义字段 400
-          - 推理模型且非空 → 原样保留，满足 mimo-v2.5 回传校验
+    Handling:
+      · First, deepcopy messages so the original session.messages is never mutated.
+      · Then detect reasoning models through explicit config or keyword fallback.
+      · Finally trim:
+          - remove private fields whose keys start with "_"
+          - remove empty reasoning_content values to avoid sending null
+          - remove reasoning_content for non-reasoning models
+          - preserve non-empty reasoning_content for reasoning models
     """
     is_reasoning = _is_reasoning_model(model_alias, model_id)
-    # 🔑 deepcopy：割断对 session 原始消息列表与嵌套结构（tool_calls 列表、
-    # dict 值等）的引用。切换模型时非推理模型会 strip reasoning_content，
-    # 若无深拷贝会污染原始 session.messages，导致切回推理模型后思考内容丢失。
+    # deepcopy breaks references to nested session structures such as tool_calls.
+    # Without it, stripping reasoning_content for a non-reasoning model would
+    # corrupt the original session when switching back to a reasoning model.
     cloned_msgs = copy.deepcopy(messages)
     out: list[dict] = []
     for m in cloned_msgs:
@@ -91,22 +91,22 @@ def _sanitize_messages_for_model(
             if not (isinstance(k, str) and k.startswith("_"))
         }
         rc = clean.get("reasoning_content")
-        # 空值（None / "" / 0 / 空列表）或非推理模型 → 移除字段
+        # Remove empty values or remove the field for non-reasoning models.
         if not rc or not is_reasoning:
             clean.pop("reasoning_content", None)
         out.append(clean)
     return out
 
 
-# ── 断路器状态存储（per provider base_url） ──────────────
+# Circuit-breaker state storage per provider base_url.
 _CB_LOCK      = threading.Lock()
 _CIRCUIT_BREAKERS: dict[str, dict] = {}
-# 每个 entry: {"state": "closed"|"open"|"half_open",
+# Each entry: {"state": "closed"|"open"|"half_open",
 #              "failures": int, "opened_at": float}
-_CB_TRIP_AT   = 3      # 连续失败次数触发熔断
-_CB_RESET_SEC = 30     # OPEN → HALF_OPEN 等待秒数
-_RETRY_MAX    = 3      # 最大重试次数
-_RETRY_CODES  = {429, 502, 503}  # 触发退避的 HTTP 状态码
+_CB_TRIP_AT   = 3      # Consecutive failures before opening the circuit.
+_CB_RESET_SEC = 30     # Seconds from OPEN to HALF_OPEN.
+_RETRY_MAX    = 3      # Maximum retry attempts.
+_RETRY_CODES  = {429, 502, 503}  # HTTP status codes that trigger backoff.
 
 
 def _cb_get(provider: str) -> dict:
@@ -138,7 +138,7 @@ def _cb_record_failure(provider: str) -> None:
 
 
 def _cb_allow(provider: str) -> bool:
-    """返回 True 表示允许请求；False 表示熔断器开路，应快速失败。"""
+    """Return True when requests are allowed; False means fast-fail circuit open."""
     with _CB_LOCK:
         cb = _CIRCUIT_BREAKERS.get(provider)
         if not cb or cb["state"] == "closed":
@@ -146,17 +146,17 @@ def _cb_allow(provider: str) -> bool:
         if cb["state"] == "open":
             if time.monotonic() - cb["opened_at"] >= _CB_RESET_SEC:
                 cb["state"] = "half_open"
-                return True          # 放行探针
-            return False             # 仍在熔断期
-        # half_open：放行一次
+                return True          # Allow probe request.
+            return False             # Still in the open period.
+        # half_open: allow one request.
         return True
 
 # ── per-read / connect timeout ────────────────────────────
-_READ_TIMEOUT = 120   # 每次 readline() 等待上限（秒）
-_CONN_TIMEOUT = 40   # TCP 握手 + 代理 CONNECT 超时（秒）
+_READ_TIMEOUT = 120   # Max wait per readline(), in seconds.
+_CONN_TIMEOUT = 40    # TCP handshake + proxy CONNECT timeout, in seconds.
 
 # ════════════════════════════════════════════════════════
-# 代理探测
+# Proxy detection.
 # ════════════════════════════════════════════════════════
 
 def _detect_proxy() -> str | None:
@@ -166,7 +166,7 @@ def _detect_proxy() -> str | None:
     )
 
 # ════════════════════════════════════════════════════════
-# 建立连接（含 HTTP proxy → HTTPS CONNECT 隧道）
+# Open connection, including HTTP proxy -> HTTPS CONNECT tunnel.
 # ════════════════════════════════════════════════════════
 
 def _open_connection(
@@ -175,14 +175,14 @@ def _open_connection(
     timeout: int,
 ) -> tuple[http.client.HTTPConnection, str]:
     """
-    建立到 target_url 的 HTTP(S) 连接，可选通过代理。
-    返回 (conn, request_path)。调用者负责 conn.close()。
+    Open an HTTP(S) connection to target_url, optionally through a proxy.
+    Returns (conn, request_path). The caller must close conn.
 
-    代理流程（HTTP 代理 + HTTPS 目标）：
-      1. TCP 连到代理
-      2. 发送 CONNECT target:443
-      3. 等待 200 Connection established
-      4. 在同一 socket 上包裹 SSL（SNI = target_host）
+    Proxy flow for HTTP proxy + HTTPS target:
+      1. TCP connect to proxy
+      2. Send CONNECT target:443
+      3. Wait for 200 Connection established
+      4. Wrap SSL on the same socket, with SNI = target_host
     """
     parsed      = urlparse(target_url)
     is_https    = parsed.scheme == "https"
@@ -197,11 +197,11 @@ def _open_connection(
         prx_host = prx.hostname
         prx_port = prx.port or 8080
 
-        # 步骤 1：TCP 连到代理
+        # Step 1: TCP connect to proxy.
         raw_sock = socket.create_connection((prx_host, prx_port), timeout=timeout)
 
         if is_https:
-            # 步骤 2：CONNECT 隧道
+            # Step 2: CONNECT tunnel.
             connect_req = (
                 f"CONNECT {target_host}:{target_port} HTTP/1.1\r\n"
                 f"Host: {target_host}:{target_port}\r\n"
@@ -210,33 +210,33 @@ def _open_connection(
             ).encode()
             raw_sock.sendall(connect_req)
 
-            # 读取代理响应头
+            # Read proxy response headers.
             buf = b""
             raw_sock.settimeout(timeout)
             while b"\r\n\r\n" not in buf:
                 chunk = raw_sock.recv(4096)
                 if not chunk:
-                    raise ConnectionError("代理 CONNECT 响应不完整")
+                    raise ConnectionError("Proxy CONNECT response was incomplete")
                 buf += chunk
             status_line = buf.split(b"\r\n")[0].decode(errors="replace")
             if "200" not in status_line:
-                raise ConnectionError(f"代理 CONNECT 失败: {status_line}")
+                raise ConnectionError(f"Proxy CONNECT failed: {status_line}")
 
-            # 步骤 3：SSL 包裹（SNI = 真实目标域名）
+            # Step 3: SSL wrapping with SNI = real target host.
             ctx      = ssl.create_default_context()
             ssl_sock = ctx.wrap_socket(raw_sock, server_hostname=target_host)
 
-            # 将 SSL socket 注入 HTTPSConnection 骨架（跳过内部 connect）
+            # Inject SSL socket into HTTPSConnection skeleton and skip internal connect.
             conn      = http.client.HTTPSConnection(target_host, target_port, timeout=timeout)
             conn.sock = ssl_sock
         else:
-            # HTTP 目标：代理需要完整 URL
+            # HTTP targets through a proxy require an absolute URL.
             conn      = http.client.HTTPConnection(prx_host, prx_port, timeout=timeout)
             conn.sock = raw_sock
-            path      = target_url  # 绝对 URI
+            path      = target_url  # Absolute URI.
 
     else:
-        # 直连
+        # Direct connection.
         if is_https:
             ctx  = ssl.create_default_context()
             conn = http.client.HTTPSConnection(
@@ -248,7 +248,7 @@ def _open_connection(
     return conn, path
 
 # ════════════════════════════════════════════════════════
-# 健壮 SSE delta 解析器（兼容国产模型非标格式）
+# Robust SSE delta parser for non-standard model output.
 # ════════════════════════════════════════════════════════
 
 def parse_sse_delta(raw: str) -> dict | None:
@@ -289,7 +289,7 @@ def parse_sse_delta(raw: str) -> dict | None:
     except json.JSONDecodeError:
         pass
 
-    # 降级：正则提取 content
+    # Fallback: extract content with regex.
     result: dict = {"choices": [{"delta": {}, "finish_reason": None}]}
     delta = result["choices"][0]["delta"]
     m_content = re.search(r'"content"\s*:\s*"((?:[^"\\]|\\.)*)"', cleaned2)
@@ -302,7 +302,7 @@ def parse_sse_delta(raw: str) -> dict | None:
     return result if delta else None
 
 # ════════════════════════════════════════════════════════
-# tool_call ID 补全
+# tool_call ID completion.
 # ════════════════════════════════════════════════════════
 
 _call_counter = [0]
@@ -316,11 +316,11 @@ def ensure_tool_call_id(tcd: dict, iteration: int, idx: int) -> str:
 
 
 # ════════════════════════════════════════════════════════
-# Anthropic 原生路径 — 请求构建
+# Anthropic native path: request construction.
 # ════════════════════════════════════════════════════════
 
 def _anthropic_convert_tools(tools_schema: list) -> list:
-    """OpenAI tool schema → Anthropic input_schema 格式。"""
+    """Convert OpenAI tool schema to Anthropic input_schema format."""
     result = []
     for tool in (tools_schema or []):
         fn = tool.get("function", {})
@@ -334,12 +334,12 @@ def _anthropic_convert_tools(tools_schema: list) -> list:
 
 def _anthropic_convert_messages(messages: list) -> tuple[list, str | None]:
     """
-    OpenAI messages → Anthropic messages。
-    返回 (converted_messages, system_prompt)。
-    - system 提取为顶层字段
-    - tool 角色 → user + tool_result content block
-    - assistant tool_calls → tool_use content block
-    - 合并连续同角色消息（Anthropic 要求交替）
+    Convert OpenAI messages to Anthropic messages.
+    Returns (converted_messages, system_prompt).
+    - system is extracted as a top-level field
+    - tool role -> user + tool_result content block
+    - assistant tool_calls -> tool_use content block
+    - consecutive same-role messages are merged because Anthropic requires alternation
     """
     system_prompt = None
     converted = []
@@ -395,7 +395,7 @@ def _anthropic_convert_messages(messages: list) -> tuple[list, str | None]:
                 converted.append(msg)
             continue
 
-    # Anthropic 要求 user/assistant 交替，合并连续同角色
+    # Anthropic requires user/assistant alternation; merge consecutive same-role messages.
     merged = []
     for msg in converted:
         if merged and merged[-1]["role"] == msg["role"]:
@@ -419,7 +419,7 @@ def _anthropic_build_payload(
     messages: list, model_id: str, max_tokens: int,
     tools_schema: list | None,
 ) -> dict:
-    """构建 Anthropic Messages API 原生请求体。"""
+    """Build a native Anthropic Messages API request body."""
     conv_msgs, system_prompt = _anthropic_convert_messages(messages)
     payload: dict = {
         "model":      model_id,
@@ -435,7 +435,7 @@ def _anthropic_build_payload(
 
 
 def _anthropic_build_headers(api_key: str, body_len: int) -> dict:
-    """Anthropic 原生请求头。"""
+    """Build native Anthropic request headers."""
     return {
         "x-api-key":         api_key,
         "anthropic-version": "2023-06-01",
@@ -447,13 +447,13 @@ def _anthropic_build_headers(api_key: str, body_len: int) -> dict:
 
 
 # ════════════════════════════════════════════════════════
-# Anthropic 原生路径 — SSE 解析
+# Anthropic native path: SSE parsing.
 # ════════════════════════════════════════════════════════
 
 def _anthropic_parse_sse(event_type: str, data_raw: str, state: dict) -> dict | None:
     """
-    解析单个 Anthropic SSE 事件，yield 统一 delta dict。
-    state 追踪: {"tool_blocks": {idx: {id, name, args}}}
+    Parse one Anthropic SSE event and return a unified delta dict.
+    state tracks: {"tool_blocks": {idx: {id, name, args}}}
     """
     try:
         data = json.loads(data_raw)
@@ -533,7 +533,7 @@ def _anthropic_parse_sse(event_type: str, data_raw: str, state: dict) -> dict | 
 
 
 def _anthropic_parse_response(raw_bytes: bytes) -> tuple[str, str | None]:
-    """Anthropic 非流式响应解析。返回 (text, error)。"""
+    """Parse a non-streaming Anthropic response. Returns (text, error)."""
     try:
         data = json.loads(raw_bytes)
         parts = []
@@ -545,7 +545,7 @@ def _anthropic_parse_response(raw_bytes: bytes) -> tuple[str, str | None]:
         return "", str(e)
 
 # ════════════════════════════════════════════════════════
-# 流式请求生成器（核心重写）
+# Streaming request generator.
 # ════════════════════════════════════════════════════════
 
 def stream_request(
@@ -557,24 +557,24 @@ def stream_request(
     response_format: dict | None = None,
 ):
     """
-    流式 SSE 生成器（含断路器 + 指数退避 + 局部流恢复）。
-    根据 api_format 自动选择 OpenAI 或 Anthropic 原生路径。
-    yields: 已解析的 delta dict，或 {"_error": "..."}。
+    Streaming SSE generator with circuit breaker, exponential backoff, and
+    partial-stream recovery. Chooses OpenAI or Anthropic native path from
+    api_format. Yields parsed delta dicts or {"_error": "..."}.
     """
     cfg       = get_provider_config(model_alias)
     base_url  = cfg["base_url"]
     api_key   = cfg["api_key"]
     api_fmt   = cfg["api_format"]
     model_id  = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])["id"]
-    provider  = base_url   # 用 base_url 作熔断器 key
+    provider  = base_url   # Use base_url as the circuit-breaker key.
     _max_tok  = max_tokens or DYNAMIC_CONFIG["max_tokens"]
 
-    # ── 按格式构建 payload 和 headers ────────────────────
+    # Build payload and headers by format.
     if api_fmt == "anthropic":
         payload = _anthropic_build_payload(messages, model_id, _max_tok, tools_schema)
     else:
-        # ★ thinking-mode: 推理模型保留 reasoning_content 回传，
-        # 非推理模型 strip 掉，避免部分 provider 的 HTTP 400 严格校验。
+        # thinking-mode: preserve reasoning_content for reasoning models and
+        # strip it for non-reasoning models to avoid strict provider HTTP 400s.
         clean = _sanitize_messages_for_model(messages, model_alias, model_id)
         payload = {
             "model":      model_id,
@@ -592,12 +592,12 @@ def stream_request(
     proxy = _detect_proxy()
 
     for attempt in range(_RETRY_MAX):
-        # ── 断路器检查 ────────────────────────────────────
+        # Circuit-breaker check.
         if not _cb_allow(provider):
-            yield {"_error": f"circuit open: {provider}（连续失败，暂停 {_CB_RESET_SEC}s）"}
+            yield {"_error": f"circuit open: {provider} (consecutive failures; paused {_CB_RESET_SEC}s)"}
             return
 
-        # ── 指数退避等待（首次不等）────────────────────────
+        # Exponential backoff; no wait on the first attempt.
         if attempt > 0:
             wait = min(2 ** attempt + (time.monotonic() % 1), 30)
             time.sleep(wait)
@@ -624,7 +624,7 @@ def stream_request(
 
             resp = conn.getresponse()
 
-            # ── 需要重试的 HTTP 状态码 ─────────────────────
+            # HTTP status codes that should be retried.
             if resp.status in _RETRY_CODES:
                 _cb_record_failure(provider)
                 retry_after = resp.headers.get("Retry-After")
@@ -642,31 +642,31 @@ def stream_request(
                 yield {"_error": f"HTTP {resp.status}: {err_body}"}
                 return
 
-            # ── 成功建立连接，重置断路器 ───────────────────
+            # Connection established; reset circuit breaker.
             _cb_record_success(provider)
 
-            # ── 逐行读取 SSE ─────────────────────────────
+            # Read SSE line by line.
             partial_text = ""
 
             if api_fmt == "anthropic":
-                # ── Anthropic 原生 SSE 解析 ──────────────
+                # Native Anthropic SSE parsing.
                 current_event = ""
                 state: dict = {"tool_blocks": {}}
                 while True:
                     try:
                         raw_line = resp.readline()
                     except socket.timeout:
-                        yield {"_error": f"读取超时 ({_READ_TIMEOUT}s)，检查代理/网络"}
+                        yield {"_error": f"Read timeout ({_READ_TIMEOUT}s); check proxy/network"}
                         return
                     except (BrokenPipeError, ConnectionResetError) as e:
                         if partial_text:
                             yield {"_partial_end": True,
-                                   "_error": f"流中断（已接收部分内容）: {e}"}
+                                   "_error": f"Stream interrupted after partial content: {e}"}
                         else:
                             _cb_record_failure(provider)
                             if attempt < _RETRY_MAX - 1:
                                 break
-                            yield {"_error": f"连接断开: {e}"}
+                            yield {"_error": f"Connection dropped: {e}"}
                         return
 
                     if not raw_line:
@@ -694,22 +694,22 @@ def stream_request(
                 continue
 
             else:
-                # ── OpenAI 原生 SSE 解析 ──────────────────
+                # Native OpenAI SSE parsing.
                 while True:
                     try:
                         raw_line = resp.readline()
                     except socket.timeout:
-                        yield {"_error": f"读取超时 ({_READ_TIMEOUT}s)，检查代理/网络"}
+                        yield {"_error": f"Read timeout ({_READ_TIMEOUT}s); check proxy/network"}
                         return
                     except (BrokenPipeError, ConnectionResetError) as e:
                         if partial_text:
                             yield {"_partial_end": True,
-                                   "_error": f"流中断（已接收部分内容）: {e}"}
+                                   "_error": f"Stream interrupted after partial content: {e}"}
                         else:
                             _cb_record_failure(provider)
                             if attempt < _RETRY_MAX - 1:
                                 break
-                            yield {"_error": f"连接断开: {e}"}
+                            yield {"_error": f"Connection dropped: {e}"}
                         return
 
                     if not raw_line:
@@ -739,15 +739,15 @@ def stream_request(
             _cb_record_failure(provider)
             if attempt < _RETRY_MAX - 1:
                 continue
-            yield {"_error": f"连接超时 ({_CONN_TIMEOUT}s)，检查代理地址"}
+            yield {"_error": f"Connection timeout ({_CONN_TIMEOUT}s); check proxy address"}
         except ConnectionRefusedError:
             _cb_record_failure(provider)
             if attempt < _RETRY_MAX - 1:
                 continue
-            hint = f"（代理 {proxy} 是否已启动？）" if proxy else ""
-            yield {"_error": f"连接被拒绝 {hint}"}
+            hint = f" (is proxy {proxy} running?)" if proxy else ""
+            yield {"_error": f"Connection refused{hint}"}
         except ssl.SSLError as e:
-            yield {"_error": f"SSL 错误: {e}"}
+            yield {"_error": f"SSL error: {e}"}
             return
         except ConnectionError as e:
             _cb_record_failure(provider)
@@ -755,7 +755,7 @@ def stream_request(
                 continue
             yield {"_error": str(e)}
         except KeyboardInterrupt:
-            raise  # 干净传播；finally 处理 conn 清理
+            raise  # Propagate cleanly; finally handles conn cleanup.
         except Exception as e:
             yield {"_error": str(e)}
             return
@@ -766,7 +766,7 @@ def stream_request(
         return
 
 # ════════════════════════════════════════════════════════
-# 单次非流式调用（视觉工具 / memorize 使用）
+# Single non-streaming call, used by vision tools and memorize.
 # ════════════════════════════════════════════════════════
 
 def _parse_openai_nonstream_text(raw_body: bytes) -> tuple[str, str | None]:
@@ -812,7 +812,7 @@ def call_once(
     max_tokens: int = 1024,
     vision_payload_override: dict | None = None,
 ) -> tuple[str, str | None]:
-    """非流式调用。返回 (text, error)，error=None 表示成功。"""
+    """Non-streaming call. Returns (text, error), with error=None on success."""
     cfg       = get_provider_config(model_alias)
     base_url  = cfg["base_url"]
     api_key   = cfg["api_key"]
@@ -828,7 +828,7 @@ def call_once(
         payload = _anthropic_build_payload(messages, model_id, max_tokens, None)
         payload["stream"] = False
     else:
-        # ★ thinking-mode: 与 stream_request 使用相同的 sanitizer
+        # thinking-mode: use the same sanitizer as stream_request.
         clean = _sanitize_messages_for_model(messages, model_alias, model_id)
         payload = {
             "model":      model_id,
@@ -868,7 +868,7 @@ def call_once(
             return _parse_openai_nonstream_text(raw)
 
     except socket.timeout:
-        return "", "非流式调用超时"
+        return "", "Non-streaming call timed out"
     except Exception as e:
         return "", str(e)
     finally:

@@ -12,7 +12,10 @@ from core.logger import logger
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9_-]+")
-_WEAK_USER_MESSAGES = {"hi", "hello", "hey", "你好", "您好", "在吗", "test", "测试"}
+_WEAK_USER_MESSAGES = {
+    "hi", "hello", "hey",
+    "\u4f60\u597d", "\u60a8\u597d", "\u5728\u5417", "test", "\u6d4b\u8bd5",
+}
 
 
 def pick_naming_model(fallback: str) -> str:
@@ -72,7 +75,7 @@ def should_name_session(messages: list) -> bool:
         if msg.get("tool_calls") or role == "tool":
             has_tool_or_write = True
         content = str(msg.get("content") or "")
-        if "已写入" in content or "write_file" in content:
+        if "\u5df2\u5199\u5165" in content or "write_file" in content:
             has_tool_or_write = True
         if role == "user":
             stripped = content.strip()
@@ -119,7 +122,7 @@ def _extract_json(text: str) -> dict:
     text = (text or "").strip()
     if not text:
         raise ValueError("empty naming response")
-    # 剥离 Markdown 代码块（```json ... ``` 或 ``` ... ```）
+    # Strip Markdown code fences such as ```json ... ``` or ``` ... ```.
     md = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if md:
         text = md.group(1)
@@ -142,7 +145,7 @@ def generate_session_name(
 ) -> dict:
     fallback_slug = f"task_{session_id[:8]}"
     snippets = []
-    # 优先收集有实质文本的 user/assistant 消息，跳过系统注入信号和纯工具调用
+    # Prefer substantive user/assistant text, skipping system injections and tool-only calls.
     for msg in messages:
         role = msg.get("role", "")
         if role in ("system", "tool"):
@@ -154,7 +157,7 @@ def generate_session_name(
             snippets.append(f"[{role}] {content[:400]}")
         if len(snippets) >= 6:
             break
-    # 有效文本不足 2 条时，补充工具调用名称作为上下文
+    # If there are fewer than 2 useful snippets, add tool-call names as context.
     if len(snippets) < 2:
         for msg in messages:
             if msg.get("tool_calls"):
@@ -167,11 +170,12 @@ def generate_session_name(
                 break
 
     prompt = (
-        "你是会话命名器。根据下面的 CLI agent 对话，为该任务生成便于归类检索的名称。\n"
-        "只输出一个 JSON object，不要 Markdown，不要解释。\n"
-        "JSON schema: {\"title\": \"中文友好标题\", \"slug\": \"ascii-safe-name\"}\n"
-        "title: 4-18 个中文字符或简短英文短语。\n"
-        "slug: 只用小写 ASCII 字母、数字、连字符或下划线，8-48 字符。\n\n"
+        "You are a session naming assistant. Based on the CLI agent conversation below, "
+        "generate a name that is easy to categorize and search.\n"
+        "Output only one JSON object. No Markdown. No explanation.\n"
+        "JSON schema: {\"title\": \"short friendly title\", \"slug\": \"ascii-safe-name\"}\n"
+        "title: 4-8 English words or a concise phrase.\n"
+        "slug: lowercase ASCII letters, digits, hyphens, or underscores only; 8-48 chars.\n\n"
         f"cwd_basename: {Path(cwd).name or cwd}\n"
         "conversation:\n" + "\n".join(snippets)
     )
@@ -182,13 +186,13 @@ def generate_session_name(
 
     text = ""
     kwargs = {}
-    # 只对明确支持 json_object 的 OpenAI 官方模型传 response_format
+    # Only pass response_format to official OpenAI models known to support json_object.
     _SUPPORTS_JSON_FORMAT = {"gpt-4o", "gpt-4.1", "gpt-4-turbo"}
     if model_alias in _SUPPORTS_JSON_FORMAT:
         kwargs["response_format"] = {"type": "json_object"}
 
-    # 推理模型（ds-v4-flash / ds-v4-pro 等）会先消耗 token 做推理再输出 content。
-    # max_tokens=128 不够用，必须放大；同时在 system prompt 中抑制推理过程。
+    # Reasoning models consume tokens before final content, so 128 max_tokens is
+    # often too small. Increase the budget and suppress reasoning in the prompt.
     from core.api_client import _is_reasoning_model
     is_reasoning = _is_reasoning_model(model_alias)
     naming_max_tokens = 512 if is_reasoning else 128

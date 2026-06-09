@@ -1,11 +1,11 @@
 """
-core/workspace_cleanup.py — Workspace 维护工具
+core/workspace_cleanup.py — workspace maintenance utilities.
 
-提供 ``/workspace`` 系列命令的实现：
-    plan     — 生成清理候选清单（只读）
-    execute  — 按清单归档 + DB 同步
-    restore  — 从最近一次 tar 备份回滚
-    status   — 展示 workspace 总览
+Implements the ``/workspace`` command family:
+    plan     — generate cleanup candidates, read-only
+    execute  — archive by plan and sync DB metadata
+    restore  — roll back from the latest tar backup
+    status   — show workspace overview
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from core.logger import logger
 
 
 # ════════════════════════════════════════════════════════
-# 常量
+# Constants.
 # ════════════════════════════════════════════════════════
 
 WORKSPACE_PATH = Path(WORKSPACE_DIR).expanduser()
@@ -34,8 +34,8 @@ ARCHIVE_ROOT   = PAWN_HOME / "archive"
 LAST_BACKUP    = PAWN_HOME / ".last_backup"
 DEFAULT_PLAN   = PAWN_HOME / "cleanup_plan.md"
 
-HIGH_DAYS = 7    # >7 天未改 → HIGH（自动归档）
-MID_DAYS  = 14   # >14 天未改 session → HIGH
+HIGH_DAYS = 7    # Unmodified for >7 days -> HIGH, auto-archive.
+MID_DAYS  = 14   # Session unmodified for >14 days -> HIGH.
 
 SAFE_DIRS = {"skills", "screenshots", "writeups", "sub", "by-name"}
 SENSITIVE_RE = re.compile(r"(flag|key|token|secret|password|credential)", re.IGNORECASE)
@@ -43,7 +43,7 @@ SKILLS_LOCKED_SUFFIX = (".json", ".yaml", ".yml")
 
 
 # ════════════════════════════════════════════════════════
-# 通用工具
+# Shared helpers.
 # ════════════════════════════════════════════════════════
 
 def _size_human(n: int) -> str:
@@ -76,7 +76,7 @@ def _dir_size(path: Path) -> int:
 
 
 def _categorize(name: str, is_dir: bool) -> str:
-    """文件 → 归档类别（与 cleanup_plan.md 表格保持一致）"""
+    """Map a file to an archive category consistent with cleanup_plan.md."""
     if is_dir and name.startswith("session_"):
         return "orphan_sessions"
     n_low = name.lower()
@@ -119,13 +119,13 @@ def _load_db_sessions() -> dict:
 
 
 # ════════════════════════════════════════════════════════
-# 1) 备份
+# 1. Backup.
 # ════════════════════════════════════════════════════════
 
 def make_backup() -> Path:
-    """tar.gz 整个 workspace，返回备份文件路径，并写入 .last_backup"""
+    """Create a tar.gz of the workspace, return the backup path, and write .last_backup."""
     if not WORKSPACE_PATH.exists():
-        raise FileNotFoundError(f"workspace 不存在: {WORKSPACE_PATH}")
+        raise FileNotFoundError(f"workspace does not exist: {WORKSPACE_PATH}")
     PAWN_HOME.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out = PAWN_HOME / f"backup_before_cleanup_{ts}.tar.gz"
@@ -136,7 +136,7 @@ def make_backup() -> Path:
 
 
 # ════════════════════════════════════════════════════════
-# 2) 扫描 + 分类
+# 2. Scan and classify.
 # ════════════════════════════════════════════════════════
 
 def _classify(path: Path, db: dict) -> dict:
@@ -146,12 +146,12 @@ def _classify(path: Path, db: dict) -> dict:
     age = _age_days(path)
     sensitive = bool(SENSITIVE_RE.search(path.name))
 
-    # skills/ 内 JSON / YAML：LOCKED
+    # JSON/YAML files under skills/ are LOCKED.
     try:
         path.relative_to(WORKSPACE_PATH / "skills")
         if path.name.endswith(SKILLS_LOCKED_SUFFIX) or path.name == "manifest.json":
             return {"path": str(rel), "kind": kind, "size": size, "age_days": age,
-                    "confidence": "LOCKED", "reason": "skills/ 工具链描述文件",
+                    "confidence": "LOCKED", "reason": "skills/ toolchain descriptor",
                     "sensitive": False, "locked": True,
                     "action": "KEEP", "category": ""}
     except ValueError:
@@ -160,62 +160,62 @@ def _classify(path: Path, db: dict) -> dict:
     top = rel.parts[0] if rel.parts else ""
     if top in SAFE_DIRS:
         return {"path": str(rel), "kind": kind, "size": size, "age_days": age,
-                "confidence": "SAFE", "reason": f"功能目录 {top}/",
+                "confidence": "SAFE", "reason": f"functional directory {top}/",
                 "sensitive": False, "locked": False,
                 "action": "KEEP", "category": ""}
 
-    # session_* 目录
+    # session_* directories.
     if kind == "dir" and top.startswith("session_"):
         sid = top.replace("session_", "", 1)
         info = db.get(sid)
         if info and info["age_days"] <= HIGH_DAYS:
             return {"path": str(rel), "kind": kind, "size": size, "age_days": age,
                     "confidence": "SAFE",
-                    "reason": f"DB 会话 {info['age_days']:.1f} 天前活跃",
+                    "reason": f"DB session active {info['age_days']:.1f} days ago",
                     "sensitive": sensitive, "locked": False,
                     "action": "KEEP", "category": ""}
         elif info and info["age_days"] <= MID_DAYS:
             return {"path": str(rel), "kind": kind, "size": size, "age_days": age,
                     "confidence": "MID",
-                    "reason": f"DB 会话 {info['age_days']:.1f} 天未改",
+                    "reason": f"DB session unchanged for {info['age_days']:.1f} days",
                     "sensitive": sensitive, "locked": False,
                     "action": "CONFIRM", "category": "stale_sessions"}
         else:
-            reason = (f"DB 会话 {info['age_days']:.1f} 天未改"
-                      if info else "DB 已无对应会话（孤儿目录）")
+            reason = (f"DB session unchanged for {info['age_days']:.1f} days"
+                      if info else "No matching DB session; orphan directory")
             return {"path": str(rel), "kind": kind, "size": size, "age_days": age,
                     "confidence": "SENSITIVE" if sensitive else "HIGH",
-                    "reason": reason + ("（含敏感字样）" if sensitive else ""),
+                    "reason": reason + ("; sensitive-looking name" if sensitive else ""),
                     "sensitive": sensitive, "locked": False,
                     "action": "CONFIRM" if sensitive else "ARCHIVE",
                     "category": "orphan_sessions"}
 
-    # 根目录散落文件
+    # Loose files in workspace root.
     if len(rel.parts) == 1 and kind == "file":
         cat = _categorize(path.name, False)
         if age >= HIGH_DAYS:
             conf, action = "HIGH", "ARCHIVE"
-            reason = f"散落文件 ({age:.1f}d, {_size_human(size)})"
+            reason = f"loose file ({age:.1f}d, {_size_human(size)})"
         else:
             conf, action = "MID", "CONFIRM"
-            reason = f"散落文件 ({age:.1f}d) 较新"
+            reason = f"loose file ({age:.1f}d), relatively new"
         if sensitive:
             conf, action = "SENSITIVE", "CONFIRM"
-            reason += "（含敏感字样）"
+            reason += "; sensitive-looking name"
         return {"path": str(rel), "kind": kind, "size": size, "age_days": age,
                 "confidence": conf, "reason": reason,
                 "sensitive": sensitive, "locked": False,
                 "action": action, "category": cat}
 
-    # 其他
+    # Other entries.
     return {"path": str(rel), "kind": kind, "size": size, "age_days": age,
-            "confidence": "MID", "reason": "未分类",
+            "confidence": "MID", "reason": "unclassified",
             "sensitive": sensitive, "locked": False,
             "action": "CONFIRM", "category": "misc"}
 
 
 def scan() -> tuple[list, dict]:
-    """返回 (条目列表, db_sessions)"""
+    """Return (entry_list, db_sessions)."""
     if not WORKSPACE_PATH.exists():
         return [], {}
     db = _load_db_sessions()
@@ -228,13 +228,13 @@ def scan() -> tuple[list, dict]:
 
 
 # ════════════════════════════════════════════════════════
-# 3) 清单生成
+# 3. Plan rendering.
 # ════════════════════════════════════════════════════════
 
 _CONF_ICON = {
     "LOCKED": "🔒", "SAFE": "🟢", "MID": "🟡", "HIGH": "🔴", "SENSITIVE": "⚠️",
 }
-_ACTION_LABEL = {"KEEP": "保留", "ARCHIVE": "→归档", "CONFIRM": "需确认"}
+_ACTION_LABEL = {"KEEP": "keep", "ARCHIVE": "-> archive", "CONFIRM": "needs confirmation"}
 
 
 def render_plan(rows: list, db: dict, plan_path: Path = DEFAULT_PLAN) -> str:
@@ -245,7 +245,7 @@ def render_plan(rows: list, db: dict, plan_path: Path = DEFAULT_PLAN) -> str:
         f"**Workspace**: `{WORKSPACE_PATH}`",
         f"**Backup**: `{LAST_BACKUP.read_text().strip() if LAST_BACKUP.exists() else '(none)'}`",
         "",
-        "## 总览",
+        "## Overview",
         "",
     ]
 
@@ -257,19 +257,19 @@ def render_plan(rows: list, db: dict, plan_path: Path = DEFAULT_PLAN) -> str:
         if r["action"] == "ARCHIVE":
             archive_size += r["size"]
 
-    lines.append(f"- 扫描条目: **{len(rows)}**")
-    lines.append(f"- 总大小: **{_size_human(total_size)}**")
-    lines.append(f"- 拟归档大小: **{_size_human(archive_size)}**")
+    lines.append(f"- Scanned entries: **{len(rows)}**")
+    lines.append(f"- Total size: **{_size_human(total_size)}**")
+    lines.append(f"- Planned archive size: **{_size_human(archive_size)}**")
     lines.append("")
-    lines.append("| 置信度 | 数量 |")
+    lines.append("| Confidence | Count |")
     lines.append("|---|---|")
     for k in ("LOCKED", "SAFE", "MID", "HIGH", "SENSITIVE"):
         lines.append(f"| {_CONF_ICON[k]} {k} | {by_conf.get(k, 0)} |")
     lines.append("")
 
-    lines.append("## 详细清单")
+    lines.append("## Detailed Inventory")
     lines.append("")
-    lines.append("| 置信度 | 路径 | 类型 | 大小 | 年龄(天) | 建议 | 类别 | 理由 |")
+    lines.append("| Confidence | Path | Type | Size | Age (days) | Suggestion | Category | Reason |")
     lines.append("|---|---|---|---|---|---|---|---|")
     order = {"SENSITIVE": 0, "HIGH": 1, "MID": 2, "SAFE": 3, "LOCKED": 4}
     for r in sorted(rows, key=lambda x: (order.get(x["confidence"], 9), x["path"])):
@@ -281,13 +281,13 @@ def render_plan(rows: list, db: dict, plan_path: Path = DEFAULT_PLAN) -> str:
         )
     lines.append("")
 
-    # DB 一致性
+    # DB consistency.
     empty = [(s, info) for s, info in db.items() if not info["workspace_dir"]]
-    lines.append("## DB 一致性")
+    lines.append("## DB Consistency")
     lines.append("")
-    lines.append(f"- DB 总会话: **{len(db)}**")
-    lines.append(f"- workspace_dir 为空: **{len(empty)}** "
-                 "(execute 阶段会批量补写指向归档共享占位)")
+    lines.append(f"- Total DB sessions: **{len(db)}**")
+    lines.append(f"- Empty workspace_dir: **{len(empty)}** "
+                 "(execute will batch-fill these with an archived shared placeholder)")
     lines.append("")
 
     plan_path.parent.mkdir(parents=True, exist_ok=True)
@@ -296,7 +296,7 @@ def render_plan(rows: list, db: dict, plan_path: Path = DEFAULT_PLAN) -> str:
 
 
 # ════════════════════════════════════════════════════════
-# 4) 归档执行
+# 4. Archive execution.
 # ════════════════════════════════════════════════════════
 
 def _safe_mv(src: Path, dst_dir: Path) -> Path:
@@ -314,10 +314,10 @@ def _safe_mv(src: Path, dst_dir: Path) -> Path:
 
 
 def execute_cleanup(rows: list, db: dict) -> dict:
-    """按 rows 中 action='ARCHIVE' 的条目执行归档 + DB 补写。
+    """Archive rows with action='ARCHIVE' and backfill DB workspace metadata.
 
-    返回 {"moved": [...], "skipped": [...], "archive_root": Path,
-          "db_updated": int}
+    Returns {"moved": [...], "skipped": [...], "archive_root": Path,
+             "db_updated": int}
     """
     date_tag = datetime.now().strftime("%Y%m%d")
     archive_root = ARCHIVE_ROOT / f"cleanup_{date_tag}"
@@ -331,15 +331,15 @@ def execute_cleanup(rows: list, db: dict) -> dict:
         if r["action"] != "ARCHIVE":
             continue
         if r["locked"] or r["sensitive"]:
-            skipped.append((r["path"], "locked/sensitive — 跳过"))
+            skipped.append((r["path"], "locked/sensitive — skipped"))
             continue
 
         src = WORKSPACE_PATH / r["path"]
         if not src.exists():
-            skipped.append((r["path"], "源路径不存在"))
+            skipped.append((r["path"], "source path does not exist"))
             continue
         if src.is_symlink():
-            skipped.append((r["path"], "symlink，跳过"))
+            skipped.append((r["path"], "symlink; skipped"))
             continue
 
         cat_dir = archive_root / (r["category"] or "misc")
@@ -351,10 +351,10 @@ def execute_cleanup(rows: list, db: dict) -> dict:
                 sid = r["path"].replace("session_", "", 1)
                 sid_to_archive[sid] = str(target)
         except Exception as exc:
-            skipped.append((r["path"], f"mv 失败: {exc}"))
+            skipped.append((r["path"], f"mv failed: {exc}"))
             logger.warning("Cleanup mv failed | path={} exc={!r}", r["path"], exc)
 
-    # 写 MANIFEST
+    # Write MANIFEST.
     manifest = archive_root / "MANIFEST.md"
     lines = [
         "# Cleanup Manifest",
@@ -364,16 +364,16 @@ def execute_cleanup(rows: list, db: dict) -> dict:
         f"**Archive root**: `{archive_root}`",
         f"**Moved**: {len(moved)} | **Skipped**: {len(skipped)}",
         "",
-        "## 归档明细",
+        "## Archived Items",
         "",
-        "| 原路径 | 归档至 | 类别 |",
+        "| Source Path | Archived To | Category |",
         "|---|---|---|",
     ]
     for src, dst, cat in moved:
         lines.append(f"| `workspace/{src}` | `{dst}` | {cat} |")
     if skipped:
         lines.append("")
-        lines.append("## 跳过明细")
+        lines.append("## Skipped Items")
         lines.append("")
         for n, reason in skipped:
             lines.append(f"- `{n}`: {reason}")
@@ -384,7 +384,7 @@ def execute_cleanup(rows: list, db: dict) -> dict:
         json.dumps(sid_to_archive, indent=2)
     )
 
-    # DB 同步：workspace_dir='' 的会话补写
+    # DB sync: backfill sessions with empty workspace_dir.
     db_updated = 0
     placeholder = archive_root / "orphan_sessions" / "_shared_ancient"
     placeholder.mkdir(parents=True, exist_ok=True)
@@ -421,19 +421,19 @@ def execute_cleanup(rows: list, db: dict) -> dict:
 
 
 # ════════════════════════════════════════════════════════
-# 5) 回滚（从最近备份）
+# 5. Restore from latest backup.
 # ════════════════════════════════════════════════════════
 
 def restore_from_backup(backup_path: Optional[Path] = None) -> dict:
-    """从备份 tar 解压回 ~/.pawnlogic/。注意会覆盖当前 workspace 内容！"""
+    """Extract a backup tar into ~/.pawnlogic/. This overwrites current workspace content."""
     if backup_path is None:
         if not LAST_BACKUP.exists():
-            return {"ok": False, "error": "未找到 .last_backup 记录"}
+            return {"ok": False, "error": ".last_backup record not found"}
         backup_path = Path(LAST_BACKUP.read_text().strip())
     if not backup_path.exists():
-        return {"ok": False, "error": f"备份文件不存在: {backup_path}"}
+        return {"ok": False, "error": f"backup file does not exist: {backup_path}"}
 
-    # 把当前 workspace 重命名为 _replaced_<ts>，以防回滚出错丢数据
+    # Rename current workspace to _replaced_<ts> before restore to avoid data loss.
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     if WORKSPACE_PATH.exists():
         replaced = WORKSPACE_PATH.parent / f"workspace_replaced_{ts}"

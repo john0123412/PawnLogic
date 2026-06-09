@@ -33,9 +33,9 @@ def fmt_config() -> str:
     """
     cfg = DYNAMIC_CONFIG
     return (
-        f"  max_tokens      : {c(CYAN, str(cfg['max_tokens']))}  (每次 API 输出上限)\n"
+        f"  max_tokens      : {c(CYAN, str(cfg['max_tokens']))}  (per-API output limit)\n"
         f"  ctx_max_chars   : {c(CYAN, str(cfg['ctx_max_chars']))}  (~{cfg['ctx_max_chars']//4:,} tokens)\n"
-        f"  max_iter        : {c(CYAN, str(cfg['max_iter']))}  (工具调用轮次上限)\n"
+        f"  max_iter        : {c(CYAN, str(cfg['max_iter']))}  (tool-call iteration limit)\n"
         f"  tool_max_chars  : {c(CYAN, str(cfg['tool_max_chars']))}\n"
         f"  fetch_max_chars : {c(CYAN, str(cfg['fetch_max_chars']))}\n"
     )

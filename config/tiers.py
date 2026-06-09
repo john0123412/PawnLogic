@@ -1,4 +1,4 @@
-"""config/tiers.py — 三档算力预设"""
+"""config/tiers.py - runtime tier presets."""
 
 TIER_LOW = {
     "max_tokens":      4_096,

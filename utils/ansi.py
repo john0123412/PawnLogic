@@ -1,22 +1,22 @@
-"""utils/ansi.py — ANSI 颜色辅助
+"""utils/ansi.py - ANSI color helpers.
 
-修复 WSL2 / Ubuntu readline 光标错位问题：
-  readline 在计算 input() 提示符宽度时会把 ANSI 转义序列
-  （\033[...m）当作可见字符，导致光标偏移，输入覆盖上一行输出。
+Fix WSL2 / Ubuntu readline cursor drift:
+  readline counts ANSI escape sequences such as \033[...m as visible
+  characters when measuring input() prompts. That shifts the cursor and can
+  make user input overwrite the previous output line.
 
-  修复方案：用 readline 专用标记包裹转义序列：
-    \001  = RL_PROMPT_START_IGNORE（告知 readline：忽略宽度计算开始）
-    \002  = RL_PROMPT_END_IGNORE  （告知 readline：忽略宽度计算结束）
+  The fix is to wrap escape sequences with readline markers:
+    \001  = RL_PROMPT_START_IGNORE
+    \002  = RL_PROMPT_END_IGNORE
 
-  普通输出（print / sys.stdout.write）用 c()，不需要这些标记。
-  只有 input() 的 prompt 参数才用 cp() / rl_wrap()。
+  Regular output should use c(). Only input() prompts need cp() / rl_wrap().
 """
 
 import sys
 import threading
 import re as _re
 
-# ── 基础颜色常量 ────────────────────────────────────────
+# Color constants.
 R       = "\033[0m"
 BOLD    = "\033[1m"
 DIM     = "\033[2m"
@@ -28,56 +28,56 @@ RED     = "\033[91m"
 BLUE    = "\033[94m"
 MAGENTA = "\033[95m"
 
-# ── 普通输出用（print / sys.stdout.write）──────────────
+# Regular output helpers for print / sys.stdout.write.
 
 def c(col: str, txt: str) -> str:
-    """为普通输出着色。不可用于 input() prompt。"""
+    """Color regular output. Do not use this for input() prompts."""
     return f"{col}{txt}{R}"
 
 def box(txt: str, col: str = CYAN) -> str:
     return f"{col}│{R} {txt}"
 
-# ── readline prompt 专用 ────────────────────────────────
+# readline prompt helpers.
 #
-# \001 和 \002 是 readline 的 RL_PROMPT_START_IGNORE /
-# RL_PROMPT_END_IGNORE 标记，告诉 readline 忽略这段字节的
-# 显示宽度，从而正确计算光标位置。
+# \001 and \002 are readline's RL_PROMPT_START_IGNORE /
+# RL_PROMPT_END_IGNORE markers. They tell readline to ignore the wrapped
+# bytes when computing display width.
 #
-# 原理：readline 对 prompt 宽度的计算公式是
-#   visible_width = len(prompt) - len(所有 \001...\002 之间的字节)
-# 把所有 \033[...m 包进 \001...\002，宽度偏差归零。
+# Principle:
+#   visible_width = len(prompt) - len(bytes between every \001...\002 pair)
+# Wrapping every \033[...m removes the width error.
 
 _ANSI_RE = _re.compile(r'(\033\[[0-9;]*m)')
 
 def rl_wrap(text: str) -> str:
     """
-    将字符串中所有 ANSI 转义序列包裹上 readline 忽略标记。
-    用于需要传入 input() 的任何含颜色的字符串。
+    Wrap every ANSI escape sequence with readline ignore markers.
+    Use this for any colored string passed to input().
     """
     return _ANSI_RE.sub(r'\001\1\002', text)
 
 def cp(col: str, txt: str) -> str:
     """
-    readline-safe 版 c()。
-    用于 input() prompt，其余场合用 c()。
+    readline-safe c().
+    Use this for input() prompts; use c() everywhere else.
 
-    示例：
-        # 普通输出
-        print(c(GREEN, "完成"))
+    Example:
+        # Regular output
+        print(c(GREEN, "Done"))
 
-        # input 提示符
+        # input prompt
         raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > "))
     """
     return rl_wrap(f"{col}{txt}{R}")
 
 
-# ── Loading 动画 ────────────────────────────────────────
+# Loading animation.
 
 class Spinner:
-    """USER_MODE 专用 Loading 动画，在后台线程显示旋转字符。
+    """USER_MODE loading animation that renders a spinner in a background thread.
 
-    用法:
-        with Spinner("正在同步技能包"):
+    Usage:
+        with Spinner("Syncing skill packs"):
             do_long_running_work()
     """
     _FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -96,7 +96,7 @@ class Spinner:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=1)
-        # 清除动画行
+        # Clear the animation line.
         sys.stdout.write(f"\r\033[K")
         sys.stdout.flush()
 

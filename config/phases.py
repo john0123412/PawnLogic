@@ -1,4 +1,4 @@
-"""config/phases.py — MoE 动态工具裁剪专家路由表"""
+"""config/phases.py - MoE dynamic tool-pruning route table."""
 
 AGENT_PHASES: dict[str, list[str]] = {
     "RECON": [

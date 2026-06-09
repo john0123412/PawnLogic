@@ -1,12 +1,12 @@
 """
-tools/sandbox.py — 多语言代码执行沙箱（重构版）
+tools/sandbox.py — multi-language code execution sandbox.
 
-WSL 性能优化：
-  ① preexec_fn 设置 resource 限制（内存 512MB、CPU 时间 = timeout+5s）
-  ② 进程 nice +10 降低调度优先级，不抢主进程 CPU
-  ③ 输出限制提前在 subprocess 层截断，避免大输出全量缓冲进内存
-  ④ venv 复用检测：已存在则不重建，避免重复 I/O
-  ⑤ 编译产物写入 /tmp（tmpfs，WSL 下比 /home 快）
+WSL performance optimizations:
+  1. preexec_fn sets resource limits: 512 MB memory, CPU time = timeout + 5s.
+  2. nice +10 lowers subprocess scheduling priority.
+  3. Output is truncated at the subprocess layer to avoid large in-memory buffers.
+  4. Existing venvs are reused to avoid repeated I/O.
+  5. Compilation artifacts go to /tmp, which is tmpfs and faster than /home on WSL.
 """
 
 import os, sys, re, subprocess, tempfile
@@ -14,21 +14,21 @@ from pathlib import Path
 from config import DYNAMIC_CONFIG, SANDBOX_LANGS
 from utils.ansi import c, YELLOW, RED
 
-# ── 资源限制仅在 POSIX 系统可用（Linux / WSL2 / macOS）──────
+# Resource limits are available only on POSIX systems: Linux / WSL2 / macOS.
 _IS_POSIX = (os.name == "posix")
 if _IS_POSIX:
     import resource
 
-# ── WSL 资源限制常量 ──────────────────────────────────────
-_MEM_LIMIT_MB      = 512          # 子进程最大内存（MB）
-_NICE_LEVEL        = 10           # nice 值：降低调度优先级
-_OUTPUT_HARD_BYTES = 256_000      # subprocess 输出硬截断（字节）
+# WSL resource-limit constants.
+_MEM_LIMIT_MB      = 512          # Max subprocess memory in MB.
+_NICE_LEVEL        = 10           # nice value to lower scheduling priority.
+_OUTPUT_HARD_BYTES = 256_000      # Hard subprocess output truncation in bytes.
 _PY_PKG_NAME_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9_,.-]+\])?([<>=!~]=?[A-Za-z0-9.*+!._-]+)?$"
 )
 _SYS_PKG_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+.-]*$")
 
-# ── 最小化环境变量：防止 API Key 等敏感信息泄露给子进程 ────
+# Minimized environment to prevent API keys and other secrets leaking to subprocesses.
 _SENSITIVE_ENV_KEYS = {
     "PAWN_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "QWEN_API_KEY",
     "ZHIPU_API_KEY", "SILICON_API_KEY", "OPENROUTER_API_KEY", "MOONSHOT_API_KEY",
@@ -37,7 +37,7 @@ _SENSITIVE_ENV_KEYS = {
 }
 
 def _build_sandbox_env() -> dict:
-    """构建最小化环境变量，只保留 PATH/HOME/LANG 等基础变量，剔除所有 API Key。"""
+    """Build a minimal environment with only basic vars and no API keys."""
     env = {}
     safe_keys = {"PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE",
                  "TERM", "SHELL", "TMPDIR", "TEMP", "TMP",
@@ -46,9 +46,9 @@ def _build_sandbox_env() -> dict:
         if k in safe_keys:
             env[k] = v
         elif k in _SENSITIVE_ENV_KEYS:
-            continue  # 剔除 API Key
+            continue  # Drop API keys.
         elif k.startswith("PAWN_") or k.startswith("OPENAI_") or k.startswith("DEEPSEEK_"):
-            continue  # 剔除所有可能的 API 相关变量
+            continue  # Drop likely API-related variables.
     return env
 
 
@@ -58,40 +58,40 @@ def _invalid_packages(pkgs: list[str], pattern: re.Pattern[str]) -> list[str]:
 
 def _sandbox_preexec(cpu_timeout: int) -> None:
     """
-    在子进程 fork 后、exec 前执行（仅 POSIX）。
-    设置资源上限，防止失控进程拖垮系统。
+    Run after fork and before exec in the subprocess, POSIX only.
+    Sets resource limits to prevent runaway processes from harming the host.
     """
     if not _IS_POSIX:
-        return  # Windows 下无 resource 模块，跳过
+        return  # Windows has no resource module.
 
-    # 内存上限：512 MB
+    # Memory limit: 512 MB.
     mem = _MEM_LIMIT_MB * 1024 * 1024
     try:
         resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
     except (ValueError, resource.error):
         pass
 
-    # CPU 时间上限：比 timeout 多 5s 作为缓冲
+    # CPU time limit: timeout plus 5 seconds of buffer.
     cpu = cpu_timeout + 5
     try:
         resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
     except (ValueError, resource.error):
         pass
 
-    # 文件写入上限：64 MB（防止填满磁盘）
+    # File write limit: 64 MB, to avoid filling the disk.
     fsize = 64 * 1024 * 1024
     try:
         resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))
     except (ValueError, resource.error, AttributeError):
         pass
 
-    # 进程数限制（防 fork bomb）—— 仅 Linux
+    # Process count limit to reduce fork-bomb risk, Linux only.
     try:
         resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))
     except (ValueError, resource.error, AttributeError):
         pass
 
-    # 降低调度优先级（nice +10）
+    # Lower scheduling priority with nice +10.
     try:
         os.nice(_NICE_LEVEL)
     except OSError:
@@ -108,15 +108,15 @@ def _run_limited(
     disable_rlimit: bool = False,
 ) -> tuple[str, int]:
     """
-    带资源限制的 subprocess 运行。
-    返回 (output_text, return_code)。
-    输出超过 _OUTPUT_HARD_BYTES 时直接截断，不会全量进内存。
+    Run a subprocess with resource limits.
+    Returns (output_text, return_code). Output above _OUTPUT_HARD_BYTES is
+    truncated before large buffers accumulate in memory.
     """
-    # 默认使用最小化沙箱环境，防止 API Key 泄露
+    # Use minimized sandbox environment by default to prevent API key leaks.
     if env is None:
         env = _build_sandbox_env()
 
-    # Windows 不支持 preexec_fn
+    # Windows does not support preexec_fn.
     preexec = None
     if not disable_rlimit and _IS_POSIX:
         preexec = lambda: _sandbox_preexec(timeout)
@@ -127,12 +127,12 @@ def _run_limited(
             shell=shell,
             stdin=subprocess.PIPE if input_data else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,   # 合并 stderr，只读一个管道
+            stderr=subprocess.STDOUT,   # Merge stderr so only one pipe is read.
             cwd=cwd,
             env=env,
             preexec_fn=preexec,
         )
-        # communicate 带超时
+        # communicate with timeout.
         try:
             stdout_bytes, _ = proc.communicate(
                 input=input_data.encode() if input_data else None,
@@ -141,40 +141,40 @@ def _run_limited(
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.communicate()
-            return f"[执行超时 {timeout}s]", 1
+            return f"[execution timed out after {timeout}s]", 1
 
-        # 硬截断
+        # Hard truncation.
         if len(stdout_bytes) > _OUTPUT_HARD_BYTES:
             half = _OUTPUT_HARD_BYTES // 2
             stdout_bytes = (
                 stdout_bytes[:half]
-                + f"\n...[输出过大，已截断至 {_OUTPUT_HARD_BYTES//1024}KB]...\n".encode()
+                + f"\n...[output too large, truncated to {_OUTPUT_HARD_BYTES//1024}KB]...\n".encode()
                 + stdout_bytes[-half // 4:]
             )
 
         return stdout_bytes.decode("utf-8", errors="replace"), proc.returncode
 
     except FileNotFoundError as e:
-        return f"ERROR: 命令不存在 — {e}", 1
+        return f"ERROR: command not found — {e}", 1
     except MemoryError:
-        return "ERROR: 内存超限（>512MB）", 1
+        return "ERROR: memory limit exceeded (>512MB)", 1
     except Exception as e:
         return f"ERROR: {e}", 1
 
 
 def _get_python_exec(use_venv: bool, cwd: str) -> str:
-    """获取 Python 解释器，支持 ./venv 自动创建/复用。"""
+    """Return Python executable; supports automatic ./venv creation/reuse."""
     if not use_venv:
         return sys.executable
     venv_path = Path(cwd) / "venv"
     if not venv_path.exists():
-        print(c(YELLOW, f"  🐍 创建 venv: {venv_path}"))
+        print(c(YELLOW, f"  🐍 Creating venv: {venv_path}"))
         out, rc = _run_limited(
             [sys.executable, "-m", "venv", str(venv_path)],
             timeout=60, cwd=cwd
         )
         if rc != 0:
-            print(c(RED, f"  venv 创建失败: {out[:200]}"))
+            print(c(RED, f"  venv creation failed: {out[:200]}"))
             return sys.executable
     for candidate in ["bin/python3", "bin/python", "Scripts/python.exe"]:
         py = venv_path / candidate
@@ -193,15 +193,15 @@ def tool_run_code(a: dict) -> str:
     cwd          = a.get("cwd") or _get_cwd()
 
     if language not in SANDBOX_LANGS:
-        return (f"ERROR: 不支持的语言 '{language}'。\n"
-                f"支持: {', '.join(SANDBOX_LANGS.keys())}")
+        return (f"ERROR: unsupported language '{language}'.\n"
+                f"Supported: {', '.join(SANDBOX_LANGS.keys())}")
 
     lang_cfg = SANDBOX_LANGS[language]
     ext      = lang_cfg["ext"]
     output   = []
 
-    # 使用系统临时目录（Linux/WSL: /tmp tmpfs；Windows: %TEMP%）
-    _tmp_root = "/tmp" if _IS_POSIX else None  # None = 系统默认 tempdir
+    # Use system temp dir. Linux/WSL uses /tmp tmpfs; Windows uses %TEMP%.
+    _tmp_root = "/tmp" if _IS_POSIX else None  # None = system default tempdir.
     with tempfile.TemporaryDirectory(prefix="pawn_sandbox_", dir=_tmp_root) as tmpdir:
 
         # ══ Python ══════════════════════════════════════
@@ -220,7 +220,7 @@ def tool_run_code(a: dict) -> str:
                     timeout=120, cwd=cwd, disable_rlimit=True,
                 )
                 if rc != 0:
-                    output.append(f"[pip 警告]\n{out[:500]}")
+                    output.append(f"[pip warning]\n{out[:500]}")
 
             src = os.path.join(tmpdir, f"code{ext}")
             with open(src, "w", encoding="utf-8") as f:
@@ -233,7 +233,7 @@ def tool_run_code(a: dict) -> str:
             output.append(out)
             output.append(f"[exit {rc}]")
 
-        # ══ 编译型（C / C++ / Rust / Java）════════════
+        # Compiled languages: C / C++ / Rust / Java.
         elif lang_cfg.get("compile"):
             src  = os.path.join(tmpdir, f"code{ext}")
             bin_ = os.path.join(tmpdir, "a.out")
@@ -244,9 +244,9 @@ def tool_run_code(a: dict) -> str:
             print(c(YELLOW, f"  🔨 {compile_cmd[:90]}"))
             cout, crc = _run_limited(compile_cmd, timeout=60, cwd=tmpdir, shell=True)
             if cout.strip():
-                output.append(f"[编译输出]\n{cout}")
+                output.append(f"[compile output]\n{cout}")
             if crc != 0:
-                output.append(f"[编译失败 exit {crc}]")
+                output.append(f"[compile failed exit {crc}]")
                 return "\n".join(output)
 
             if language == "java":
@@ -265,7 +265,7 @@ def tool_run_code(a: dict) -> str:
             output.append(run_out)
             output.append(f"[exit {run_rc}]")
 
-        # ══ 解释型（bash / node / go run）═════════════
+        # Interpreted commands: bash / node / go run.
         else:
             src = os.path.join(tmpdir, f"code{ext}")
             with open(src, "w", encoding="utf-8") as f:
@@ -284,8 +284,8 @@ def tool_run_code(a: dict) -> str:
     result = "\n".join(x for x in output if x)
     limit  = DYNAMIC_CONFIG["tool_max_chars"]
     if len(result) > limit:
-        result = result[:limit // 2] + "\n...[截断]...\n" + result[-limit // 4:]
-    return result or "(无输出)"
+        result = result[:limit // 2] + "\n...[truncated]...\n" + result[-limit // 4:]
+    return result or "(no output)"
 
 
 def _get_cwd() -> str:
@@ -375,12 +375,12 @@ SANDBOX_SCHEMAS = [
     {"type": "function", "function": {
         "name": "run_code",
         "description": (
-            "在沙箱中执行代码。语言: python / c / cpp / javascript / bash / rust / go / java。\n"
-            "Python: use_venv=true 自动创建/复用 ./venv；install_deps='numpy requests' 安装依赖。\n"
-            "C/C++: 自动 gcc/g++ 编译，先输出编译信息再运行。\n"
-            "资源限制：内存 512MB，CPU = timeout+5s，输出 256KB。\n"
-            "🚨 防幻觉警告：如果你的脚本需要处理本地文件，必须在脚本中使用 open('path').read() "
-            "真实读取！绝不允许在脚本字符串中伪造、编造或 hardcode 目标文件的假内容！"
+            "Execute code in a sandbox. Languages: python / c / cpp / javascript / bash / rust / go / java.\n"
+            "Python: use_venv=true creates/reuses ./venv; install_deps='numpy requests' installs deps.\n"
+            "C/C++: automatically compiles with gcc/g++, then runs after compile output.\n"
+            "Resource limits: memory 512MB, CPU = timeout+5s, output 256KB.\n"
+            "Anti-hallucination warning: if your script needs local files, it must read them "
+            "with open('path').read(). Never fabricate, invent, or hardcode fake target file content."
         ),
         "parameters": {
             "type": "object",
@@ -388,9 +388,9 @@ SANDBOX_SCHEMAS = [
                 "language":     {"type": "string"},
                 "code":         {"type": "string"},
                 "stdin":        {"type": "string"},
-                "timeout":      {"type": "integer", "description": "执行超时秒数（默认10）"},
-                "use_venv":     {"type": "boolean", "description": "Python only: 使用 ./venv"},
-                "install_deps": {"type": "string",  "description": "Python only: 空格分隔的 pip 包名"},
+                "timeout":      {"type": "integer", "description": "Execution timeout in seconds; default 10"},
+                "use_venv":     {"type": "boolean", "description": "Python only: use ./venv"},
+                "install_deps": {"type": "string",  "description": "Python only: space-separated pip package names"},
             },
             "required": ["language", "code"],
         },

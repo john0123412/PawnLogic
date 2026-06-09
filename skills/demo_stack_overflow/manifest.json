@@ -1,14 +1,14 @@
 {
   "name": "Stack Overflow Exploit",
   "version": "1.0",
-  "description": "栈溢出漏洞分析与利用模板，覆盖偏移计算、ROP 链构建、one_gadget 注入",
-  "keywords": ["pwn", "stack", "overflow", "栈溢出", "exploit", "rop"],
+  "description": "Stack overflow vulnerability analysis and exploitation template covering offset calculation, ROP chain construction, and one_gadget usage",
+  "keywords": ["pwn", "stack", "overflow", "exploit", "rop"],
   "triggers": [
-    "分析栈溢出漏洞",
+    "analyze stack overflow",
     "stack smash",
     "buffer overflow",
-    "构建 ROP 链",
-    "pwn 二进制漏洞",
+    "build ROP chain",
+    "pwn binary vulnerability",
     "ret2libc"
   ],
   "guide": "guide.md",

@@ -827,9 +827,9 @@ def test_provider_fetch_prints_filter_and_alias_summary(monkeypatch, capsys):
         provider_cmd.PROVIDERS.pop(alias, None)
 
     out = capsys.readouterr().out
-    assert "接口返回 4 个" in out
-    assert "按类型/名称隐藏 1 个" in out
-    assert "连通探测隐藏 1 个" in out
+    assert "Sync summary: 4 returned" in out
+    assert "1 hidden by type/name" in out
+    assert "1 hidden by chat probe" in out
     assert "gpt-5.4-mini -> pytest_fetch_summary:gpt-5.4-mini" in out
     assert saved["name"] == alias
     assert sorted(saved["models_cfg"]) == [
@@ -859,7 +859,7 @@ def test_provider_activate_command_updates_active_state(monkeypatch, capsys):
 
     out = capsys.readouterr().out
     assert seen == {"name": alias, "active": True}
-    assert "已设置为 active" in out
+    assert "is now active" in out
 
 
 def test_model_command_rejects_inactive_provider_model(monkeypatch, capsys):
@@ -885,7 +885,7 @@ def test_model_command_rejects_inactive_provider_model(monkeypatch, capsys):
     )
 
     out = capsys.readouterr().out
-    assert "未 active" in out
+    assert "is not active" in out
     assert session.model_alias == "ds-v4-flash"
 
 

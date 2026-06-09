@@ -1,20 +1,20 @@
 """
-测试 API 空响应重试机制
+Tests for API empty-response retry behavior.
 
-验证：
-  1. API 返回空响应时，重试逻辑触发（指数退避）
-  2. 重试耗尽后注入恢复提示，不静默退出
-  3. 正常响应不受影响
+Verifies:
+  1. Empty API responses trigger retry logic with exponential backoff.
+  2. Exhausted retries inject a recovery prompt instead of exiting silently.
+  3. Normal responses are unaffected.
 """
 
 import sys, types
 from unittest.mock import MagicMock
 from pathlib import Path
 
-# 将项目根目录加入 sys.path
+# Add project root to sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# ── Mock 配置模块（避免导入真实 config 的副作用）─────────
+# Mock config module to avoid importing real config side effects.
 mock_config = types.ModuleType("config")
 mock_config.DYNAMIC_CONFIG = {
     "max_iter": 5,
@@ -46,45 +46,45 @@ mock_config.get_provider_config = lambda m: {
 }
 sys.modules["config"] = mock_config
 
-# ── Mock 其他依赖 ──────────────────────────────────────
+# Mock other dependencies.
 for mod_name in ("utils.ansi", "core.logger", "core.memory", "core.gsa",
                  "tools.file_ops", "tools.web_ops", "tools.sandbox",
                  "tools.pwn_chain", "tools.vision", "core.skill_manager"):
     if mod_name not in sys.modules:
         sys.modules[mod_name] = MagicMock()
 
-# 确保 ansi 颜色常量可用
+# Ensure ANSI color constants are available.
 sys.modules["utils.ansi"].c = lambda color, text: text
 for attr in ("BOLD", "DIM", "GRAY", "CYAN", "GREEN", "YELLOW", "RED", "MAGENTA", "BLUE"):
     setattr(sys.modules["utils.ansi"], attr, "")
 
-# 确保 logger 可用
+# Ensure logger is available.
 sys.modules["core.logger"].logger = MagicMock()
 sys.modules["core.logger"].audit_tool_call = MagicMock()
 
-# ── 导入被测模块 ──────────────────────────────────────
+# Import module under test.
 from core.api_client import APIEmptyResponseError
 
 
 # ════════════════════════════════════════════════════════
-# 测试 1: APIEmptyResponseError 异常定义
+# Test 1: APIEmptyResponseError exception definition.
 # ════════════════════════════════════════════════════════
 
 def test_exception_exists():
-    """APIEmptyResponseError 应作为 Exception 的子类存在。"""
+    """APIEmptyResponseError should be an Exception subclass."""
     assert issubclass(APIEmptyResponseError, Exception)
     e = APIEmptyResponseError("test empty response")
     assert str(e) == "test empty response"
-    print("  ✓ [1/5] APIEmptyResponseError 异常定义正确")
+    print("  OK [1/5] APIEmptyResponseError definition is correct")
 
 
 # ════════════════════════════════════════════════════════
-# 测试 2: 空响应检测逻辑
+# Test 2: empty response detection.
 # ════════════════════════════════════════════════════════
 
 def test_empty_response_detection():
-    """模拟空响应场景，验证检测逻辑。"""
-    # 模拟空响应：text_buf 为空，tc_buf 为空，tokens 未变化
+    """Simulate empty-response scenarios and verify detection logic."""
+    # Empty response: text_buf empty, tc_buf empty, tokens unchanged.
     text_buf = ""
     tc_buf = {}
     tokens_before = 0
@@ -93,125 +93,126 @@ def test_empty_response_detection():
     no_new_tokens = (tokens_after == tokens_before)
     empty_response = (not text_buf.strip() and not tc_buf and no_new_tokens)
 
-    assert empty_response is True, "空响应应被检测到"
-    print("  ✓ [2/5] 空响应检测逻辑正确（text='' + tc={} + 0 tokens）")
+    assert empty_response is True, "empty response should be detected"
+    print("  OK [2/5] empty response detection works (text='' + tc={} + 0 tokens)")
 
-    # 非空响应：有文本内容
+    # Non-empty response: text content is present.
     text_buf = "Hello"
     empty_response = (not text_buf.strip() and not tc_buf and no_new_tokens)
-    assert empty_response is False, "有文本时不应判定为空"
-    print("  ✓ [2/5] 非空响应检测正确（text='Hello')")
+    assert empty_response is False, "text response should not be considered empty"
+    print("  OK [2/5] non-empty response detection works (text='Hello')")
 
-    # 非空响应：有 tool_calls
+    # Non-empty response: tool_calls are present.
     text_buf = ""
     tc_buf = {"0": {"name": "run_shell", "args": "{}"}}
     empty_response = (not text_buf.strip() and not tc_buf and no_new_tokens)
-    assert empty_response is False, "有 tool_calls 时不应判定为空"
-    print("  ✓ [2/5] 非空响应检测正确（tc_buf 有数据）")
+    assert empty_response is False, "tool_call response should not be considered empty"
+    print("  OK [2/5] non-empty response detection works (tc_buf has data)")
 
 
 # ════════════════════════════════════════════════════════
-# 测试 3: 重试机制（指数退避）
+# Test 3: retry mechanism with exponential backoff.
 # ════════════════════════════════════════════════════════
 
 def test_retry_mechanism():
-    """模拟连续空响应，验证重试次数和退避时间。"""
+    """Simulate consecutive empty responses and verify retry count/backoff."""
     API_RETRY_MAX = 3
     retry_count = 0
     total_wait = 0
 
     while retry_count < API_RETRY_MAX:
-        # 模拟空响应
-        empty_response = True  # 每次都返回空
+        # Simulate empty response on every attempt.
+        empty_response = True
 
         if not empty_response:
             break
 
         retry_count += 1
         if retry_count >= API_RETRY_MAX:
-            # 应注入恢复提示
-            assert retry_count == 3, f"重试次数应为 3，实际: {retry_count}"
+            # Recovery prompt should be injected here.
+            assert retry_count == 3, f"retry count should be 3, got: {retry_count}"
             break
 
         wait = min(2 ** retry_count, 8)
         total_wait += wait
 
-    assert retry_count == API_RETRY_MAX, f"应重试 {API_RETRY_MAX} 次，实际: {retry_count}"
-    assert total_wait == 6, f"总等待应为 6s（2+4），实际: {total_wait}s"
-    print(f"  ✓ [3/5] 重试机制正确：{retry_count} 次重试，总退避 {total_wait}s（2s + 4s）")
+    assert retry_count == API_RETRY_MAX, f"should retry {API_RETRY_MAX} times, got: {retry_count}"
+    assert total_wait == 6, f"total wait should be 6s (2+4), got: {total_wait}s"
+    print(f"  OK [3/5] retry mechanism works: {retry_count} retries, {total_wait}s total backoff")
 
 
 # ════════════════════════════════════════════════════════
-# 测试 4: 恢复消息注入
+# Test 4: recovery message injection.
 # ════════════════════════════════════════════════════════
 
 def test_recovery_message():
-    """验证重试耗尽后注入的恢复消息格式。"""
+    """Verify recovery message format after retries are exhausted."""
     recovery_msg = (
-        "[System] 收到无效响应（空内容/0 Token），请重新审视任务目标并继续。"
-        "如果此问题反复出现，考虑切换模型（/model）或检查 API 密钥。"
+        "[System] Received an invalid response (empty content / 0 tokens). "
+        "Re-check the task objective and continue. "
+        "If this repeats, consider switching models (/model) or checking the API key."
     )
 
-    # 模拟 messages 列表
+    # Simulated messages list.
     messages = [{"role": "user", "content": "test input"}]
 
-    # 模拟重试耗尽后注入
+    # Simulate injection after retries are exhausted.
     API_RETRY_MAX = 3
     for attempt in range(API_RETRY_MAX):
         if attempt >= API_RETRY_MAX - 1:
             messages.append({"role": "user", "content": recovery_msg})
             break
 
-    assert len(messages) == 2, f"应有 2 条消息，实际: {len(messages)}"
-    assert messages[-1]["role"] == "user", "恢复消息应为 user 角色"
-    assert "无效响应" in messages[-1]["content"], "应包含无效响应提示"
-    assert "切换模型" in messages[-1]["content"], "应包含切换模型建议"
-    print("  ✓ [4/5] 恢复消息注入正确（user 角色 + 无效响应提示）")
+    assert len(messages) == 2, f"should have 2 messages, got: {len(messages)}"
+    assert messages[-1]["role"] == "user", "recovery message should use user role"
+    assert "invalid response" in messages[-1]["content"], "should include invalid-response prompt"
+    assert "switching models" in messages[-1]["content"], "should include model-switch suggestion"
+    print("  OK [4/5] recovery message injection works (user role + invalid-response prompt)")
 
 
 # ════════════════════════════════════════════════════════
-# 测试 5: 正常响应不触发重试
+# Test 5: normal responses do not trigger retry.
 # ════════════════════════════════════════════════════════
 
 def test_normal_response_no_retry():
-    """正常响应不应触发重试逻辑。"""
-    # 模拟正常响应
+    """Normal responses should not trigger retry logic."""
+    # Simulate normal text response.
     text_buf = "I found the vulnerability in /etc/passwd"
     tc_buf = {}
 
     empty_response = (not text_buf.strip() and not tc_buf)
-    assert empty_response is False, "正常文本响应不应被判定为空"
+    assert empty_response is False, "normal text response should not be considered empty"
 
-    # 模拟有 tool_call 的响应
+    # Simulate a tool_call response.
     text_buf = ""
     tc_buf = {"0": {"name": "run_shell", "args": '{"command": "id"}'}}
     empty_response = (not text_buf.strip() and not tc_buf)
-    assert empty_response is False, "tool_call 响应不应被判定为空"
+    assert empty_response is False, "tool_call response should not be considered empty"
 
-    print("  ✓ [5/5] 正常响应不触发重试（文本 + tool_call）")
+    print("  OK [5/5] normal responses do not trigger retry (text + tool_call)")
 
 
 # ════════════════════════════════════════════════════════
-# 测试 6: 指数退避时间计算
+# Test 6: exponential backoff timing.
 # ════════════════════════════════════════════════════════
 
 def test_backoff_timing():
-    """验证指数退避时间计算公式：wait = min(2^attempt, 8)。"""
+    """Verify exponential backoff formula: wait = min(2^attempt, 8)."""
     expected = [2, 4, 8]  # attempt 1, 2, 3
     for attempt in range(1, 4):
         wait = min(2 ** attempt, 8)
         assert wait == expected[attempt - 1], \
             f"attempt={attempt}: expected {expected[attempt-1]}, got {wait}"
-    print("  ✓ [额外] 指数退避时间计算正确: 2s → 4s → 8s")
+    print("  OK [extra] exponential backoff timing is correct: 2s -> 4s -> 8s")
 
 
 # ════════════════════════════════════════════════════════
-# 运行所有测试
+# Run all tests.
 # ════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("  API 空响应重试机制 — 单元测试")
+    print("  API empty-response retry behavior - unit tests")
     print("=" * 60 + "\n")
 
     tests = [
@@ -237,6 +238,6 @@ if __name__ == "__main__":
             failed += 1
 
     print(f"\n{'=' * 60}")
-    print(f"  结果: {passed} 通过, {failed} 失败")
+    print(f"  Result: {passed} passed, {failed} failed")
     print(f"{'=' * 60}\n")
     sys.exit(0 if failed == 0 else 1)

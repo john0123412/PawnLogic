@@ -1,18 +1,18 @@
 """
-core/memory.py — SQLite 数据库管理器
+core/memory.py — SQLite database manager.
 
-新增功能：
-  · sessions 表新增 tags 列（逗号分隔标签）
-  · session_links 表（双向关联两个会话）
-  · full_text_search() 跨会话全文检索消息内容
-  · get_session_with_stats() 获取单个会话的统计摘要
+Features:
+  · sessions.tags column for comma-separated tags
+  · session_links table for bidirectional session relationships
+  · full_text_search() for cross-session message search
+  · get_session_with_stats() for single-session summaries
   · tag_session() / untag_session() / link_sessions() / get_linked_sessions()
 
-并发优化（来自 concurrent_fix）：
-  · threading.local() 线程本地连接
+Concurrency:
+  · threading.local() per-thread connections
   · busy_timeout = 200ms
-  · PRAGMA 性能调优
-  · 增量消息保存
+  · PRAGMA tuning
+  · incremental message saving
 """
 
 import sqlite3, json, re, os, hashlib, threading, time
@@ -21,7 +21,7 @@ from config import DB_PATH
 from core.logger import logger
 
 # ════════════════════════════════════════════════════════
-# 线程本地连接池
+# Thread-local connection pool.
 # ════════════════════════════════════════════════════════
 
 _tls = threading.local()
@@ -53,7 +53,7 @@ def get_conn() -> sqlite3.Connection:
     return _get_tls_conn()
 
 # ════════════════════════════════════════════════════════
-# 建表（幂等）
+# Idempotent table creation.
 # ════════════════════════════════════════════════════════
 
 def init_db():
@@ -118,15 +118,15 @@ def _create_core_tables():
         CREATE INDEX IF NOT EXISTS idx_session_tags  ON sessions(tags);
         """)
 
-    # ── FTS5 全文搜索引擎─────────────────────
-    # 使用 content=messages 延迟同步模式，FTS5 自动读取 messages 表
+    # FTS5 full-text search engine. Uses content=messages external-content
+    # mode so FTS5 can read from the messages table.
     with get_conn() as conn:
         try:
             conn.execute("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
                 USING fts5(content, session_id, role, content=messages, content_rowid=id)
             """)
-            # 创建触发器保持 FTS5 与 messages 表同步
+            # Keep FTS5 synchronized with messages through triggers.
             conn.executescript("""
                 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
                     INSERT INTO messages_fts(rowid, content, session_id, role)
@@ -146,9 +146,9 @@ def _create_core_tables():
                 END;
             """)
         except sqlite3.OperationalError:
-            pass  # FTS5 不可用时静默降级
+            pass  # Gracefully degrade when FTS5 is unavailable.
 
-    # 迁移旧库：SQLite 不支持 ADD COLUMN IF NOT EXISTS，必须先查列。
+    # Migrate old DBs. SQLite lacks ADD COLUMN IF NOT EXISTS, so inspect columns first.
     with get_conn() as conn:
         cols = [row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()]
         migrations = {
@@ -162,9 +162,8 @@ def _create_core_tables():
             if col not in cols:
                 conn.execute(ddl)
 
-    # ── ★ thinking-mode 修复：messages 表新增 reasoning_content 列 ──
-    # 旧 pawn.db 没有此列，需要自动 ALTER 追加；否则加载会话后
-    # mimo-v2.5 等推理模型会因缺失 reasoning_content 返回 HTTP 400。
+    # thinking-mode fix: add messages.reasoning_content for old pawn.db files.
+    # Missing this field can trigger HTTP 400 after loading reasoning-model sessions.
     with get_conn() as conn:
         msg_cols = [row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()]
         msg_migrations = {
@@ -175,13 +174,13 @@ def _create_core_tables():
                 try:
                     conn.execute(ddl)
                 except sqlite3.OperationalError:
-                    # 极端场景：其他进程并发已加列，静默忽略
+                    # Another process may have added it concurrently.
                     pass
 
 # init_facts_table is defined later; init_db calls it after both are loaded.
 
 # ════════════════════════════════════════════════════════
-# 工具函数
+# Helpers.
 # ════════════════════════════════════════════════════════
 
 def _now() -> str:
@@ -192,7 +191,7 @@ def _gen_id(seed: str = "") -> str:
     return datetime.now().strftime("%Y%m%d%H%M%S") + "_" + hashlib.md5(raw.encode()).hexdigest()[:6]
 
 # ════════════════════════════════════════════════════════
-# 增量保存跟踪器
+# Incremental save trackers.
 # ════════════════════════════════════════════════════════
 
 _last_saved_seq:  dict[str, int]             = {}
@@ -206,8 +205,7 @@ def _build_rows(session_id: str, messages: list) -> list[tuple]:
             session_id, seq, m.get("role",""), m.get("content") or "",
             json.dumps(m["tool_calls"]) if m.get("tool_calls") else None,
             m.get("tool_call_id"), 1 if m.get("_pinned") else 0,
-            # ★ thinking-mode 修复：reasoning_content 必须持久化，
-            # 否则 /chat load 后再次对话会触发 mimo-v2.5 HTTP 400。
+            # Persist reasoning_content so /chat load can continue reasoning-model sessions.
             m.get("reasoning_content"),
             now,
         ))
@@ -300,7 +298,7 @@ def delete_session(session_id: str):
         conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
 
 def rename_session(session_id: str, new_name: str, name_source: str = "manual") -> bool:
-    """重命名会话。"""
+    """Rename a session."""
     with get_conn() as conn:
         cur = conn.execute(
             "UPDATE sessions SET name=?, name_source=?, updated_at=? WHERE id=?",
@@ -343,13 +341,13 @@ def update_session_naming(
         return cur.rowcount > 0
 
 # ════════════════════════════════════════════════════════
-# 标签管理
+# Tag management.
 # ════════════════════════════════════════════════════════
 
 def tag_session(session_id: str, new_tags: str) -> bool:
     """
-    给会话追加标签（不覆盖已有标签）。
-    new_tags: 逗号分隔字符串，如 "pwn,ctf,heap"
+    Append tags to a session without overwriting existing tags.
+    new_tags is a comma-separated string, e.g. "pwn,ctf,heap".
     """
     with get_conn() as conn:
         row = conn.execute("SELECT tags FROM sessions WHERE id=?", (session_id,)).fetchone()
@@ -361,7 +359,7 @@ def tag_session(session_id: str, new_tags: str) -> bool:
         return True
 
 def untag_session(session_id: str, remove_tags: str) -> bool:
-    """删除指定标签。"""
+    """Remove specified tags."""
     with get_conn() as conn:
         row = conn.execute("SELECT tags FROM sessions WHERE id=?", (session_id,)).fetchone()
         if not row: return False
@@ -372,7 +370,7 @@ def untag_session(session_id: str, remove_tags: str) -> bool:
         return True
 
 def find_sessions_by_tag(tag: str) -> list[sqlite3.Row]:
-    """模糊匹配 tag，返回包含该 tag 的会话列表。"""
+    """Fuzzy-match a tag and return sessions containing it."""
     with get_conn() as conn:
         return conn.execute("""
             SELECT s.id, s.name, s.model, s.cwd, s.tags, s.created_at, s.updated_at,
@@ -385,12 +383,12 @@ def find_sessions_by_tag(tag: str) -> list[sqlite3.Row]:
         """, (f"%{tag}%",)).fetchall()
 
 # ════════════════════════════════════════════════════════
-# 关联会话
+# Session links.
 # ════════════════════════════════════════════════════════
 
 def link_sessions(session_a: str, session_b: str, note: str = "") -> bool:
-    """双向关联两个会话（存储单向，查询时双向）。"""
-    # 规范化顺序（避免 (a,b) 和 (b,a) 重复）
+    """Bidirectionally link two sessions; storage is one-way, queries are two-way."""
+    # Normalize order to avoid duplicate (a,b) and (b,a) rows.
     a, b = sorted([session_a, session_b])
     try:
         with get_conn() as conn:
@@ -403,13 +401,13 @@ def link_sessions(session_a: str, session_b: str, note: str = "") -> bool:
         return False
 
 def unlink_sessions(session_a: str, session_b: str):
-    """取消关联。"""
+    """Remove a session link."""
     a, b = sorted([session_a, session_b])
     with get_conn() as conn:
         conn.execute("DELETE FROM session_links WHERE session_a=? AND session_b=?", (a, b))
 
 def get_linked_sessions(session_id: str) -> list[sqlite3.Row]:
-    """获取与指定会话相关联的所有会话，含备注。"""
+    """Return all sessions linked to a given session, including notes."""
     with get_conn() as conn:
         rows = conn.execute("""
             SELECT CASE WHEN session_a=? THEN session_b ELSE session_a END AS other_id,
@@ -439,16 +437,16 @@ def get_linked_sessions(session_id: str) -> list[sqlite3.Row]:
     return result
 
 # ════════════════════════════════════════════════════════
-# 对话全文检索
+# Conversation full-text search.
 # ════════════════════════════════════════════════════════
 
 def full_text_search(query: str, limit: int = 20) -> list[dict]:
     """
-    在所有会话的消息内容中搜索关键词。
-    返回列表，每项含：session 元数据 + 命中的消息片段。
-    支持多词搜索（空格分隔，AND 语义）。
+    Search message content across all sessions.
+    Returns session metadata plus matching snippets.
+    Supports multi-word search separated by spaces with AND semantics.
 
-    优先使用 FTS5（速度快 100x+），不可用时降级为 LIKE 全表扫描。
+    Uses FTS5 first, then falls back to a LIKE full-table scan when unavailable.
     """
     keywords = [w.strip() for w in query.split() if w.strip()]
     if not keywords:
@@ -456,7 +454,7 @@ def full_text_search(query: str, limit: int = 20) -> list[dict]:
 
     hits = []
 
-    # ── 策略 1：FTS5 全文搜索（优先）──────────────────────
+    # Strategy 1: FTS5 full-text search.
     try:
         fts_query = " AND ".join(f'"{kw}"' for kw in keywords)
         with get_conn() as conn:
@@ -470,9 +468,9 @@ def full_text_search(query: str, limit: int = 20) -> list[dict]:
             """, (fts_query, limit * 3)).fetchall()
             hits = rows
     except (sqlite3.OperationalError, sqlite3.DatabaseError):
-        hits = []  # FTS5 不可用，降级
+        hits = []  # FTS5 unavailable; fall back.
 
-    # ── 策略 2：LIKE 全表扫描（降级兜底）──────────────────
+    # Strategy 2: LIKE full-table scan fallback.
     if not hits:
         like_clauses = " AND ".join("content LIKE ?" for _ in keywords)
         params       = tuple(f"%{kw}%" for kw in keywords)
@@ -488,7 +486,7 @@ def full_text_search(query: str, limit: int = 20) -> list[dict]:
     if not hits:
         return []
 
-    # 按 session_id 聚合，每个 session 最多显示前 3 条命中
+    # Group by session_id; show at most 3 hits per session.
     session_hits: dict[str, list] = {}
     for row in hits:
         sid = row["session_id"]
@@ -499,7 +497,7 @@ def full_text_search(query: str, limit: int = 20) -> list[dict]:
         if len(session_hits) >= limit:
             break
 
-    # 补充会话元数据
+    # Add session metadata.
     result = []
     with get_conn() as conn:
         for sid, msg_rows in session_hits.items():
@@ -527,8 +525,8 @@ def full_text_search(query: str, limit: int = 20) -> list[dict]:
 
 def _extract_snippet(content: str, keywords: list[str], window: int = 80) -> str:
     """
-    提取包含关键词的上下文片段（±window 字符）。
-    高亮显示（大写标记）命中的关键词。
+    Extract a context snippet around the first keyword hit.
+    Keyword highlighting is handled by callers when needed.
     """
     content_lower = content.lower()
     for kw in keywords:
@@ -543,13 +541,13 @@ def _extract_snippet(content: str, keywords: list[str], window: int = 80) -> str
     return content[:window * 2].replace("\n", " ") + "…"
 
 # ════════════════════════════════════════════════════════
-# 会话完整内容读取（用于 /chat view）
+# Full session content read for /chat view.
 # ════════════════════════════════════════════════════════
 
 def get_session_messages_pretty(session_id: str) -> list[dict]:
     """
-    读取某个会话的所有消息，返回适合展示的格式化列表。
-    每项：{seq, role, content_preview, content_full, is_pinned, created_at}
+    Read all messages from a session and return display-friendly entries.
+    Each entry: {seq, role, content_preview, content_full, is_pinned, created_at}
     """
     with get_conn() as conn:
         rows = conn.execute("""
@@ -562,15 +560,15 @@ def get_session_messages_pretty(session_id: str) -> list[dict]:
     for r in rows:
         content = r["content"] or ""
         if not content and r["tool_calls"]:
-            # assistant 工具调用消息：展示工具名列表
+            # Assistant tool-call message: show tool names.
             try:
                 calls = json.loads(r["tool_calls"])
                 names = [c["function"]["name"] for c in calls if "function" in c]
-                content = f"[调用工具: {', '.join(names)}]"
+                content = f"[Tool calls: {', '.join(names)}]"
             except Exception:
                 content = "[tool_calls]"
         if r["role"] == "tool":
-            content = f"[工具结果 call_id={r['tool_call_id']}] " + content[:200]
+            content = f"[Tool result call_id={r['tool_call_id']}] " + content[:200]
 
         result.append({
             "seq":          r["seq"],
@@ -584,25 +582,25 @@ def get_session_messages_pretty(session_id: str) -> list[dict]:
 
 def export_session_to_markdown(session_id: str) -> str:
     """
-    将一个会话导出为 Markdown 字符串。
-    可通过 /chat export 写到本地文件。
+    Export a session to a Markdown string.
+    /chat export can write it to a local file.
     """
     meta = get_session(session_id)
     if not meta:
-        return f"ERROR: 会话 {session_id} 不存在"
+        return f"ERROR: session {session_id} does not exist"
 
     lines = [
-        f"# PawnLogic 对话导出",
+        f"# PawnLogic Conversation Export",
         f"",
-        f"| 字段 | 值 |",
+        f"| Field | Value |",
         f"|------|----|",
         f"| session_id | `{session_id}` |",
-        f"| 名称 | {meta['name'] or meta['auto_name'] or meta['workspace_alias'] or '(未命名)'} |",
-        f"| 模型 | {meta['model']} |",
-        f"| 目录 | `{meta['cwd']}` |",
-        f"| 标签 | {meta['tags'] or '-'} |",
-        f"| 创建 | {meta['created_at']} |",
-        f"| 更新 | {meta['updated_at']} |",
+        f"| Name | {meta['name'] or meta['auto_name'] or meta['workspace_alias'] or '(unnamed)'} |",
+        f"| Model | {meta['model']} |",
+        f"| Directory | `{meta['cwd']}` |",
+        f"| Tags | {meta['tags'] or '-'} |",
+        f"| Created | {meta['created_at']} |",
+        f"| Updated | {meta['updated_at']} |",
         f"",
         f"---",
         f"",
@@ -616,28 +614,28 @@ def export_session_to_markdown(session_id: str) -> str:
         content = m["content_full"]
 
         if role == "user":
-            lines.append(f"## 🧑 用户  `[{m['seq']}]`{pinned}  {ts}")
+            lines.append(f"## 🧑 User  `[{m['seq']}]`{pinned}  {ts}")
             lines.append(f"")
             lines.append(content)
             lines.append(f"")
         elif role == "assistant":
-            if content.startswith("[调用工具:"):
-                lines.append(f"## 🔧 工具调用  `[{m['seq']}]`  {ts}")
+            if content.startswith("[Tool calls:"):
+                lines.append(f"## 🔧 Tool Call  `[{m['seq']}]`  {ts}")
                 lines.append(f"")
                 lines.append(f"> {m['preview']}")
                 lines.append(f"")
             else:
-                lines.append(f"## 🤖 助手  `[{m['seq']}]`{pinned}  {ts}")
+                lines.append(f"## 🤖 Assistant  `[{m['seq']}]`{pinned}  {ts}")
                 lines.append(f"")
                 lines.append(content)
                 lines.append(f"")
         elif role == "tool":
-            lines.append(f"<details><summary>🔩 工具结果 [{m['seq']}]</summary>")
+            lines.append(f"<details><summary>🔩 Tool Result [{m['seq']}]</summary>")
             lines.append(f"")
             lines.append(f"```")
             lines.append(content[:1000])
             if len(content) > 1000:
-                lines.append(f"...[共 {len(content)} 字符，已截断]...")
+                lines.append(f"...[{len(content)} chars total, truncated]...")
             lines.append(f"```")
             lines.append(f"</details>")
             lines.append(f"")
@@ -647,7 +645,7 @@ def export_session_to_markdown(session_id: str) -> str:
     return "\n".join(lines)
 
 # ════════════════════════════════════════════════════════
-# Messages CRUD（增量保存）
+# Messages CRUD with incremental saving.
 # ════════════════════════════════════════════════════════
 
 def save_messages(session_id: str, messages: list):
@@ -690,7 +688,7 @@ def save_messages(session_id: str, messages: list):
             break
         except sqlite3.OperationalError as e:
             if _retry == 2:
-                logger.error(f"save_messages 持续失败（3次重试）: {e}")
+                logger.error(f"save_messages failed after 3 retries: {e}")
             else:
                 time.sleep(0.1 * (_retry + 1))
 
@@ -707,8 +705,7 @@ def load_messages(session_id: str) -> list[dict]:
             except Exception: pass
         if r["tool_call_id"]: m["tool_call_id"] = r["tool_call_id"]
         if r["is_pinned"]:    m["_pinned"] = True
-        # ★ thinking-mode 修复：还原 reasoning_content 字段。
-        # 旧 DB 无此列时 sqlite3.Row 会抛 IndexError，捕获后降级。
+        # Restore reasoning_content. Old DBs may not have this column.
         try:
             rc = r["reasoning_content"]
             if rc:
@@ -791,17 +788,17 @@ def format_knowledge_for_prompt(rows: list[sqlite3.Row]) -> str:
 # ════════════════════════════════════════════════════════
 # Persistent Agent Facts — Key-Value MemoryStore
 #
-# 用途：跨会话、跨 delegate_task 的持久化事实存储。
-# 解决"上下文失忆"问题——即使 /clear 或新 delegate_task 启动，
-# 之前 save_fact 的内容仍然可以被 query_fact 取出。
+# Purpose: persistent fact storage across sessions and delegate_task calls.
+# Solves context amnesia: facts saved by save_fact remain queryable even after
+# /clear or a new delegate_task starts.
 #
-# API 摘要：
-#   save_fact(key, value, namespace)  → 写入/更新一条事实
-#   query_fact(key, namespace)        → 精确读取单条（返回 str | None）
-#   search_facts(query_text, ...)     → 关键词模糊搜索多条
-#   delete_fact(key, namespace)       → 删除单条
-#   list_facts(namespace, limit)      → 列出所有事实
-#   format_facts_for_prompt(rows)     → 格式化为注入 Prompt 的文本块
+# API summary:
+#   save_fact(key, value, namespace)  → write/update one fact
+#   query_fact(key, namespace)        → exact-read one fact (str | None)
+#   search_facts(query_text, ...)     → fuzzy keyword search
+#   delete_fact(key, namespace)       → delete one fact
+#   list_facts(namespace, limit)      → list facts
+#   format_facts_for_prompt(rows)     → format prompt-injection block
 # ════════════════════════════════════════════════════════
 
 def init_facts_table():
@@ -818,7 +815,7 @@ def init_facts_table():
         );
         CREATE INDEX IF NOT EXISTS idx_facts_ns_key ON agent_facts(namespace, key);
         """)
-        # 迁移：为旧库加 namespace 列（若不存在）
+        # Migration: add namespace to old DBs when missing.
         cols = [row[1] for row in conn.execute("PRAGMA table_info(agent_facts)").fetchall()]
         if cols and "namespace" not in cols:
             conn.execute("ALTER TABLE agent_facts ADD COLUMN namespace TEXT NOT NULL DEFAULT 'global'")
@@ -958,23 +955,23 @@ def format_facts_for_prompt(rows: list[sqlite3.Row], max_chars: int = 600) -> st
 
 
 # ════════════════════════════════════════════════════════
-# P0: Failure Patterns — 防御性审计数据库
+# P0: Failure Patterns — defensive audit database.
 #
-# 用途：记录工具调用失败的历史，用于 Payload 投前审计。
-# 当 Agent 准备调用 run_code / run_shell / run_interactive 时，
-# 自动查询是否有同类失败记录，有则注入警告。
+# Purpose: record tool-call failure history for pre-flight payload audits.
+# When the agent is about to call run_code / run_shell / run_interactive,
+# it checks for similar historical failures and injects a warning if any exist.
 #
-# API 摘要：
+# API summary:
 #   write_failure(tool_name, args_summary, error_msg, error_type, session_id)
-#       → 写入一条失败记录
+#       → write one failure record
 #   check_failure(tool_name, args_keywords, limit)
-#       → 查询同类历史失败（返回 list[sqlite3.Row]）
+#       → query similar historical failures (list[sqlite3.Row])
 #   list_failures(limit)
-#       → 列出最近 N 条失败记录
+#       → list latest N failure records
 #   count_failure(tool_name, error_type)
-#       → 统计同类失败次数（用于自动沉淀阈值判断）
+#       → count same-class failures for automatic sinking thresholds
 #   clear_failures()
-#       → 清空所有失败记录
+#       → clear all failure records
 # ════════════════════════════════════════════════════════
 
 def init_failures_table():
@@ -1005,7 +1002,7 @@ def write_failure(
     session_id: str = "",
 ) -> int:
     """
-    写入一条工具调用失败记录。
+    Write one tool-call failure record.
     """
     import hashlib
     args_hash = hashlib.md5(args_summary[:100].encode()).hexdigest()[:12]
@@ -1023,7 +1020,7 @@ def write_failure(
 
 def check_failure(tool_name: str, args_keywords: str = "", limit: int = 3) -> list[sqlite3.Row]:
     """
-    查询指定工具的历史失败记录。
+    Query historical failure records for a tool.
     """
     with get_conn() as conn:
         if args_keywords:
@@ -1045,7 +1042,7 @@ def check_failure(tool_name: str, args_keywords: str = "", limit: int = 3) -> li
 
 
 def count_failure(tool_name: str, error_type: str = "") -> int:
-    """统计指定工具的失败总次数。"""
+    """Count failures for a tool, optionally filtered by error type."""
     with get_conn() as conn:
         if error_type:
             row = conn.execute(
@@ -1061,7 +1058,7 @@ def count_failure(tool_name: str, error_type: str = "") -> int:
 
 
 def list_failures(limit: int = 20) -> list[sqlite3.Row]:
-    """列出最近 limit 条失败记录。"""
+    """List the latest limit failure records."""
     with get_conn() as conn:
         return conn.execute(
             "SELECT * FROM agent_failures ORDER BY created_at DESC LIMIT ?", (limit,)
@@ -1069,14 +1066,14 @@ def list_failures(limit: int = 20) -> list[sqlite3.Row]:
 
 
 def clear_failures() -> int:
-    """清空所有失败记录。返回删除的行数。"""
+    """Clear all failure records and return deleted row count."""
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM agent_failures")
         return cur.rowcount
 
 
 def format_failures_for_prompt(rows: list[sqlite3.Row], max_chars: int = 800) -> str:
-    """将失败记录格式化为注入 System Prompt 的警告文本。"""
+    """Format failure records as a warning block for System Prompt injection."""
     if not rows:
         return ""
     lines = ["⚠ [FAILURE WARNING — Historical failures detected for this tool/operation]"]

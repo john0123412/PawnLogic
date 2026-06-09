@@ -1,25 +1,25 @@
 """
-core/skill_manager.py — SkillScanner: 技能包扫描与匹配引擎
+core/skill_manager.py — SkillScanner: skill-pack scanning and matching engine.
 ============================================================
-零配置模式：文件夹里扔一个 .md 文件就能用。
+Zero-config mode: drop one .md file into a folder and it works.
 
-最简用法：
+Minimal layout:
     skills/
     └── pwn_stack/
-        └── skill.md        ← 就这一个文件，完事
+        └── skill.md        ← only file needed
 
-进阶用法（可选）：
+Advanced layout, optional:
     skills/
     └── pwn_stack/
-        ├── skill.md        ← 主内容（Agent 读取执行）
-        ├── exploit.py      ← 可选：Agent 优先调用的脚本
-        └── manifest.json   ← 可选：额外元数据（keywords/triggers）
+        ├── skill.md        ← main content read by the agent
+        ├── exploit.py      ← optional script the agent should prefer
+        └── manifest.json   ← optional metadata: keywords/triggers
 
-扫描逻辑：
-    1. 遍历 ./skills/*/ 目录
-    2. 找 skill.md（或 guide.md / 目录内第一个 .md）
-    3. 从文件名 + 内容标题自动提取关键词
-    4. manifest.json 若存在，其 keywords/triggers 优先级更高
+Scanning:
+    1. Iterate ./skills/*/ directories.
+    2. Find skill.md, guide.md, or the first .md file.
+    3. Auto-extract keywords from the folder name and Markdown headings.
+    4. manifest.json keywords/triggers override auto extraction when present.
 """
 
 import json
@@ -30,19 +30,20 @@ from config import scrub_sensitive_env
 
 
 class SkillScanner:
-    """扫描 ./skills/*/，从 .md 文件自动提取元数据并匹配。"""
+    """Scan ./skills/*/, auto-extract metadata from .md files, and match packs."""
 
     def __init__(self, skills_dir: Path):
         self.skills_dir = skills_dir
         self._cache: list[dict] | None = None
 
     def invalidate_cache(self):
-        """清除缓存，下次 scan_all() 时重新扫描磁盘。"""
+        """Clear cache so scan_all() re-scans the disk next time."""
         self._cache = None
 
     def sync_packs(self) -> list[dict]:
-        """遍历 ./skills/ 下所有带 .git 的文件夹，调用 git pull 同步更新。
-        返回 [{"name": str, "status": "ok"|"error", "detail": str}, ...]
+        """Run git pull for every ./skills/ child directory containing .git.
+
+        Returns [{"name": str, "status": "ok"|"error", "detail": str}, ...].
         """
         results = []
         if not self.skills_dir.exists():
@@ -71,7 +72,7 @@ class SkillScanner:
                     detail = proc.stderr.strip().split("\n")[-1][:100]
                     results.append({"name": name, "status": "error", "detail": detail})
             except subprocess.TimeoutExpired:
-                results.append({"name": name, "status": "error", "detail": "git pull 超时 (30s)"})
+                results.append({"name": name, "status": "error", "detail": "git pull timed out (30s)"})
             except Exception as e:
                 results.append({"name": name, "status": "error", "detail": str(e)[:80]})
 
@@ -79,19 +80,20 @@ class SkillScanner:
         return results
 
     def install_pack(self, repo_url: str) -> dict:
-        """将远程仓库 git clone 到 ./skills/ 子目录。
-        成功后自动 invalidate_cache()。
-        返回 {"status": "ok"|"error", "name": str, "detail": str}
+        """Clone a remote repository into a ./skills/ subdirectory.
+
+        Invalidates cache on success. Returns
+        {"status": "ok"|"error", "name": str, "detail": str}.
         """
         if not self.skills_dir.exists():
             self.skills_dir.mkdir(parents=True, exist_ok=True)
 
-        # 从 URL 提取仓库名作为目录名
-        # https://github.com/user/repo.git → repo
+        # Extract repository name from URL to use as directory name.
+        # https://github.com/user/repo.git -> repo
         name = repo_url.rstrip("/").split("/")[-1]
         if name.endswith(".git"):
             name = name[:-4]
-        # 清理非法字符
+        # Sanitize illegal characters.
         name = re.sub(r"[^a-zA-Z0-9_\-.]", "_", name)
 
         target_dir = self.skills_dir / name
@@ -99,7 +101,7 @@ class SkillScanner:
             return {
                 "status": "error",
                 "name": name,
-                "detail": f"目录已存在: {target_dir}",
+                "detail": f"directory already exists: {target_dir}",
             }
 
         try:
@@ -110,21 +112,21 @@ class SkillScanner:
                 env=scrub_sensitive_env(),
             )
             if proc.returncode != 0:
-                # 清理失败的克隆目录
+                # Clean up failed clone directory.
                 import shutil
                 if target_dir.exists():
                     shutil.rmtree(str(target_dir), ignore_errors=True)
                 detail = proc.stderr.strip().split("\n")[-1][:120]
                 return {"status": "error", "name": name, "detail": detail}
 
-            # 确保文件权限正确
+            # Ensure file permissions are usable.
             subprocess.run(
                 ["chmod", "-R", "u+rwX,go+rX", str(target_dir)],
                 capture_output=True, timeout=10,
                 env=scrub_sensitive_env(),
             )
 
-            # 自动忽略非技能仓库的冗余文件
+            # Remove noisy non-skill repository files.
             _IGNORE_PATTERNS = [".git", "__pycache__", "*.pyc", ".DS_Store", "node_modules"]
             for pattern in _IGNORE_PATTERNS:
                 for p in target_dir.glob(pattern):
@@ -133,18 +135,18 @@ class SkillScanner:
                         shutil.rmtree(str(p), ignore_errors=True)
 
             self.invalidate_cache()
-            return {"status": "ok", "name": name, "detail": f"已安装到 {target_dir}"}
+            return {"status": "ok", "name": name, "detail": f"installed to {target_dir}"}
 
         except subprocess.TimeoutExpired:
             import shutil
             if target_dir.exists():
                 shutil.rmtree(str(target_dir), ignore_errors=True)
-            return {"status": "error", "name": name, "detail": "git clone 超时 (60s)"}
+            return {"status": "error", "name": name, "detail": "git clone timed out (60s)"}
         except Exception as e:
             return {"status": "error", "name": name, "detail": str(e)[:120]}
 
     def scan_all(self) -> list[dict]:
-        """扫描所有技能包，返回元数据列表。"""
+        """Scan all skill packs and return metadata."""
         if self._cache is not None:
             return self._cache
 
@@ -165,8 +167,8 @@ class SkillScanner:
         return packs
 
     def _scan_one(self, skill_dir: Path) -> dict | None:
-        """扫描单个技能包目录，返回元数据 dict 或 None。"""
-        # 1. 找主 .md 文件：skill.md > guide.md > 第一个 .md
+        """Scan one skill-pack directory and return metadata or None."""
+        # 1. Find main .md file: skill.md > guide.md > first .md.
         md_file = None
         for name in ("skill.md", "guide.md"):
             candidate = skill_dir / name
@@ -178,15 +180,15 @@ class SkillScanner:
             if mds:
                 md_file = mds[0]
         if not md_file:
-            return None  # 没有 .md 文件，跳过
+            return None  # No .md file; skip.
 
-        # 2. 读取 .md 内容
+        # 2. Read Markdown content.
         try:
             content = md_file.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             return None
 
-        # 3. 尝试加载 manifest.json（可选）
+        # 3. Try to load optional manifest.json.
         manifest = {}
         manifest_path = skill_dir / "manifest.json"
         if manifest_path.exists():
@@ -195,19 +197,19 @@ class SkillScanner:
             except (json.JSONDecodeError, OSError):
                 pass
 
-        # 4. 提取名称：manifest.name > .md 一级标题 > 文件夹名
+        # 4. Name: manifest.name > level-1 Markdown heading > folder name.
         name = manifest.get("name")
         if not name:
             heading = re.search(r"^#\s+(.+)", content, re.MULTILINE)
             name = heading.group(1).strip() if heading else skill_dir.name
 
-        # 5. 提取关键词：manifest.keywords > 自动提取
+        # 5. Keywords: manifest.keywords > auto extraction.
         keywords = manifest.get("keywords", [])
         triggers = manifest.get("triggers", [])
         if not keywords:
             keywords = self._auto_extract_keywords(skill_dir.name, content)
 
-        # 6. 找可执行脚本
+        # 6. Find executable scripts.
         scripts = manifest.get("scripts", [])
         if not scripts:
             for ext in ("*.py", "*.sh"):
@@ -226,8 +228,10 @@ class SkillScanner:
         }
 
     def match(self, query: str, top_k: int = 3, min_score: int = 3) -> list[dict]:
-        """按查询匹配技能包，返回排序后的列表。
-        min_score: 最低分阈值，低于此分数的技能包不返回（避免噪音注入）。
+        """Match skill packs by query and return a sorted list.
+
+        min_score is the minimum threshold; below it packs are not returned to
+        avoid noisy prompt injection.
         """
         packs = self.scan_all()
         if not packs or not query.strip():
@@ -247,21 +251,21 @@ class SkillScanner:
             for kw in keywords:
                 kw_l = kw.lower()
                 kw_len = len(kw_l)
-                # 名称匹配（中文 3-gram 权重更高）
+                # Name match; longer grams carry slightly higher weight.
                 if kw_l in pack_name:
                     score += 6 if kw_len >= 3 else 5
-                # 关键词匹配
+                # Keyword match.
                 for pk in pack_kw:
                     if kw_l in pk or pk in kw_l:
                         score += 4 if kw_len >= 3 else 3
                         break
-                # 触发词匹配：要求匹配长度 >= 触发词长度的一半（过滤短泛词命中长触发词）
+                # Trigger match: require enough length to avoid short generic hits.
                 for pt in pack_tr:
                     if kw_l in pt and kw_len * 2 >= len(pt):
                         score += 3 if kw_len >= 3 else 2
                         break
 
-            # 兜底：查询关键词在 .md 内容中出现（需含至少 1 个 3-gram 或 3+ 个 2-gram 命中）
+            # Fallback: query keywords appear in .md content.
             if score == 0:
                 md_file = pack.get("_md_file")
                 if md_file:
@@ -281,7 +285,7 @@ class SkillScanner:
         return [pack for _, pack in scored[:top_k]]
 
     def format_for_prompt(self, packs: list[dict]) -> str:
-        """将匹配到的技能包格式化为系统提示词注入文本。"""
+        """Format matched skill packs for System Prompt injection."""
         if not packs:
             return ""
 
@@ -308,24 +312,24 @@ class SkillScanner:
                         lines.append(f"  Run: bash {script_path} <TARGET>")
                     else:
                         lines.append(f"  Run: {script_path} <args>")
-                lines.append(f"  P6: 优先执行脚本，失败先读 guide.md，禁止跳过直接编写。")
+                lines.append("  P6: Prefer scripts first. If they fail, read guide.md before modifying parameters. Do not skip directly to hand-written code.")
 
             blocks.append("\n".join(lines))
 
         return "\n\n".join(blocks)
 
     def format_user_message(self, packs: list[dict]) -> str:
-        """USER_MODE 简洁提示。"""
+        """Concise USER_MODE status message."""
         if not packs:
             return ""
         names = [p.get("name", "?") for p in packs]
-        return f"  ✓ 已加载技能: {', '.join(names)}"
+        return f"  ✓ Loaded skills: {', '.join(names)}"
 
     def format_list(self) -> str:
-        """格式化所有已扫描的技能包列表（用于 /skillpack 命令）。"""
+        """Format all scanned skill packs for /skillpack."""
         packs = self.scan_all()
         if not packs:
-            return "(skills/ 目录下暂无技能包)"
+            return "(no skill packs found under skills/)"
         lines = []
         for i, p in enumerate(packs):
             name = p.get("name", "?")
@@ -344,31 +348,31 @@ class SkillScanner:
                 lines.append(detail)
         return "\n".join(lines)
 
-    # ── 内部辅助 ──────────────────────────────────────────
+    # Internal helpers.
 
     @staticmethod
     def _auto_extract_keywords(dirname: str, content: str) -> list[str]:
-        """从文件夹名 + .md 标题自动提取关键词。"""
+        """Auto-extract keywords from folder name and Markdown headings."""
         kw = set()
-        # 文件夹名拆词（英文）
+        # Split folder name into English words.
         for word in re.split(r"[_\-\s]+", dirname):
             if 2 <= len(word) <= 15 and word.isascii():
                 kw.add(word.lower())
-        # .md 标题中的英文单词
+        # English words in Markdown headings.
         for m in re.finditer(r"^#{1,3}\s+(.+)", content, re.MULTILINE):
             heading = m.group(1).strip()
             for word in re.findall(r"[a-zA-Z_]{2,15}", heading):
                 kw.add(word.lower())
-        # .md 标题中的中文词（连续 2-4 个汉字）
+        # Chinese terms in Markdown headings, preserved for matching user queries.
         for m in re.finditer(r"^#{1,3}\s+(.+)", content, re.MULTILINE):
             heading = m.group(1).strip()
-            for cn in re.findall(r"[一-鿿]{2,4}", heading):
+            for cn in re.findall(r"[\u4e00-\u9fff]{2,4}", heading):
                 kw.add(cn)
         return list(kw)
 
     @staticmethod
     def _auto_extract_desc(content: str) -> str:
-        """从 .md 内容提取第一段非标题文本作为描述。"""
+        """Extract the first non-heading paragraph from Markdown as description."""
         for line in content.splitlines():
             line = line.strip()
             if line and not line.startswith("#") and len(line) > 5:
@@ -377,11 +381,11 @@ class SkillScanner:
 
     @staticmethod
     def _extract_query_keywords(query: str) -> list[str]:
-        """从查询中提取关键词（英文按词，中文按 2-gram + 3-gram）。"""
+        """Extract English word keywords plus Chinese 2-grams and 3-grams."""
         words = []
         words.extend(w.lower() for w in re.findall(r"[a-zA-Z_]+", query) if len(w) > 1)
-        cn_chars = [c for c in query if "一" <= c <= "鿿"]
-        # 3-gram 优先（更精确），权重由 match() 中按长度加权
+        cn_chars = [c for c in query if "\u4e00" <= c <= "\u9fff"]
+        # 3-grams first for better precision; match() weights by length.
         for i in range(len(cn_chars) - 2):
             words.append(cn_chars[i] + cn_chars[i + 1] + cn_chars[i + 2])
         for i in range(len(cn_chars) - 1):

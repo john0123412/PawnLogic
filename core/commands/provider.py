@@ -84,21 +84,21 @@ _ENV_PATH = _PAWNLOGIC_DIR / ".env"
 # Key wizard
 # ════════════════════════════════════════════════════════
 
-# (序号标签, env_var, label, hint, 是否可跳过 key)
+# (number label, env_var, label, hint, whether the key can be skipped)
 _WIZARD_PROVIDERS = [
     ("1", "PAWN_API_KEY",       "PawnLogic Engine",  "hermes · hermes405",                  False),
     ("2", "DEEPSEEK_API_KEY",   "DeepSeek",          "ds-v4-flash / ds-v4-pro",             False),
-    ("3", "OPENROUTER_API_KEY", "OpenRouter",        "多模型聚合，含 gpt-4o 视觉",          False),
-    ("4", "SILICON_API_KEY",    "SiliconFlow",       "ds-coder · qwen 等国产模型",          False),
-    ("5", "ZHIPU_API_KEY",      "ZhipuAI 智谱",      "glm-4v-plus 视觉识图（国内直连）",    False),
+    ("3", "OPENROUTER_API_KEY", "OpenRouter",        "multi-model routing, includes gpt-4o vision", False),
+    ("4", "SILICON_API_KEY",    "SiliconFlow",       "ds-coder, qwen, and regional models",         False),
+    ("5", "ZHIPU_API_KEY",      "ZhipuAI",           "glm-4v-plus vision with regional access",     False),
     ("6", "XIAOMI_API_KEY",     "Xiaomi MiMo",       "mimo-v2.5-pro · mimo-v2-omni",        False),
     ("7", "ANTHROPIC_API_KEY",  "Anthropic",         "claude-opus-4-7 · claude-sonnet-4-6", False),
-    ("8", None,                 "本地 Ollama",       "需先运行 ollama serve，无需 Key",      True),
+    ("8", None,                 "Local Ollama",      "run ollama serve first; no key needed", True),
 ]
 
 
 def _detect_shell_config() -> Path | None:
-    """检测用户使用的 shell 配置文件。"""
+    """Detect the user's shell configuration file."""
     shell = os.environ.get("SHELL", "")
     home = Path.home()
     if "zsh" in shell and (home / ".zshrc").exists():
@@ -107,12 +107,12 @@ def _detect_shell_config() -> Path | None:
         for f in [".bashrc", ".bash_profile", ".profile"]:
             if (home / f).exists():
                 return home / f
-        return home / ".bashrc"   # 新建
+        return home / ".bashrc"   # create if needed
     return home / ".bashrc"
 
 
 def _write_key_to_shell(env_var: str, key: str) -> str:
-    """将 export 语句写入 shell 配置文件并立即注入 os.environ。返回写入路径。"""
+    """Append an export line to the shell config and inject os.environ."""
     cfg_file = _detect_shell_config()
     export_line = f'\nexport {env_var}="{key}"\n'
 
@@ -128,40 +128,40 @@ def _write_key_to_shell(env_var: str, key: str) -> str:
             with open(str(cfg_file), "a", encoding="utf-8") as f:
                 f.write(export_line)
         except Exception as e:
-            return f"写入失败: {e}"
+            return f"write failed: {e}"
 
     os.environ[env_var] = key
     return str(cfg_file)
 
 
 def _run_key_wizard() -> bool:
-    """模块 2：无 Key 时的交互式配置向导。
-    返回 True 表示至少成功配置了一个 Key（可以继续启动）。
+    """Interactive setup wizard shown when no API key is configured.
+    Return True when at least one key was configured.
     """
     print(f"""
 {c(BOLD+CYAN, "╔════════════════════════════════════════════════╗")}
-{c(BOLD+CYAN, "║")}  {c(BOLD, f"PawnLogic {VERSION}")} — 首次配置向导              {c(BOLD+CYAN,"║")}
+{c(BOLD+CYAN, "║")}  {c(BOLD, f"PawnLogic {VERSION}")} - First-Run Setup Wizard     {c(BOLD+CYAN,"║")}
 {c(BOLD+CYAN, "╚════════════════════════════════════════════════╝")}
 
-{c(YELLOW,"⚠  未检测到任何 API Key。")}
-请选择要配置的服务商（可多次配置）：
+{c(YELLOW,"⚠  No API key was detected.")}
+Select providers to configure. You can run this multiple times:
 
 """)
 
     for num, env_var, label, hint, no_key in _WIZARD_PROVIDERS:
         already = ""
         if env_var and os.environ.get(env_var):
-            already = c(GREEN, "  [已配置 ✓]")
+            already = c(GREEN, "  [configured ✓]")
         print(f"  {c(CYAN, f'[{num}]')} {c(BOLD, f'{label:18}')} {c(GRAY, hint)}{already}")
 
-    print(f"\n  {c(GRAY, '[0]')} 跳过，稍后手动配置（export KEY=sk-... 或 /setkey）")
+    print(f"\n  {c(GRAY, '[0]')} Skip for now. Configure later with export KEY=sk-... or /setkey.")
     print()
 
     configured_any = False
 
     while True:
         try:
-            choice = input(cp(BOLD, "  请输入序号（可输入多个，如 1 5）: ")).strip()
+            choice = input(cp(BOLD, "  Enter number(s), e.g. 1 5: ")).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
@@ -174,23 +174,23 @@ def _run_key_wizard() -> bool:
         for sel in selected:
             matched = next((p for p in _WIZARD_PROVIDERS if p[0] == sel), None)
             if not matched:
-                print(c(RED, f"  ✗ 无效序号 '{sel}'"))
+                print(c(RED, f"  ✗ Invalid selection '{sel}'"))
                 continue
 
             num, env_var, label, hint, no_key = matched
 
             if no_key:
                 local_url = input(
-                    c(GRAY, "  Ollama API URL [默认: http://localhost:11434/v1/chat/completions]: ")
+                    c(GRAY, "  Ollama API URL [default: http://localhost:11434/v1/chat/completions]: ")
                 ).strip()
                 if local_url:
                     os.environ["LOCAL_API_URL"] = local_url
                     _write_key_to_shell("LOCAL_API_URL", local_url)
-                print(c(GREEN, "  ✓ Ollama 配置完成。请确保 ollama serve 已在后台运行。"))
+                print(c(GREEN, "  ✓ Ollama configured. Make sure ollama serve is running."))
                 configured_any = True
                 continue
 
-            print(c(GRAY, f"\n  获取 {label} Key:"))
+            print(c(GRAY, f"\n  Get a {label} key:"))
             _KEY_URLS = {
                 "PAWN_API_KEY":       "https://portal.nousresearch.com/api-keys",
                 "DEEPSEEK_API_KEY":   "https://platform.deepseek.com/api_keys",
@@ -202,32 +202,32 @@ def _run_key_wizard() -> bool:
             }
             url = _KEY_URLS.get(env_var, "")
             if url:
-                print(c(CYAN, f"  申请地址: {url}"))
+                print(c(CYAN, f"  Key URL: {url}"))
 
             try:
-                key = ptk_prompt(f"  粘贴 {env_var}（回车确认）: ").strip()
+                key = ptk_prompt(f"  Paste {env_var} and press Enter: ").strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 continue
 
             if not key:
-                print(c(YELLOW, "  跳过（未输入）"))
+                print(c(YELLOW, "  Skipped: no value entered."))
                 continue
 
             written_to = _write_key_to_shell(env_var, key)
-            print(c(GREEN, f"  ✓ {env_var} 已保存 → {written_to}"))
-            print(c(GRAY,  "  已即时注入当前进程，无需重启终端。"))
+            print(c(GREEN, f"  ✓ {env_var} saved -> {written_to}"))
+            print(c(GRAY,  "  Injected into the current process; no terminal restart needed."))
             configured_any = True
 
         try:
-            cont = input(cp(GRAY, "  继续配置其他服务商? [y/N]: ")).strip().lower()
+            cont = input(cp(GRAY, "  Configure more providers? [y/N]: ")).strip().lower()
             if cont != "y":
                 break
         except (EOFError, KeyboardInterrupt):
             break
 
     if not configured_any:
-        print(c(YELLOW, "\n  未配置任何 Key。启动后可用 /setkey 命令重新配置。\n"))
+        print(c(YELLOW, "\n  No key configured. Use /setkey after startup to configure one.\n"))
 
     return configured_any
 
@@ -237,7 +237,7 @@ def _run_key_wizard() -> bool:
 # ════════════════════════════════════════════════════════
 
 def _visible_models() -> dict:
-    """返回当前进程环境中已配置 API Key 的模型子集（动态，每次调用实时检查）。"""
+    """Return keyed models whose providers are active in the current process."""
     return {
         alias: cfg
         for alias, cfg in MODELS.items()
@@ -251,10 +251,10 @@ def _visible_models() -> dict:
 # ════════════════════════════════════════════════════════
 
 def _provider_list() -> None:
-    """列出所有 Provider 状态。人读路径（sub-commands of /provider 不带 ctx）。
+    """List provider status for the human-readable provider sub-command path.
 
-    JSON 路径从进程级 active sink 读取；如果是 JsonSink，发射结构化数据，
-    否则保持原有的彩色表格输出。
+    The JSON path reads the process-level active sink. If it is a JsonSink,
+    emit structured data; otherwise keep the colored table output.
     """
     from core.commands._common import get_active_sink
     from core.output import JsonSink
@@ -280,7 +280,7 @@ def _provider_list() -> None:
         sink.print_json(data)
         return
 
-    print(c(BOLD, "\n  Provider 列表："))
+    print(c(BOLD, "\n  Providers:"))
     for pname, pinfo in PROVIDERS.items():
         fmt = pinfo.get("api_format", "openai")
         label = pinfo.get("label", pname)
@@ -289,73 +289,73 @@ def _provider_list() -> None:
         if val:
             ktag = c(GREEN, f"✓ ({mask_key(val)})")
         elif not env:
-            ktag = c(GRAY, "无需 Key")
+            ktag = c(GRAY, "No key required")
         else:
-            ktag = c(RED, "✗ 未配置")
+            ktag = c(RED, "✗ Not configured")
         fmt_tag = c(MAGENTA, "[Anthropic]") if fmt == "anthropic" else c(GRAY, "[OpenAI]")
         active_tag = c(GREEN, "active") if is_provider_active(pname) else c(GRAY, "inactive")
         hint = pinfo.get("models_hint", "")
         print(f"  {c(CYAN, f'{pname:16}')}{fmt_tag:14} {label:24} {ktag}  {active_tag}")
         if hint:
             print(f"  {'':16}{c(GRAY, hint)}")
-    print(c(GRAY, f"\n  自定义配置: {CUSTOM_PROVIDERS_PATH}"))
+    print(c(GRAY, f"\n  Custom config: {CUSTOM_PROVIDERS_PATH}"))
     print()
 
 
 def _provider_set_active(alias: str, active: bool) -> None:
     if not alias:
         verb = "activate" if active else "deactivate"
-        print(c(RED, f"  用法: /provider {verb} <name>"))
+        print(c(RED, f"  Usage: /provider {verb} <name>"))
         return
     if alias not in PROVIDERS:
-        print(c(RED, f"  ✗ 未找到 Provider: {alias}"))
+        print(c(RED, f"  ✗ Provider not found: {alias}"))
         return
     if alias == "deepseek" and not active:
-        print(c(YELLOW, "  ⚠ deepseek 是默认 provider，始终保持 active。"))
+        print(c(YELLOW, "  ⚠ deepseek is the default provider and always stays active."))
         return
     if not set_provider_active(alias, active):
-        print(c(RED, f"  ✗ 无法更新 Provider 状态: {alias}"))
+        print(c(RED, f"  ✗ Failed to update provider state: {alias}"))
         return
     state = "active" if active else "inactive"
-    print(c(GREEN, f"  ✓ Provider '{alias}' 已设置为 {state}。"))
+    print(c(GREEN, f"  ✓ Provider '{alias}' is now {state}."))
 
 
 def _provider_add() -> None:
-    """交互式添加自定义 Provider。"""
-    print(c(BOLD, "\n  添加自定义 Provider"))
-    print(c(GRAY, "  （Key 存入 .env，配置存入 ~/.pawnlogic/custom_providers.json）\n"))
+    """Interactively add a custom provider."""
+    print(c(BOLD, "\n  Add Custom Provider"))
+    print(c(GRAY, "  Keys are stored in .env; provider config is stored in ~/.pawnlogic/custom_providers.json.\n"))
 
     try:
-        name = input(cp(BOLD, "  Provider 名称 (短ID，如 my_relay): ")).strip()
+        name = input(cp(BOLD, "  Provider name (short ID, e.g. my_relay): ")).strip()
     except (EOFError, KeyboardInterrupt):
         print()
         return
     if not name or name in PROVIDERS:
-        print(c(RED, f"  ✗ 名称无效或已存在: {name}"))
+        print(c(RED, f"  ✗ Invalid or duplicate provider name: {name}"))
         return
 
-    print(f"\n  {c(BOLD, 'API 格式:')}")
-    print(f"    {c(CYAN, '[1]')} OpenAI Chat Completions 格式")
-    print(f"    {c(CYAN, '[2]')} Anthropic Messages 格式")
+    print(f"\n  {c(BOLD, 'API format:')}")
+    print(f"    {c(CYAN, '[1]')} OpenAI Chat Completions format")
+    print(f"    {c(CYAN, '[2]')} Anthropic Messages format")
     try:
-        fmt_choice = input(cp(BOLD, "  选择 [1/2]: ")).strip()
+        fmt_choice = input(cp(BOLD, "  Select [1/2]: ")).strip()
     except (EOFError, KeyboardInterrupt):
         print()
         return
     api_format = "anthropic" if fmt_choice == "2" else "openai"
 
     try:
-        base_url = input(cp(BOLD, "  Base URL (如 https://api.example.com/v1/chat/completions): ")).strip()
+        base_url = input(cp(BOLD, "  Base URL (e.g. https://api.example.com/v1/chat/completions): ")).strip()
     except (EOFError, KeyboardInterrupt):
         print()
         return
     if not base_url:
-        print(c(RED, "  ✗ URL 不能为空"))
+        print(c(RED, "  ✗ URL cannot be empty."))
         return
 
     env_var_name = f"{name.upper().replace('-', '_')}_API_KEY"
     try:
-        key = ptk_prompt(f"  粘贴 API Key（回车确认，存入 .env → {env_var_name}）: ").strip()
+        key = ptk_prompt(f"  Paste API key and press Enter; it will be stored in .env -> {env_var_name}: ").strip()
     except (EOFError, KeyboardInterrupt):
         print()
         return
@@ -371,7 +371,7 @@ def _provider_add() -> None:
         except Exception:
             os.environ[env_var_name] = key
         _write_key_to_shell(env_var_name, key)
-        print(c(GREEN, f"  ✓ Key 已保存 → .env ({env_var_name})"))
+        print(c(GREEN, f"  ✓ Key saved -> .env ({env_var_name})"))
 
     prov_cfg = {
         "base_url":    base_url,
@@ -383,34 +383,34 @@ def _provider_add() -> None:
     save_custom_provider(name, prov_cfg, {})
     PROVIDERS[name] = prov_cfg
 
-    print(c(GREEN, f"\n  ✓ Provider '{name}' 已添加"))
-    print(c(GRAY,  f"    格式: {api_format}"))
+    print(c(GREEN, f"\n  ✓ Provider '{name}' added."))
+    print(c(GRAY,  f"    Format: {api_format}"))
     print(c(GRAY,  f"    URL:  {base_url}"))
-    print(c(GRAY,  f"    配置: {CUSTOM_PROVIDERS_PATH}"))
-    print(c(CYAN,  f"    接下来运行 /provider fetch {name} 拉取模型列表"))
+    print(c(GRAY,  f"    Config: {CUSTOM_PROVIDERS_PATH}"))
+    print(c(CYAN,  f"    Next: run /provider fetch {name} to fetch the model list."))
     print()
 
 
 def _provider_remove(name: str = "") -> None:
-    """删除自定义 Provider。"""
+    """Remove a custom provider."""
     if not name:
         if not CUSTOM_PROVIDERS_PATH.exists():
-            print(c(GRAY, "\n  没有自定义 Provider。"))
+            print(c(GRAY, "\n  No custom providers."))
             return
         try:
             data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
         except Exception:
-            print(c(RED, "\n  ✗ 读取配置文件失败"))
+            print(c(RED, "\n  ✗ Failed to read the config file."))
             return
         custom = list(data.get("providers", {}).keys())
         if not custom:
-            print(c(GRAY, "\n  没有自定义 Provider。"))
+            print(c(GRAY, "\n  No custom providers."))
             return
-        print(c(BOLD, "\n  自定义 Provider:"))
+        print(c(BOLD, "\n  Custom Providers:"))
         for i, n in enumerate(custom, 1):
             print(f"    {c(CYAN, f'[{i}]')} {n}")
         try:
-            choice = input(cp(BOLD, "  输入序号或名称: ")).strip()
+            choice = input(cp(BOLD, "  Enter index or name: ")).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             return
@@ -419,7 +419,7 @@ def _provider_remove(name: str = "") -> None:
         elif choice in custom:
             name = choice
         else:
-            print(c(RED, f"  ✗ 无效选择: {choice}"))
+            print(c(RED, f"  ✗ Invalid selection: {choice}"))
             return
 
     if remove_custom_provider(name):
@@ -428,31 +428,31 @@ def _provider_remove(name: str = "") -> None:
         to_remove = [a for a, m in MODELS.items() if m.get("provider") == name]
         for a in to_remove:
             del MODELS[a]
-        print(c(GREEN, f"  ✓ 已删除 Provider '{name}'"))
+        print(c(GREEN, f"  ✓ Removed provider '{name}'"))
     else:
-        print(c(RED, f"  ✗ 未找到自定义 Provider: {name}"))
+        print(c(RED, f"  ✗ Custom provider not found: {name}"))
 
 
 def _provider_test(session, model_alias: str = "") -> None:
-    """测试 Provider 连通性。"""
+    """Test provider connectivity."""
     if not model_alias:
         try:
-            model_alias = input(cp(BOLD, "  输入要测试的模型别名: ")).strip()
+            model_alias = input(cp(BOLD, "  Enter model alias to test: ")).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             return
     if model_alias not in MODELS:
-        print(c(RED, f"  ✗ 未知模型: {model_alias}"))
+        print(c(RED, f"  ✗ Unknown model: {model_alias}"))
         return
 
     ok, env = validate_api_key(model_alias)
     if not ok:
-        print(c(RED, f"  ✗ {env} 未配置。用 /setkey 或 /provider add 配置。"))
+        print(c(RED, f"  ✗ {env} is not configured. Use /setkey or /provider add."))
         return
 
     cfg = get_provider_config(model_alias)
-    print(c(GRAY, f"  测试 {model_alias} ({cfg['api_format']}) → {cfg['base_url']} ..."))
-    print(c(GRAY, "  发送 max_tokens=1 测试请求..."))
+    print(c(GRAY, f"  Testing {model_alias} ({cfg['api_format']}) -> {cfg['base_url']} ..."))
+    print(c(GRAY, "  Sending a max_tokens=1 test request..."))
 
     from core.api_client import call_once
     text, err = call_once(
@@ -460,16 +460,16 @@ def _provider_test(session, model_alias: str = "") -> None:
         model_alias, max_tokens=1,
     )
     if err:
-        print(c(RED, f"  ✗ 测试失败: {err}"))
+        print(c(RED, f"  ✗ Test failed: {err}"))
     else:
-        print(c(GREEN, f"  ✓ 连通成功！响应: {text[:80]}"))
+        print(c(GREEN, f"  ✓ Connection succeeded. Response: {text[:80]}"))
 
 
 def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str = "openai") -> bool:
-    """非交互式：/provider add <alias> <base_url> <ENV_KEY> [anthropic]"""
+    """Non-interactive: /provider add <alias> <base_url> <ENV_KEY> [anthropic]."""
     from config.providers import save_custom_provider as _save_cp, load_custom_providers
     if alias in PROVIDERS:
-        print(c(YELLOW, f"  ⚠ Provider '{alias}' 已存在，将覆盖配置"))
+        print(c(YELLOW, f"  ⚠ Provider '{alias}' already exists; config will be overwritten."))
     fmt = api_format if api_format in ("openai", "anthropic") else "openai"
     prov_cfg = {
         "base_url":    base_url,
@@ -481,23 +481,23 @@ def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str =
     _save_cp(alias, prov_cfg, {})
     PROVIDERS[alias] = prov_cfg
     load_custom_providers()
-    print(c(GREEN, f"  ✓ 供应商注册成功！请确保已在 .env 中配置了 {env_key}。"))
-    print(c(CYAN, f"  需要显示在 /model 时，请运行 /provider activate {alias}。"))
+    print(c(GREEN, f"  ✓ Provider registered. Make sure {env_key} is configured in .env."))
+    print(c(CYAN, f"  To show it in /model, run /provider activate {alias}."))
     if not os.getenv(env_key, ""):
-        print(c(CYAN, f"  接下来请运行 /provider fetch {alias} 以拉取模型。"))
+        print(c(CYAN, f"  Next: run /provider fetch {alias} to fetch models."))
         return False
     if not sys.stdin.isatty():
-        print(c(CYAN, f"  接下来请运行 /provider fetch {alias} 以拉取模型。"))
+        print(c(CYAN, f"  Next: run /provider fetch {alias} to fetch models."))
         return False
     try:
-        ans = input(cp(BOLD, f"  是否立即拉取 {alias} 的模型列表？[Y/n]: ")).strip().lower()
+        ans = input(cp(BOLD, f"  Fetch {alias} models now? [Y/n]: ")).strip().lower()
     except (EOFError, KeyboardInterrupt):
         ans = "n"
     return ans in ("", "y")
 
 
 def _fetch_models_paginated(models_url: str, api_key: str) -> list:
-    """带分页支持的 /v1/models 请求，返回所有 model 条目。"""
+    """Request /v1/models with pagination and return all model entries."""
     import httpx
     all_data: list = []
     url = f"{models_url}?limit=200"
@@ -516,8 +516,8 @@ def _fetch_models_paginated(models_url: str, api_key: str) -> list:
 
 
 async def _provider_fetch_selector(entries: list[tuple[str, dict]]) -> list[str]:
-    """prompt_toolkit 多选菜单：Space 选中/取消，Enter 确认，Esc 全不选退出。
-    返回选中的 model id 列表。
+    """prompt_toolkit multi-select menu. Space toggles, Enter confirms, Esc cancels.
+    Return the selected model IDs.
     """
     if not _HAS_PROMPT_TOOLKIT:
         return [mid for mid, _ in entries]
@@ -533,8 +533,8 @@ async def _provider_fetch_selector(entries: list[tuple[str, dict]]) -> list[str]
 
     def get_fragments():
         frags = []
-        frags.append(("class:title", f"  选择要注册的模型（共 {len(entries)} 个）\n"))
-        frags.append(("class:desc",  "  Space 选中/取消  ↑↓ 移动  A 全选  N 全不选  Enter 确认  Esc 取消\n\n"))
+        frags.append(("class:title", f"  Select models to register ({len(entries)} total)\n"))
+        frags.append(("class:desc",  "  Space toggle  Up/Down move  A all  N none  Enter confirm  Esc cancel\n\n"))
 
         for i, (mid, cfg) in enumerate(entries):
             checked = "●" if i in selected else "○"
@@ -542,7 +542,7 @@ async def _provider_fetch_selector(entries: list[tuple[str, dict]]) -> list[str]
             vtag = " 📷" if cfg.get("vision") else ""
             style = "class:selected" if i == cursor_idx else ""
             frags.append((style, f"  {cursor}{checked} {mid}{vtag}\n"))
-        frags.append(("", f"\n  已选 {len(selected)}/{len(entries)} 个\n"))
+        frags.append(("", f"\n  Selected {len(selected)}/{len(entries)}\n"))
         return frags
 
     control = FormattedTextControl(get_fragments)
@@ -598,7 +598,7 @@ async def _provider_fetch_selector(entries: list[tuple[str, dict]]) -> list[str]
 
 
 async def _provider_fetch(alias: str) -> None:
-    """/provider fetch <alias>: 分页请求 /v1/models，交互多选后批量注册。"""
+    """/provider fetch <alias>: fetch /v1/models with pagination and register selections."""
     from core.provider_tui import (
         _filter_supported_chat_models,
         _format_alias_preview,
@@ -613,26 +613,26 @@ async def _provider_fetch(alias: str) -> None:
 
     _BUILTIN = {"deepseek", "openai", "anthropic"}
     if alias in _BUILTIN:
-        print(c(RED, f"  ✗ 拒绝修改内置 Provider '{alias}'，保护核心资产。"))
+        print(c(RED, f"  ✗ Refusing to modify built-in provider '{alias}'."))
         return
 
     prov = PROVIDERS.get(alias)
     if not prov:
-        print(c(RED, f"  ✗ 未找到 Provider '{alias}'，请先运行 /provider add {alias} <url> <KEY>"))
+        print(c(RED, f"  ✗ Provider '{alias}' not found. Run /provider add {alias} <url> <KEY> first."))
         return
 
     api_key = os.getenv(prov.get("api_key_env", ""), "")
     if not api_key:
-        print(c(RED, f"  ✗ {prov.get('api_key_env')} 未配置，请先在 ~/.pawnlogic/.env 中设置该变量。"))
+        print(c(RED, f"  ✗ {prov.get('api_key_env')} is not configured. Set it in ~/.pawnlogic/.env first."))
         return
 
     models_url = models_url_from_base_url(prov["base_url"])
-    print(c(GRAY, f"  正在请求 {models_url} ..."))
+    print(c(GRAY, f"  Requesting {models_url} ..."))
 
     try:
         data = _fetch_models_paginated(models_url, api_key)
     except Exception as e:
-        print(c(RED, f"  ✗ 请求失败: {e}"))
+        print(c(RED, f"  ✗ Request failed: {e}"))
         return
 
     candidates: list[tuple[str, dict]] = []
@@ -646,7 +646,7 @@ async def _provider_fetch(alias: str) -> None:
         candidates.append((mid, {
             "id":       mid,
             "provider": alias,
-            "desc":     "动态拉取模型",
+            "desc":     "Fetched model",
             "color":    "\033[37m",
             "vision":   vision,
         }))
@@ -659,14 +659,14 @@ async def _provider_fetch(alias: str) -> None:
     )
 
     if not candidates:
-        print(c(YELLOW, "  ⚠ 未获取到任何可用模型，请检查接口返回格式。"))
+        print(c(YELLOW, "  ⚠ No usable models were fetched. Check the API response format."))
         return
 
     print(
         c(
             GRAY,
-            f"  同步摘要：接口返回 {len(data)} 个；按类型/名称隐藏 {hidden_by_name} 个；"
-            f"连通探测隐藏 {removed} 个；可选择 {len(candidates)} 个。",
+            f"  Sync summary: {len(data)} returned; {hidden_by_name} hidden by type/name; "
+            f"{removed} hidden by chat probe; {len(candidates)} selectable.",
         )
     )
     alias_changes = _model_alias_changes(alias, candidates)
@@ -674,15 +674,15 @@ async def _provider_fetch(alias: str) -> None:
         print(
             c(
                 GRAY,
-                f"  别名说明：{len(alias_changes)} 个模型会保存为 provider 前缀别名："
-                f"{_format_alias_preview(alias_changes)}。",
+                f"  Alias note: {len(alias_changes)} model IDs will be saved with provider prefixes: "
+                f"{_format_alias_preview(alias_changes)}.",
             )
         )
-    print(c(GREEN, f"  ✓ 获取到 {len(candidates)} 个模型，请选择要注册的模型：\n"))
+    print(c(GREEN, f"  ✓ Fetched {len(candidates)} models. Select models to register:\n"))
     chosen_ids = await _provider_fetch_selector(candidates)
 
     if not chosen_ids:
-        print(c(GRAY, "  已取消，未注册任何模型。"))
+        print(c(GRAY, "  Cancelled. No models were registered."))
         return
 
     models_cfg = {
@@ -693,11 +693,11 @@ async def _provider_fetch(alias: str) -> None:
     _save_cp(alias, PROVIDERS[alias], models_cfg, replace_models=True)
     load_custom_providers()
 
-    print(c(GREEN, f"  ✓ 成功注册了 {len(models_cfg)} 个模型！"))
+    print(c(GREEN, f"  ✓ Registered {len(models_cfg)} models."))
     if is_provider_active(alias):
-        print(c(CYAN, "  Provider 已 active，可直接在 /model 中选择。"))
+        print(c(CYAN, "  Provider is active. You can select these models in /model."))
     else:
-        print(c(CYAN, f"  需要显示在 /model 时，请运行 /provider activate {alias}。"))
+        print(c(CYAN, f"  To show them in /model, run /provider activate {alias}."))
 
 
 # ════════════════════════════════════════════════════════
@@ -705,9 +705,9 @@ async def _provider_fetch(alias: str) -> None:
 # ════════════════════════════════════════════════════════
 
 async def _handle_provider_cmd(sub: str, sub_arg: str, session) -> None:
-    """处理 /provider 子命令。"""
+    """Handle /provider sub-commands."""
 
-    # ── /provider 无参数 — 全交互式 TUI 面板 ──────────
+    # /provider without arguments opens the interactive TUI panel.
     if not sub:
         if _HAS_PROMPT_TOOLKIT:
             try:
@@ -737,7 +737,7 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session) -> None:
             _provider_list()
         return
 
-    # ── /provider list ────────────────────────────────
+    # /provider list
     if sub == "list":
         _provider_list()
     elif sub == "add":
@@ -751,12 +751,12 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session) -> None:
             _provider_add()
     elif sub == "fetch":
         if not sub_arg:
-            print(c(RED, "  用法: /provider fetch <name>"))
+            print(c(RED, "  Usage: /provider fetch <name>"))
         else:
             await _provider_fetch(sub_arg.strip())
     elif sub == "update":
         if not sub_arg:
-            print(c(RED, "  用法: /provider update <name>"))
+            print(c(RED, "  Usage: /provider update <name>"))
         else:
             await _provider_fetch(sub_arg.strip())  # update = re-fetch
     elif sub in ("activate", "active"):
@@ -768,7 +768,7 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session) -> None:
     elif sub == "test":
         _provider_test(session, sub_arg)
     else:
-        print(c(RED, f"  ✗ 未知子命令 '{sub}'。可用: list · add · fetch · update · activate · deactivate · remove · test"))
+        print(c(RED, f"  ✗ Unknown sub-command '{sub}'. Available: list · add · fetch · update · activate · deactivate · remove · test"))
 
 
 # ════════════════════════════════════════════════════════
@@ -778,7 +778,7 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session) -> None:
 async def cc_style_model_selector(
     models: dict, current_alias: str,
 ) -> str | None:
-    """Claude Code 风格的内联交互式模型选择器。"""
+    """Claude Code style inline model selector."""
     from prompt_toolkit.application import Application
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.layout import Layout
@@ -906,18 +906,18 @@ async def cmd_keys(ctx: CommandContext) -> None:
             data[env] = bool(os.environ.get(env, ""))
         ctx.sink.print_json(data)
         return
-    print(c(BOLD, "\n  API Key 配置状态："))
+    print(c(BOLD, "\n  API Key status:"))
     for pname, pinfo in PROVIDERS.items():
         env = pinfo.get("api_key_env")
         if not env:
             continue
         val = os.environ.get(env, "")
         if val:
-            tag = c(GREEN, f"✓ 已配置 ({mask_key(val)})")
+            tag = c(GREEN, f"✓ Configured ({mask_key(val)})")
         else:
-            tag = c(RED, "✗ 未配置")
+            tag = c(RED, "✗ Not configured")
         print(f"  {c(CYAN, f'{pname:14}')}{env:28} {tag}")
-    print(c(GRAY, "\n  视觉模型: " + ", ".join(list_vision_models())))
+    print(c(GRAY, "\n  Vision models: " + ", ".join(list_vision_models())))
 
 
 @register("/provider")
@@ -930,10 +930,10 @@ async def cmd_model(ctx: CommandContext) -> None:
     session = ctx.session
     arg = ctx.arg
     if not arg:
-        # ── CC 风格内联选择器 ──────────────────────────
+        # Claude Code style inline selector.
         _vm = _visible_models()
         if not _vm:
-            print(c(YELLOW, "  ⚠ 当前没有已配置 API Key 的模型，请先用 /setkey 配置。"))
+            print(c(YELLOW, "  ⚠ No models with configured API keys are available. Use /setkey first."))
         elif _HAS_PROMPT_TOOLKIT:
             from collections import defaultdict
             _groups: dict[str, list] = defaultdict(list)
@@ -941,50 +941,50 @@ async def cmd_model(ctx: CommandContext) -> None:
                 _prov_label = PROVIDERS.get(_cfg_m.get("provider", ""), {}).get("label", _cfg_m.get("provider", ""))
                 _groups[_prov_label].append((_alias, _cfg_m))
 
-            print(c(BOLD, "\n  可用模型（active 且已配置 Key）："))
+            print(c(BOLD, "\n  Available models (active providers with configured keys):"))
             for _prov_label, _entries in _groups.items():
-                print(c(CYAN, f"  {_prov_label}") + c(GRAY, f"  [{len(_entries)} 个]"))
+                print(c(CYAN, f"  {_prov_label}") + c(GRAY, f"  [{len(_entries)} models]"))
 
             result = await cc_style_model_selector(_vm, session.model_alias)
             if result:
                 session.model_alias = result
                 ok, env = validate_api_key(result)
                 if not ok:
-                    print(c(YELLOW, f"  ⚠ 已切换到 {result}，但 {env} 未设置。用 /setkey 配置。"))
+                    print(c(YELLOW, f"  ⚠ Switched to {result}, but {env} is not set. Configure it with /setkey."))
                 else:
-                    print(c(GREEN, f"  ✓ 已切换到 {c(MODELS[result]['color'], result)}"))
+                    print(c(GREEN, f"  ✓ Switched to {c(MODELS[result]['color'], result)}"))
             else:
-                print(c(GRAY, "  已取消"))
+                print(c(GRAY, "  Cancelled"))
         else:
-            # readline 降级：按 provider 分组的纯文本列表（active 且已配置 Key 的模型）
+            # readline fallback: plain grouped list for active providers with keys.
             from collections import defaultdict
             _groups: dict[str, list] = defaultdict(list)
             for _alias, _cfg_m in _vm.items():
                 _prov_label = PROVIDERS.get(_cfg_m.get("provider", ""), {}).get("label", _cfg_m.get("provider", ""))
                 _groups[_prov_label].append((_alias, _cfg_m))
 
-            print(c(BOLD, "\n  可用模型："))
+            print(c(BOLD, "\n  Available models:"))
             for _prov_label, _entries in _groups.items():
                 print(c(CYAN, f"\n  ── {_prov_label} ──"))
                 for _alias, _cfg_m in _entries:
-                    tick = c(GREEN, " ◀ 当前") if _alias == session.model_alias else ""
+                    tick = c(GREEN, " ◀ current") if _alias == session.model_alias else ""
                     _env_var = PROVIDERS.get(_cfg_m.get("provider", ""), {}).get("api_key_env", "")
                     _raw_key = os.getenv(_env_var, "")
                     ktag = c(GREEN, f"[{mask_key(_raw_key)}]")
                     vtag = c(CYAN, " 📷") if _cfg_m.get("vision") else ""
                     ftag = c(MAGENTA, " [A]") if get_api_format(_alias) == "anthropic" else ""
                     print(f"    {c(_cfg_m['color'], f'{_alias:14}')}{_cfg_m['desc']:30} {ktag}{vtag}{ftag}{tick}")
-            print(c(GRAY, "\n  用法: /model <alias>  📷=支持视觉  [A]=Anthropic 格式"))
+            print(c(GRAY, "\n  Usage: /model <alias>  📷=vision capable  [A]=Anthropic format"))
     elif arg in MODELS:
         provider_name = MODELS[arg].get("provider", "")
         if not is_provider_active(provider_name):
-            print(c(YELLOW, f"  ⚠ Provider '{provider_name}' 未 active。先运行 /provider activate {provider_name}。"))
+            print(c(YELLOW, f"  ⚠ Provider '{provider_name}' is not active. Run /provider activate {provider_name} first."))
             return
         session.model_alias = arg
         ok, env = validate_api_key(arg)
         if not ok:
-            print(c(YELLOW, f"  ⚠ 已切换到 {arg}，但 {env} 未设置。用 /setkey 配置。"))
+            print(c(YELLOW, f"  ⚠ Switched to {arg}, but {env} is not set. Configure it with /setkey."))
         else:
-            print(c(GREEN, f"  ✓ 已切换到 {c(MODELS[arg]['color'], arg)}"))
+            print(c(GREEN, f"  ✓ Switched to {c(MODELS[arg]['color'], arg)}"))
     else:
-        print(c(RED, f"  ✗ 未知模型 '{arg}'"))
+        print(c(RED, f"  ✗ Unknown model '{arg}'"))

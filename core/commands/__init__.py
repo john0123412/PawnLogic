@@ -83,9 +83,9 @@ async def dispatch(ctx: CommandContext) -> Any:
     if handler is not None:
         return await handler(ctx)
 
-    # Unknown verb — match legacy behavior of printing a hint.
+    # Unknown verb - match legacy behavior of printing a hint.
     from utils.ansi import c, GRAY
-    print(c(GRAY, f"  未知命令 '{ctx.verb}'，输入 /help"))
+    print(c(GRAY, f"  Unknown command '{ctx.verb}'. Type /help."))
     return None
 
 

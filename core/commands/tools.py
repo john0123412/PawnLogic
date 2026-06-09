@@ -41,12 +41,12 @@ async def cmd_knowledge(ctx: CommandContext) -> None:
     query = (ctx.arg + " " + ctx.arg2).strip()
     if query:
         rows = search_knowledge(query, limit=10)
-        print(c(BOLD, f"\n  知识库搜索: '{query}' — {len(rows)} 条："))
+        print(c(BOLD, f"\n  Knowledge search: '{query}' - {len(rows)} results:"))
     else:
         rows = list(list_knowledge(20))
-        print(c(BOLD, f"\n  知识库（最近 {len(rows)} 条）："))
+        print(c(BOLD, f"\n  Knowledge base (latest {len(rows)}):"))
     if not rows:
-        print(c(GRAY, "  (空)"))
+        print(c(GRAY, "  (empty)"))
     else:
         for r in rows:
             print(c(CYAN, f"  [{r['id']:3d}] ") + c(YELLOW, r["topic"]) +
@@ -60,7 +60,7 @@ async def cmd_knowledge(ctx: CommandContext) -> None:
 
 @register("/webstatus")
 async def cmd_webstatus(ctx: CommandContext) -> None:
-    print(c(BOLD, "\n  网页抓取工具状态："))
+    print(c(BOLD, "\n  Web fetch tool status:"))
     print(web_tool_status())
 
 
@@ -68,10 +68,10 @@ async def cmd_webstatus(ctx: CommandContext) -> None:
 async def cmd_browserstatus(ctx: CommandContext) -> None:
     try:
         from tools.browser_ops import browser_tool_status
-        print(c(BOLD, "\n  Scrapling 浏览器工具状态："))
+        print(c(BOLD, "\n  Scrapling browser tool status:"))
         print(browser_tool_status())
     except ImportError:
-        print(c(RED, "  ✗ browser_ops 模块未加载"))
+        print(c(RED, "  ✗ browser_ops module is not loaded"))
 
 
 @register("/pwnenv")
@@ -92,17 +92,17 @@ async def cmd_docker(ctx: CommandContext) -> None:
     )
     sub = arg.lower().strip() if arg else "status"
     if sub == "status":
-        print(c(BOLD, "\n  Docker 状态："))
+        print(c(BOLD, "\n  Docker status:"))
         print(docker_status())
-        print(c(GRAY, f"\n  可用镜像别名: {', '.join(DEFAULT_DOCKER_IMAGES.keys())}"))
-        print(c(GRAY, "  用法: /docker status | /docker images | /docker ps | /docker containers"))
+        print(c(GRAY, f"\n  Available image aliases: {', '.join(DEFAULT_DOCKER_IMAGES.keys())}"))
+        print(c(GRAY, "  Usage: /docker status | /docker images | /docker ps | /docker containers"))
     elif sub == "images":
         client = _get_docker_client()
         if not client:
-            print(c(RED, "  ✗ Docker 不可用"))
+            print(c(RED, "  ✗ Docker is unavailable"))
         else:
             images = client.images.list()
-            print(c(BOLD, f"\n  本地镜像（{len(images)} 个）："))
+            print(c(BOLD, f"\n  Local images ({len(images)}):"))
             for img in images[:20]:
                 tags = ", ".join(img.tags) if img.tags else "<none>"
                 size_mb = img.attrs.get("Size", 0) / (1024 * 1024)
@@ -110,42 +110,42 @@ async def cmd_docker(ctx: CommandContext) -> None:
     elif sub in ("ps", "containers"):
         client = _get_docker_client()
         if not client:
-            print(c(RED, "  ✗ Docker 不可用"))
+            print(c(RED, "  ✗ Docker is unavailable"))
         else:
             containers = client.containers.list(all=True)
             pawn_containers = [ct for ct in containers if ct.labels.get("pawn") == "true"]
-            print(c(BOLD, f"\n  PawnLogic 容器（{len(pawn_containers)} 个）："))
+            print(c(BOLD, f"\n  PawnLogic containers ({len(pawn_containers)}):"))
             for ct in pawn_containers:
                 name = ct.labels.get("pawn_name", ct.name)
                 status_color = GREEN if ct.status == "running" else RED
                 print(f"  {c(CYAN, name):20} {c(status_color, ct.status):12} {c(GRAY, ct.id[:12])}")
             if not pawn_containers:
-                print(c(GRAY, "  (无 PawnLogic 容器)"))
+                print(c(GRAY, "  (no PawnLogic containers)"))
     elif sub == "pull":
         image = arg2.strip() if arg2 else ""
         if not image:
-            print(c(RED, "  用法: /docker pull <镜像名或别名>"))
+            print(c(RED, "  Usage: /docker pull <image name or alias>"))
         else:
             from tools.docker_sandbox import _resolve_image
             resolved = _resolve_image(image)
             client = _get_docker_client()
             if not client:
-                print(c(RED, "  ✗ Docker 不可用"))
+                print(c(RED, "  ✗ Docker is unavailable"))
             else:
-                print(c(YELLOW, f"  📥 正在拉取 {resolved} ..."))
+                print(c(YELLOW, f"  📥 Pulling {resolved} ..."))
                 try:
                     client.images.pull(resolved)
-                    print(c(GREEN, f"  ✓ {resolved} 拉取完成"))
+                    print(c(GREEN, f"  ✓ Pulled {resolved}"))
                 except Exception as e:
-                    print(c(RED, f"  ✗ 拉取失败: {e}"))
+                    print(c(RED, f"  ✗ Pull failed: {e}"))
     elif sub == "clean":
         from tools.docker_sandbox import docker_prune_resources
-        print(c(YELLOW, "  🧹 正在清理 Docker 资源..."))
+        print(c(YELLOW, "  🧹 Cleaning Docker resources..."))
         result = docker_prune_resources()
         col = GREEN if result.startswith("✓") else RED
         print(c(col, f"  {result}"))
     else:
-        print(c(GRAY, "  用法: /docker status | /docker images | /docker ps | /docker pull <镜像> | /docker clean"))
+        print(c(GRAY, "  Usage: /docker status | /docker images | /docker ps | /docker pull <image> | /docker clean"))
 
 
 # ════════════════════════════════════════════════════════
@@ -160,58 +160,58 @@ async def cmd_worker(ctx: CommandContext) -> None:
     target = arg.lower().strip() if arg else ""
 
     if not target:
-        # 无参数：显示交互式菜单
+        # No argument: show an interactive-style menu.
         current = DYNAMIC_CONFIG.get("preferred_worker", "auto")
-        print(c(BOLD, "\n  子任务 Worker 模型（delegate_task 使用）："))
+        print(c(BOLD, "\n  Subtask worker models (used by delegate_task):"))
         for i, alias in enumerate(_WORKER_MODEL_CANDIDATES):
             if alias not in MODELS:
                 continue
             ok, env = validate_api_key(alias)
             ktag = c(GREEN, "[key✓]") if ok else c(RED, "[key✗]")
             desc = MODELS[alias].get("desc", "")
-            tick = c(GREEN, " ◀ 当前") if alias == current else ""
+            tick = c(GREEN, " ◀ current") if alias == current else ""
             print(
                 c(GRAY, f"  [{i+1}] ")
                 + c(CYAN, f"{alias:16}")
                 + f" {desc:30} {ktag}{tick}"
             )
-        # auto 选项
-        auto_tick = c(GREEN, " ◀ 当前") if current == "auto" else ""
+        # auto option
+        auto_tick = c(GREEN, " ◀ current") if current == "auto" else ""
         print(
             c(GRAY, "  [A] ")
             + c(YELLOW, f"{'auto':16}")
-            + f" {'系统自动路由（按优先级选取首个可用模型）':30} {auto_tick}"
+            + f" {'Automatic routing by priority':30} {auto_tick}"
         )
-        print(c(GRAY, "\n  用法: /worker <alias> 或 /worker auto"))
+        print(c(GRAY, "\n  Usage: /worker <alias> or /worker auto"))
         return
 
     if target == "auto":
         DYNAMIC_CONFIG["preferred_worker"] = "auto"
         session._reset_system_prompt()
-        print(c(GREEN, "  ✓ Worker 已恢复为自动路由模式"))
+        print(c(GREEN, "  ✓ Worker restored to automatic routing mode"))
         return
 
     if target in MODELS:
         ok, env = validate_api_key(target)
         if not ok:
-            print(c(YELLOW, f"  ⚠ 已切换到 {target}，但 {env} 未设置。用 /setkey 配置。"))
+            print(c(YELLOW, f"  ⚠ Switched to {target}, but {env} is not set. Configure it with /setkey."))
         DYNAMIC_CONFIG["preferred_worker"] = target
         session._reset_system_prompt()
-        print(c(GREEN, f"  ✓ Worker 已锁定为 {c(CYAN, target)}（子任务将强制使用此模型）"))
+        print(c(GREEN, f"  ✓ Worker locked to {c(CYAN, target)}; subtasks will force this model."))
         return
 
-    # 尝试按序号匹配
+    # Try numeric index matching.
     try:
         idx = int(target) - 1
         if 0 <= idx < len(_WORKER_MODEL_CANDIDATES):
             alias = _WORKER_MODEL_CANDIDATES[idx]
             DYNAMIC_CONFIG["preferred_worker"] = alias
             session._reset_system_prompt()
-            print(c(GREEN, f"  ✓ Worker 已锁定为 {c(CYAN, alias)}"))
+            print(c(GREEN, f"  ✓ Worker locked to {c(CYAN, alias)}"))
         else:
-            print(c(RED, "  ✗ 序号超出范围"))
+            print(c(RED, "  ✗ Selection out of range"))
     except ValueError:
-        print(c(RED, f"  ✗ 未知模型 '{target}'。用 /worker 查看候选列表。"))
+        print(c(RED, f"  ✗ Unknown model '{target}'. Use /worker to list candidates."))
 
 
 # ════════════════════════════════════════════════════════
@@ -235,20 +235,20 @@ async def cmd_skills(ctx: CommandContext) -> None:
         packs = _skill_scanner.scan_all()
         if not packs:
             print(c(GRAY,
-                f"  skills/ 目录下暂无技能包。\n"
-                f"  路径: {SKILLS_DIR}\n"
-                "  创建: mkdir -p skills/my_skill && echo '# My Skill' > skills/my_skill/skill.md"
+                f"  No skill packs found under skills/.\n"
+                f"  Path: {SKILLS_DIR}\n"
+                "  Create one with: mkdir -p skills/my_skill && echo '# My Skill' > skills/my_skill/skill.md"
             ))
         else:
-            print(c(BOLD, f"\n  📦 本地技能包（{len(packs)} 个）"))
-            print(c(GRAY,  f"  路径: {SKILLS_DIR}\n"))
+            print(c(BOLD, f"\n  📦 Local skill packs ({len(packs)})"))
+            print(c(GRAY,  f"  Path: {SKILLS_DIR}\n"))
             print(_skill_scanner.format_list())
-            print(c(GRAY, "\n  /skillpack rescan → 重新扫描  |  /skillpack <名称> → 查看详情"))
+            print(c(GRAY, "\n  /skillpack rescan -> rescan  |  /skillpack <name> -> show details"))
         return
 
     if sub == "view":
         if not GLOBAL_SKILLS_PATH.exists():
-            print(c(GRAY, "  global_skills.md 尚未创建。完成任务后由 AI 自动生成，或使用 /memo。"))
+            print(c(GRAY, "  global_skills.md has not been created. The agent can generate it after tasks, or use /memo."))
             return
         lines_all = GLOBAL_SKILLS_PATH.read_text(encoding="utf-8").splitlines()
         total = len(lines_all)
@@ -259,7 +259,7 @@ async def cmd_skills(ctx: CommandContext) -> None:
             page = 0
         start = page * page_size
         end = min(start + page_size, total)
-        print(c(BOLD, f"\n  global_skills.md  ({total} 行，显示 {start+1}-{end})\n"))
+        print(c(BOLD, f"\n  global_skills.md  ({total} lines, showing {start+1}-{end})\n"))
         for line in lines_all[start:end]:
             if line.startswith("# "):
                 print(c(CYAN, line))
@@ -269,16 +269,16 @@ async def cmd_skills(ctx: CommandContext) -> None:
                 print(f"  {line}")
         if end < total:
             rem = (total - end + page_size - 1) // page_size
-            print(c(GRAY, f"\n  还有 {rem} 页，/skills view <页码> 继续"))
+            print(c(GRAY, f"\n  {rem} pages remain. Continue with /skills view <page>."))
         return
 
-    # 默认：toc 分类目录
+    # Default: table of contents.
     try:
         from core.gsa import load_toc
         toc = load_toc(max_lines=120)
     except ImportError:
         if not GLOBAL_SKILLS_PATH.exists():
-            toc = "(尚未创建)"
+            toc = "(not created yet)"
         else:
             toc = "\n".join(
                 line for line in GLOBAL_SKILLS_PATH.read_text(encoding="utf-8").splitlines()[:80]
@@ -286,13 +286,13 @@ async def cmd_skills(ctx: CommandContext) -> None:
             )
     if not GLOBAL_SKILLS_PATH.exists():
         print(c(GRAY,
-            f"  global_skills.md 尚未创建。\n"
-            f"  路径: {GLOBAL_SKILLS_PATH}\n"
-            "  完成任务后 AI 自动创建，或用 /memo 手动存档。"
+            f"  global_skills.md has not been created.\n"
+            f"  Path: {GLOBAL_SKILLS_PATH}\n"
+            "  The agent can create it after tasks, or you can archive manually with /memo."
         ))
     else:
-        print(c(BOLD, "\n  📚 Global Skills Archive — 分类目录"))
-        print(c(GRAY,  f"  路径: {GLOBAL_SKILLS_PATH}\n"))
+        print(c(BOLD, "\n  📚 Global Skills Archive - Table of Contents"))
+        print(c(GRAY,  f"  Path: {GLOBAL_SKILLS_PATH}\n"))
         for line in toc.splitlines():
             if line.startswith("# "):
                 print(c(CYAN + BOLD, f"  {line}"))
@@ -300,7 +300,7 @@ async def cmd_skills(ctx: CommandContext) -> None:
                 print(c(YELLOW, f"    {line}"))
             else:
                 print(c(GRAY, f"  {line}"))
-        print(c(GRAY, "\n  /skills view → 完整内容  |  /skills packs → 本地技能包  |  /memo → 手动存档"))
+        print(c(GRAY, "\n  /skills view -> full content  |  /skills packs -> local packs  |  /memo -> manual archive"))
 
 
 # ════════════════════════════════════════════════════════
@@ -318,25 +318,25 @@ async def cmd_skillpack(ctx: CommandContext) -> None:
     if sub == "rescan":
         _skill_scanner.invalidate_cache()
         packs = _skill_scanner.scan_all()
-        print(c(GREEN, f"  ✓ 已重新扫描 skills/ 目录，发现 {len(packs)} 个技能包"))
+        print(c(GREEN, f"  ✓ Rescanned skills/ and found {len(packs)} skill packs"))
         if packs:
-            print(c(BOLD, "\n  本地技能包："))
+            print(c(BOLD, "\n  Local skill packs:"))
             print(_skill_scanner.format_list())
         return
 
     if sub == "sync":
         if _runtime_state.user_mode:
-            with Spinner("正在同步技能包"):
+            with Spinner("Syncing skill packs"):
                 results = _skill_scanner.sync_packs()
         else:
-            print(c(CYAN, "  🔄 正在同步所有带 .git 的技能包..."))
+            print(c(CYAN, "  🔄 Syncing all git-backed skill packs..."))
             results = _skill_scanner.sync_packs()
         if not results:
-            print(c(GRAY, "  没有发现带 .git 的技能包目录"))
+            print(c(GRAY, "  No git-backed skill pack directories found"))
             return
         ok_count = sum(1 for r in results if r["status"] == "ok")
         err_count = len(results) - ok_count
-        print(c(GREEN, f"  ✓ 同步完成: {ok_count} 成功, {err_count} 失败"))
+        print(c(GREEN, f"  ✓ Sync complete: {ok_count} succeeded, {err_count} failed"))
         for r in results:
             tag = c(GREEN, "✓") if r["status"] == "ok" else c(RED, "✗")
             detail = ""
@@ -344,27 +344,27 @@ async def cmd_skillpack(ctx: CommandContext) -> None:
                 detail = c(GRAY, f"  {r['detail']}")
             print(f"    {tag} {r['name']}{detail}")
         if err_count > 0:
-            print(c(GRAY, "  提示: 手动进入失败的目录执行 git pull 查看详细错误"))
+            print(c(GRAY, "  Tip: enter the failed directory and run git pull for details"))
         return
 
     if sub == "install":
         repo_url = arg2.strip() if arg2 else ""
         if not repo_url:
-            print(c(RED, "  用法: /sp install <repo_url>"))
-            print(c(GRAY, "  例: /sp install https://github.com/user/exploit-pack.git"))
+            print(c(RED, "  Usage: /sp install <repo_url>"))
+            print(c(GRAY, "  Example: /sp install https://github.com/user/exploit-pack.git"))
             return
         if _runtime_state.user_mode:
-            with Spinner("正在安装技能包"):
+            with Spinner("Installing skill pack"):
                 result = _skill_scanner.install_pack(repo_url)
         else:
-            print(c(CYAN, f"  📥 正在克隆 {repo_url} ..."))
+            print(c(CYAN, f"  📥 Cloning {repo_url} ..."))
             result = _skill_scanner.install_pack(repo_url)
         if result["status"] == "ok":
             print(c(GREEN, f"  ✓ {result['detail']}"))
             packs = _skill_scanner.scan_all()
             installed = [p for p in packs if result["name"] in p.get("_path", "").name]
             if installed:
-                print(c(BOLD, "\n  新安装的技能包:"))
+                print(c(BOLD, "\n  Newly installed skill packs:"))
                 for p in installed:
                     name = p.get("name", "?")
                     desc = p.get("description", "")
@@ -375,34 +375,34 @@ async def cmd_skillpack(ctx: CommandContext) -> None:
                     if scripts:
                         print(c(GRAY, f"       scripts: {', '.join(scripts)}"))
         else:
-            print(c(RED, f"  ✗ 安装失败: {result['detail']}"))
+            print(c(RED, f"  ✗ Install failed: {result['detail']}"))
         return
 
     if sub == "list" or sub == "":
         packs = _skill_scanner.scan_all()
         if not packs:
             print(c(GRAY,
-                f"  skills/ 目录下暂无技能包。\n"
-                f"  路径: {SKILLS_DIR}\n"
-                "  创建: mkdir -p skills/my_skill && echo '# My Skill' > skills/my_skill/skill.md"
+                f"  No skill packs found under skills/.\n"
+                f"  Path: {SKILLS_DIR}\n"
+                "  Create one with: mkdir -p skills/my_skill && echo '# My Skill' > skills/my_skill/skill.md"
             ))
         else:
-            print(c(BOLD, f"\n  📦 本地技能包（{len(packs)} 个）"))
-            print(c(GRAY,  f"  路径: {SKILLS_DIR}\n"))
+            print(c(BOLD, f"\n  📦 Local skill packs ({len(packs)})"))
+            print(c(GRAY,  f"  Path: {SKILLS_DIR}\n"))
             print(_skill_scanner.format_list())
             print(c(GRAY,
-                "\n  /sp rescan → 重新扫描  |  /sp sync → 同步更新  |"
-                "  /sp install <url> → 安装新包  |  /sp <名称> → 查看详情"
+                "\n  /sp rescan -> rescan  |  /sp sync -> sync updates  |"
+                "  /sp install <url> -> install new pack  |  /sp <name> -> show details"
             ))
         return
 
-    # 按名称查看详情
+    # Show details by name.
     packs = _skill_scanner.scan_all()
     matched = [p for p in packs if sub in p.get("name", "").lower()
                or sub in p.get("_path", "").name.lower()]
     if not matched:
-        print(c(RED, f"  ✗ 未找到名为 '{sub}' 的技能包"))
-        print(c(GRAY, "  用 /skillpack 查看所有可用技能包"))
+        print(c(RED, f"  ✗ No skill pack named '{sub}' was found"))
+        print(c(GRAY, "  Use /skillpack to list all available skill packs"))
         return
     for pack in matched:
         name = pack.get("name", "?")
@@ -417,17 +417,17 @@ async def cmd_skillpack(ctx: CommandContext) -> None:
         print(c(BOLD, f"\n  📦 {name} v{ver}"))
         if desc:
             print(f"  {desc}")
-        print(c(GRAY, f"  路径: {pack_path}"))
+        print(c(GRAY, f"  Path: {pack_path}"))
         if kw:
-            print(c(CYAN, f"  关键词: {', '.join(kw)}"))
+            print(c(CYAN, f"  Keywords: {', '.join(kw)}"))
         if tr:
-            print(c(CYAN, f"  触发词: {', '.join(tr)}"))
+            print(c(CYAN, f"  Triggers: {', '.join(tr)}"))
         if guide:
-            print(c(GREEN, f"  指南: {pack_path / guide}"))
+            print(c(GREEN, f"  Guide: {pack_path / guide}"))
             print(c(GRAY,  f"    → read_file(path='{pack_path / guide}')"))
         if scripts:
-            print(c(GREEN, f"  脚本: {', '.join(scripts)}"))
-            print(c(GRAY,  "    → 优先运行脚本而非即兴编码"))
+            print(c(GREEN, f"  Scripts: {', '.join(scripts)}"))
+            print(c(GRAY,  "    → Prefer running scripts over ad-hoc code"))
 
 
 # Reference MAGENTA so that ruff doesn't flag the import as unused.

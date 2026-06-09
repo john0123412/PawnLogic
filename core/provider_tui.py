@@ -33,7 +33,7 @@ _UNSUPPORTED_MODEL_MARKERS = (
     "not supported", "unsupported", "model_not_found", "model not found",
     "does not exist", "unknown model", "invalid model", "not available",
 )
-_REASONING_KEYWORDS = ("mimo", "deepseek", "qwq")  # 与 api_client._REASONING_MODEL_PATTERNS 保持同步
+_REASONING_KEYWORDS = ("mimo", "deepseek", "qwq")  # Keep in sync with api_client._REASONING_MODEL_PATTERNS.
 _PAGE = 20  # rows per page in model selector
 
 TUI_STYLE = Style.from_dict({

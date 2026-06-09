@@ -2,53 +2,55 @@
 core/gsa.py — Global Skills Archive (GSA) Engine
 PawnLogic
 
-职责：
-  · 读取 / 初始化 global_skills.md
-  · 提取现有分类（一级 # 标题）
-  · 调用 LLM 自动分类并格式化技能块
-  · 防重复检测（同名技能 → 追加 Case N）
-  · 将技能块写入文件（基于 SEARCH/REPLACE）
+Responsibilities:
+  · Read and initialize global_skills.md.
+  · Extract existing categories (# headings).
+  · Use an LLM to classify and format reusable skill blocks.
+  · Detect duplicates (same skill name -> append Case N).
+  · Write skill blocks through SEARCH/REPLACE patches.
 
-对外接口：
+Public API:
   write_skill(model_alias, content, topic_hint="")
       → (ok: bool, message: str)
 
   load_toc()
-      → 提取所有 # / ## 标题行，供 System Prompt 注入
+      → Extract all # / ## headings for System Prompt injection.
 
   load_relevant_skills(query, top_k=3)
       → (skills_markdown: str, conflict_warning: str)
-      使用 FinalScore（FSRS 幂律衰减 + 稳定性 + 底分保护）+ 冲突检测
+      Uses FinalScore (FSRS power-law decay + stability + score floor)
+      plus conflict detection.
 
   bump_skill(skill_name)
       → (ok: bool, message: str)
-      闭环反馈——成功使用后调用，增加 hits，刷新 last_used
+      Closed-loop feedback after successful use: increases hits and refreshes last_used.
 
   prune_zombie_skills(min_hits, max_idle_days)
       → (pruned_count: int, pruned_names: list[str])
-      垃圾回收——清理长期闲置的低频技能
+      Garbage collection for long-idle, low-frequency skills.
 
-被调用方：
-  · session.py  → _reset_system_prompt 注入 TOC 及相关技能
-  · session.py  → TOOL_MAP 中的 tool_bump_skill
-  · main.py     → /memo 命令
+Callers:
+  · session.py  → _reset_system_prompt injects TOC and relevant skills.
+  · session.py  → tool_bump_skill in TOOL_MAP.
+  · main.py     → /memo command.
 
 ─────────────────────────────────────────────────────────────
-衰减算法说明
+Decay Algorithm Notes
 ─────────────────────────────────────────────────────────────
-  采用 FSRS（间隔重复算法）的个性化稳定性锚定衰减，解决全局指数衰减
-  （牛顿冷却）导致的"用户长期离线后整个技能库同步崩溃"问题。
+  Uses FSRS-style personalized stability anchoring to avoid the
+  whole archive collapsing after a long offline period, which can happen
+  with global exponential decay.
 
-  · 每个技能的"个性化稳定性 S"由被验证次数（hits）和置信度决定：
+  · Each skill's personalized stability S is derived from hits and confidence:
         S = S_MIN × (1 + hits)^GROWTH × confidence × 2
-        hits=0,  conf=0.70  →  S ≈  20 天
-        hits=5,  conf=0.85  →  S ≈  62 天
-        hits=15, conf=1.00  →  S ≈ 130 天
-  · 衰减用幂律公式（比指数更"记忆友好"）：
+        hits=0,  conf=0.70  →  S ≈  20 days
+        hits=5,  conf=0.85  →  S ≈  62 days
+        hits=15, conf=1.00  →  S ≈ 130 days
+  · Decay uses a power-law formula, which is more memory-friendly than exponentials:
         R(t, S) = (1 + t / (9×S))^(-0.5)
-  · 底分保护（SCORE_FLOOR）：即使长期离线，相关技能仍可被召回，
-    只是排名会被近期验证的技能压后。
-  · 综合评分：FinalScore = max(
+  · Score floor: related skills remain retrievable after long idle periods,
+    though recently verified skills rank above them.
+  · Composite score: FinalScore = max(
         (sim + Hits_Bonus) × R(t,S) × confidence,
         sim × SCORE_FLOOR
     )
@@ -60,20 +62,20 @@ from datetime import datetime
 from config import GLOBAL_SKILLS_PATH
 
 # ════════════════════════════════════════════════════════
-# 文件初始化
+# File initialization.
 # ════════════════════════════════════════════════════════
 
 _STUB_TEMPLATE = """\
 # 🗂️ PawnLogic Global Skills Archive
 
-> 自动生成于 {ts}
-> 由 PawnLogic GSA 系统维护，记录跨会话的可复用技术知识。
-> 勿手动删除此文件头部的 `#` 行，分类结构依赖其存在。
+> Automatically generated at {ts}.
+> Maintained by the PawnLogic GSA system for reusable cross-session technical knowledge.
+> Do not manually remove the `#` heading lines at the top; category structure depends on them.
 
 """
 
 def _ensure_file() -> str:
-    """确保 global_skills.md 存在，若为空则写入存根。返回当前文件内容。"""
+    """Ensure global_skills.md exists; write a stub when empty and return content."""
     GLOBAL_SKILLS_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not GLOBAL_SKILLS_PATH.exists() or GLOBAL_SKILLS_PATH.stat().st_size == 0:
         stub = _STUB_TEMPLATE.format(ts=datetime.now().strftime("%Y-%m-%d %H:%M"))
@@ -82,14 +84,13 @@ def _ensure_file() -> str:
     return GLOBAL_SKILLS_PATH.read_text(encoding="utf-8")
 
 # ════════════════════════════════════════════════════════
-# TOC 提取（供 System Prompt 注入）
+# TOC extraction for System Prompt injection.
 # ════════════════════════════════════════════════════════
 
 def load_toc(max_lines: int = 60) -> str:
     """
-    读取 global_skills.md 的前 max_lines 行，
-    提取所有 # 和 ## 标题，返回紧凑的目录字符串。
-    用于 System Prompt 注入，让 AI 知道现有分类。
+    Read the first max_lines from global_skills.md, extract # and ## headings,
+    and return a compact directory string for System Prompt injection.
     """
     try:
         content = _ensure_file()
@@ -99,13 +100,13 @@ def load_toc(max_lines: int = 60) -> str:
     lines    = content.splitlines()[:max_lines]
     headings = [l for l in lines if re.match(r'^#{1,2}\s', l)]
     if not headings:
-        return "(global_skills.md 暂无分类)"
+        return "(global_skills.md has no categories yet)"
     return "\n".join(headings)
 
 def load_h1_categories() -> list[str]:
     """
-    返回所有一级标题（# 开头）字符串列表，供分类决策使用。
-    去掉 emoji 后的纯文本形式。
+    Return all level-1 headings for classification decisions.
+    Emoji are stripped so callers receive plain text.
     """
     try:
         content = _ensure_file()
@@ -115,21 +116,21 @@ def load_h1_categories() -> list[str]:
     for line in content.splitlines():
         m = re.match(r'^#\s+(.+)', line)
         if m:
-            # 去 emoji，保留纯文本
+            # Strip emoji and keep plain text.
             text = re.sub(r'[^\w\s/+#\-.]', '', m.group(1)).strip()
             cats.append(text)
     return cats
 
 
 # ════════════════════════════════════════════════════════
-# ★ 新增：元数据系统
+# Metadata system.
 #
-# 存储格式（插在 ## Skill Name 正下方，Markdown 不可见）：
+# Storage format, inserted directly under ## Skill Name and invisible in Markdown:
 #   <!-- meta: hits=3 last_used=2025-04-25 confidence=0.85 -->
 #
-# hits        : int   — 累计被 bump_skill 调用次数（成功使用次数）
-# last_used   : str   — ISO 日期，最后一次被使用的日期
-# confidence  : float — 初始 0.70，每次 bump +0.05，上限 1.0
+# hits        : int   — total successful bump_skill calls
+# last_used   : str   — ISO date of the latest successful use
+# confidence  : float — starts at 0.70; each bump adds 0.05 up to 1.0
 # ════════════════════════════════════════════════════════
 
 _META_RE  = re.compile(
@@ -138,26 +139,26 @@ _META_RE  = re.compile(
 )
 _META_FMT = "<!-- meta: hits={hits} last_used={last_used} confidence={confidence:.2f} -->"
 
-# ── FSRS 稳定性锚定衰减参数──────────────────────────────────
-# 个性化稳定性：S = S_MIN × (1 + hits)^GROWTH × confidence × 2
-_S_MIN:         float = 14.0   # 新技能最短半衰期 14 天
-_GROWTH:        float = 0.6    # 幂律增长指数（防止高 hits 过度拉伸）
+# FSRS stability-anchored decay parameters.
+# Personalized stability: S = S_MIN × (1 + hits)^GROWTH × confidence × 2
+_S_MIN:         float = 14.0   # Minimum half-life for new skills: 14 days.
+_GROWTH:        float = 0.6    # Power-law growth exponent; avoids over-stretching high hits.
 
-# 幂律衰减：R(t, S) = (1 + t / (9×S))^POWER
-# POWER = -0.5 是 FSRS 风格的标准参数
+# Power-law decay: R(t, S) = (1 + t / (9×S))^POWER
+# POWER = -0.5 is the FSRS-style standard parameter.
 _FSRS_POWER:    float = -0.5
 
-# 底分保护：即使技能极旧，FinalScore 最低为 sim × SCORE_FLOOR
-# 防止用户长期离线后相关技能被彻底排除出检索
+# Score floor: even very old skills keep FinalScore >= sim × SCORE_FLOOR.
+# This prevents relevant skills from disappearing after long offline periods.
 _SCORE_FLOOR:   float = 0.05
 
-# Hits 加成的分母（hits=20 时达到最大加成 +0.5）
+# Denominator for the hits bonus; hits=20 reaches the max bonus +0.5.
 _HITS_SCALE: float = 20.0
 _HITS_CAP:   float = 0.5
 
 
 def _parse_meta(block: str) -> dict:
-    """从技能块中解析 meta 注释。若不存在则返回默认值（向后兼容旧格式）。"""
+    """Parse a meta comment from a skill block, with old-format defaults."""
     m = _META_RE.search(block)
     if not m:
         return {"hits": 0, "last_used": "1970-01-01", "confidence": 0.70}
@@ -169,11 +170,11 @@ def _parse_meta(block: str) -> dict:
 
 
 def _update_meta_in_block(block: str, meta: dict) -> str:
-    """将 meta dict 序列化并替换（或插入）到技能块中。"""
+    """Serialize and replace or insert a meta dict in a skill block."""
     meta_line = _META_FMT.format(**meta)
     if _META_RE.search(block):
         return _META_RE.sub(meta_line, block)
-    # 无 meta 行时，插入到 ## 标题正下方
+    # Insert directly under the ## heading when no meta line exists.
     lines = block.splitlines()
     result = [lines[0], meta_line] + lines[1:]
     return "\n".join(result)
@@ -181,11 +182,11 @@ def _update_meta_in_block(block: str, meta: dict) -> str:
 
 def _add_initial_meta(skill_block: str) -> str:
     """
-    向新生成的技能块注入初始 meta 注释。
-    应在 write_skill 最终写入之前调用。
+    Inject an initial meta comment into a new skill block.
+    Call before write_skill persists the final block.
     """
     if _META_RE.search(skill_block):
-        return skill_block   # 已存在，跳过
+        return skill_block   # Already present.
     today    = datetime.now().strftime("%Y-%m-%d")
     meta_line = _META_FMT.format(hits=0, last_used=today, confidence=0.70)
     lines    = skill_block.splitlines()
@@ -195,53 +196,53 @@ def _add_initial_meta(skill_block: str) -> str:
 
 
 # ════════════════════════════════════════════════════════
-# FSRS 稳定性锚定衰减 + FinalScore
+# FSRS stability-anchored decay + FinalScore.
 #
-# 解决之前版本的"长期离线全库崩溃"问题：
-#   · 每个技能拥有由自身验证历史决定的个性化稳定性 S
-#   · 精华技能（hits 高）半衰期远大于新写入技能
-#   · 从未验证的僵尸技能快速自然沉底
-#   · SCORE_FLOOR 保证用户回归时相关技能仍可被检索到
+# Fixes the earlier long-offline archive collapse problem:
+#   · Each skill has personalized stability S derived from its validation history.
+#   · High-hit skills keep a far longer half-life than newly written skills.
+#   · Never-validated zombie skills naturally sink quickly.
+#   · SCORE_FLOOR keeps relevant skills retrievable when the user returns.
 # ════════════════════════════════════════════════════════
 
 def _stability(hits: int, confidence: float) -> float:
     """
-    计算技能的"个性化稳定性 S"（单位：天）。
+    Calculate a skill's personalized stability S, in days.
 
     S = S_MIN × (1 + hits)^GROWTH × (confidence × 2)
 
-    示例（S_MIN=14, GROWTH=0.6）：
-      hits=0,  confidence=0.70  →  S ≈ 14 × 1.00 × 1.40 ≈  20 天
-      hits=5,  confidence=0.85  →  S ≈ 14 × 2.63 × 1.70 ≈  62 天
-      hits=10, confidence=0.95  →  S ≈ 14 × 3.73 × 1.90 ≈  99 天
-      hits=15, confidence=1.00  →  S ≈ 14 × 4.64 × 2.00 ≈ 130 天
-      hits=20, confidence=1.00  →  S ≈ 14 × 5.28 × 2.00 ≈ 148 天
+    Examples (S_MIN=14, GROWTH=0.6):
+      hits=0,  confidence=0.70  →  S ≈ 14 × 1.00 × 1.40 ≈  20 days
+      hits=5,  confidence=0.85  →  S ≈ 14 × 2.63 × 1.70 ≈  62 days
+      hits=10, confidence=0.95  →  S ≈ 14 × 3.73 × 1.90 ≈  99 days
+      hits=15, confidence=1.00  →  S ≈ 14 × 4.64 × 2.00 ≈ 130 days
+      hits=20, confidence=1.00  →  S ≈ 14 × 5.28 × 2.00 ≈ 148 days
 
-    高频验证的精华技能稳定性是新技能的 7x+，可以抵御用户数月不活跃。
+    Frequently validated skills can be 7x+ more stable than new skills.
     """
     conf_mult = max(0.0, confidence) * 2.0
     s = _S_MIN * ((1 + hits) ** _GROWTH) * conf_mult
-    return max(s, 1.0)   # 最低 1 天，防止除零
+    return max(s, 1.0)   # Minimum 1 day to avoid divide-by-zero.
 
 
 def _retrieval_strength(days: int, S: float) -> float:
     """
-    FSRS 风格幂律衰减：R(t, S) = (1 + t / (9×S))^POWER
+    FSRS-style power-law decay: R(t, S) = (1 + t / (9×S))^POWER
 
-    与指数衰减对比（S=20 天为例）：
-      t=7   天：指数(λ=0.02)→0.87  幂律→0.97  （新技能第一周几乎无损）
-      t=30  天：指数→0.55        幂律→0.83  （一个月后仍有 83%）
-      t=90  天：指数→0.16        幂律→0.63  （三个月后仍有 63%）
+    Compared with exponential decay (S=20 days):
+      t=7   days: exponential(λ=0.02)->0.87  power-law->0.97
+      t=30  days: exponential->0.55          power-law->0.83
+      t=90  days: exponential->0.16          power-law->0.63
 
-    对于 S=112 天（hits=15 的精华技能）：
-      t=90  天：幂律→0.91        （三个月后 91% 的检索强度）
-      t=180 天：幂律→0.82        （半年后 82% 的检索强度）
+    For S=112 days (a high-hit skill):
+      t=90  days: power-law->0.91
+      t=180 days: power-law->0.82
     """
     return (1.0 + days / (9.0 * S)) ** _FSRS_POWER
 
 
 def _decay_days(last_used_str: str) -> int:
-    """从 last_used 字符串计算距今天数。解析失败视为极旧（365 天）。"""
+    """Return days since last_used; parse failures count as very old (365 days)."""
     try:
         last = datetime.strptime(last_used_str, "%Y-%m-%d")
         return max(0, (datetime.now() - last).days)
@@ -253,18 +254,17 @@ def _final_score(similarity: float, meta: dict) -> float:
     """
     FinalScore = max(
         (sim + Hits_Bonus) × R(t, S) × confidence,
-        sim × SCORE_FLOOR          ← 底分保护
+        sim × SCORE_FLOOR
     )
 
-    底分保护确保：即使用户离线数月导致 R(t,S) 很低，
-    只要技能与当前 query 语义相关（sim > 0），它仍能以 sim×5% 的保底分
-    出现在检索结果中，避免"一朝离线，经验清零"。
+    The score floor ensures that semantically relevant skills (sim > 0) remain
+    retrievable even after months offline.
 
-    对比矩阵（sim=0.8）：
-      新技能，今天写入（hits=0, S≈20, t=0）   → 0.8×1.0×0.70 = 0.56
-      活跃，hits=10, 7天前，conf=0.95          → 1.2×0.96×0.95 ≈ 1.10
-      精华，hits=20, 用户离线6月，conf=1.0      → 1.3×0.82×1.0 ≈ 1.07  （≫底分）
-      僵尸，hits=0, 离线6月，conf=0.70          → max(0.056, 0.04) = 0.056
+    Example matrix (sim=0.8):
+      New skill today (hits=0, S≈20, t=0)       → 0.8×1.0×0.70 = 0.56
+      Active, hits=10, 7 days old, conf=0.95    → 1.2×0.96×0.95 ≈ 1.10
+      High-hit, idle 6 months, conf=1.0         → 1.3×0.82×1.0 ≈ 1.07
+      Zombie, idle 6 months, conf=0.70          → max(0.056, 0.04) = 0.056
     """
     hits       = meta.get("hits", 0)
     confidence = meta.get("confidence", 0.70)
@@ -280,13 +280,13 @@ def _final_score(similarity: float, meta: dict) -> float:
 
 
 # ════════════════════════════════════════════════════════
-# 轻量级相似度（Jaccard，基于词 token 集合）
+# Lightweight similarity: Jaccard over word-token sets.
 # ════════════════════════════════════════════════════════
 
 def _jaccard_sim(str1: str, str2: str) -> float:
     """
-    基于小写词 token 集合的 Jaccard 相似度。
-    返回 [0.0, 1.0]，完全相同返回 1.0。
+    Jaccard similarity over lowercase word-token sets.
+    Returns [0.0, 1.0], where exact equality returns 1.0.
     """
     def _tokens(s: str) -> set[str]:
         return set(re.findall(r'[a-z0-9_\-]+', s.lower()))
@@ -299,7 +299,7 @@ def _jaccard_sim(str1: str, str2: str) -> float:
 
 
 # ════════════════════════════════════════════════════════
-# ★ 新增：冲突检测
+# Conflict detection.
 # ════════════════════════════════════════════════════════
 
 _CASE_STRIP_RE = re.compile(r'\s+Case\s+\d+\s*$', re.IGNORECASE)
@@ -309,17 +309,15 @@ def _detect_conflicts(
     scored_blocks: list[tuple[float, str, str]]
 ) -> str:
     """
-    检测 Top-K 中是否存在同一"Case 系列"的多个变体。
+    Detect whether Top-K contains multiple variants from the same Case series.
 
     scored_blocks: [(final_score, title, block_text), ...]
 
-    冲突条件：
-      · 2+ 个技能具有相同的去 Case 后缀基名
-        （如 "FOO" 与 "FOO Case 2" 会被识别为同一集群）
+    Conflict condition:
+      · 2+ skills share the same base name after stripping a Case suffix.
 
-    返回：
-      · 如有冲突 → 格式化的 <conflict_warning> 字符串
-      · 无冲突   → 空字符串
+    Returns a formatted <conflict_warning> string when conflicts exist,
+    otherwise an empty string.
     """
     base_groups: dict[str, list[tuple[float, str]]] = {}
     for score, title, _ in scored_blocks:
@@ -349,7 +347,7 @@ def _detect_conflicts(
 
 
 # ════════════════════════════════════════════════════════
-# ★ 升级版：load_relevant_skills（衰减评分 + 冲突检测）
+# Upgraded load_relevant_skills with decay scoring and conflict detection.
 # ════════════════════════════════════════════════════════
 
 def load_relevant_skills(
@@ -357,17 +355,17 @@ def load_relevant_skills(
     top_k: int = 3,
 ) -> tuple[str, str]:
     """
-    根据 query 从 global_skills.md 动态加载最相关的 Top-K 技能块。
+    Dynamically load the Top-K most relevant skill blocks from global_skills.md.
 
-    升级点：
-      · 衰减从全局指数（牛顿冷却）升级为个性化 FSRS 幂律衰减
-      · 精华技能（hits 高）半衰期显著更长，长期离线不导致全库崩溃
-      · 引入 SCORE_FLOOR 底分保护，相关技能即使旧了也不会消失
-      · 过滤阈值从 score>0 收紧为 score >= SCORE_FLOOR（更干净的结果）
+    Improvements:
+      · Replaces global exponential decay with personalized FSRS power-law decay.
+      · High-hit skills keep a much longer half-life.
+      · SCORE_FLOOR keeps related old skills retrievable.
+      · Filtering is stricter than score > 0 for cleaner results.
 
-    返回：
-      skills_markdown : str  — 拼接后的 Markdown，用于 System Prompt 注入
-      conflict_warning: str  — 若检测到 Case 系列冲突则非空，否则为 ""
+    Returns:
+      skills_markdown : joined Markdown for System Prompt injection
+      conflict_warning: non-empty when Case-series conflicts are detected
     """
     try:
         content = _ensure_file()
@@ -377,7 +375,7 @@ def load_relevant_skills(
     if not content.strip():
         return "", ""
 
-    # 按 "## " 拆分技能块（保留标题行）
+    # Split by "## " while preserving heading lines.
     raw_blocks = re.split(r'(?=^## )', content, flags=re.MULTILINE)
     # (final_score, title, block_text)
     scored: list[tuple[float, str, str]] = []
@@ -388,7 +386,7 @@ def load_relevant_skills(
             continue
         first_line = block.splitlines()[0]
         title      = re.sub(r'^##\s+', '', first_line).strip()
-        # 去除 meta 注释行后再做 Jaccard（避免日期字符串干扰）
+        # Strip meta comments before Jaccard to avoid date-string noise.
         clean_title = _CASE_STRIP_RE.sub("", title).strip()
         sim         = _jaccard_sim(query, clean_title)
         meta        = _parse_meta(block)
@@ -401,14 +399,13 @@ def load_relevant_skills(
     scored.sort(key=lambda x: x[0], reverse=True)
     top = scored[:top_k]
 
-    # 过滤掉底分以下的完全不相关项，但至少保留 1 个
-    # 改用 SCORE_FLOOR 而非 0，让僵尸技能真正被过滤
-    threshold = _SCORE_FLOOR * 0.5   # 轻微放宽，避免误杀语义相关但旧的技能
+    # Filter truly unrelated entries below the floor while keeping at least one.
+    threshold = _SCORE_FLOOR * 0.5   # Slightly relaxed to avoid false negatives.
     filtered = [(s, t, b) for s, t, b in top if s >= threshold]
     if not filtered:
         filtered = [top[0]]
 
-    # 冲突检测
+    # Conflict detection.
     conflict_warning = _detect_conflicts(filtered)
 
     skills_md = "\n\n".join(b for _, _, b in filtered)
@@ -416,37 +413,37 @@ def load_relevant_skills(
 
 
 # ════════════════════════════════════════════════════════
-# ★ 新增：闭环反馈工具 bump_skill
+# Closed-loop feedback tool: bump_skill.
 # ════════════════════════════════════════════════════════
 
 def bump_skill(skill_name: str) -> tuple[bool, str]:
     """
-    当主 Agent 成功利用某技能解决问题后调用。
-    效果：
+    Call after the main agent successfully uses a skill to solve a problem.
+
+    Effects:
       · hits += 1
       · last_used = today
       · confidence = min(confidence + 0.05, 1.0)
 
-    参数：
-      skill_name — 技能的 ## 标题（精确匹配，不含 "## " 前缀）
+    Args:
+      skill_name — exact ## heading without the "## " prefix
 
-    返回：
-      (True, 更新摘要)  — 成功
-      (False, 错误消息) — 技能名未找到或 IO 异常
+    Returns:
+      (True, update summary) or (False, error message)
     """
     try:
         content = GLOBAL_SKILLS_PATH.read_text(encoding="utf-8")
     except Exception as e:
-        return False, f"读取 global_skills.md 失败: {e}"
+        return False, f"Failed to read global_skills.md: {e}"
 
-    # 宽松匹配：允许开头的 ## 及末尾空格，不区分大小写
+    # Lenient match: allow ## prefix and trailing spaces, case-insensitive.
     pattern = re.compile(
         r'^## ' + re.escape(skill_name.strip()) + r'\s*$',
         re.MULTILINE | re.IGNORECASE,
     )
     match = pattern.search(content)
     if not match:
-        # 二次尝试：去掉 Case N 后缀后模糊匹配
+        # Second pass: strip Case N suffix and fuzzy-match the base.
         base  = _CASE_STRIP_RE.sub("", skill_name.strip())
         alt   = re.compile(
             r'^## ' + re.escape(base) + r'(\s+Case\s+\d+)?\s*$',
@@ -454,16 +451,16 @@ def bump_skill(skill_name: str) -> tuple[bool, str]:
         )
         match = alt.search(content)
         if not match:
-            return False, f"技能 '{skill_name}' 未在 global_skills.md 中找到"
+            return False, f"Skill '{skill_name}' was not found in global_skills.md"
 
-    # 定位技能块边界
+    # Locate the skill block boundaries.
     block_start = match.start()
     rest        = content[match.end():]
     next_block  = re.search(r'^## ', rest, re.MULTILINE)
     block_end   = match.end() + next_block.start() if next_block else len(content)
     old_block   = content[block_start:block_end]
 
-    # 更新 meta
+    # Update meta.
     meta               = _parse_meta(old_block)
     meta["hits"]      += 1
     meta["last_used"]  = datetime.now().strftime("%Y-%m-%d")
@@ -475,7 +472,7 @@ def bump_skill(skill_name: str) -> tuple[bool, str]:
     try:
         GLOBAL_SKILLS_PATH.write_text(new_content, encoding="utf-8")
     except Exception as e:
-        return False, f"写入失败: {e}"
+        return False, f"Write failed: {e}"
 
     actual_title = match.group(0).lstrip("#").strip()
     return True, (
@@ -486,7 +483,7 @@ def bump_skill(skill_name: str) -> tuple[bool, str]:
 
 
 # ════════════════════════════════════════════════════════
-# ★ 新增：垃圾回收 prune_zombie_skills
+# Garbage collection: prune_zombie_skills.
 # ════════════════════════════════════════════════════════
 
 def prune_zombie_skills(
@@ -494,29 +491,29 @@ def prune_zombie_skills(
     max_idle_days: int = 90,
 ) -> tuple[int, list[str]]:
     """
-    物理删除"僵尸技能"：hits < min_hits 且 闲置 > max_idle_days 的技能块。
+    Physically remove zombie skill blocks where hits < min_hits and idle > max_idle_days.
 
-    默认阈值：
-      · hits < 1（从未被验证使用）
-      · 闲置 > 90 天（三个月未被召回）
+    Default thresholds:
+      · hits < 1 (never validated)
+      · idle > 90 days
 
-    返回：
+    Returns:
       (pruned_count, pruned_names_list)
 
-    注意：此操作不可逆。建议在调用前备份或使用 git 跟踪 global_skills.md。
+    This operation is irreversible. Back up or track global_skills.md in git first.
     """
     try:
         content = _ensure_file()
     except Exception:
         return 0, []
 
-    # 按 ## 拆分，保留文件头部（非技能块内容）
+    # Split by ## while preserving the file header.
     raw_blocks = re.split(r'(?=^## )', content, flags=re.MULTILINE)
     kept:   list[str] = []
     pruned: list[str] = []
 
     for block in raw_blocks:
-        # 文件头（# 一级标题 / 说明文字 / 空行）直接保留
+        # Preserve the file header, comments, and blank lines.
         if not block.strip().startswith("## "):
             kept.append(block)
             continue
@@ -525,12 +522,12 @@ def prune_zombie_skills(
         title      = re.sub(r'^##\s+', '', first_line).strip()
         meta       = _parse_meta(block)
 
-        # 计算闲置天数
+        # Calculate idle days.
         try:
             last      = datetime.strptime(meta["last_used"], "%Y-%m-%d")
             idle_days = max(0, (datetime.now() - last).days)
         except ValueError:
-            idle_days = 9999   # 无法解析 → 视为极旧
+            idle_days = 9999   # Parse failure counts as very old.
 
         if meta["hits"] < min_hits and idle_days > max_idle_days:
             pruned.append(title)
@@ -541,31 +538,32 @@ def prune_zombie_skills(
         try:
             GLOBAL_SKILLS_PATH.write_text("".join(kept), encoding="utf-8")
         except Exception:
-            return 0, []   # IO 失败，保守返回
+            return 0, []   # IO failure: return conservatively.
 
     return len(pruned), pruned
 
 
 # ════════════════════════════════════════════════════════
-# P0: Failure Pattern 自动沉淀（Anti-Pattern DB）
+# P0: automatic failure pattern sinking (Anti-Pattern DB).
 #
-# 当同一工具 + 同一错误类型出现 ≥ SINK_THRESHOLD 次时，
-# 自动将失败模式写入 global_skills.md 的 # ❌ Failure Patterns 分区。
-# 格式：## <工具名> — <错误类型>，含触发条件 + 正确做法。
+# When the same tool + error type appears at least SINK_THRESHOLD times,
+# write the failure pattern into the # ❌ Failure Patterns section of global_skills.md.
+# Format: ## <tool_name> — <error_type>, with trigger conditions and the right response.
 # ════════════════════════════════════════════════════════
 
-_SINK_THRESHOLD = 3   # 同类失败 ≥ 3 次触发沉淀
+_SINK_THRESHOLD = 3   # Same-class failures >= 3 trigger sinking.
 
 
 def _ensure_failure_section(content: str) -> str:
-    """确保 global_skills.md 中存在 # ❌ Failure Patterns 分区。"""
+    """Ensure global_skills.md contains the # ❌ Failure Patterns section."""
     if "❌ Failure Patterns" in content:
         return content
-    # 追加到文件末尾
+    # Append to the file tail.
     section = (
         "\n\n# ❌ Failure Patterns\n\n"
-        "> 自动生成的失败防雷区。当同一工具 + 同一错误类型出现 ≥ 3 次时自动记录。\n"
-        "> 请勿手动删除，Agent 会在调用危险工具前自动比对此分区。\n\n"
+        "> Automatically generated failure-pattern guardrail. When the same tool "
+        "+ error type appears at least 3 times, it is recorded here.\n"
+        "> Do not manually delete this section; the agent checks it before dangerous tool calls.\n\n"
     )
     return content + section
 
@@ -577,47 +575,48 @@ def sink_failure_to_gsa(
     args_preview: str,
 ) -> tuple[bool, str]:
     """
-    将失败模式沉淀到 global_skills.md 的 Failure Patterns 分区。
-    仅当同类失败 ≥ SINK_THRESHOLD 次时调用。
+    Sink a failure pattern into the Failure Patterns section of global_skills.md.
+    Call only when same-class failures reach SINK_THRESHOLD.
 
     Returns
     -------
-    (True, 成功消息) 或 (False, 原因)
+    (True, success message) or (False, reason)
     """
     try:
         content = _ensure_file()
     except Exception as e:
-        return False, f"读取 global_skills.md 失败: {e}"
+        return False, f"Failed to read global_skills.md: {e}"
 
-    # 检查是否已存在该失败模式
+    # Check whether the pattern already exists.
     skill_name = f"{tool_name} — {error_type}"
     pattern = re.compile(
         r'^##\s+' + re.escape(skill_name) + r'\s*$',
         re.MULTILINE | re.IGNORECASE,
     )
     if pattern.search(content):
-        return False, f"失败模式 '{skill_name}' 已存在，跳过重复写入"
+        return False, f"Failure pattern '{skill_name}' already exists; skipped duplicate write"
 
-    # 构建技能块
+    # Build the skill block.
     today = datetime.now().strftime("%Y-%m-%d")
     skill_block = (
         f"## {skill_name}\n"
         f"<!-- meta: hits=0 last_used={today} confidence=0.70 -->\n\n"
-        f"**What**: 工具 `{tool_name}` 在以下条件下反复失败：\n"
-        f"  - 错误类型: `{error_type}`\n"
-        f"  - 典型参数: `{args_preview[:120]}`\n\n"
+        f"**What**: Tool `{tool_name}` repeatedly failed under these conditions:\n"
+        f"  - Error type: `{error_type}`\n"
+        f"  - Typical args: `{args_preview[:120]}`\n\n"
         f"**Error**:\n```\n{error_msg[:300]}\n```\n\n"
-        f"**Rule**: 调用 `{tool_name}` 前必须检查参数是否匹配上述失败条件。"
-        f"若匹配，应改用其他方案或修正参数后再试。\n"
+        f"**Rule**: Before calling `{tool_name}`, check whether the arguments match "
+        f"the failure condition above. If they match, use another approach or fix "
+        f"the arguments before retrying.\n"
     )
 
-    # 确保 Failure Patterns 分区存在
+    # Ensure the Failure Patterns section exists.
     content = _ensure_failure_section(content)
 
-    # 插入到 Failure Patterns 分区末尾
+    # Insert at the end of the Failure Patterns section.
     try:
         from tools.file_ops import _apply_patch_blocks
-        # 找到 Failure Patterns 分区的最后一个 ## 行作为锚点
+        # Use the last ## line in the Failure Patterns section as the anchor.
         lines = content.splitlines(keepends=True)
         anchor_idx = None
         in_section = False
@@ -626,16 +625,16 @@ def sink_failure_to_gsa(
                 in_section = True
                 continue
             if in_section and line.startswith("# ") and "❌" not in line:
-                # 到达下一个一级标题，锚点为前一行
+                # Reached the next top-level heading; anchor to the previous line.
                 anchor_idx = i - 1
                 break
             if in_section and line.startswith("## "):
                 anchor_idx = i
         if anchor_idx is None:
-            # 分区是最后一个，追加到末尾
+            # The section is the last block; append to the tail.
             content += f"\n{skill_block}\n"
             GLOBAL_SKILLS_PATH.write_text(content, encoding="utf-8")
-            return True, f"✓ 失败模式已沉淀: ## {skill_name}"
+            return True, f"✓ Failure pattern recorded: ## {skill_name}"
 
         anchor_line = lines[anchor_idx].rstrip("\n")
         patch = (
@@ -644,26 +643,27 @@ def sink_failure_to_gsa(
         )
         result_msg = _apply_patch_blocks(str(GLOBAL_SKILLS_PATH), patch)
         if result_msg.startswith("OK"):
-            return True, f"✓ 失败模式已沉淀: ## {skill_name}"
-        # patch 失败 → 降级追加
+            return True, f"✓ Failure pattern recorded: ## {skill_name}"
+        # Patch failed; degrade to append.
         with open(GLOBAL_SKILLS_PATH, "a", encoding="utf-8") as f:
             f.write(f"\n{skill_block}\n")
-        return True, f"⚠ 降级追加: ## {skill_name}"
+        return True, f"⚠ Fallback append: ## {skill_name}"
     except Exception as e:
-        return False, f"写入失败: {e}"
+        return False, f"Write failed: {e}"
 
 
 # ════════════════════════════════════════════════════════
-# 重复检测
+# Duplicate detection.
 # ════════════════════════════════════════════════════════
 
 def _find_duplicate(content: str, skill_name: str) -> int:
     """
-    在文件中查找 ## skill_name（或其变体 ## skill_name Case N）。
-    返回已存在的相同前缀的最大 Case 编号（0 = 不存在，1 = 有一个原始版本，2 = 有 Case 2...）。
+    Find ## skill_name or variants like ## skill_name Case N in the file.
+    Returns the largest existing Case number: 0 = absent, 1 = original exists,
+    2 = Case 2 exists, and so on.
     """
     base = re.escape(skill_name.strip())
-    # 匹配 ## skill_name 或 ## skill_name Case N
+    # Match ## skill_name or ## skill_name Case N.
     pattern = re.compile(
         r'^##\s+' + base + r'(\s+Case\s+(\d+))?\s*$',
         re.IGNORECASE | re.MULTILINE
@@ -675,7 +675,7 @@ def _find_duplicate(content: str, skill_name: str) -> int:
     return max(nums)
 
 # ════════════════════════════════════════════════════════
-# LLM 分类 + 格式化（核心）
+# LLM classification and formatting.
 # ════════════════════════════════════════════════════════
 
 _CLASSIFY_SYSTEM = (
@@ -714,7 +714,7 @@ Instructions:
 
 def _call_llm_classify(model_alias: str, content: str, topic_hint: str,
                         existing_cats: list[str]) -> dict | None:
-    """调用 LLM 进行分类和格式化。返回解析后的 dict，或 None（失败时）。"""
+    """Use the LLM for classification and formatting; return parsed dict or None."""
     try:
         from core.api_client import call_once
     except ImportError:
@@ -723,7 +723,7 @@ def _call_llm_classify(model_alias: str, content: str, topic_hint: str,
     categories_str = "\n".join(f"  - {c}" for c in existing_cats) if existing_cats else "  (none yet)"
     prompt = _CLASSIFY_PROMPT_TMPL.format(
         categories  = categories_str,
-        content     = content[:2000],   # 防止 payload 过大
+        content     = content[:2000],   # Avoid an oversized payload.
         topic_hint  = topic_hint or "(none)",
     )
 
@@ -738,7 +738,7 @@ def _call_llm_classify(model_alias: str, content: str, topic_hint: str,
     if err or not text:
         return None
 
-    # 清理可能残留的 markdown fence
+    # Strip possible leftover markdown fences.
     cleaned = text.strip()
     cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
     cleaned = re.sub(r'\s*```$', '',        cleaned)
@@ -746,7 +746,7 @@ def _call_llm_classify(model_alias: str, content: str, topic_hint: str,
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        # 尝试从文本中提取 JSON 对象
+        # Try to extract a JSON object from surrounding text.
         m = re.search(r'\{.*\}', cleaned, re.DOTALL)
         if m:
             try:    return json.loads(m.group(0))
@@ -754,35 +754,35 @@ def _call_llm_classify(model_alias: str, content: str, topic_hint: str,
     return None
 
 # ════════════════════════════════════════════════════════
-# SEARCH/REPLACE 写入
+# SEARCH/REPLACE writing.
 # ════════════════════════════════════════════════════════
 
 def _build_patch(content: str, category_heading: str,
                  skill_block: str, is_new_category: bool) -> str | None:
     """
-    构建一个 SEARCH/REPLACE patch_blocks 字符串。
+    Build a SEARCH/REPLACE patch_blocks string.
 
-    策略：
-      · 若 is_new_category：在文件末尾追加新的 # 标题 + 技能块
-      · 若 existing category：在该 # 标题的最后一个 ## 之后（或标题行本身之后）插入
+    Strategy:
+      · If is_new_category: append a new # heading plus the skill block.
+      · Existing category: insert after the last ## in that # section, or after the heading.
 
-    返回 patch_blocks 字符串，或 None（无法定位时）。
+    Returns patch_blocks or None when no anchor can be located.
     """
     lines = content.splitlines(keepends=True)
 
     if is_new_category:
-        # 追加到文件末尾：SEARCH 文件最后一行，REPLACE 原内容 + 新分类 + 技能块
+        # Append to file tail: SEARCH last line, REPLACE with original + new section.
         if not lines:
-            # 文件为空，直接写
-            return None  # 调用方检测到 None 时直接 write_text
+            # Empty file; caller will write directly when None is returned.
+            return None
         last_line = lines[-1].rstrip("\n")
         new_section = f"\n# {category_heading}\n\n{skill_block}\n"
         return (
             f"<<<<<<< SEARCH\n{last_line}\n=======\n{last_line}{new_section}>>>>>>> REPLACE"
         )
     else:
-        # 在现有分类下插入
-        # 找到目标 # 标题的行号
+        # Insert under an existing category.
+        # Locate the target # heading line.
         target_h1 = None
         for i, line in enumerate(lines):
             if re.match(r'^#\s+', line) and category_heading.lower() in line.lower():
@@ -791,14 +791,14 @@ def _build_patch(content: str, category_heading: str,
         if target_h1 is None:
             return None
 
-        # 找到这个 # 标题块的末尾：下一个 # 标题之前的最后一行
+        # Find this # heading block tail: last line before the next # heading.
         block_end = len(lines) - 1
         for j in range(target_h1 + 1, len(lines)):
             if re.match(r'^#\s+', lines[j]):
                 block_end = j - 1
                 break
 
-        # SEARCH: 最后一个非空行（锚点）
+        # SEARCH anchor: last non-empty line.
         anchor_idx = block_end
         while anchor_idx > target_h1 and not lines[anchor_idx].strip():
             anchor_idx -= 1
@@ -811,7 +811,7 @@ def _build_patch(content: str, category_heading: str,
         )
 
 # ════════════════════════════════════════════════════════
-# 主入口
+# Main entry point.
 # ════════════════════════════════════════════════════════
 
 def write_skill(
@@ -820,29 +820,28 @@ def write_skill(
     topic_hint: str = "",
 ) -> tuple[bool, str]:
     """
-    完整 GSA 写入流程。
+    Complete GSA write flow.
 
-    参数：
-      model_alias — 用于分类的 LLM 模型别名（通常与主 session 相同）
-      content     — 要存档的技术内容（自然语言描述或代码片段）
-      topic_hint  — 可选的分类提示（如 "pwn rop chain"）
+    Args:
+      model_alias — LLM model alias used for classification, usually current session model
+      content     — technical content to archive
+      topic_hint  — optional classification hint, e.g. "pwn rop chain"
 
-    返回：
-      (True, 摘要消息)  — 成功
-      (False, 错误消息) — 失败
+    Returns:
+      (True, summary message) or (False, error message)
     """
-    # ── Step 1：确保文件存在 ─────────────────────────────
+    # Step 1: ensure the file exists.
     try:
         file_content = _ensure_file()
     except Exception as e:
-        return False, f"无法初始化 global_skills.md: {e}"
+        return False, f"Failed to initialize global_skills.md: {e}"
 
     existing_cats = load_h1_categories()
 
-    # ── Step 2：LLM 分类 + 格式化 ──────────────────────
+    # Step 2: LLM classification and formatting.
     result = _call_llm_classify(model_alias, content, topic_hint, existing_cats)
     if not result:
-        return False, "LLM 分类调用失败（网络错误或模型返回格式异常）"
+        return False, "LLM classification failed (network error or malformed model response)"
 
     category    = result.get("category", "").strip()
     is_new      = bool(result.get("is_new_category", False))
@@ -850,12 +849,12 @@ def write_skill(
     skill_block = result.get("skill_block", "").strip()
 
     if not category or not skill_block:
-        return False, f"LLM 返回格式不完整: {result}"
+        return False, f"LLM returned an incomplete schema: {result}"
 
-    # ── Step 3：防重复检测 ───────────────────────────────
+    # Step 3: duplicate detection.
     dup_level = _find_duplicate(file_content, skill_name)
     if dup_level > 0:
-        # 已存在完全同名版本，追加 Case N
+        # Exact name already exists; append Case N.
         next_case  = dup_level + 1
         skill_name = f"{skill_name} Case {next_case}"
         skill_block = re.sub(
@@ -866,7 +865,7 @@ def write_skill(
             flags=re.MULTILINE,
         )
     else:
-        # ── 语义相似度检查：对同分类下现有技能做 Jaccard 比对 ──
+        # Semantic similarity check against existing skill names via Jaccard.
         existing_skill_names: list[str] = []
         for line in file_content.splitlines():
             m = re.match(r'^##\s+(.+)', line)
@@ -882,7 +881,7 @@ def write_skill(
                 best_match = existing
 
         if best_sim > 0.8:
-            # TODO: LLM semantic merge — 当前策略：高相似度自动追加 Case 2
+            # TODO: LLM semantic merge. Current policy: high similarity appends Case 2.
             next_case  = _find_duplicate(file_content, best_match) + 1
             if next_case < 2:
                 next_case = 2
@@ -895,43 +894,43 @@ def write_skill(
                 flags=re.MULTILINE,
             )
 
-    # ── Step 3.5：★ 注入初始元数据 ──────────────────────
+    # Step 3.5: inject initial metadata.
     skill_block = _add_initial_meta(skill_block)
 
-    # ── Step 4：构建 SEARCH/REPLACE patch ────────────────
-    file_content = GLOBAL_SKILLS_PATH.read_text(encoding="utf-8")   # 重新读取最新内容
+    # Step 4: build SEARCH/REPLACE patch.
+    file_content = GLOBAL_SKILLS_PATH.read_text(encoding="utf-8")   # Re-read latest content.
     patch_blocks = _build_patch(file_content, category, skill_block, is_new)
 
     if patch_blocks is None:
-        # 极端情况：文件为空或无法定位锚点，直接追加
+        # Extreme case: empty file or no anchor; append directly.
         try:
             new_section = f"\n# {category}\n\n{skill_block}\n"
             with open(GLOBAL_SKILLS_PATH, "a", encoding="utf-8") as f:
                 f.write(new_section)
-            return True, f"✓ 已追加新分类 '# {category}' → '{skill_name}'"
+            return True, f"✓ Appended new category '# {category}' -> '{skill_name}'"
         except Exception as e:
-            return False, f"写入失败: {e}"
+            return False, f"Write failed: {e}"
 
-    # ── Step 5：应用 patch ───────────────────────────────
+    # Step 5: apply patch.
     try:
         from tools.file_ops import _apply_patch_blocks
         result_msg = _apply_patch_blocks(str(GLOBAL_SKILLS_PATH), patch_blocks)
         if result_msg.startswith("OK"):
-            dup_note = f" (去重 → Case {dup_level+1})" if dup_level > 0 else ""
+            dup_note = f" (deduplicated -> Case {dup_level+1})" if dup_level > 0 else ""
             return True, (
-                f"✓ 技能已写入 global_skills.md\n"
-                f"  分类: # {category}  {'← 新建' if is_new else ''}\n"
-                f"  技能: ## {skill_name}{dup_note}\n"
-                f"  路径: {GLOBAL_SKILLS_PATH}"
+                f"✓ Skill written to global_skills.md\n"
+                f"  Category: # {category}  {'<- new' if is_new else ''}\n"
+                f"  Skill: ## {skill_name}{dup_note}\n"
+                f"  Path: {GLOBAL_SKILLS_PATH}"
             )
         else:
-            # patch 失败 → 降级为追加（保证不丢数据）
+            # Patch failed; degrade to append so data is not lost.
             new_section = f"\n# {category}\n\n{skill_block}\n" if is_new else f"\n{skill_block}\n"
             with open(GLOBAL_SKILLS_PATH, "a", encoding="utf-8") as f:
                 f.write(new_section)
             return True, (
-                f"⚠ SEARCH/REPLACE 失败（{result_msg[:60]}），已降级为追加写入。\n"
-                f"  技能: ## {skill_name}  →  {GLOBAL_SKILLS_PATH}"
+                f"⚠ SEARCH/REPLACE failed ({result_msg[:60]}); fell back to append.\n"
+                f"  Skill: ## {skill_name}  ->  {GLOBAL_SKILLS_PATH}"
             )
     except Exception as e:
-        return False, f"应用 patch 时异常: {e}"
+        return False, f"Exception while applying patch: {e}"

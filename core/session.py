@@ -1,25 +1,29 @@
 """
-core/session.py — AgentSession · Agentic Loop
+core/session.py - AgentSession and agentic loop.
 Plan-as-Key Architecture
 
-本次修改摘要（Plan-as-Key + 教练模式 CoT Guard）：
-  [1] 常量重构：
-        · 移除 _PLAN_REQUIRED_MSG / _SELF_CORRECTION_MSG
-        · 新增 _PLAN_MISSING_SIGNAL（工具结果后注入，attention 贴近推理层）
-        · 新增 _PLAN_EXEMPT_TOOLS + _is_plan_exempt()（只读工具豁免检查）
-        · 新增 _MAX_SOFT_CORRECTIONS / _MAX_HARD_KILLS（阈值常量化）
-  [2] _PlanRenderer 升级：
-        · 新增子标签渲染：<intent> <tool> <why> <next> <anchor> <correction>
-        · 向后兼容旧 <action> <verify> 格式
-  [3] Execution Protocol（系统提示词）更新：
-        · Plan 格式改为 <intent>/<tool>/<why>/<next> 子标签结构
-        · 新增 Self-Correction Protocol、Anti-Drift Anchor、Long Output Management
-  [4] run_turn CoT Guard 重构（教练模式）：
-        · 豁免：只读工具（pwn_env / list_dir / git_op 只读操作）跳过 plan 检查
-        · 软拦截 × _MAX_SOFT_CORRECTIONS：工具执行，结果后注入 PLAN_MISSING 信号
-        · 硬终止 × _MAX_HARD_KILLS：软拦截耗尽后触发，撤销上一条 user 消息
+Change summary (Plan-as-Key + coaching-mode CoT Guard):
+  [1] Constant refactor:
+        - Removed _PLAN_REQUIRED_MSG / _SELF_CORRECTION_MSG.
+        - Added _PLAN_MISSING_SIGNAL, injected after tool results so attention
+          stays close to the current reasoning layer.
+        - Added _PLAN_EXEMPT_TOOLS + _is_plan_exempt() for read-only tools.
+        - Added _MAX_SOFT_CORRECTIONS / _MAX_HARD_KILLS threshold constants.
+  [2] _PlanRenderer upgrade:
+        - Added subtag rendering for <intent> <tool> <why> <next> <anchor>
+          <correction>.
+        - Preserved backward compatibility with <action> <verify>.
+  [3] Execution Protocol system prompt update:
+        - Plan format now uses <intent>/<tool>/<why>/<next> subtags.
+        - Added Self-Correction Protocol, Anti-Drift Anchor, and Long Output
+          Management.
+  [4] run_turn CoT Guard refactor:
+        - Exempt read-only tools such as pwn_env, list_dir, and read-only git_op.
+        - Soft intercepts execute tools and inject PLAN_MISSING afterward.
+        - Hard stop happens only after soft intercepts are exhausted.
 
-所有原有功能（GSA、Anti-Loop 并发截断、Pwn 约束、自动直觉检索等）均保留。
+Existing GSA, Anti-Loop, concurrency truncation, Pwn constraints, and
+auto-intuition features are preserved.
 """
 
 import os, json, sys, threading, time
@@ -63,11 +67,11 @@ from tools.pwn_chain import (tool_pwn_env, tool_inspect_binary, tool_pwn_rop,
 from tools.vision    import analyze_local_image, VISION_SCHEMAS
 from core.logger import logger, audit_tool_call
 
-# P3 + P4: Docker 容器化（可选依赖，不可用时静默跳过）
+# P3 + P4: Docker containerization. Optional dependency; silently skip if absent.
 try:
     from tools.docker_sandbox import (
         tool_run_code_docker, tool_pwn_container,
-        tool_install_package, docker_prune_resources,   # P4.2 / P4.3 新增
+        tool_install_package, docker_prune_resources,
         DOCKER_SCHEMAS,
     )
 except ImportError:
@@ -77,7 +81,7 @@ except ImportError:
     docker_prune_resources = None   # P4.3
     DOCKER_SCHEMAS         = []
 
-# P5: Scrapling 浏览器武器库（可选依赖，不可用时静默跳过）
+# P5: Scrapling browser toolkit. Optional dependency; silently skip if absent.
 try:
     from tools.browser_ops import (
         tool_web_fetch, tool_web_click, tool_web_screenshot,
@@ -93,7 +97,7 @@ except ImportError:
     tool_web_navigate   = None
     BROWSER_SCHEMAS     = []
 
-# P6: 环境嗅探工具（可选依赖，不可用时静默跳过）
+# P6: environment reconnaissance tools. Optional dependency; silently skip if absent.
 try:
     from tools.recon_ops import tool_check_service, RECON_SCHEMAS
 except ImportError:
@@ -124,7 +128,7 @@ TOOL_MAP: dict = {
     "analyze_local_image": analyze_local_image,
 }
 
-# P3 + P4: Docker 工具注册（可选）
+# P3 + P4: optional Docker tool registration.
 if tool_run_code_docker:
     TOOL_MAP["run_code_docker"]    = tool_run_code_docker
 if tool_pwn_container:
@@ -134,7 +138,7 @@ if tool_install_package:                                    # P4.2
 if docker_prune_resources:                                  # P4.3
     TOOL_MAP["docker_prune_resources"] = docker_prune_resources
 
-# P5: Scrapling 浏览器工具注册（可选）
+# P5: optional Scrapling browser tool registration.
 if tool_web_fetch:
     TOOL_MAP["web_fetch"]      = tool_web_fetch
 if tool_web_click:
@@ -148,7 +152,7 @@ if tool_web_type:
 if tool_web_navigate:
     TOOL_MAP["web_navigate"]   = tool_web_navigate
 
-# P6: 环境嗅探工具注册（可选）
+# P6: optional environment reconnaissance tool registration.
 if tool_check_service:
     TOOL_MAP["check_service"]  = tool_check_service
 
@@ -158,21 +162,23 @@ TOOLS_SCHEMA: list = (
     + BROWSER_SCHEMAS + RECON_SCHEMAS
 )
 
-# ── switch_phase：全局路由工具（强制附加，不受 Phase 过滤）───────────
-# 注意：实际执行逻辑在 run_turn 中拦截，TOOL_MAP 条目仅作保底占位。
+# switch_phase: global routing tool, always attached regardless of phase filter.
+# Actual execution is intercepted in run_turn; the TOOL_MAP entry is a fallback.
 _SWITCH_PHASE_SCHEMA = {
     "type": "function",
     "function": {
         "name": "switch_phase",
         "description": (
-            "当前阶段的工具无法满足需求，或你已完成本阶段任务时，调用此工具切换工作阶段。\n"
-            "切换后系统将为你加载下一批专业工具，请根据任务需要选择目标阶段。\n"
-            f"可用阶段: {', '.join(AGENT_PHASES.keys())}\n"
-            "  RECON    — 侦察：环境检测、目录浏览、二进制初步分析\n"
-            "  VULN_DEV — 漏洞开发：偏移计算、反汇编、ROP/libc 分析\n"
-            "  EXPLOIT  — 利用：编写 exploit、动态调试、交互式验证\n"
-            "  WEB_PEN  — Web 渗透：Scrapling 反爬抓取、自适应定位、浏览器自动化\n"
-            "  GENERAL  — 通用：文件操作、联网、后备场景"
+            "Call this tool to switch work phases when the current phase's tools "
+            "are insufficient or this phase is complete.\n"
+            "After switching, the system loads the next specialized tool set. "
+            "Choose the target phase based on task needs.\n"
+            f"Available phases: {', '.join(AGENT_PHASES.keys())}\n"
+            "  RECON    - reconnaissance: environment checks, directory browsing, initial binary analysis\n"
+            "  VULN_DEV - vulnerability development: offsets, disassembly, ROP/libc analysis\n"
+            "  EXPLOIT  - exploitation: write exploits, dynamic debugging, interactive validation\n"
+            "  WEB_PEN  - web penetration: Scrapling anti-bot fetch, adaptive selectors, browser automation\n"
+            "  GENERAL  - general fallback: file operations, networking, fallback scenarios"
         ),
         "parameters": {
             "type": "object",
@@ -180,11 +186,11 @@ _SWITCH_PHASE_SCHEMA = {
                 "phase": {
                     "type": "string",
                     "enum": list(AGENT_PHASES.keys()),
-                    "description": "目标阶段名称，必须是上述可用阶段之一",
+                    "description": "Target phase name; must be one of the available phases above.",
                 },
                 "reason": {
                     "type": "string",
-                    "description": "切换原因（一句话说明为什么需要切换）",
+                    "description": "One-sentence explanation of why the phase switch is needed.",
                 },
             },
             "required": ["phase"],
@@ -193,42 +199,43 @@ _SWITCH_PHASE_SCHEMA = {
 }
 
 TOOL_MAP["switch_phase"] = lambda a: (
-    f"[switch_phase] 阶段切换请求已接收，目标: {a.get('phase', '?')}。"
-    "（此消息不应出现，应由 run_turn 拦截处理）"
+    f"[switch_phase] Phase switch request received; target: {a.get('phase', '?')}. "
+    "This message should not appear; run_turn should intercept it."
 )
 TOOLS_SCHEMA.append(_SWITCH_PHASE_SCHEMA)
 
-# ── ★ bump_skill 工具（GSA 闭环反馈）─────────────────────────────────
+# bump_skill tool: GSA feedback loop.
 def tool_bump_skill(args: dict) -> str:
     """
-    当你利用某个 GSA 技能成功解决了问题，调用此工具增加该技能的使用计数并刷新时间戳。
-    这是 GSA 知识库的闭环反馈入口，请在 <verify> 通过后主动调用。
+    Increase a GSA skill's hit count and refresh its timestamp after using it
+    successfully. Call this proactively after <verify> passes.
     """
     skill_name = args.get("skill_name", "").strip()
     if not skill_name:
-        return "ERROR: skill_name 参数不能为空"
+        return "ERROR: skill_name cannot be empty"
     try:
         ok, msg = bump_skill(skill_name)
         return msg
     except Exception as e:
-        return f"ERROR: bump_skill 异常: {e}"
+        return f"ERROR: bump_skill failed: {e}"
 
 _BUMP_SKILL_SCHEMA = {
     "type": "function",
     "function": {
         "name": "bump_skill",
         "description": (
-            "GSA 闭环反馈工具。当你成功使用了某个 global_skills.md 中的技能来解决问题时，"
-            "调用此工具以增加该技能的 hits 计数、刷新 last_used 日期、提升 confidence。"
-            "这有助于知识库的质量演化——高频验证的技能在未来检索中会获得更高优先级。\n"
-            "请在 <verify> 通过后、GSA 存档之前调用。"
+            "GSA feedback-loop tool. When you successfully use a skill from "
+            "global_skills.md to solve a problem, call this to increment hits, "
+            "refresh last_used, and improve confidence. Frequently validated "
+            "skills receive higher priority in future retrieval.\n"
+            "Call it after <verify> passes and before GSA archiving."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "skill_name": {
                     "type":        "string",
-                    "description": "技能的精确名称（## 标题文本，不含 '## ' 前缀）",
+                    "description": "Exact skill name: the ## heading text without the '## ' prefix.",
                 },
             },
             "required": ["skill_name"],
@@ -239,31 +246,31 @@ _BUMP_SKILL_SCHEMA = {
 TOOL_MAP["bump_skill"] = tool_bump_skill
 TOOLS_SCHEMA.append(_BUMP_SKILL_SCHEMA)
 
-# ── P0: audit_payload 工具（防御性审计）───────────────────
-# 需要审计的危险工具集合
+# P0: audit_payload tool for defensive auditing.
+# Dangerous tools that require audit.
 _AUDITED_TOOLS = {"run_code", "run_shell", "run_interactive"}
 
 
 def tool_audit_payload(args: dict) -> str:
     """
-    Payload 投前审计工具。
-    查询指定工具的历史失败记录，返回警告和建议。
+    Pre-flight payload audit tool.
+    Query historical failures for a tool and return warnings and suggestions.
     """
     tool_name   = args.get("tool_name", "").strip()
     payload_hint = args.get("payload_preview", "").strip()
 
     if not tool_name:
-        return "ERROR: tool_name 参数不能为空"
+        return "ERROR: tool_name cannot be empty"
 
     rows = check_failure(tool_name, args_keywords=payload_hint, limit=3)
     if not rows:
-        return f"✓ 审计通过: {tool_name} 无历史失败记录。"
+        return f"✓ Audit passed: no historical failures for {tool_name}."
 
     warning = format_failures_for_prompt(rows)
     return (
-        f"⚠ 审计警告: {tool_name} 存在 {len(rows)} 条历史失败记录\n\n"
+        f"⚠ Audit warning: {tool_name} has {len(rows)} historical failure records\n\n"
         f"{warning}\n\n"
-        f"建议: 修改 Payload 或换用其他方案后再试。"
+        "Suggestion: modify the payload or try a different approach before retrying."
     )
 
 
@@ -272,20 +279,21 @@ _AUDIT_PAYLOAD_SCHEMA = {
     "function": {
         "name": "audit_payload",
         "description": (
-            "Payload 投前审计工具。在调用 run_code / run_shell / run_interactive 执行危险操作之前，\n"
-            "使用此工具检查是否有同类历史失败记录。如果有，系统会返回失败原因和修改建议。\n"
-            "适用场景：执行 exploit 脚本、运行 shellcode、调用 GDB 调试前。"
+            "Pre-flight payload audit tool. Before dangerous run_code / run_shell / "
+            "run_interactive operations, call this to check similar historical failures. "
+            "If matches exist, the system returns failure reasons and modification advice.\n"
+            "Use before exploit scripts, shellcode execution, or GDB debugging."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "tool_name": {
                     "type": "string",
-                    "description": "目标工具名：run_code / run_shell / run_interactive",
+                    "description": "Target tool name: run_code / run_shell / run_interactive.",
                 },
                 "payload_preview": {
                     "type": "string",
-                    "description": "Payload 或参数摘要（用于模糊匹配历史失败记录）",
+                    "description": "Payload or argument summary for fuzzy matching historical failures.",
                 },
             },
             "required": ["tool_name"],
@@ -296,31 +304,31 @@ _AUDIT_PAYLOAD_SCHEMA = {
 TOOL_MAP["audit_payload"] = tool_audit_payload
 TOOLS_SCHEMA.append(_AUDIT_PAYLOAD_SCHEMA)
 
-# ── ★ P6: search_skills 工具（自动化利用链检索）─────────────────────
+# P6: search_skills tool for automated exploit-chain retrieval.
 def tool_search_skills(args: dict) -> str:
     """
-    根据探测到的目标指纹（如 'Fastjson', 'Shiro', 'Log4j'）搜索本地技能包。
-    返回匹配的技能包列表及脚本执行指引。
+    Search local skill packs by detected target fingerprint such as Fastjson,
+    Shiro, or Log4j. Return matching packs and script execution guidance.
     """
     query = args.get("query", "").strip()
     if not query:
-        return "ERROR: query 参数不能为空。请输入目标指纹或关键词，如 'Fastjson'、'Shiro'。"
+        return "ERROR: query cannot be empty. Provide a target fingerprint or keyword such as 'Fastjson' or 'Shiro'."
 
     try:
         packs = _skill_scanner.match(query, top_k=int(args.get("top_k", 3)))
     except Exception as e:
-        return f"ERROR: search_skills 异常: {e}"
+        return f"ERROR: search_skills failed: {e}"
 
     if not packs:
-        return f"未找到与 '{query}' 匹配的技能包。可尝试：1. /skillpack rescan  2. 检查 skills/ 目录"
+        return f"No skill packs matched '{query}'. Try: 1. /skillpack rescan  2. Check the skills/ directory."
 
-    # 使用 format_for_prompt 获取完整指引（含脚本执行命令）
+    # Use format_for_prompt for full guidance, including script execution commands.
     result = _skill_scanner.format_for_prompt(packs)
 
-    # USER_MODE 简洁输出
+    # Concise USER_MODE output.
     if USER_MODE:
         names = [p.get("name", "?") for p in packs]
-        print(c(GREEN, f"  🚀 [P6] 已匹配 {len(packs)} 个技能包: {', '.join(names)}"))
+        print(c(GREEN, f"  🚀 [P6] Matched {len(packs)} skill packs: {', '.join(names)}"))
 
     return result
 
@@ -330,22 +338,24 @@ _SEARCH_SKILLS_SCHEMA = {
     "function": {
         "name": "search_skills",
         "description": (
-            "P6 自动化利用链：根据目标指纹搜索本地技能包。\n"
-            "在侦察阶段探测到 Web 框架指纹（如 Fastjson/Shiro/Log4j/Spring）后，\n"
-            "调用此工具检索对应的自动化利用脚本和指南。\n"
-            "返回结果包含：技能包名称、描述、guide.md 路径、可用脚本及执行命令。\n"
-            "你必须优先执行返回的脚本，禁止在未尝试脚本前自主编写长段 Payload。"
+            "P6 automated exploit chain: search local skill packs by target fingerprint.\n"
+            "After reconnaissance detects a web framework fingerprint such as "
+            "Fastjson/Shiro/Log4j/Spring, call this tool to retrieve matching "
+            "automation scripts and guides.\n"
+            "Results include pack name, description, guide.md path, available "
+            "scripts, and execution commands.\n"
+            "You must try returned scripts first; do not write long payloads before attempting them."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {
                     "type":        "string",
-                    "description": "目标指纹或关键词，如 'Fastjson', 'Shiro', 'log4j', 'spring', 'sql注入'",
+                    "description": "Target fingerprint or keyword, e.g. 'Fastjson', 'Shiro', 'log4j', 'spring', 'sql injection'.",
                 },
                 "top_k": {
                     "type":        "integer",
-                    "description": "返回的最大技能包数量（默认 3）",
+                    "description": "Maximum number of skill packs to return; default 3.",
                     "default":     3,
                 },
             },
@@ -368,31 +378,31 @@ def _try_load_delegate():
 _try_load_delegate()
 
 # ════════════════════════════════════════════════════════
-# 外部 MCP 工具挂载点
-# 由 main.py 在 init_db 之后、AgentSession 实例化之前调用一次。
+# External MCP tool attachment point.
+# Called once after init_db and before AgentSession creation.
 # ════════════════════════════════════════════════════════
 
 def attach_external_mcp_tools() -> None:
     """
-    把 mcp_client_manager 发现的外部 MCP 工具合并进
-    TOOL_MAP / TOOLS_SCHEMA / AGENT_PHASES。
-    无配置或全部 server 启动失败时本函数自动 no-op。
+    Merge external MCP tools discovered by mcp_client_manager into TOOL_MAP,
+    TOOLS_SCHEMA, and AGENT_PHASES. If no config exists or all servers fail to
+    start, this function is a no-op.
     """
     try:
         from core.mcp_client_manager import init_external_mcp
     except ImportError:
-        return  # mcp 未安装时静默跳过
+        return  # silently skip when MCP support is not installed
     from config import AGENT_PHASES
 
     mgr = init_external_mcp()
     if mgr is None:
         return
 
-    # 1. 工具表：update / extend —— PawnLogic 主循环零感知地消费
+    # 1. Tool tables: update / extend for transparent main-loop consumption.
     TOOL_MAP.update(mgr.build_pawnlogic_handlers())
     TOOLS_SCHEMA.extend(mgr.build_pawnlogic_schemas())
 
-    # 2. Phase 归属：让外部工具按配置进入对应 Phase 可见列表
+    # 2. Phase ownership: expose external tools in configured phase lists.
     for prefixed_name, phase in mgr.get_phase_mapping().items():
         target = phase if phase in AGENT_PHASES else "GENERAL"
         if phase != target:
@@ -405,31 +415,31 @@ def attach_external_mcp_tools() -> None:
 
 
 def detach_external_mcp_tools() -> None:
-    """收割背景线程与全部外部 MCP 子进程。幂等。"""
+    """Shut down background threads and external MCP subprocesses idempotently."""
     try:
         from core.mcp_client_manager import shutdown_external_mcp
         shutdown_external_mcp()
     except Exception:  # noqa: BLE001
-        pass  # finally 块里绝不能抛异常
+        pass  # never raise from shutdown/finally paths
 
 
 # ════════════════════════════════════════════════════════
-# ★ 改动 [1]：_PLAN_REQUIRED_MSG → 温和引导语气
-#   不再是 "ERROR: Rule Violation"，改为 "Notice"，
-#   只在终端打印，不注入对话上下文（避免上下文污染）。
+# Change [1]: _PLAN_REQUIRED_MSG -> softer coaching tone.
+# It is no longer "ERROR: Rule Violation"; it is a notice printed only to the
+# terminal and not injected into conversation context.
 # ════════════════════════════════════════════════════════
 
 _MAX_CONCURRENT_TOOLS  = 3
-_MAX_SOFT_CORRECTIONS  = 2   # 软拦截最大次数（工具仍执行，追加修正信号）
-_MAX_HARD_KILLS        = 1   # 软拦截耗尽后的硬终止阈值
+_MAX_SOFT_CORRECTIONS  = 2   # max soft intercepts; tools still run and receive correction signal
+_MAX_HARD_KILLS        = 1   # hard-stop threshold after soft intercepts are exhausted
 
 # ════════════════════════════════════════════════════════
-# P1: 时间感知调度 — URGENT_MODE 常量
+# P1: time-aware scheduling constants for URGENT_MODE.
 # ════════════════════════════════════════════════════════
 
-_URGENT_THRESHOLD_SEC = 30   # 剩余 < 30s 时触发 URGENT_MODE
+_URGENT_THRESHOLD_SEC = 30   # trigger URGENT_MODE when remaining time is below 30s
 
-# 极速模型候选（时间紧迫时自动切换）
+# Fast model candidates used for automatic switching under time pressure.
 _URGENT_MODEL_CANDIDATES = [
     "ds-v4-flash",
     "claude-haiku",
@@ -446,9 +456,9 @@ _URGENT_SIGNAL = (
     "  5. If a tool call fails, do NOT retry — report partial results.\n"
 )
 
-# ── PLAN_MISSING 信号 ─────────────────────────────────────────────
-# 注入位置：tool 结果追加完毕后（而非 user 消息），
-# 使 attention 权重贴近当前推理层，修正效果优于旧 _SELF_CORRECTION_MSG。
+# PLAN_MISSING signal.
+# Injected after tool results rather than as a user message, keeping attention
+# close to the current reasoning layer and improving correction quality.
 _PLAN_MISSING_SIGNAL = (
     "[SYSTEM: PLAN_MISSING — your last tool call was intercepted by the executor]\n"
     "The tool executor requires a <plan> block to authorize tool usage.\n"
@@ -460,11 +470,11 @@ _is_plan_exempt = _plan_guard.is_plan_exempt
 _tool_call_missing_plan = _plan_guard.tool_call_missing_plan
 
 # ════════════════════════════════════════════════════════
-# GSA 辅助：读取 global_skills.md TOC
+# GSA helper: read the global_skills.md table of contents.
 # ════════════════════════════════════════════════════════
 
 # ════════════════════════════════════════════════════════
-# P6.5: 技能引擎 — SkillScanner 文件夹包模式
+# P6.5: Skill engine using SkillScanner folder-pack mode.
 # ════════════════════════════════════════════════════════
 
 from core.skill_manager import SkillScanner
@@ -479,20 +489,20 @@ def _load_skills_toc() -> str:
         pass
     try:
         if not GLOBAL_SKILLS_PATH.exists():
-            return "(global_skills.md 尚未创建，AI 可在首次存档时自主创建第一个分类)"
+            return "(global_skills.md has not been created; the agent may create the first category during archiving)"
         lines    = GLOBAL_SKILLS_PATH.read_text(encoding="utf-8").splitlines()[:80]
         headings = [l for l in lines if l.startswith("#")]
-        return "\n".join(headings) if headings else "(global_skills.md 暂无分类)"
+        return "\n".join(headings) if headings else "(global_skills.md has no categories yet)"
     except Exception:
-        return "(无法读取 global_skills.md)"
+        return "(failed to read global_skills.md)"
 
 # ════════════════════════════════════════════════════════
-# 上下文管理
+# Context management.
 # ════════════════════════════════════════════════════════
 
 def _ctx_chars(msgs: list) -> int:
-    # ★ thinking-mode 修复：reasoning_content 也必须计入上下文预算
-    # 否则小米 MiMo 等推理模型返回的 reasoning 块会让真实 token 远超预期
+    # thinking-mode fix: reasoning_content must count toward context budget,
+    # otherwise reasoning blocks from models such as MiMo undercount true tokens.
     return sum(
         len(str(m.get("content") or "")) + len(str(m.get("reasoning_content") or ""))
         for m in msgs
@@ -500,22 +510,23 @@ def _ctx_chars(msgs: list) -> int:
 
 def _trim_and_compact_context(msgs: list) -> int:
     """
-    上下文压缩（Tool Clearing）：
-    Token 溢出时，保留系统提示词 + 最新 10 条消息。
-    被清理的老消息不直接丢弃，而是：
-      · role=tool   → 内容替换为占位符
-      · role=user/assistant → 截断保留前 100 字符
-    再将这些消息合并为一条 role=assistant 的摘要插回 system 之后。
+    Context compaction (Tool Clearing).
+    When the token budget overflows, keep the system prompt and latest 10
+    messages. Older messages are not dropped directly:
+      - role=tool content is replaced by a placeholder
+      - role=user/assistant content is truncated to the first 100 characters
+    Then the compacted content is merged into one assistant summary inserted
+    after the system message.
     """
     if _ctx_chars(msgs) <= DYNAMIC_CONFIG["ctx_max_chars"]:
         return 0
 
     KEEP_TAIL = 10
-    # system 占 index 0；至少要有可压缩空间
+    # system occupies index 0; require enough room to compact.
     if len(msgs) <= KEEP_TAIL + 1:
         return 0
 
-    cutoff = len(msgs) - KEEP_TAIL   # [1 : cutoff] 为待压缩区间
+    cutoff = len(msgs) - KEEP_TAIL   # [1:cutoff] is the compaction range
 
     old_msgs = msgs[1:cutoff]
 
@@ -543,24 +554,24 @@ def _trim_and_compact_context(msgs: list) -> int:
     summary_msg = {
         "role":     "assistant",
         "content":  summary_content,
-        "_pinned":  True,   # 防止摘要本身在下次压缩时被再次弹出
+        "_pinned":  True,   # keep the summary from being compacted again next time
     }
 
-    # 用摘要替换老消息区间
+    # Replace the old message range with the summary.
     del msgs[1:cutoff]
     msgs.insert(1, summary_msg)
 
     return len(old_msgs)
 
 # ════════════════════════════════════════════════════════
-# XML Plan 渲染器（含"憋尿"修复）
+# XML plan renderer.
 # ════════════════════════════════════════════════════════
 
 _TAG_PAIRS = [
     ("<plan>",       "</plan>"),
     ("<action>",     "</action>"),
     ("<verify>",     "</verify>"),
-    # ── 新增子标签────────────────────────────────
+    # Additional subtags.
     ("<intent>",     "</intent>"),
     ("<tool>",       "</tool>"),
     ("<why>",        "</why>"),
@@ -571,15 +582,15 @@ _TAG_PAIRS = [
 _ALL_TAGS = [t for pair in _TAG_PAIRS for t in pair]
 _TAG_MAX  = max(len(t) for t in _ALL_TAGS) + 2
 
-# 子标签的前缀标签与颜色映射
+# Subtag prefix labels and color mapping.
 _SUBTAG_OPEN: dict = {
     "<action>":     (GRAY,          "  📋 "),
-    "<verify>":     (CYAN,          "  🔬 验证: "),
-    "<intent>":     (MAGENTA,       "  🎯 意图: "),
-    "<tool>":       (CYAN,          "  🔧 工具: "),
-    "<why>":        (GRAY,          "  💡 理由: "),
-    "<next>":       (GRAY + DIM,    "  ⏭  下步: "),
-    "<anchor>":     (YELLOW,        "  ⚓ 锚点:\n"),
+    "<verify>":     (CYAN,          "  🔬 Verify: "),
+    "<intent>":     (MAGENTA,       "  🎯 Intent: "),
+    "<tool>":       (CYAN,          "  🔧 Tool: "),
+    "<why>":        (GRAY,          "  💡 Why: "),
+    "<next>":       (GRAY + DIM,    "  ⏭  Next: "),
+    "<anchor>":     (YELLOW,        "  ⚓ Anchor:\n"),
     "<correction>": (YELLOW,        ""),          # silent flag, no display
 }
 
@@ -656,7 +667,7 @@ class _PlanRenderer:
             elif not self.in_plan:
                 output += self.tail[:ep]; self.tail = self.tail[ep:]
                 if et == "<plan>":
-                    sys.stdout.write(c(GRAY + DIM, "\n  💭 [计划开始]\n")); sys.stdout.flush()
+                    sys.stdout.write(c(GRAY + DIM, "\n  💭 [plan start]\n")); sys.stdout.flush()
                     self.in_plan = True; self.tail = self.tail[len("<plan>"):]
                 else:
                     output += self.tail[:len(et)]; self.tail = self.tail[len(et):]
@@ -666,7 +677,7 @@ class _PlanRenderer:
                 if col: sys.stdout.write(col); sys.stdout.flush()
                 self.tail = self.tail[ep:]
                 if et == "</plan>":
-                    sys.stdout.write(c(GRAY, "\n  [计划结束]\n")); sys.stdout.flush()
+                    sys.stdout.write(c(GRAY, "\n  [plan end]\n")); sys.stdout.flush()
                     self.in_plan = self.in_action = self.in_verify = False
                     self.in_intent = self.in_tool_tag = self.in_why = False
                     self.in_next = self.in_anchor = self.in_correction = False
@@ -723,20 +734,20 @@ class AgentSession:
         _session_cwd[0]  = self.cwd
         self.workspace_dir = stable_workspace_dir(self.session_id)
         _session_workspace_dir[0] = self.workspace_dir
-        self.current_phase = "RECON"   # MoE 初始阶段
+        self.current_phase = "RECON"   # initial MoE phase
         init_db()
-        # ── P1: Time-aware scheduling state（必须在 _reset_system_prompt 之前）──
+        # P1: time-aware scheduling state. Must exist before _reset_system_prompt.
         self._turn_start_time        = 0.0
-        self._time_budget_sec        = 0   # 0 = 不限时间
+        self._time_budget_sec        = 0   # 0 = unlimited
         self._urgent_mode            = False
         self._save_lock = threading.Lock()
         self._naming_lock = threading.Lock()
         self._naming_done = False
         self._naming_attempted_at = 0.0
-        # ★ 会话自动命名：累计完成的 turn 数，门槛 = 2
+        # Session auto-naming: count completed turns; threshold is 2.
         self._turn_count = 0
-        # ★ 动态工作区 swap：保护 rename + 反向 symlink + 指针切换三步原子性
-        # （短锁：临界区内只做本地 FS 操作，不含网络/DB）
+        # Dynamic workspace swap: protect the three-step rename, reverse
+        # symlink, and pointer switch with a short local-FS-only lock.
         self._workspace_swap_lock = threading.Lock()
         # ── Usage & audit counters (cumulative across all turns) ──
         self.total_prompt_tokens     = 0
@@ -746,39 +757,41 @@ class AgentSession:
         self._turn_prompt_tokens     = 0
         self._turn_completion_tokens = 0
         self._turn_tool_calls        = 0
-        # ★ P6.5: 技能包匹配结果缓存
+        # P6.5: matched skill-pack cache.
         self._loaded_skill_packs: list = []
-        # ★ 滚动窗口 + 历史摘要状态
-        self._history_summary: str = ""          # 当前有效的历史摘要文本
-        self._summary_turn_count: int = 0        # 上次生成摘要时的迭代轮次数
-        # 最后调用，因为它依赖上面所有属性
+        # Sliding window + history summary state.
+        self._history_summary: str = ""          # current effective history summary
+        self._summary_turn_count: int = 0        # turn count when summary was last generated
+        # Call last because it depends on all attributes above.
         self._reset_system_prompt()
 
     def _time_remaining(self) -> float:
-        """返回当前 turn 的剩余秒数。time_budget=0 时返回 inf。"""
+        """Return seconds remaining for the current turn; inf when budget is 0."""
         if self._time_budget_sec <= 0:
             return float("inf")
         elapsed = time.monotonic() - self._turn_start_time
         return max(0.0, self._time_budget_sec - elapsed)
 
     def undo(self, n: int = 1) -> tuple[int, str]:
-        """物理删除 messages 尾部消息对（user+assistant），不影响 pinned。
-        返回 (实际删除的消息数, 被撤回的最后一条 user 文本)。
-        user 文本供 Ctrl+C 回退编辑时作为 prompt default 使用。"""
+        """Physically remove trailing user/assistant message pairs, preserving pinned messages.
+
+        Returns ``(removed_count, last_user_text)``. ``last_user_text`` is used as
+        the default prompt value when Ctrl+C rolls the prompt back for editing.
+        """
         removed = 0
         last_user_text = ""
         for _ in range(n):
-            # 从尾部向前扫描，跳过 system 和 pinned
+            # Scan backward from the tail, skipping system and pinned messages.
             while self.messages:
                 tail = self.messages[-1]
                 if tail.get("role") == "system" or tail.get("_pinned"):
                     break
-                # 记录被弹出的 user 文本
+                # Remember the user text being removed.
                 if tail.get("role") == "user":
                     last_user_text = str(tail.get("content") or "")
                 self.messages.pop()
                 removed += 1
-                # 如果弹出的是 assistant，继续弹出对应的 user 消息
+                # If an assistant was removed, also remove the matching user message.
                 if tail.get("role") == "assistant":
                     while self.messages:
                         prev = self.messages[-1]
@@ -790,19 +803,19 @@ class AgentSession:
                             removed += 1
                             break
                         elif prev.get("role") == "assistant":
-                            # 连续 assistant（多轮工具调用），继续弹
+                            # Consecutive assistant messages can happen across tool loops.
                             self.messages.pop()
                             removed += 1
                         else:
                             break
                     break
-                # 如果弹出的是 user，也结束这一轮
+                # If a user message was removed, this undo round is complete.
                 elif tail.get("role") == "user":
                     break
         return removed, last_user_text
 
     # ════════════════════════════════════════════════════
-    # 动态工作区 swap（rename + 反向 symlink + 原子指针切换）
+    # Dynamic workspace swap (rename + reverse symlink + atomic pointer update)
     # ════════════════════════════════════════════════════
 
     def _swap_workspace_dir(self, slug: str) -> tuple[str, str]:
@@ -826,17 +839,17 @@ class AgentSession:
         from config import WORKSPACE_DIR, WORKSPACE_ROOT
 
         with self._workspace_swap_lock:
-            # 🔑 边界检查 root（宽）与落位 target（窄）拆分：
-            #   · boundary_root = ~/.pawnlogic —— 允许 archive/、workspace/ 等
-            #     兄弟目录下的 session 通过 relative_to 校验
-            #   · workspace_target = ~/.pawnlogic/workspace —— 新 slug 最终落位
-            #     始终回归沙箱，避免 session 永久滞留 archive
+            # Keep boundary validation broad while forcing the final target narrow:
+            #   · boundary_root = ~/.pawnlogic allows sessions under archive/,
+            #     workspace/, and sibling directories to pass relative_to checks.
+            #   · workspace_target = ~/.pawnlogic/workspace forces the final slug
+            #     back into the sandbox so sessions do not remain in archive.
             boundary_root    = Path(WORKSPACE_ROOT).expanduser().resolve()
             workspace_target = Path(WORKSPACE_DIR).expanduser().resolve()
             workspace_target.mkdir(parents=True, exist_ok=True)
 
             current_path = Path(self.workspace_dir).expanduser().resolve()
-            # 防御：当前 workspace 必须在 ~/.pawnlogic 下（含 archive/）才允许 swap
+            # Defense: only swap current workspaces under ~/.pawnlogic, including archive/.
             try:
                 current_path.relative_to(boundary_root)
             except ValueError:
@@ -847,11 +860,11 @@ class AgentSession:
                 )
                 return "", ""
 
-            # 若已是 slug 名且已在目标 workspace/ 下（重复触发），直接返回现状
+            # If already named and placed correctly, return the current state.
             if current_path.name == slug and current_path.parent == workspace_target:
                 return current_path.name, str(current_path)
 
-            # 冲突探测：slug → slug-<id_tail> → slug-<id_tail>-N（均落位 workspace_target）
+            # Collision probing: slug -> slug-<id_tail> -> slug-<id_tail>-N.
             id_tail = self.session_id[-4:] if len(self.session_id) >= 4 else self.session_id
             candidates = [slug, f"{slug}-{id_tail}"]
             candidates.extend(f"{slug}-{id_tail}-{i}" for i in range(2, 100))
@@ -871,7 +884,7 @@ class AgentSession:
 
             new_path = workspace_target / final_name
             try:
-                # 1. rename 实体目录（同 FS 内 POSIX 原子；跨 FS 时自动走复制+删除）
+                # 1. Rename the real directory. POSIX rename is atomic on one FS.
                 os.rename(str(current_path), str(new_path))
             except OSError as exc:
                 logger.warning(
@@ -880,25 +893,23 @@ class AgentSession:
                 )
                 return "", ""
 
-            # 2. 反向兜底 symlink：原路径 → 新 <slug>（仅当原路径在 workspace_target 下时可用）
+            # 2. Reverse fallback symlink: old path -> new <slug>, when applicable.
             try:
                 old_name = current_path.name
                 if current_path.parent == workspace_target:
                     old_link = workspace_target / old_name
                     if not old_link.exists() and not old_link.is_symlink():
-                        # 相对 symlink，workspace 整体可迁移
+                        # Use a relative symlink so the workspace tree stays movable.
                         os.symlink(final_name, str(old_link))
-                # 跨 archive→workspace 迁移时，原路径已不在 workspace/ 下，
-                # 反向 symlink 没有意义，直接跳过
+                # archive -> workspace moves do not benefit from a reverse symlink.
             except OSError as exc:
-                # 反向 symlink 失败不致命（rename 已成功），只是 pre-swap 路径
-                # 解析可能变悬。记录后继续。
+                # Reverse symlink failure is non-fatal after rename succeeds.
                 logger.warning(
                     "Reverse symlink failed (non-fatal) | old={} new={} exc={!r}",
                     current_path.name, final_name, exc,
                 )
 
-            # 3. 原子指针切换（list-index 赋值在 CPython 下是字节码原子）
+            # 3. Atomic pointer update; CPython list-index assignment is atomic.
             new_abs = str(new_path.resolve())
             _session_workspace_dir[0] = new_abs
             self.workspace_dir = new_abs
@@ -914,15 +925,15 @@ class AgentSession:
     ) -> None:
         """Pretty-print the auto-naming result to stdout.
 
-        USER_MODE  → 单行简洁；DEV → 完整路径便于开发调试。
+        USER_MODE prints one concise line; DEV prints full paths for debugging.
         Any error is swallowed (UI never blocks naming persistence).
         """
         try:
             if USER_MODE:
                 if final_dirname:
-                    print(c(CYAN, f"  🏷  会话已自动命名 → {title} · 工作区: {final_dirname}/"))
+                    print(c(CYAN, f"  🏷  Session auto-named -> {title} · Workspace: {final_dirname}/"))
                 else:
-                    print(c(CYAN, f"  🏷  会话已自动命名 → {title}"))
+                    print(c(CYAN, f"  🏷  Session auto-named -> {title}"))
             else:
                 id_tail = self.session_id[-8:] if len(self.session_id) >= 8 else self.session_id
                 if final_dirname and new_abs:
@@ -931,7 +942,7 @@ class AgentSession:
                     print(c(GRAY,    f"      slug       : {slug}"))
                     print(c(GRAY,    f"      workspace  : {new_abs}"))
                 else:
-                    print(c(YELLOW,  f"\n  ⚠ [Auto-Name] 命名入库成功但目录 swap 失败（保留 session_{id_tail}/）"))
+                    print(c(YELLOW,  f"\n  ⚠ [Auto-Name] Name saved, but workspace swap failed (kept session_{id_tail}/)"))
                     print(c(GRAY,    f"      title      : {title}"))
                     print(c(GRAY,    f"      slug       : {slug}"))
         except Exception:
@@ -939,8 +950,8 @@ class AgentSession:
 
     @property
     def model(self) -> dict:
-        # 防御性 .get()：如果 self.model_alias 是已失效的旧名（例如从旧会话
-        # 恢复时 DB 残留 "mimo"），降级到 DEFAULT_MODEL 而非抛 KeyError 崩溃。
+        # Defensive .get(): stale aliases restored from old sessions fall back to
+        # DEFAULT_MODEL instead of crashing with KeyError.
         return MODELS.get(self.model_alias, MODELS[DEFAULT_MODEL])
 
     def _reset_system_prompt(self, knowledge_query: str = ""):
@@ -951,7 +962,7 @@ class AgentSession:
             knowledge_block = format_knowledge_for_prompt(rows)
         state_block  = _load_state_md(self.cwd)
 
-        # P1.8: URGENT_MODE 跳过 GSA 注入（节省 token）
+        # P1.8: URGENT_MODE skips GSA injection to save tokens.
         if self._urgent_mode:
             skills_toc = ""
             _relevant_skills_md = ""
@@ -961,7 +972,7 @@ class AgentSession:
         else:
             skills_toc   = _load_skills_toc()
 
-            # ── ★ GSA 相关技能动态检索（衰减评分版）────────────
+            # Dynamic retrieval of GSA skills with decayed scoring.
             _relevant_skills_md  = ""
             _conflict_warning    = ""
             _local_skills_md     = ""
@@ -971,20 +982,20 @@ class AgentSession:
                         knowledge_query, top_k=3
                     )
                 except Exception:
-                    pass   # 降级：无相关技能注入，不中断主流程
+                    pass   # Degrade without relevant skill injection.
 
-            # ★ P6.5: 本地技能引擎检索（SkillScanner 文件夹包模式）
-            # 始终尝试匹配：knowledge_query 为空时按关键词匹配可能返回空，
-            # 但有 manifest.json triggers 的技能包仍可通过其他方式命中。
+            # P6.5: Local skill retrieval through SkillScanner directory packages.
+            # Always attempt matching. Empty knowledge_query may produce no keyword
+            # matches, but manifest.json triggers can still match through metadata.
             try:
                 _query = knowledge_query or ""
                 _matched_packs = _skill_scanner.match(_query, top_k=3)
                 _local_skills_md = _skill_scanner.format_for_prompt(_matched_packs)
                 self._loaded_skill_packs = _matched_packs
             except Exception:
-                pass   # 降级：无本地技能注入，不中断主流程
+                pass   # Degrade without local skill injection.
 
-        # ── MoE Phase 感知块 ──────────────────────────────
+        # MoE phase-awareness block.
         phase_tools  = AGENT_PHASES.get(self.current_phase, [])
         other_phases = [p for p in AGENT_PHASES if p != self.current_phase]
         phase_block  = (
@@ -1019,9 +1030,13 @@ class AgentSession:
             "the stack. Use ROP chains (pwn_rop) or one_gadget (pwn_one_gadget) instead.\n"
             "RULE: If 'inspect_binary' shows 'Canary found', you MUST find a canary leak path before "
             "attempting any stack smashing exploit.\n\n"
-            "=== VULN_DEV 漏洞开发纪律 ===\n"
-            "你处于无头(Headless)终端。绝对禁止直接运行等待输入的 gdb/nc 等交互式命令！\n"
-            "最佳实践：在漏洞开发阶段，优先编写包含 pwntools 的 exploit.py 脚本。利用 cyclic() 生成偏移数据、process() 启动程序、corefile 读取崩溃内存，然后使用 run_shell 执行 'python3 exploit.py' 来测试。这是最稳定的方式。\n\n"
+            "=== VULN_DEV Exploit Discipline ===\n"
+            "You are running in a headless terminal. NEVER run interactive commands such as "
+            "gdb or nc directly when they may wait for input.\n"
+            "Best practice: during exploit development, write an exploit.py script with "
+            "pwntools. Use cyclic() to generate offset data, process() to start the target, "
+            "corefile to inspect crash memory, then test with run_shell('python3 exploit.py'). "
+            "This is the most stable workflow.\n\n"
 
             "=== Memory & History Awareness ===\n"
             "You have a persistent conversation database. While you have no spontaneous memory,\n"
@@ -1032,40 +1047,40 @@ class AgentSession:
             "  File     : read_file · read_file_lines · write_file · patch_file · list_dir · find_files\n"
             "  Shell    : run_shell · git_op\n"
             "  Web      : web_search → fetch_url (Jina / Pandoc / regex fallback)\n"
-            "  Browser  : web_fetch (StealthyFetcher/反爬) · web_click · web_screenshot\n"
-            "             web_select (自适应CSS) · web_type · web_navigate\n"
+            "  Browser  : web_fetch (StealthyFetcher / anti-bot) · web_click · web_screenshot\n"
+            "             web_select (adaptive CSS) · web_type · web_navigate\n"
             "  Sandbox  : run_code  (python / c / cpp / javascript / bash / rust / go / java)\n"
-            "  Docker   : run_code_docker (一次性容器) · pwn_container (持久化容器)\n"
+            "  Docker   : run_code_docker (one-shot container) · pwn_container (persistent container)\n"
             "  Vision   : analyze_local_image  (jpg/png/gif/webp — glm-4v / gpt-4o)\n"
             "  CTF/Pwn  : pwn_env · inspect_binary · pwn_rop · pwn_cyclic · pwn_disasm\n"
             "             pwn_libc · pwn_debug · pwn_one_gadget · pwn_timed_debug\n"
-            "  Recon    : check_service (port → PID/进程名/路径/环境变量/动态库)\n"
+            "  Recon    : check_service (port -> PID/process/path/environment/shared libraries)\n"
             "  Advanced : delegate_task  (fresh context sub-agent)\n"
-            "  Skills   : search_skills (P6: 按目标指纹检索本地技能包)\n"
+            "  Skills   : search_skills (P6: retrieve local skill packs by target fingerprint)\n"
             "  History  : /chat list · /chat view · /chat find · /chat tag · /chat related\n\n"
 
             "=== Scrapling Web Penetration (WEB_PEN Phase) ===\n"
-            "Cloudflare / 动态页面 → Scrapling 自适应穿透：\n"
-            "  · web_fetch 自动 StealthyFetcher + solve_cloudflare。\n"
-            "  · web_select 自适应 CSS 定位，应对 DOM 变化。\n"
-            "  · 截图/下载 → ~/.pawnlogic/workspace/screenshots/。\n"
-            "  · 交互操作: web_navigate → web_type → web_click → web_screenshot。\n\n"
+            "Cloudflare / dynamic pages -> Scrapling adaptive bypass:\n"
+            "  · web_fetch automatically uses StealthyFetcher + solve_cloudflare.\n"
+            "  · web_select uses adaptive CSS targeting for DOM changes.\n"
+            "  · Screenshots/downloads go to ~/.pawnlogic/workspace/screenshots/.\n"
+            "  · Interaction flow: web_navigate -> web_type -> web_click -> web_screenshot.\n\n"
 
             "=== Auto-Exploit (P6) Protocol ===\n"
-            "Web 目标必走闭环：\n\n"
-            "  1. 侦察指纹 — web_fetch 提取 Server/X-Powered-By/Cookie/HTML 特征，识别框架。\n"
-            "  2. 确认环境 — check_service(port) 获取 PID/路径/环境变量/动态库。\n"
-            "  3. 检索武器 — search_skills(query='<框架名>')，空结果则尝试变体关键词。\n"
-            "  4. 同步更新 — /sp sync 拉取最新，/sp install <url> 安装新包。\n"
-            "  5. 阅读指南 — read_file(guide.md)，理解条件与参数。\n"
-            "  6. 执行脚本 — 优先 run_shell(pack_path/script)，隔离用 run_code_docker。\n"
-            "  7. 验证收尾 — 确认 Flag/Shell/回显，成功后 bump_skill 提升权重。\n\n"
-            "  ⚡ 肌肉记忆: 侦察 → check_service → search_skills → install/sync → 执行\n\n"
-            "  RULE: 禁止跳过 search_skills 直接编写 Exploit。\n"
-            "  RULE: 脚本失败先读 guide.md 改参数重试，仅无匹配时从零编写。\n"
-            "  RULE: write_file 的所有输出文件必须写入 ~/.pawnlogic/workspace/ 下。\n"
-            "       相对路径会自动重定向，绝对路径必须在 workspace 内。\n"
-            "       例: write_file(path='exploit.py', content=...) → 实际写入 ~/.pawnlogic/workspace/exploit.py\n\n"
+            "Web targets must follow this closed loop:\n\n"
+            "  1. Recon fingerprint — web_fetch extracts Server/X-Powered-By/Cookie/HTML traits and identifies the framework.\n"
+            "  2. Confirm environment — check_service(port) obtains PID/path/environment/shared libraries.\n"
+            "  3. Retrieve weaponry — search_skills(query='<framework>'); try variant keywords when empty.\n"
+            "  4. Sync/install — /sp sync for latest packs, /sp install <url> for new packs.\n"
+            "  5. Read the guide — read_file(guide.md), then understand conditions and parameters.\n"
+            "  6. Execute scripts — prefer run_shell(pack_path/script); use run_code_docker for isolation.\n"
+            "  7. Verify finish — confirm Flag/Shell/echo; after success call bump_skill to raise weight.\n\n"
+            "  Muscle memory: recon -> check_service -> search_skills -> install/sync -> execute\n\n"
+            "  RULE: Do not skip search_skills and write an exploit directly.\n"
+            "  RULE: If a script fails, read guide.md, adjust parameters, and retry; write from scratch only when no pack matches.\n"
+            "  RULE: All files produced by write_file must be written under ~/.pawnlogic/workspace/.\n"
+            "       Relative paths are automatically redirected; absolute paths must stay inside the workspace.\n"
+            "       Example: write_file(path='exploit.py', content=...) writes to ~/.pawnlogic/workspace/exploit.py\n\n"
 
             f"Working dir : {self.cwd}\n"
             f"Time        : {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
@@ -1074,7 +1089,7 @@ class AgentSession:
             f"ctx={cfg['ctx_max_chars']//1000}k  tool_out={cfg['tool_max_chars']}\n\n"
 
             # ════════════════════════════════════════════════
-            # ★ 改动 [2]：Execution Protocol — 新版 plan 格式
+            # Execution protocol: current plan format.
             # ════════════════════════════════════════════════
             "=== Execution Protocol (MANDATORY) ===\n"
 
@@ -1099,7 +1114,7 @@ class AgentSession:
             "  · For pure conversation (no tools), a plan is optional.\n"
             "  · For even a single tool call, output AT MINIMUM: <plan><intent>reason</intent></plan>\n\n"
             # ════════════════════════════════════════════════
-            # ★ 终极防线：打破 JSON 惯性，强化 XML 强制力
+            # Final defense: break JSON inertia and reinforce XML requirements.
             # ════════════════════════════════════════════════
             "### === TOOL CALLING PROTOCOL (CRITICAL) ===\n"
             "You have TWO output formats. Choosing the wrong format will cause system crash.\n\n"
@@ -1179,9 +1194,10 @@ class AgentSession:
             "Coding:\n"
             "  plan → find_files (max 1-2×) → read_file → patch_file → run_shell (verify) → git_op commit\n\n"
             "Code Search & Analysis:\n"
-            "  · 查找函数调用/引用：优先使用 run_shell('grep -rn <关键词> .') 或专门的代码检索工具。\n"
-            "  · 绝对禁止：不要为了搜索文本而专门写一个带有硬编码内容的 Python 脚本并调用 run_code，\n"
-            "    这既低效又容易产生幻觉（模型会伪造文件内容而非真实读取）。\n\n"
+            "  · To find function calls/references, prefer run_shell('grep -rn <keyword> .') "
+            "or a dedicated code-search tool.\n"
+            "  · Never write a hard-coded Python search script and run it with run_code just "
+            "to search text. That is inefficient and prone to hallucinated file content.\n\n"
             "Pwn/CTF:\n"
             "  pwn_env → inspect_binary → pwn_cyclic gen → pwn_debug (find offset) "
             "→ pwn_rop (gadgets) → pwn_libc → write exploit (run_code, use_venv=true) → test\n"
@@ -1191,8 +1207,8 @@ class AgentSession:
             "History:\n"
             "  /chat find <keywords>  →  /chat view <id>  →  answer user\n\n"
             "Delegation (Smart Routing):\n"
-            "  当需要阅读超过 500 行的长代码、分析巨型 Log 或进行深度全网搜索时，\n"
-            "  MUST 使用 delegate_task。不要用自己的上下文硬扛。\n\n"
+            "  When reading more than 500 lines of code, analyzing huge logs, or doing deep "
+            "web-wide search, MUST use delegate_task. Do not force it through your own context.\n\n"
             "Environment & Files:\n"
             "  WSL Paths: Windows Desktop in WSL is '/mnt/c/Users/<username>/Desktop'.\n"
             "    ALWAYS start paths with '/'. 'mnt/c/...' (no leading slash) is WRONG.\n"
@@ -1245,7 +1261,7 @@ class AgentSession:
             f"{skills_toc}\n"
             "(Use these headings for semantic matching in Step 2 above.)\n\n"
 
-            # ★ 动态注入：与当前任务相关的技能全文
+            # Dynamic injection: full text of skills relevant to the current task.
             + (
                 f"=== GSA Relevant Skills (ranked by recency × usage × similarity) ===\n"
                 f"{_relevant_skills_md}\n"
@@ -1254,7 +1270,7 @@ class AgentSession:
                 if _relevant_skills_md else ""
             )
 
-            # ★ P6: 本地技能引擎 — 从 ./skills/ 检索相关技能
+            # P6: Local skill engine retrieves relevant skills from ./skills/.
             + (
                 f"=== Local Skills (from ./skills/ directory) ===\n"
                 f"{_local_skills_md}\n"
@@ -1263,14 +1279,14 @@ class AgentSession:
                 if _local_skills_md else ""
             )
 
-            # ★ 冲突预警注入
+            # Conflict warning injection.
             + (
                 f"{_conflict_warning}\n\n"
                 if _conflict_warning else ""
             )
 
             # ════════════════════════════════════════════════
-            # ★ 修改 1：语言锁（动态匹配 + 防漂移）
+            # Language lock: dynamic matching and anti-drift.
             # ════════════════════════════════════════════════
             + "<language_rule>\n"
             "DYNAMIC LANGUAGE MATCHING & ANTI-DRIFT:\n"
@@ -1299,13 +1315,15 @@ class AgentSession:
             self.messages.insert(0, {"role": "system", "content": prompt})
 
     # ════════════════════════════════════════════════════
-    # 滚动窗口上下文构建（Sliding Window + History Summary）
+    # Sliding window context construction with history summary.
     # ════════════════════════════════════════════════════
 
     def _count_turns(self, msgs: list) -> list[tuple[int, int]]:
-        """将 msgs[1:] 按迭代单元分组，返回 [(start_idx, end_idx), ...]。
-        一个迭代单元 = 一条 user 消息 + 其后所有 assistant/tool 消息（直到下一条 user）。
-        system 消息（index 0）不参与分组。
+        """Group msgs[1:] into iteration units and return [(start_idx, end_idx), ...].
+
+        An iteration unit is one user message plus all following assistant/tool
+        messages until the next user message. The system message at index 0 is
+        not included in grouping.
         """
         turns: list[tuple[int, int]] = []
         i = 1  # skip system
@@ -1313,7 +1331,7 @@ class AgentSession:
             if msgs[i].get("role") == "user":
                 start = i
                 i += 1
-                # 吸收紧跟的 assistant + tool 消息，直到下一条 user 或结束
+                # Absorb following assistant/tool messages until the next user or end.
                 while i < len(msgs) and msgs[i].get("role") != "user":
                     i += 1
                 turns.append((start, i))
@@ -1322,8 +1340,10 @@ class AgentSession:
         return turns
 
     def _maybe_update_summary(self, msgs: list, current_turn_count: int) -> None:
-        """若迭代轮次超过阈值且距上次摘要已过半个阈值，同步生成历史摘要。
-        摘要只覆盖滚动窗口之外的旧历史，不包含最近 N 轮。
+        """Synchronously refresh history summary when turn thresholds are reached.
+
+        The summary covers only old history outside the sliding window and never
+        includes the latest N turns.
         """
         cfg = DYNAMIC_CONFIG
         threshold   = cfg.get("ctx_summary_threshold", 8)
@@ -1336,12 +1356,12 @@ class AgentSession:
             return
 
         turns = self._count_turns(msgs)
-        # 只摘要滚动窗口之外的旧轮次
+        # Summarize only old turns outside the sliding window.
         old_turns = turns[:-sliding] if len(turns) > sliding else []
         if not old_turns:
             return
 
-        # 收集待摘要的消息文本
+        # Collect message text to summarize.
         lines: list[str] = []
         for start, end in old_turns:
             for m in msgs[start:end]:
@@ -1350,7 +1370,7 @@ class AgentSession:
                 if role == "tool":
                     lines.append(f"[Tool Output]: {content}")
                 elif role == "assistant":
-                    # 只保留非 plan 的文本部分（去掉 XML 标签）
+                    # Keep only non-plan text by stripping XML tags.
                     import re as _re
                     clean = _re.sub(r"<[^>]+>", " ", content).strip()[:400]
                     if clean:
@@ -1379,7 +1399,7 @@ class AgentSession:
             f"--- HISTORY ---\n{history_text}\n--- END ---"
         )
 
-        # 选轻量摘要模型（复用 NAMING_MODEL_CHAIN）
+        # Pick a lightweight summarization model, reusing NAMING_MODEL_CHAIN.
         from core.naming import pick_naming_model
         try:
             summary_alias = pick_naming_model(self.model_alias)
@@ -1414,7 +1434,7 @@ class AgentSession:
                     sliding, summary_alias,
                 )
                 print(c(CYAN,
-                    f"  🗜  [Context Pruning] 历史摘要已更新（保留最近 {sliding} 轮明细）"
+                    f"  🗜  [Context Pruning] History summary updated (kept latest {sliding} turns)"
                 ))
         except Exception as exc:
             logger.warning(
@@ -1422,14 +1442,15 @@ class AgentSession:
             )
 
     def _build_api_messages(self) -> list:
-        """构建发送给 LLM 的消息列表（滚动窗口视图）。
-        不修改 self.messages 原始列表，只返回裁剪后的副本。
+        """Build the message list sent to the LLM as a sliding-window view.
 
-        结构：
+        Does not mutate the original ``self.messages`` list; returns a trimmed copy.
+
+        Structure:
           [0] system prompt
-          [1..2] 原始任务目标（前 1~2 轮 user+assistant，永不裁剪）
-          [3] assistant: 历史摘要块（若存在）
-          [4..] 最近 ctx_sliding_turns 轮完整迭代
+          [1..2] original task goal (first 1-2 user+assistant turns, never trimmed)
+          [3] assistant: history summary block, when present
+          [4..] latest ctx_sliding_turns full iterations
         """
         msgs = self.messages
         if len(msgs) <= 1:
@@ -1441,18 +1462,18 @@ class AgentSession:
         turns = self._count_turns(msgs)
         total_turns = len(turns)
 
-        # 不需要裁剪：轮次未超过阈值
+        # No trimming needed when turn count is below the threshold.
         if total_turns <= sliding + 2:
             return list(msgs)
 
-        # 锚定：永远保留前 2 轮（任务目标）
+        # Anchor: always keep the first 2 turns as the task goal.
         anchor_end = turns[1][1] if len(turns) >= 2 else (turns[0][1] if turns else 1)
-        anchor_msgs = msgs[:anchor_end]  # system + 前2轮
+        anchor_msgs = msgs[:anchor_end]  # system + first 2 turns
 
-        # 滚动窗口：最近 sliding 轮
+        # Sliding window: latest N turns.
         window_start_idx = turns[-sliding][0] if total_turns >= sliding else turns[0][0]
 
-        # 组装
+        # Assemble.
         result = list(anchor_msgs)
 
         if self._history_summary:
@@ -1462,7 +1483,7 @@ class AgentSession:
                 "_pinned": True,
             })
 
-        # 追加滚动窗口消息（anchor 之后、window 起点之前的中间段跳过）
+        # Append sliding-window messages and skip the middle span.
         for i, m in enumerate(msgs[anchor_end:], start=anchor_end):
             if i >= window_start_idx:
                 result.append(m)
@@ -1470,7 +1491,7 @@ class AgentSession:
         return result
 
     # ════════════════════════════════════════════════════
-    # 模块 2：自动直觉检索辅助
+    # Module 2: auto-intuition retrieval helper.
     # ════════════════════════════════════════════════════
 
     @staticmethod
@@ -1499,38 +1520,38 @@ class AgentSession:
             return ""
 
     # ════════════════════════════════════════════════════
-    # Hybrid v2 双协议解析器
+    # Hybrid v2 dual-protocol parser.
     # ════════════════════════════════════════════════════
 
     def _extract_calls(self, text_buf: str) -> list:
         """
-        Hybrid v2 双协议解析器。
+        Hybrid v2 dual-protocol parser.
 
-        优先级：
-          1. XML <call name="...">...</call>   — 零转义，完美处理中文与多行代码
-          2. JSON <tool_call>{...}</tool_call> — 紧凑格式，适合单行 ASCII 参数
+        Priority:
+          1. XML <call name="...">...</call>   — no escaping, works with multiline text
+          2. JSON <tool_call>{...}</tool_call> — compact, for single-line ASCII args
 
-        返回格式：
+        Returns:
           [{"name": str, "args": dict, "_source": "xml"|"json"}, ...]
 
-        容错：
-          · XML 缺失 </call> 尾标签时，截取至字符串末尾尝试补全解析。
-          · JSON 使用 strict=False 允许参数字符串中出现真实换行符。
+        Tolerance:
+          · If XML misses </call>, parse through the end of the string.
+          · JSON uses strict=False to allow real newline characters in arguments.
         """
         import re
         results = []
 
-        # ── 1. XML 路径：优先匹配完整 <call>…</call> ─────────────
+        # 1. XML path: prefer complete <call>...</call> matches.
         _XML_FULL = re.compile(
             r'<call\s+name="(?P<name>[^"]+)">(?P<args_block>.*?)</call>',
             re.DOTALL,
         )
-        # 容错：模型忘记写 </call> 时，截取至字符串末尾
+        # Tolerance: parse to string end when the model omits </call>.
         _XML_PARTIAL = re.compile(
             r'<call\s+name="(?P<name>[^"]+)">(?P<args_block>.*)',
             re.DOTALL,
         )
-        # XML 参数内部子标签匹配（递归解析 args_block）
+        # Match child tags inside XML argument blocks.
         _XML_PARAM = re.compile(
             r'<(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)>(?P<val>.*?)</(?P=key)>',
             re.DOTALL,
@@ -1547,15 +1568,15 @@ class AgentSession:
                 name = m.group("name").strip()
                 args_block = m.group("args_block")
                 if _used_partial:
-                    print(c(GRAY, "  ⚙ [XML Parser] 检测到未闭合 </call>，已启用容错补全解析"))
+                    print(c(GRAY, "  ⚙ [XML Parser] Unclosed </call> detected; tolerant completion enabled"))
 
                 args: dict = {}
                 for pm in _XML_PARAM.finditer(args_block):
                     key = pm.group("key").strip()
-                    # 🔑 零转义：仅 .strip() 去除标签周围空白，内容原样透传
+                    # No escaping: only strip surrounding whitespace.
                     val_raw = pm.group("val").strip()
 
-                    # ── 类型自动纠正 ──────────────────────────────
+                    # Basic type coercion.
                     if val_raw.lstrip("-").isdigit():
                         val: object = int(val_raw)
                     elif val_raw.lower() == "true":
@@ -1563,7 +1584,7 @@ class AgentSession:
                     elif val_raw.lower() == "false":
                         val = False
                     else:
-                        val = val_raw   # 保留原始字符串（含换行符、中文等）
+                        val = val_raw   # Preserve raw strings, including newlines.
 
                     args[key] = val
 
@@ -1573,7 +1594,7 @@ class AgentSession:
             if results:
                 return results
 
-        # ── 2. JSON 兜底：兼容 <tool_call>{...}</tool_call> 幻觉 ─
+        # 2. JSON fallback: tolerate hallucinated <tool_call>{...}</tool_call>.
         if "<tool_call>" in text_buf:
             match = re.search(r"<tool_call>\s*(\{.*)", text_buf, re.DOTALL)
             if match:
@@ -1582,7 +1603,7 @@ class AgentSession:
                     r"</tool_call>.*$", "", json_str, flags=re.DOTALL
                 ).strip()
                 try:
-                    # strict=False 允许参数中存在真实换行符（专治代码生成器）
+                    # strict=False allows real newlines inside argument strings.
                     parsed_tc = json.loads(json_str, strict=False)
                     if "name" in parsed_tc and "arguments" in parsed_tc:
                         raw_args = parsed_tc["arguments"]
@@ -1597,15 +1618,15 @@ class AgentSession:
                             "_source": "json",
                         })
                 except json.JSONDecodeError as e:
-                        # ── 脏 JSON 抢救逻辑：尝试修复未转义的双引号 ──
+                        # Dirty JSON rescue: try escaping unescaped inner quotes.
                         rescued = False
                         try:
                             import re as _re
-                            # 贪婪匹配 content 字段中的所有内容
+                            # Greedily match the whole content field.
                             content_match = _re.search(r'"content"\s*:\s*"(.*)"\s*\}', json_str, _re.DOTALL)
                             if content_match:
                                 bad_content = content_match.group(1)
-                                # 将中间的双引号转义，但避免重复转义已转义的引号
+                                # Escape inner quotes without double-escaping existing ones.
                                 fixed_content = _re.sub(r'(?<!\\)"', r'\"', bad_content)
                                 fixed_j_str = json_str.replace(bad_content, fixed_content)
 
@@ -1634,27 +1655,27 @@ class AgentSession:
                                 self.model_alias, self.session_id[:8], e, json_str[:4096],
                             )
                             if USER_MODE:
-                                print(c(RED, "  ❌ 系统忙，请稍后重试"))
+                                print(c(RED, "  ❌ System is busy. Please try again later."))
                             else:
-                                print(c(RED, f"  ✗ [Hybrid Parser] JSON 兜底解析失败: {e}"))
+                                print(c(RED, f"  ✗ [Hybrid Parser] JSON fallback parse failed: {e}"))
                         else:
-                            print(c(YELLOW, f"  ⚠ [Hybrid Parser] 探测到脏 JSON，已通过正则抢救成功！"))
+                            print(c(YELLOW, "  ⚠ [Hybrid Parser] Dirty JSON detected and rescued with regex"))
 
         return results
 
-    # ── 主轮次 ────────────────────────────────────────────
+    # Main turn loop.
     def run_turn(self, user_input: str):
         self._reset_system_prompt(knowledge_query=user_input)
         self.messages.append({"role": "user", "content": user_input})
 
-        # ★ 滚动窗口：计算当前轮次数，按需同步生成历史摘要
+        # Sliding window: compute turn count and update history summary when needed.
         _current_turns = len(self._count_turns(self.messages))
         self._maybe_update_summary(self.messages, _current_turns)
 
         dropped = _trim_and_compact_context(self.messages)
         if dropped:
             print(c(YELLOW,
-                    f"  ⚠ 上下文过长，已将最旧 {dropped} 条消息压缩为摘要（Tool Clearing）"
+                    f"  ⚠ Context too long; compacted oldest {dropped} messages into a summary (Tool Clearing)"
                     ))
             logger.warning(
                 "Context compacted (Tool Clearing) | session={} compacted={} model={}",
@@ -1663,7 +1684,7 @@ class AgentSession:
 
         ok, env_name = validate_api_key(self.model_alias)
         if not ok:
-            print(c(RED, f"  ✗ {self.model_alias} 需要 {env_name}，请 export {env_name}=sk-..."))
+            print(c(RED, f"  ✗ {self.model_alias} requires {env_name}; please export {env_name}=sk-..."))
             logger.error(
                 "API key missing | model={} required_env={}",
                 self.model_alias, env_name,
@@ -1678,24 +1699,24 @@ class AgentSession:
         self._turn_completion_tokens = 0
         self._turn_tool_calls        = 0
 
-        # ── P1: 时间感知初始化 ──────────────────────────
+        # P1: Time-aware initialization.
         self._turn_start_time = time.monotonic()
         self._time_budget_sec = DYNAMIC_CONFIG.get("time_budget_sec", 0)
         self._urgent_mode     = False
         if self._time_budget_sec > 0:
             _mins = self._time_budget_sec // 60
             _secs = self._time_budget_sec % 60
-            print(c(GRAY, f"  ⏱  时间预算: {_mins}m{_secs}s"))
+            print(c(GRAY, f"  ⏱  Time budget: {_mins}m{_secs}s"))
 
         max_iter           = DYNAMIC_CONFIG["max_iter"]
         renderer           = _PlanRenderer()
         is_vision_model    = self.model.get("vision", False)
         current_max_tokens = 4096 if is_vision_model else DYNAMIC_CONFIG["max_tokens"]
         if is_vision_model:
-            print(c(YELLOW, "  ℹ 视觉模型已禁用工具调用"))
+            print(c(YELLOW, "  ℹ Tool calls are disabled for vision models"))
             current_tools = None
         else:
-            # ── MoE 动态工具裁剪 ──────────────────────────────
+            # MoE dynamic tool pruning.
             phase_whitelist = set(AGENT_PHASES.get(self.current_phase, []))
             current_tools = [
                 s for s in TOOLS_SCHEMA
@@ -1704,7 +1725,7 @@ class AgentSession:
             ]
             print(c(GRAY,
                 f"  📡 [Phase:{self.current_phase}] "
-                f"加载 {len(current_tools)} 个工具 "
+                f"Loaded {len(current_tools)} tools "
                 f"({', '.join(s['function']['name'] for s in current_tools)})"
             ))
 
@@ -1712,24 +1733,24 @@ class AgentSession:
         _dir_search_count = 0
         _DIR_THRESHOLD    = 3
 
-        # ── Logic Refresh 模块状态 ─────────────────────────
-        _LOGIC_REFRESH_INTERVAL = 20   # 每 20 轮触发一次阶段性总结
-        _REPEAT_ERROR_THRESHOLD = 3    # 连续相同错误阈值
-        _recent_cmd_errors: list[tuple[str, str]] = []  # (cmd, error) 历史
-        _repeat_error_count   = 0      # 当前连续相同错误计数
+        # Logic Refresh module state.
+        _LOGIC_REFRESH_INTERVAL = 20   # Trigger a phase summary every 20 iterations.
+        _REPEAT_ERROR_THRESHOLD = 3    # Threshold for consecutive identical errors.
+        _recent_cmd_errors: list[tuple[str, str]] = []  # (cmd, error) history.
+        _repeat_error_count   = 0      # Current consecutive identical error count.
 
-        # ── 连续相同代码检测 ──────────────────────────────
-        _REPEAT_CODE_THRESHOLD = 3     # 连续相同代码阈值
-        _recent_code_outputs: list[str] = []   # 最近的工具输出哈希
-        _repeat_code_count    = 0      # 当前连续相同代码计数
+        # Repeated identical code-output detection.
+        _REPEAT_CODE_THRESHOLD = 3     # Threshold for consecutive identical outputs.
+        _recent_code_outputs: list[str] = []   # Recent tool-output hashes.
+        _repeat_code_count    = 0      # Current consecutive identical output count.
 
         for iteration in range(max_iter):
             try:
-                # ── Mid-turn checkpoint: 每 5 轮保存一次中间状态 ──
+                # Mid-turn checkpoint: save intermediate state every 5 iterations.
                 if iteration > 0 and iteration % 5 == 0:
                     self._autosave()
 
-                # ── P6.5: 首轮迭代显示技能包加载状态 ────────
+                # P6.5: show loaded skill-pack status on the first iteration.
                 if iteration == 0 and self._loaded_skill_packs:
                     if USER_MODE:
                         print(c(GREEN, _skill_scanner.format_user_message(self._loaded_skill_packs)))
@@ -1742,11 +1763,11 @@ class AgentSession:
                             if _sp.get("scripts"):
                                 print(c(GRAY, f"     scripts: {', '.join(_sp['scripts'])}"))
 
-                # ── P1: 每轮迭代时间检查 ────────────────────
+                # P1: per-iteration time check.
                 _remaining = self._time_remaining()
                 if _remaining <= 0:
                     print(c(RED,
-                        f"\n  ⏰ [Time Budget] 预算已耗尽（{self._time_budget_sec}s），任务终止。"
+                        f"\n  ⏰ [Time Budget] Budget exhausted ({self._time_budget_sec}s); stopping task."
                     ))
                     logger.warning(
                         "Time budget exhausted | session={} budget={}s",
@@ -1755,24 +1776,24 @@ class AgentSession:
                     break
 
                 if not self._urgent_mode and _remaining < _URGENT_THRESHOLD_SEC:
-                    # ── 触发 URGENT_MODE ──────────────────────
+                    # Activate URGENT_MODE.
                     self._urgent_mode = True
                     print(c(RED,
-                        f"  🚨 [URGENT_MODE] 剩余 {_remaining:.0f}s — "
-                        f"切换至极速模式"
+                        f"  🚨 [URGENT_MODE] {_remaining:.0f}s remaining — "
+                        f"switching to fast mode"
                     ))
                     logger.info(
                         "URGENT_MODE activated | session={} remaining={:.1f}s",
                         self.session_id[:8], _remaining,
                     )
 
-                    # 注入 URGENT 信号到上下文
+                    # Inject the URGENT signal into context.
                     self.messages.append({
                         "role": "user",
                         "content": _URGENT_SIGNAL,
                     })
 
-                    # 自动切换到极速模型（优先同 provider 的 fast 模型）
+                    # Auto-switch to a fast model, preferring the same provider.
                     _urgent_target = None
                     if not is_fast_model(self.model_alias):
                         _urgent_target = find_fast_peer(self.model_alias)
@@ -1787,10 +1808,10 @@ class AgentSession:
                         old_model = self.model_alias
                         self.model_alias = _urgent_target
                         print(c(MAGENTA,
-                            f"  🚨 [URGENT] 模型已切换: "
-                            f"{old_model} → {_urgent_target}（极速响应）"
+                            f"  🚨 [URGENT] Model switched: "
+                            f"{old_model} -> {_urgent_target} (fast response)"
                         ))
-                        # 重建工具列表
+                        # Rebuild the tool list.
                         phase_whitelist = set(AGENT_PHASES.get(self.current_phase, []))
                         current_tools = [
                             s for s in TOOLS_SCHEMA
@@ -1800,12 +1821,12 @@ class AgentSession:
                         current_max_tokens = min(current_max_tokens, 4096)
 
                 # ════════════════════════════════════════════════
-                # Logic Refresh 模块：阶段性总结 + 冗余清理 + 错误检测
+                # Logic Refresh: phase summary, redundancy cleanup, and error detection.
                 # ════════════════════════════════════════════════
 
-                # ── 1. 阶段性总结（每 N 轮触发）────────────────
+                # 1. Phase summary, triggered every N iterations.
                 if iteration > 0 and iteration % _LOGIC_REFRESH_INTERVAL == 0:
-                    # 收集最近的 tool observation
+                    # Collect recent tool observations.
                     _recent_obs = []
                     for _m in self.messages[-20:]:
                         if _m.get("role") == "tool" and _m.get("content"):
@@ -1814,12 +1835,12 @@ class AgentSession:
                         _obs_text = "\n".join(_recent_obs[-10:])
                         _summary_prompt = (
                             f"[Logic Refresh — Iteration {iteration}]\n"
-                            f"请对以下最近的探索路径进行简明总结（5 句话以内），"
-                            f"提炼关键发现、已排除的路径和当前最佳方向：\n\n{_obs_text}"
+                            f"Summarize the recent exploration path below in at most 5 sentences. "
+                            f"Extract key findings, paths already ruled out, and the current best direction:\n\n{_obs_text}"
                         )
                         self.messages.append({"role": "user", "content": _summary_prompt})
                         print(c(CYAN,
-                            f"  🔄 [Logic Refresh] 已触发阶段性总结（iteration={iteration}）"
+                            f"  🔄 [Logic Refresh] Phase summary triggered (iteration={iteration})"
                         ))
                         logger.info(
                             "Logic Refresh: phase summary triggered | "
@@ -1827,7 +1848,7 @@ class AgentSession:
                             self.session_id[:8], iteration, len(_recent_obs),
                         )
 
-                # ── 2. 冗余数据清理（合并重复 ls/cat 报错）──────
+                # 2. Redundant data cleanup: merge repeated ls/cat-style errors.
                 _REDUNDANT_PATTERNS = (
                     "No such file or directory",
                     "Permission denied",
@@ -1848,56 +1869,56 @@ class AgentSession:
                             if _seen_errors[_key] > 3:
                                 _msgs_to_compact.append(_mi)
                             break
-                # 将重复报错压缩为单行占位
+                # Compact repeated errors into one-line placeholders.
                 for _mi in reversed(_msgs_to_compact):
                     _old = self.messages[_mi]
                     _old_content = _old.get("content") or ""
-                    # 只压缩短报错（长输出保留原文）
+                    # Only compact short errors; preserve long output.
                     if len(_old_content) < 300:
                         self.messages[_mi]["content"] = (
-                            f"(已压缩: {_old_content[:60]}...) — 同类报错已出现 {_seen_errors.get(_REDUNDANT_PATTERNS[0], '?')} 次"
+                            f"(compacted: {_old_content[:60]}...) — similar errors have appeared "
+                            f"{_seen_errors.get(_REDUNDANT_PATTERNS[0], '?')} times"
                         )
 
-                # ── 3. 重复错误检测（连续 3 次相同命令+错误）───
+                # 3. Repeated error detection: identical command and error 3 times.
                 if _repeat_error_count >= _REPEAT_ERROR_THRESHOLD:
                     _anti_loop_msg = (
-                        "[System] 当前路径似乎不通：检测到连续 "
-                        f"{_repeat_error_count} 次相同命令返回相同错误。"
-                        "请重新审视 exploit 逻辑，考虑以下绕过方向：\n"
-                        "  1. 软链接绕过（ln -s）\n"
-                        "  2. open_basedir 绕过（php -d open_basedir=/）\n"
-                        "  3. 路径编码绕过（../ ./ ..%2f）\n"
-                        "  4. 切换工具或攻击向量\n"
-                        "  5. 向用户确认目标环境信息"
+                        "[System] The current path appears blocked: detected "
+                        f"{_repeat_error_count} consecutive identical command errors. "
+                        "Re-evaluate the exploit logic and consider these bypass directions:\n"
+                        "  1. Symlink bypass (ln -s)\n"
+                        "  2. open_basedir bypass (php -d open_basedir=/)\n"
+                        "  3. Path encoding bypass (../ ./ ..%2f)\n"
+                        "  4. Switch tool or attack vector\n"
+                        "  5. Ask the user to confirm target environment details"
                     )
                     self.messages.append({"role": "user", "content": _anti_loop_msg})
                     print(c(YELLOW,
-                        f"  🔁 [Anti-Loop] 检测到连续 {_repeat_error_count} 次相同错误，已注入绕过提示"
+                        f"  🔁 [Anti-Loop] Detected {_repeat_error_count} repeated errors; injected bypass hint"
                     ))
                     logger.warning(
                         "Anti-Loop: repeated error detected | "
                         "session={} iteration={} count={}",
                         self.session_id[:8], iteration, _repeat_error_count,
                     )
-                    _repeat_error_count = 0  # 重置，避免反复注入
+                    _repeat_error_count = 0  # Reset to avoid repeated injection.
 
-                # ── API 调用 + 空响应重试（指数退避）─────────────
+                # API call with empty-response retry and exponential backoff.
                 _api_retry = 0
                 _API_RETRY_MAX = 3
                 text_buf = ""; tc_buf = {}
 
-                # ★ 滚动窗口视图：发给 LLM 的是裁剪后的消息，self.messages 原始列表不变
+                # Sliding-window view: send trimmed messages without mutating self.messages.
                 _api_msgs = self._build_api_messages()
 
                 while True:
                     text_buf = ""; tc_buf = {}
-                    # ★ thinking-mode 修复：独立累积 reasoning_content
-                    #   · mimo-v2.5 / deepseek-reasoner / qwen-qwq 等推理模型
-                    #     会在 delta 中返回 reasoning_content 字段
-                    #   · 必须原样累积并回传给 API（否则 MiMo 返回 HTTP 400）
-                    #   · USER_MODE 下完全隐藏，DEV 模式下灰色前缀流式打印
+                    # thinking-mode fix: accumulate reasoning_content separately.
+                    # Some reasoning models return reasoning_content deltas that must
+                    # be preserved and sent back as-is, or they may return HTTP 400.
+                    # Hide it in USER_MODE; stream it in gray in DEV mode.
                     reasoning_buf = ""
-                    _reasoning_printed = False   # 是否已输出 "🧠 [thinking]" 前缀
+                    _reasoning_printed = False   # Whether the "🧠 [thinking]" prefix was printed.
                     _tokens_before = self._turn_completion_tokens
 
                     for delta in stream_request(
@@ -1922,11 +1943,11 @@ class AgentSession:
                         d     = choices[0].get("delta", {})
                         chunk = d.get("content") or ""
 
-                        # ★ thinking-mode: 捕获 reasoning_content delta
+                        # thinking-mode: capture reasoning_content deltas.
                         r_chunk = d.get("reasoning_content") or ""
                         if r_chunk:
                             reasoning_buf += r_chunk
-                            # 只在 DEV 模式（非 USER_MODE）下流式显示
+                            # Stream only in DEV mode, not USER_MODE.
                             if not USER_MODE:
                                 if not _reasoning_printed:
                                     sys.stdout.write(c(GRAY + DIM, "\n  🧠 [thinking] "))
@@ -1945,11 +1966,11 @@ class AgentSession:
                             self.total_completion_tokens += ct
 
                         if chunk:
-                            # thinking 块结束切换到正式输出前补一个换行
+                            # Add a newline when switching from thinking to normal output.
                             if _reasoning_printed and not USER_MODE:
                                 sys.stdout.write("\n")
                                 sys.stdout.flush()
-                                _reasoning_printed = False   # 只换行一次
+                                _reasoning_printed = False   # Only newline once.
                             printable = renderer.feed(chunk)
                             if printable: sys.stdout.write(printable); sys.stdout.flush()
                             text_buf += chunk
@@ -1967,7 +1988,7 @@ class AgentSession:
 
                     leftover = renderer.flush()
 
-                    # ── P7: 原始 tool_call 参数日志（驱动层转义诊断）──
+                    # P7: raw tool_call argument logging for driver escaping diagnostics.
                     if tc_buf and not USER_MODE:
                         for _idx, _tc in tc_buf.items():
                             _raw_name = _tc["name"]
@@ -1979,7 +2000,7 @@ class AgentSession:
                                 _raw_name, _raw_args[:200],
                             )
 
-                    # ── P2: rich Markdown 渲染（仅对非 plan 文本）──
+                    # P2: rich Markdown rendering for non-plan text.
                     if leftover:
                         try:
                             from pawnlogic.cli import render_agent_output
@@ -1989,7 +2010,7 @@ class AgentSession:
                             sys.stdout.flush()
                     print()
 
-                    # ── Hybrid v2 Parser：XML 优先，JSON 兜底 ─────────────
+                    # Hybrid v2 parser: XML first, JSON fallback.
                     if not tc_buf and (
                         '<call name="' in text_buf or "<tool_call>" in text_buf
                     ):
@@ -2009,7 +2030,7 @@ class AgentSession:
                             }
                             label = "XML" if source == "xml" else "JSON"
                             print(c(GRAY,
-                                f"  ⚙ [Hybrid Parser/{label}] 拦截工具调用: {call['name']} "
+                                f"  ⚙ [Hybrid Parser/{label}] Intercepted tool call: {call['name']} "
                                 f"(params: {list(call['args'].keys())})"
                             ))
                             logger.info(
@@ -2024,17 +2045,18 @@ class AgentSession:
                             text_buf = text_buf[:_trim.start()]
                     # ─────────────────────────────────────────────────────────
 
-                    # ── 空响应检测 + 指数退避重试 ────────────────────
+                    # Empty-response detection with exponential-backoff retry.
                     _no_new_tokens = (self._turn_completion_tokens == _tokens_before)
                     _empty_response = (not text_buf.strip() and not tc_buf and _no_new_tokens)
 
                     if not _empty_response:
-                        break   # 有效响应，退出重试循环
+                        break   # Valid response; exit retry loop.
 
                     _api_retry += 1
                     if _api_retry >= _API_RETRY_MAX:
                         print(c(YELLOW,
-                            f"\n  ⚠ [API Recovery] 连续 {_api_retry} 次收到空响应，注入恢复提示继续任务..."
+                            f"\n  ⚠ [API Recovery] Received {_api_retry} consecutive empty responses; "
+                            "injecting recovery hint and continuing..."
                         ))
                         logger.warning(
                             "API empty response: retries exhausted | "
@@ -2044,16 +2066,17 @@ class AgentSession:
                         self.messages.append({
                             "role": "user",
                             "content": (
-                                "[System] 收到无效响应（空内容/0 Token），请重新审视任务目标并继续。"
-                                "如果此问题反复出现，考虑切换模型（/model）或检查 API 密钥。"
+                                "[System] Received an invalid response (empty content / 0 tokens). "
+                                "Re-check the task objective and continue. "
+                                "If this repeats, consider switching models (/model) or checking the API key."
                             ),
                         })
-                        break   # 退出重试循环，进入下一个 iteration
+                        break   # Exit retry loop and proceed to the next iteration.
 
                     _wait = min(2 ** _api_retry, 8)
                     print(c(YELLOW,
-                        f"\n  ⚠ [API Recovery] 收到无效响应，正在尝试恢复... "
-                        f"({_api_retry}/{_API_RETRY_MAX}，等待 {_wait}s)"
+                        f"\n  ⚠ [API Recovery] Invalid response received; attempting recovery... "
+                        f"({_api_retry}/{_API_RETRY_MAX}, waiting {_wait}s)"
                     ))
                     logger.warning(
                         "API empty response detected, retrying | "
@@ -2061,15 +2084,15 @@ class AgentSession:
                         self.model_alias, self.session_id[:8], iteration, _api_retry, _wait,
                     )
                     time.sleep(_wait)
-                    continue   # 重试 API 调用
+                    continue   # Retry the API call.
 
-                # ── 如果重试耗尽仍为空响应，跳过工具执行 ─────────
+                # If retries are exhausted and the response is still empty, skip tool execution.
                 if _empty_response and _api_retry >= _API_RETRY_MAX:
-                    continue   # 进入下一个 iteration
+                    continue   # Proceed to the next iteration.
 
                 if not tc_buf:
-                    # ★ thinking-mode 修复：若本轮捕获到 reasoning_content，
-                    # 必须随 assistant 消息一同入库，下一轮才能原样回传给 API。
+                    # thinking-mode fix: store reasoning_content with the assistant
+                    # message so the next API call can send it back unchanged.
                     _asst_msg: dict = {"role": "assistant", "content": text_buf}
                     if reasoning_buf:
                         _asst_msg["reasoning_content"] = reasoning_buf
@@ -2078,16 +2101,16 @@ class AgentSession:
                     self._autosave(); return
 
                 # ════════════════════════════════════════════════
-                # ★ 改动 [3]：CoT Guard 重构 — 教练模式
+                # CoT Guard refactor: coaching mode.
                 #
-                # 判断次序：
-                #   1. 豁免检查（只读工具无需 plan）
-                #   2. 软拦截 × MAX_SOFT_CORRECTIONS（工具照常执行，追加信号）
-                #   3. 硬终止 × 1（软拦截耗尽后才触发）
+                # Decision order:
+                #   1. Exemption check (read-only tools do not require plans)
+                #   2. Soft intercept x MAX_SOFT_CORRECTIONS (tools still run, signal appended)
+                #   3. Hard stop x 1 (only after soft intercepts are exhausted)
                 #
-                # 信号注入：
-                #   · 不阻断工具执行，让模型先看到结果
-                #   · 信号以 "user" 角色追加在工具结果之后（attention 贴近推理层）
+                # Signal injection:
+                #   · Does not block tool execution; the model sees results first.
+                #   · Appends the signal as a "user" role after tool results.
                 # ════════════════════════════════════════════════
                 _plan_signal_injected = False
                 _missing_required_plan = _tool_call_missing_plan(text_buf, tc_buf)
@@ -2098,12 +2121,12 @@ class AgentSession:
                     _plan_rejected = 0
 
                 if _plan_rejected > _MAX_SOFT_CORRECTIONS:
-                    # ── 硬终止：软拦截已耗尽 ──────────────────
+                    # Hard stop after soft intercepts are exhausted.
                     print(c(RED,
-                            f"  ⛔ [CoT Guard] 连续 {_plan_rejected} 次未提供 <plan>，任务已终止。"
+                            f"  ⛔ [CoT Guard] Missing <plan> for {_plan_rejected} consecutive attempts; task stopped."
                             ))
                     print(c(GRAY,
-                            "  建议：1. 简化指令  2. 切换更强模型（/model ds-v4-pro）"
+                            "  Suggestions: 1. Simplify the instruction  2. Switch to a stronger model (/model ds-v4-pro)"
                             ))
                     logger.warning(
                         "CoT Guard: hard kill triggered | "
@@ -2112,14 +2135,14 @@ class AgentSession:
                         iteration, _plan_rejected,
                     )
                     if self.messages and self.messages[-1]["role"] == "user":
-                        self.messages.pop()  # 撤销上一条 user 消息，保持上下文干净
+                        self.messages.pop()  # Remove the latest user message to keep context clean.
                     return
 
                 elif _plan_rejected > 0:
-                    # ── 软拦截：工具仍执行，计划注入信号 ──────────
+                    # Soft intercept: tools still run; inject correction signal after results.
                     print(c(YELLOW,
                         f"  💭 [CoT Soft #{_plan_rejected}/{_MAX_SOFT_CORRECTIONS}] "
-                        "检测到缺失 <plan>，工具已执行，修正信号将在结果后注入..."
+                        "Missing <plan> detected; tools will run and the correction signal will be injected after results..."
                     ))
                     logger.debug(
                         "CoT Guard: soft intercept #{} | model={} session={} iteration={}",
@@ -2127,21 +2150,20 @@ class AgentSession:
                     )
                     _plan_signal_injected = True
 
-                # ── 模块 1B：并发截断 ──────────────────────────
+                # Module 1B: concurrent call truncation.
                 if len(tc_buf) > _MAX_CONCURRENT_TOOLS:
                     orig = len(tc_buf)
                     kept = sorted(tc_buf.keys())[:_MAX_CONCURRENT_TOOLS]
                     tc_buf = {k: tc_buf[k] for k in kept}
-                    print(c(YELLOW, f"  ✂ [并发限制] {orig} 个工具调用已截断至前 {_MAX_CONCURRENT_TOOLS} 个。"))
+                    print(c(YELLOW, f"  ✂ [Concurrency Limit] Truncated {orig} tool calls to the first {_MAX_CONCURRENT_TOOLS}."))
                     logger.warning(
                         "Concurrent tool limit | model={} session={} original={} kept={}",
                         self.model_alias, self.session_id[:8], orig, _MAX_CONCURRENT_TOOLS,
                     )
 
 
-                # ★ thinking-mode 修复：若本轮捕获到 reasoning_content，
-                # 必须随 assistant 消息一同入库，下一轮才能原样回传给 API
-                # （mimo-v2.5 等推理模型对此做严格校验，缺失会返回 HTTP 400）。
+                # thinking-mode fix: persist reasoning_content with the assistant
+                # message so strict reasoning models can receive it back unchanged.
                 _asst_msg: dict = {
                     "role":    "assistant",
                     "content": text_buf or None,
@@ -2155,12 +2177,12 @@ class AgentSession:
                     _asst_msg["reasoning_content"] = reasoning_buf
                 self.messages.append(_asst_msg)
 
-                # ── 执行所有工具 ───────────────────────────────
+                # Execute all tools.
                 for i in sorted(tc_buf):
                     tc = tc_buf[i];
                     name = tc["name"]
 
-                    # 🔑 优先使用 XML/Hybrid Parser 透传的零转义字典
+                    # Prefer the zero-escape dict passed through by XML/Hybrid Parser.
                     if "_args_parsed" in tc:
                         fn_args = tc["_args_parsed"]
                     else:
@@ -2177,7 +2199,7 @@ class AgentSession:
                     preview  = ", ".join(f"{k}={repr(v)[:40]}" for k, v in fn_args.items())
                     iter_tag = c(GRAY, f"[{iteration+1}/{max_iter}]")
 
-                    # P6: USER_MODE 下检测技能包脚本调用，简化输出
+                    # P6: in USER_MODE, detect skill-pack script calls and simplify output.
                     _is_skill_call = False
                     if USER_MODE and name == "run_shell":
                         _cmd = fn_args.get("command", "") or fn_args.get("_raw_args", "")
@@ -2187,22 +2209,22 @@ class AgentSession:
                             for ext in (".py", ".sh")
                         ):
                             _is_skill_call = True
-                            # 从命令中提取技能包名称
+                            # Extract the skill-pack name from the command path.
                             _parts = _cmd.replace("\\", "/").split("/skills/")
                             _pack_hint = _parts[1].split("/")[0] if len(_parts) > 1 else "unknown"
-                            print(c(GREEN, f"  🚀 [P6] 正在调用针对 {_pack_hint} 的自动化验证脚本...") + f" {iter_tag}")
+                            print(c(GREEN, f"  🚀 [P6] Running automated validation script for {_pack_hint}...") + f" {iter_tag}")
 
                     if not _is_skill_call:
                         print(c(YELLOW, f"  🔧 {name}") + c(GRAY, f"({preview[:80]})") + f" {iter_tag}")
 
-                    # ── switch_phase 拦截（直接操作实例状态）────────
+                    # switch_phase intercept; mutate instance state directly.
                     if name == "switch_phase":
                         target = fn_args.get("phase", "").upper()
-                        reason = fn_args.get("reason", "（未说明原因）")
+                        reason = fn_args.get("reason", "(no reason provided)")
                         if target in AGENT_PHASES:
                             old_phase = self.current_phase
                             self.current_phase = target
-                            # 重建动态工具列表（下一轮迭代生效）
+                            # Rebuild the dynamic tool list for the next iteration.
                             phase_whitelist = set(AGENT_PHASES[target])
                             current_tools = [
                                 s for s in TOOLS_SCHEMA
@@ -2224,12 +2246,12 @@ class AgentSession:
                                 self.model_alias, self.session_id[:8],
                                 old_phase, target, reason,
                             )
-                            # 刷新系统提示词中的 Phase 感知块
+                            # Refresh the phase-awareness block in the system prompt.
                             self._reset_system_prompt()
                         else:
                             result = (
-                                f"ERROR: 未知阶段 '{target}'。"
-                                f"可用: {', '.join(AGENT_PHASES.keys())}"
+                                f"ERROR: Unknown phase '{target}'. "
+                                f"Available: {', '.join(AGENT_PHASES.keys())}"
                             )
 
                     else:
@@ -2240,7 +2262,7 @@ class AgentSession:
                             "inspect_binary", "web_search", "fetch_url", "find_refs",
                         }
 
-                        # ── P0.6: 投前失败审计（危险工具自动检查）───
+                        # P0.6: pre-flight failure audit for dangerous tools.
                         _failure_warning = ""
                         if name in _AUDITED_TOOLS:
                             try:
@@ -2248,27 +2270,27 @@ class AgentSession:
                                 if _fail_rows:
                                     _failure_warning = format_failures_for_prompt(_fail_rows)
                                     print(c(YELLOW,
-                                        f"  ⚠ [Anti-Pattern] {name} 存在 "
-                                        f"{len(_fail_rows)} 条历史失败记录"
+                                        f"  ⚠ [Anti-Pattern] {name} has "
+                                        f"{len(_fail_rows)} historical failure records"
                                     ))
                             except Exception:
                                 pass
 
-                        # ── 审计计时 ────────────────────────────
+                        # Audit timing.
                         _t0 = time.monotonic()
                         _audit_ok = True
                         try:
-                            result = TOOL_MAP[name](fn_args) if name in TOOL_MAP else f"ERROR: 未知工具 '{name}'"
+                            result = TOOL_MAP[name](fn_args) if name in TOOL_MAP else f"ERROR: Unknown tool '{name}'"
 
-                            # ★ P0.7 增强：语义级失败判定
-                            # 工具本身没抛异常，但 result 内容表明执行失败
+                            # P0.7: semantic failure detection. The tool may not raise,
+                            # but result content can still indicate failure.
                             _SEMANTIC_FAILURE_SIGNALS = (
                                 "ERROR:", "Traceback", "Segmentation fault", "SIGSEGV",
                                 "NameError", "SyntaxError", "TypeError", "AttributeError",
                                 "ImportError", "ModuleNotFoundError", "FileNotFoundError",
                                 "PermissionError", "RuntimeError", "ValueError",
                                 "panic", "FATAL", "core dumped", "Aborted",
-                                "编译失败", "exit 1", "exit 2", "exit 126", "exit 127",
+                                "Compile failed", "Compilation failed", "exit 1", "exit 2", "exit 126", "exit 127",
                                 "exit 134", "exit 139", "command not found",
                             )
                             if any(sig in str(result) for sig in _SEMANTIC_FAILURE_SIGNALS):
@@ -2280,19 +2302,19 @@ class AgentSession:
                             _audit_ok = False
                         _elapsed_ms = int((time.monotonic() - _t0) * 1000)
 
-                        # ── P0.7: 失败自动记录 ──────────────────
+                        # P0.7: automatic failure recording.
                         if not _audit_ok and name in _AUDITED_TOOLS:
                             try:
                                 _error_type = ""
                                 _r = str(result)
                                 _rl = _r.lower()
-                                if "timeoutexpired" in _rl or "超时" in _r:
+                                if "timeoutexpired" in _rl or "timeout" in _rl:
                                     _error_type = "Timeout"
                                 elif "segmentation fault" in _rl or "sigsegv" in _rl or "core dumped" in _rl:
                                     _error_type = "Segfault"
-                                elif "编译失败" in _r or "compileerror" in _rl:
+                                elif "compile failed" in _rl or "compilation failed" in _rl or "compileerror" in _rl:
                                     _error_type = "CompileError"
-                                elif "memoryerror" in _rl or "内存超限" in _r:
+                                elif "memoryerror" in _rl or "memory limit" in _rl:
                                     _error_type = "MemoryError"
                                 elif "syntaxerror" in _rl or "indentationerror" in _rl:
                                     _error_type = "SyntaxError"
@@ -2323,7 +2345,7 @@ class AgentSession:
                                     session_id   = self.session_id,
                                 )
 
-                                # ── P0.9: 同类失败 ≥ 3 次自动沉淀到 GSA ──
+                                # P0.9: sink repeated same-class failures to GSA.
                                 if _error_type:
                                     _fail_count = count_failure(name, _error_type)
                                     if _fail_count >= 3:
@@ -2336,13 +2358,13 @@ class AgentSession:
                                         if _ok:
                                             print(c(YELLOW, f"  📝 [GSA Sink] {_msg}"))
                             except Exception:
-                                pass  # 失败记录不应阻断主流程
+                                pass  # Failure recording must not block the main flow.
 
-                        # ── 将投前审计警告追加到 tool result ─────
+                        # Append pre-flight audit warnings to the tool result.
                         if _failure_warning:
                             result = result + "\n\n" + _failure_warning
 
-                        # ── 写入审计日志 ────────────────────────
+                        # Write audit log.
                         try:
                             audit_tool_call(
                                 tool_name    = name,
@@ -2355,20 +2377,20 @@ class AgentSession:
                                 success      = _audit_ok,
                             )
                         except Exception:
-                            pass  # 审计日志不应阻断主流程
+                            pass  # Audit logging must not block the main flow.
 
                         if QUIET_MODE or name in _VERBOSE_TOOLS:
                             result = smart_truncate(result, head=30, tail=30)
                         else:
                             limit = DYNAMIC_CONFIG["tool_max_chars"]
                             if len(result) > limit:
-                                result = result[:limit//2] + f"\n...[截断至{limit}字符]...\n" + result[-limit//4:]
+                                result = result[:limit//2] + f"\n...[truncated to {limit} chars]...\n" + result[-limit//4:]
 
                     # Audit counter
                     self._turn_tool_calls  += 1
                     self.total_tool_calls  += 1
 
-                    # ── 目录搜索计数 & 自动直觉检索 ───────────
+                    # Directory-search count and auto-intuition retrieval.
                     if name in ("list_dir", "find_files"):
                         _dir_search_count += 1
                         if _dir_search_count >= _DIR_THRESHOLD:
@@ -2378,14 +2400,14 @@ class AgentSession:
                             auto_result = ""
                             if search_query:
                                 print(c(GRAY,
-                                    f"  🧠 [Auto-Intuition] 目录搜索 {_dir_search_count} 次，"
-                                    f"检索历史: '{search_query}'"
+                                    f"  🧠 [Auto-Intuition] Directory search count {_dir_search_count}; "
+                                    f"searching history for: '{search_query}'"
                                 ))
                                 auto_result = self._auto_intuitive_search(search_query)
                             hint = (
-                                f"\n[System hint — 目录搜索已连续 {_dir_search_count} 次] "
-                                "建议切换策略：/chat find <关键词> 检索历史，"
-                                "或直接告知用户文件路径未知。"
+                                f"\n[System hint — directory search has run {_dir_search_count} consecutive times] "
+                                "Switch strategy: use /chat find <keyword> to search history, "
+                                "or tell the user the file path is unknown."
                             )
                             result = result + hint + auto_result
                     else:
@@ -2395,13 +2417,13 @@ class AgentSession:
                         "role": "tool", "tool_call_id": tc["id"], "content": result,
                     })
 
-                    # ── Logic Refresh: 重复错误追踪 ──────────────
+                    # Logic Refresh: repeated error tracking.
                     if name == "run_shell" and not _audit_ok:
                         _cmd_key = fn_args.get("command", "") or preview[:80]
                         _err_sig = ""
                         for _sig in ("ERROR:", "Permission denied", "No such file",
                                      "command not found", "Segmentation fault",
-                                     "timeout", "超时"):
+                                     "timeout"):
                             if _sig in str(result):
                                 _err_sig = _sig
                                 break
@@ -2412,11 +2434,11 @@ class AgentSession:
                             else:
                                 _repeat_error_count = 1
                             _recent_cmd_errors.append(_pair)
-                            # 保留最近 20 条
+                            # Keep the latest 20 entries.
                             if len(_recent_cmd_errors) > 20:
                                 _recent_cmd_errors = _recent_cmd_errors[-20:]
 
-                    # ── 连续相同代码检测（防止逻辑死循环）──────
+                    # Repeated identical code-output detection to prevent loops.
                     if name in ("run_shell", "run_code", "write_file", "patch_file"):
                         import hashlib
                         _result_hash = hashlib.md5(
@@ -2432,16 +2454,16 @@ class AgentSession:
 
                         if _repeat_code_count >= _REPEAT_CODE_THRESHOLD:
                             _anti_code_loop = (
-                                f"[System] 检测到连续 {_repeat_code_count} 次工具输出几乎相同。"
-                                "当前路径可能陷入循环，请立即停止并重新审视思路：\n"
-                                "  1. 是否在重复执行已知会失败的命令？\n"
-                                "  2. 是否需要换个攻击向量或工具？\n"
-                                "  3. 是否应该向用户确认目标环境？\n"
-                                "请在 <plan> 中说明你的新思路后再继续。"
+                                f"[System] Detected {_repeat_code_count} consecutive nearly identical tool outputs. "
+                                "The current path may be looping; stop and re-evaluate immediately:\n"
+                                "  1. Are you repeating commands already known to fail?\n"
+                                "  2. Do you need a different attack vector or tool?\n"
+                                "  3. Should you ask the user to confirm the target environment?\n"
+                                "Explain the new approach in <plan> before continuing."
                             )
                             self.messages.append({"role": "user", "content": _anti_code_loop})
                             print(c(YELLOW,
-                                f"  🔁 [Anti-Code-Loop] 连续 {_repeat_code_count} 次相同输出，已注入重思提示"
+                                f"  🔁 [Anti-Code-Loop] {_repeat_code_count} identical outputs detected; injected re-evaluation hint"
                             ))
                             logger.warning(
                                 "Anti-Code-Loop: repeated output | "
@@ -2451,11 +2473,8 @@ class AgentSession:
                             _repeat_code_count = 0
 
                 # ════════════════════════════════════════════════
-                # ★ 改动 [3b]：所有工具结果追加完毕后，
-                #   若触发了软拦截，注入 PLAN_MISSING 信号。
-                #   · 使用 "user" 角色（attention 贴近推理层）
-                #   · 工具已执行完毕，模型看到结果再修正，
-                #     避免结果丢失导致的重复调用。
+                # After all tool results are appended, inject PLAN_MISSING if a
+                # soft intercept fired. The model sees results first, then corrects.
                 # ════════════════════════════════════════════════
                 if _plan_signal_injected:
                     self.messages.append({
@@ -2463,16 +2482,16 @@ class AgentSession:
                         "content": _PLAN_MISSING_SIGNAL,
                     })
                     print(c(GRAY,
-                        "  🔄 [CoT Self-Correction] 已注入 PLAN_MISSING 修正信号，"
-                        "模型将在下一轮自我修正。"
+                        "  🔄 [CoT Self-Correction] PLAN_MISSING correction signal injected; "
+                        "the model will self-correct next iteration."
                     ))
 
             except KeyboardInterrupt:
-                print(c(YELLOW, "\n  [已中断]"))
+                print(c(YELLOW, "\n  [Interrupted]"))
                 self._autosave()
                 return
 
-        print(c(RED, f"\n[达到 max_iter={max_iter}，用 /mid /deep 或 /iter <n> 提升]"))
+        print(c(RED, f"\n[Reached max_iter={max_iter}; use /mid, /deep, or /iter <n> to raise it]"))
         logger.warning(
             "max_iter reached | model={} session={} max_iter={}",
             self.model_alias, self.session_id[:8], max_iter,
@@ -2516,10 +2535,10 @@ class AgentSession:
             ]
             print(c(GRAY, "\n".join(lines)))
 
-    # ── 后台异步自动保存 ──────────────────────────────────
+    # Background async autosave.
     def _autosave(self):
-        # ★ Turn 计数：每次调用累加（无论成功/中断/耗尽 max_iter），
-        # 用于自动命名门槛判断（_maybe_autoname 要求 >=2）
+        # Turn count increments on every call, regardless of success, interrupt,
+        # or max_iter exhaustion. _maybe_autoname requires at least 2 turns.
         self._turn_count += 1
         msgs_snapshot = [dict(m) for m in self.messages]
         sid, model_alias, cwd, workspace_dir, cfg_snap = (
@@ -2536,7 +2555,7 @@ class AgentSession:
                 )
                 save_messages(sid, msgs_snapshot)
             except Exception as _autosave_exc:
-                # 原来是 pass（静默丢失错误），现在写入日志文件
+                # Log autosave failures instead of silently dropping them.
                 logger.error(
                     "Autosave failed | session={} model={} exc={!r}",
                     sid[:8], model_alias, _autosave_exc,
@@ -2564,7 +2583,8 @@ class AgentSession:
             if not self._naming_lock.acquire(blocking=False):
                 return
             try:
-                # ★ 冷却门移入锁内：失败时不阻断下次重试（锁释放后可重新进入）
+                # Keep the cooldown gate inside the lock. Failures do not block
+                # the next retry once the lock is released.
                 now = time.monotonic()
                 if now - self._naming_attempted_at < 10:
                     return
@@ -2578,7 +2598,7 @@ class AgentSession:
                     )
                     naming_alias = model_alias
 
-                # 2. 调用 LLM 生成 {title, slug}
+                # 2. Call the LLM to generate {title, slug}.
                 result = generate_session_name(
                     messages=msgs_snapshot,
                     model_alias=naming_alias,
@@ -2594,7 +2614,7 @@ class AgentSession:
                     )
                     return
 
-                # 3. 切换实体工作区（rename + 反向 symlink + 原子指针）
+                # 3. Swap the real workspace directory.
                 try:
                     final_dirname, new_abs = self._swap_workspace_dir(slug)
                 except Exception as exc:
@@ -2604,9 +2624,9 @@ class AgentSession:
                     )
                     final_dirname, new_abs = "", ""
 
-                # 4. 决定入库的 workspace 元数据：
-                #    · swap 成功 → 用新路径 + final_dirname 作为 alias
-                #    · swap 失败 → 用旧路径，仍建 by-name/<slug> 兼容软链
+                # 4. Decide which workspace metadata to persist:
+                #    · swap success -> use new path + final_dirname as alias
+                #    · swap failure -> use old path and still create by-name/<slug>
                 if new_abs:
                     persist_workspace_dir = new_abs
                     persist_alias = final_dirname
@@ -2620,7 +2640,8 @@ class AgentSession:
                         )
                         persist_alias = slug
 
-                # 5. 写 pawn.db（单独保护，即使 DB 短暂写锁也不影响前面的文件系统改动）
+                # 5. Write pawn.db separately so transient DB locks do not affect
+                # previous filesystem changes.
                 try:
                     update_session_naming(
                         sid,
@@ -2636,18 +2657,18 @@ class AgentSession:
                         sid[:8], exc,
                     )
 
-                # 6. 标记完成（即便 DB 写入失败也标记 done，避免后续重复改名；
-                # 下一次 autosave 的 upsert_session 会用最新的 self.workspace_dir 补写）
+                # 6. Mark done even if DB write failed to avoid repeated renames.
+                # The next autosave upsert_session writes the latest workspace_dir.
                 self._naming_done = True
 
-                # 7. 终端 UX 反馈
+                # 7. Terminal UX feedback.
                 try:
                     self._print_naming_banner(title, slug, final_dirname, new_abs)
                 except Exception:
-                    pass   # UI 反馈失败不关键，绝不抛
+                    pass   # UI feedback failure is non-critical.
 
             except Exception as exc:
-                # 顶层兜底：任何未预期的异常都吞掉，只记 warning
+                # Top-level fallback: swallow unexpected errors and log a warning.
                 logger.warning(
                     "Auto naming top-level failure (non-fatal) | session={} exc={!r}",
                     sid[:8], exc,
@@ -2656,6 +2677,6 @@ class AgentSession:
                 try:
                     self._naming_lock.release()
                 except Exception:
-                    pass   # 极端情况下锁已被释放，忽略
+                    pass   # Ignore rare cases where the lock was already released.
 
         threading.Thread(target=_do, daemon=True, name=f"name-{sid[:8]}").start()

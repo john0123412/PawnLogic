@@ -69,7 +69,7 @@ def _msg(role: str, content: str) -> dict:
 
 def test_should_name_with_tool_call_and_user_text():
     msgs = [
-        _msg("user", "分析这个二进制文件"),
+        _msg("user", "analyze this binary file"),
         {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "run_shell"}}]},
         _msg("tool", "output"),
     ]
@@ -77,16 +77,16 @@ def test_should_name_with_tool_call_and_user_text():
 
 
 def test_should_name_with_long_user_message():
-    msgs = [_msg("user", "请帮我写一个完整的 Python HTTP 服务器，需要支持并发")]
+    msgs = [_msg("user", "please write a complete Python HTTP server with concurrency support")]
     assert should_name_session(msgs) is True
 
 
 def test_should_name_with_multiple_short_messages():
     # Two user messages totaling >= 40 chars triggers naming
     msgs = [
-        _msg("user", "请帮我分析这个二进制文件的内存漏洞利用点"),  # 21 chars
-        _msg("assistant", "好的，我来分析"),
-        _msg("user", "继续帮我完成完整的 exploit 利用脚本"),  # 21 chars
+        _msg("user", "analyze memory corruption in this binary"),
+        _msg("assistant", "I will analyze it"),
+        _msg("user", "continue and write the full exploit script"),
     ]
     assert should_name_session(msgs) is True
 

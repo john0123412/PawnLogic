@@ -1,35 +1,35 @@
 """
-core/state.py — PawnLogic 运行时状态管理
+core/state.py — PawnLogic runtime state management.
 
-所有运行时可变状态集中在此，与静态配置彻底分离。
-其他模块通过 `from core.state import state` 访问。
+All mutable runtime state lives here, separated from static configuration.
+Other modules access it with `from core.state import state`.
 """
 from dataclasses import dataclass, field
 
 
 @dataclass
 class RuntimeState:
-    # 输出模式
-    user_mode: bool = False       # True = 用户友好模式，False = 开发者模式
-    quiet_mode: bool = False      # True = 静默模式
+    # Output mode.
+    user_mode: bool = False       # True = user-friendly mode; False = developer mode.
+    quiet_mode: bool = False      # True = quiet mode.
 
-    # 模型状态
+    # Model state.
     current_model: str = "ds-v4-flash"
     current_worker: str = "auto"
 
-    # 算力档位（从 config.tiers 初始化，运行时可修改）
+    # Compute tier, initialized from config.tiers and mutable at runtime.
     dynamic_config: dict = field(default_factory=dict)
 
-    # 时间预算
+    # Time budget.
     time_budget_sec: int = 0
     time_start: float = 0.0
 
-    # 当前工作目录
+    # Current working directory.
     work_dir: str = "."
 
-    # 首次运行标记
+    # First-run flag.
     is_first_run: bool = False
 
 
-# 全局单例，所有模块共享
+# Shared global singleton.
 state = RuntimeState()

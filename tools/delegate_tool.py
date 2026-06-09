@@ -1,21 +1,21 @@
 """
-tools/delegate_tool.py — 模块 4.1：无污染子任务委派（Fresh Context）
+tools/delegate_tool.py - fresh-context subtask delegation.
 
-delegate_task(task_description)：
-  · 在后台实例化一个全新的 _SubAgentSession（仅含系统提示 + 当前任务）
-  · 静默运行完整 Agentic Loop（工具调用照常执行，但不打印到主 stdout）
-  · 捕获子 agent 的工具调用日志和最终回复，精简后返回给主 Session
-  · 主 Session 上下文不增长，只获得结果摘要
+delegate_task(task_description):
+  - Instantiates a fresh _SubAgentSession in the background.
+  - Runs a full agentic loop silently while tool side effects still occur.
+  - Captures tool logs and the final response, then returns a compact result.
+  - Keeps the main session context from growing with subtask details.
 
-双模型路由：
-  · 子任务强制使用"高速/低成本"小模型（worker_model）
-  · 优先级列表：ds-v4-flash → claude-haiku → gpt-4.1
-  · 由代码底层自动选取首个可用模型，大模型无权干预
+Dual-model routing:
+  - Subtasks use a fast/low-cost worker model.
+  - Candidate order: ds-v4-flash -> claude-haiku -> gpt-4.1.
+  - The code selects the first available worker model; the main model does not choose it.
 
-避免循环导入：
-  · 本模块不在顶层 import core/session.py
-  · TOOL_MAP 和 TOOLS_SCHEMA 在工具被调用时通过函数懒加载
-  · _sub_stream() 直接使用 core/api_client.stream_request（无 session 依赖）
+Import cycle avoidance:
+  - This module does not import core/session.py at top level.
+  - TOOL_MAP and TOOLS_SCHEMA are lazily imported when the tool is called.
+  - _sub_stream() uses core/api_client.stream_request directly.
 """
 
 import io, json, contextlib, threading
@@ -28,11 +28,11 @@ from core.memory     import _gen_id
 from tools.file_ops  import _session_cwd
 from utils.ansi      import c, YELLOW, GRAY, GREEN, MAGENTA
 
-# ── 递归深度保护 ──────────────────────────────────────────
-_delegate_ctx = threading.local()   # .depth 表示当前线程的委派深度
-_MAX_DEPTH    = 2                   # 子 Agent 最大嵌套层数
+# Recursion depth guard.
+_delegate_ctx = threading.local()   # .depth tracks delegation depth per thread.
+_MAX_DEPTH    = 2                   # Maximum nested sub-agent depth.
 
-# ── 双模型路由：Worker 候选优先级列表 ────────────────────
+# Worker candidate priority list for dual-model routing.
 _WORKER_MODEL_CANDIDATES = [
     "ds-v4-flash",
     "claude-haiku",
@@ -43,8 +43,8 @@ def _select_worker_model(current_model: str = DEFAULT_MODEL) -> str:
     """
     Select the worker model for a delegated sub-task.
 
-    - If current model is already fast-tier → use it directly (no downgrade needed)
-    - If current model is pro-tier → find a fast peer in the same provider
+    - If current model is already fast-tier, use it directly.
+    - If current model is pro-tier, find a fast peer in the same provider.
     - Fallback: first available model in _WORKER_MODEL_CANDIDATES, then DEFAULT_MODEL
     """
     preferred = DYNAMIC_CONFIG.get("preferred_worker", "auto")
@@ -54,13 +54,13 @@ def _select_worker_model(current_model: str = DEFAULT_MODEL) -> str:
             if ok:
                 return preferred
 
-    # Already fast — no point switching
+    # Already fast; no point switching.
     if is_fast_model(current_model):
         ok, _ = validate_api_key(current_model)
         if ok:
             return current_model
 
-    # Pro model — find fast peer in same provider
+    # Pro model: find fast peer in the same provider.
     peer = find_fast_peer(current_model)
     if peer:
         return peer
@@ -75,11 +75,11 @@ def _select_worker_model(current_model: str = DEFAULT_MODEL) -> str:
     return DEFAULT_MODEL
 
 # ════════════════════════════════════════════════════════
-# 懒加载：避免与 session.py 的循环导入
+# Lazy imports to avoid a cycle with session.py.
 # ════════════════════════════════════════════════════════
 
 def _tool_map():
-    """在调用时才导入 session.TOOL_MAP，此时循环已解开。"""
+    """Import session.TOOL_MAP only when called, after the import cycle is gone."""
     from core.session import TOOL_MAP
     return TOOL_MAP
 
@@ -88,26 +88,27 @@ def _tools_schema():
     return TOOLS_SCHEMA
 
 # ════════════════════════════════════════════════════════
-# 子 Agent Session（静默运行）
+# Sub-agent session running silently.
 # ════════════════════════════════════════════════════════
 
 class _SubAgentSession:
     """
-    轻量级子 Agent，只持有 system + task 消息，不与主 Session 共享状态。
-    所有工具调用效果（文件写入、shell 执行）会真实发生，但输出被捕获。
+    Lightweight sub-agent with only system + task messages.
+    It does not share state with the main session. Tool side effects are real,
+    but stdout is captured.
     """
 
-    MAX_ITER = 15   # 子任务硬上限，防止无限循环
+    MAX_ITER = 15   # Hard cap to prevent infinite loops.
 
     def __init__(self, task: str, model_alias: str = DEFAULT_MODEL):
         self.session_id  = "sub_" + _gen_id()
         self.model_alias = model_alias
 
-        # ── 继承父 Agent 的关键事实 ────────────────────────
+        # Inherit important facts from the parent agent.
         inherited_ctx = ""
         try:
             from core.memory import search_facts, format_facts_for_prompt
-            # 取高优先级事实（priority >= 2），最多 5 条
+            # Take up to 5 high-priority facts (priority >= 2).
             rows = search_facts(query="", priority_min=2, limit=5)
             if rows:
                 inherited_ctx = (
@@ -140,12 +141,12 @@ class _SubAgentSession:
 
     def run(self) -> str:
         """
-        静默运行 Agentic Loop。
-        标准输出被重定向，工具调用仍正常执行（副作用真实发生）。
-        返回：子 agent 的最终文本回复。
+        Run the agentic loop silently.
+        stdout is redirected while tool calls still execute normally.
+        Returns the final text response from the sub-agent.
         """
         tool_map    = _tool_map()
-        # 物理阉割：子 Agent 不得再次委派
+        # Prevent nested delegation by removing delegate_task from the schema.
         tools_sch   = [s for s in _tools_schema()
                        if s.get("function", {}).get("name") != "delegate_task"]
         cap         = io.StringIO()
@@ -153,7 +154,7 @@ class _SubAgentSession:
         for iteration in range(self.MAX_ITER):
             text_buf = ""; tc_buf: dict = {}
 
-            # 重定向 stdout（隐藏工具调用打印）
+            # Redirect stdout to hide tool-call prints.
             with contextlib.redirect_stdout(cap):
                 for delta in stream_request(
                     self.messages, self.model_alias,
@@ -180,11 +181,11 @@ class _SubAgentSession:
                         tc_buf[idx]["name"] += fn.get("name", "")
                         tc_buf[idx]["args"] += fn.get("arguments", "")
 
-            # 无工具调用 → 子任务完成
+            # No tool call means the subtask is done.
             if not tc_buf:
                 return text_buf.strip() or "(sub-agent returned no output)"
 
-            # 追加 assistant 消息
+            # Append assistant message.
             self.messages.append({
                 "role":    "assistant",
                 "content": text_buf or None,
@@ -201,7 +202,7 @@ class _SubAgentSession:
                 ],
             })
 
-            # 执行工具
+            # Execute tools.
             for i in sorted(tc_buf):
                 tc   = tc_buf[i]; name = tc["name"]
                 try:    fn_args = json.loads(tc["args"]) if tc["args"].strip() else {}
@@ -227,47 +228,47 @@ class _SubAgentSession:
         return f"[Sub-agent hit max_iter={self.MAX_ITER}]"
 
 # ════════════════════════════════════════════════════════
-# Tool 入口
+# Tool entry point.
 # ════════════════════════════════════════════════════════
 
 def tool_delegate_task(a: dict) -> str:
     """
-    委派子任务工具的入口函数。
-    在主 Session 内被调用，执行完整子任务后返回精简结果。
+    Entry point for delegated subtasks.
+    Called from the main session, executes a full subtask, then returns a compact result.
 
-    双模型路由：忽略传入的 model_alias，强制由 _select_worker_model()
-    从候选列表中选取第一个 API Key 可用的小模型作为 worker_model。
+    Dual-model routing ignores caller-provided model_alias and selects the first
+    available fast worker model from the candidate list.
     """
     task        = a.get("task_description", "").strip()
-    caller_model = a.get("model_alias", DEFAULT_MODEL)   # 记录主模型，仅用于日志
+    caller_model = a.get("model_alias", DEFAULT_MODEL)
     verbose     = bool(a.get("verbose", False))
 
     if not task:
-        return "ERROR: task_description 不能为空"
+        return "ERROR: task_description is required"
 
-    # ── ★ 双模型路由：pro → fast peer，fast → 直接用自身 ──
+    # Dual-model routing: pro -> fast peer, fast -> itself.
     worker_model = _select_worker_model(caller_model)
     _preferred = DYNAMIC_CONFIG.get("preferred_worker", "auto")
     if _preferred and _preferred != "auto":
         print(c(MAGENTA,
-            f"  🎯 极客模式: 子任务强制使用模型 → [{worker_model}]"
+            f"  [Delegate] preferred worker forced: [{worker_model}]"
         ))
     else:
         print(c(YELLOW,
-            f"  ⚡ 智能降维: 主会话模型 → [Worker: {worker_model}] (成本优化)"
+            f"  [Delegate] worker model: [{worker_model}]"
         ))
 
-    # ── 递归深度保护 ──────────────────────────────────────
+    # Recursion depth guard.
     current_depth = getattr(_delegate_ctx, "depth", 0)
     if current_depth >= _MAX_DEPTH:
         return (
-            f"ERROR: 已达最大委派深度 {_MAX_DEPTH}，拒绝嵌套委派。\n"
-            f"请直接使用工具完成任务，而非再次调用 delegate_task。"
+            f"ERROR: maximum delegation depth {_MAX_DEPTH} reached; nested delegation denied.\n"
+            f"Use tools directly for this task instead of calling delegate_task again."
         )
 
-    print(c(MAGENTA, f"  🤖 [Sub-agent] 启动委派任务..."))
-    print(c(GRAY,    f"  任务: {task[:80]}{'...' if len(task)>80 else ''}"))
-    print(c(GRAY,    f"  模型: {worker_model}  深度: {current_depth+1}/{_MAX_DEPTH}  上限: {_SubAgentSession.MAX_ITER} 轮"))
+    print(c(MAGENTA, f"  [Sub-agent] starting delegated task..."))
+    print(c(GRAY,    f"  Task: {task[:80]}{'...' if len(task)>80 else ''}"))
+    print(c(GRAY,    f"  Model: {worker_model}  Depth: {current_depth+1}/{_MAX_DEPTH}  Limit: {_SubAgentSession.MAX_ITER} iterations"))
 
     sub    = _SubAgentSession(task, worker_model)
 
@@ -277,23 +278,23 @@ def tool_delegate_task(a: dict) -> str:
     finally:
         _delegate_ctx.depth = current_depth
 
-    # 汇报工具调用摘要
+    # Report tool-call summary.
     if sub._tool_log:
-        tool_summary = "\n".join(sub._tool_log[-10:])  # 最多显示最后10条
-        print(c(GRAY, f"\n  [Sub-agent 工具调用摘要]\n{tool_summary}"))
+        tool_summary = "\n".join(sub._tool_log[-10:])
+        print(c(GRAY, f"\n  [Sub-agent tool-call summary]\n{tool_summary}"))
 
-    print(c(GREEN, f"  ✓ [Sub-agent] 完成，结果长度: {len(result)} 字符"))
+    print(c(GREEN, f"  [Sub-agent] complete, result length: {len(result)} chars"))
 
     if verbose:
         return (
-            f"[Sub-agent 完成]\n"
-            f"--- 工具调用记录 ---\n"
-            f"{chr(10).join(sub._tool_log) or '(无工具调用)'}\n\n"
-            f"--- 最终结果 ---\n"
+            f"[Sub-agent complete]\n"
+            f"--- Tool-call log ---\n"
+            f"{chr(10).join(sub._tool_log) or '(no tool calls)'}\n\n"
+            f"--- Final result ---\n"
             f"{result}"
         )
     else:
-        return f"[Sub-agent 完成]\n{result}"
+        return f"[Sub-agent complete]\n{result}"
 
 # ════════════════════════════════════════════════════════
 # Schema
@@ -304,25 +305,24 @@ DELEGATE_SCHEMA = {
     "function": {
         "name":        "delegate_task",
         "description": (
-            "将复杂子任务委派给一个全新的子 Agent 执行（Fresh Context）。\n"
-            "子 Agent 拥有独立的上下文，使用所有工具完成任务后只返回精简结果。\n"
-            "主 Agent 的上下文不会因子任务的工具调用而膨胀。\n"
-            "适用场景：大型重构的某个模块、独立的搜索+整理任务、多步骤测试流程、\n"
-            "阅读超过 500 行的长代码、分析巨型 Log、深度全网搜索。\n"
-            "注意：子任务模型由系统底层自动选取（成本优化），无需指定。"
+            "Delegate a complex subtask to a fresh-context sub-agent.\n"
+            "The sub-agent has independent context, can use all tools, and returns only a compact result.\n"
+            "The main agent context does not grow with subtask tool-call details.\n"
+            "Use for one module of a large refactor, independent search-and-summarize work,\n"
+            "multi-step test flows, reading long code files, analyzing large logs, or deep web search.\n"
+            "The worker model is selected automatically for cost control; do not specify it."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "task_description": {
                     "type":        "string",
-                    "description": "子任务的详细描述，越具体越好",
+                    "description": "Detailed subtask description; be as specific as possible.",
                 },
-                # ★ model_alias 字段已移除——子任务模型由代码底层接管，
-                #   大模型无权干预（双模型路由策略）。
+                # model_alias was removed; worker selection is controlled by code.
                 "verbose": {
                     "type":        "boolean",
-                    "description": "True 时在结果中包含完整工具调用日志（默认 False）",
+                    "description": "Include the full tool-call log in the result when true (default false).",
                 },
             },
             "required": ["task_description"],

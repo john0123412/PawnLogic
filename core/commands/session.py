@@ -84,14 +84,14 @@ def _resolve_session_id(query: str, sessions_list=None) -> str | None:
     if not rows:
         return None
     query = query.strip()
-    # 按序号（1-indexed）
+    # By 1-indexed sequence number.
     try:
         idx = int(query) - 1
         if 0 <= idx < len(rows):
             return rows[idx]["id"]
     except ValueError:
         pass
-    # 按 id 子串
+    # By id substring.
     for r in rows:
         if query.lower() in r["id"].lower() or query.lower() in (r["name"] or "").lower():
             return r["id"]
@@ -106,9 +106,9 @@ def _memo_to_skills(session, content: str, verbose: bool = True) -> str:
     try:
         from core.gsa import write_skill
     except ImportError:
-        return "ERROR: core/gsa.py 未找到，请确认 GSA 模块已部署到 core/ 目录。"
+        return "ERROR: core/gsa.py was not found. Confirm the GSA module is deployed under core/."
 
-    # 若无内容，提取上一轮 AI 回复
+    # If no content is supplied, use the previous assistant reply.
     if not content.strip():
         last_ai = next(
             (m.get("content", "") for m in reversed(session.messages)
@@ -116,13 +116,13 @@ def _memo_to_skills(session, content: str, verbose: bool = True) -> str:
             ""
         )
         if not last_ai.strip():
-            return "ERROR: 对话历史中没有可提取的 AI 回复，请在 /memo 后附上要存档的内容。"
+            return "ERROR: No assistant reply is available to archive. Add content after /memo."
         content = last_ai
         if verbose:
-            print(c(GRAY, f"  (自动提取上一条 AI 回复，{len(content)} 字符)"))
+            print(c(GRAY, f"  (Using previous assistant reply, {len(content)} characters)"))
 
     if verbose:
-        print(c(YELLOW, f"  🧠 [GSA] 正在分类并存档（模型: {session.model_alias}）..."))
+        print(c(YELLOW, f"  🧠 [GSA] Classifying and archiving (model: {session.model_alias})..."))
 
     ok, msg = write_skill(
         model_alias=session.model_alias,
@@ -146,39 +146,39 @@ def _handle_chat(arg: str, arg2: str, session) -> None:
         n = int(target) if target.isdigit() else 20
         rows = list_sessions(n)
         if not rows:
-            print(c(GRAY, "  (暂无已保存会话)"))
+            print(c(GRAY, "  (No saved sessions.)"))
             return
-        print(c(BOLD, f"\n  对话历史（最近 {len(rows)} 条）："))
+        print(c(BOLD, f"\n  Conversation history (latest {len(rows)}):"))
         for i, r in enumerate(rows):
             tags_str = c(CYAN, f"  [{r['tags']}]") if r["tags"] else ""
             display_name = r["name"] or r["auto_name"] or r["workspace_alias"]
-            name_str = c(YELLOW, display_name) if display_name else c(GRAY, "(未命名)")
+            name_str = c(YELLOW, display_name) if display_name else c(GRAY, "(untitled)")
             print(
                 c(GRAY, f"  [{i + 1:2d}] ") +
                 c(CYAN, f"{r['id'][:24]}") +
                 f"  {name_str}{tags_str}\n"
-                + c(GRAY, f"       {r['updated_at'][:16]}  {r['msg_count']}条消息  model={r['model']}")
+                + c(GRAY, f"       {r['updated_at'][:16]}  {r['msg_count']} messages  model={r['model']}")
             )
 
     # ── /chat view <id|n> ────────────────────────────────
     elif sub == "view":
         if not target:
-            print(c(RED, "  用法: /chat view <序号 或 session_id 前缀>"))
+            print(c(RED, "  Usage: /chat view <index or session_id prefix>"))
             return
         sid = _resolve_session_id(target)
         if not sid:
-            print(c(RED, f"  ✗ 找不到会话 '{target}'"))
+            print(c(RED, f"  ✗ Session not found: '{target}'"))
             return
         meta = get_session(sid)
         msgs = get_session_messages_pretty(sid)
-        display_name = meta["name"] or meta["auto_name"] or meta["workspace_alias"] or "(未命名)"
-        print(c(BOLD, f"\n  ╔ 会话 {sid}"))
-        print(c(GRAY, f"  ║ 名称  : {display_name}"))
-        print(c(GRAY, f"  ║ 模型  : {meta['model']}"))
-        print(c(GRAY, f"  ║ 目录  : {meta['cwd']}"))
-        print(c(GRAY, f"  ║ 标签  : {meta['tags'] or '-'}"))
-        print(c(GRAY, f"  ║ 更新  : {meta['updated_at']}"))
-        print(c(GRAY, f"  ╚ 共 {len(msgs)} 条消息"))
+        display_name = meta["name"] or meta["auto_name"] or meta["workspace_alias"] or "(untitled)"
+        print(c(BOLD, f"\n  ╔ Session {sid}"))
+        print(c(GRAY, f"  ║ Name   : {display_name}"))
+        print(c(GRAY, f"  ║ Model  : {meta['model']}"))
+        print(c(GRAY, f"  ║ CWD    : {meta['cwd']}"))
+        print(c(GRAY, f"  ║ Tags   : {meta['tags'] or '-'}"))
+        print(c(GRAY, f"  ║ Updated: {meta['updated_at']}"))
+        print(c(GRAY, f"  ╚ {len(msgs)} messages"))
         print()
 
         for m in msgs:
@@ -188,19 +188,19 @@ def _handle_chat(arg: str, arg2: str, session) -> None:
             ts = c(GRAY, m["created_at"][11:16] if m["created_at"] else "")
 
             if role == "system":
-                continue  # system 消息不显示（太长）
+                continue  # system messages are intentionally hidden because they are long
             elif role == "user":
                 print(c(BOLD + "\033[96m", "  🧑 You") + f" {seq_tag}{pin_tag} {ts}")
                 for line in m["content_full"].splitlines()[:10]:
                     print(f"     {line}")
                 if m["content_full"].count("\n") > 10:
-                    print(c(GRAY, f"     ...（共 {m['content_full'].count(chr(10)) + 1} 行）"))
+                    print(c(GRAY, f"     ...({m['content_full'].count(chr(10)) + 1} lines total)"))
             elif role == "assistant":
                 print(c(BOLD + "\033[92m", "  🤖 Agent") + f" {seq_tag}{pin_tag} {ts}")
                 for line in m["content_full"].splitlines()[:8]:
                     print(f"     {line}")
                 if m["content_full"].count("\n") > 8:
-                    print(c(GRAY, f"     ...（共 {m['content_full'].count(chr(10)) + 1} 行）"))
+                    print(c(GRAY, f"     ...({m['content_full'].count(chr(10)) + 1} lines total)"))
             elif role == "tool":
                 print(c(GRAY, "  🔩 tool") + f" {seq_tag} {ts}  {m['preview']}")
             print()
@@ -208,7 +208,7 @@ def _handle_chat(arg: str, arg2: str, session) -> None:
     # ── /chat export <id|n> [path] ──────────────────────
     elif sub == "export":
         if not target:
-            print(c(RED, "  用法: /chat export <序号 或 id> [输出文件路径]"))
+            print(c(RED, "  Usage: /chat export <index or id> [output file path]"))
             return
         parts = target.split(None, 1)
         id_part = parts[0]
@@ -216,7 +216,7 @@ def _handle_chat(arg: str, arg2: str, session) -> None:
 
         sid = _resolve_session_id(id_part)
         if not sid:
-            print(c(RED, f"  ✗ 找不到会话 '{id_part}'"))
+            print(c(RED, f"  ✗ Session not found: '{id_part}'"))
             return
 
         md_content = export_session_to_markdown(sid)
@@ -231,23 +231,23 @@ def _handle_chat(arg: str, arg2: str, session) -> None:
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(md_content, encoding="utf-8")
-        print(c(GREEN, f"  ✓ 对话已导出 → {out_path}"))
-        print(c(GRAY, f"  共 {len(md_content)} 字符 / {md_content.count(chr(10))} 行"))
+        print(c(GREEN, f"  ✓ Conversation exported -> {out_path}"))
+        print(c(GRAY, f"  {len(md_content)} characters / {md_content.count(chr(10))} lines"))
 
     # ── /chat find <keywords> ────────────────────────────
     elif sub == "find":
         if not target:
-            print(c(RED, "  用法: /chat find <搜索词（空格分隔多词）>"))
+            print(c(RED, "  Usage: /chat find <search terms>"))
             return
-        print(c(YELLOW, f"  🔍 跨会话搜索: '{target}' ..."))
+        print(c(YELLOW, f"  🔍 Searching across sessions: '{target}' ..."))
         results = full_text_search(target, limit=10)
         if not results:
-            print(c(GRAY, "  未找到匹配内容。"))
+            print(c(GRAY, "  No matches found."))
             return
-        print(c(BOLD, f"\n  找到 {len(results)} 个会话含匹配内容："))
+        print(c(BOLD, f"\n  Found matches in {len(results)} sessions:"))
         for r in results:
             print(c(CYAN, f"\n  [{r['session_id'][:20]}]") +
-                  c(YELLOW, f"  {r['session_name'] or '(未命名)'}") +
+                  c(YELLOW, f"  {r['session_name'] or '(untitled)'}") +
                   c(GRAY, f"  {r['updated_at'][:16]}  tags={r['tags'] or '-'}"))
             for hit in r["hits"]:
                 role_icon = "🧑" if hit["role"] == "user" else ("🤖" if hit["role"] == "assistant" else "🔩")
@@ -257,109 +257,109 @@ def _handle_chat(arg: str, arg2: str, session) -> None:
     elif sub == "tag":
         parts = target.split(None, 1)
         if len(parts) < 2:
-            print(c(RED, "  用法: /chat tag <序号 或 id> <标签1,标签2,...>"))
+            print(c(RED, "  Usage: /chat tag <index or id> <tag1,tag2,...>"))
             return
         sid = _resolve_session_id(parts[0])
         if not sid:
-            print(c(RED, f"  ✗ 找不到会话 '{parts[0]}'"))
+            print(c(RED, f"  ✗ Session not found: '{parts[0]}'"))
             return
         ok = tag_session(sid, parts[1])
         if ok:
-            print(c(GREEN, f"  ✓ 已给会话 {sid[:20]}... 添加标签: {parts[1]}"))
+            print(c(GREEN, f"  ✓ Added tags to session {sid[:20]}...: {parts[1]}"))
         else:
-            print(c(RED, "  ✗ 操作失败"))
+            print(c(RED, "  ✗ Operation failed"))
 
     # ── /chat untag <id|n> <tags> ────────────────────────
     elif sub == "untag":
         parts = target.split(None, 1)
         if len(parts) < 2:
-            print(c(RED, "  用法: /chat untag <序号 或 id> <标签1,标签2,...>"))
+            print(c(RED, "  Usage: /chat untag <index or id> <tag1,tag2,...>"))
             return
         sid = _resolve_session_id(parts[0])
         if not sid:
-            print(c(RED, f"  ✗ 找不到会话 '{parts[0]}'"))
+            print(c(RED, f"  ✗ Session not found: '{parts[0]}'"))
             return
         untag_session(sid, parts[1])
-        print(c(GREEN, f"  ✓ 已移除标签: {parts[1]}"))
+        print(c(GREEN, f"  ✓ Removed tags: {parts[1]}"))
 
     # ── /chat bytag <tag> ────────────────────────────────
     elif sub == "bytag":
         if not target:
-            print(c(RED, "  用法: /chat bytag <标签名>"))
+            print(c(RED, "  Usage: /chat bytag <tag>"))
             return
         rows = find_sessions_by_tag(target)
         if not rows:
-            print(c(GRAY, f"  未找到带标签 '{target}' 的会话。"))
+            print(c(GRAY, f"  No sessions found with tag '{target}'."))
             return
-        print(c(BOLD, f"\n  标签 '{target}' 的会话（{len(rows)} 个）："))
+        print(c(BOLD, f"\n  Sessions tagged '{target}' ({len(rows)}):"))
         for i, r in enumerate(rows):
             print(c(GRAY, f"  [{i + 1:2d}] ") + c(CYAN, r["id"][:24]) +
-                  c(GRAY, f"  {r['updated_at'][:16]}  {r['msg_count']}条  tags={r['tags']}"))
+                  c(GRAY, f"  {r['updated_at'][:16]}  {r['msg_count']} msgs  tags={r['tags']}"))
 
     # ── /chat link <id1> <id2> [note] ────────────────────
     elif sub == "link":
         parts = target.split(None, 2)
         if len(parts) < 2:
-            print(c(RED, "  用法: /chat link <id/序号1> <id/序号2> [关联备注]"))
+            print(c(RED, "  Usage: /chat link <id/index1> <id/index2> [note]"))
             return
         sid_a = _resolve_session_id(parts[0])
         sid_b = _resolve_session_id(parts[1])
         note = parts[2] if len(parts) > 2 else ""
         if not sid_a or not sid_b:
-            print(c(RED, "  ✗ 无法解析会话 ID"))
+            print(c(RED, "  ✗ Could not resolve session ID"))
             return
         if sid_a == sid_b:
-            print(c(RED, "  ✗ 不能关联同一个会话"))
+            print(c(RED, "  ✗ Cannot link a session to itself"))
             return
         link_sessions(sid_a, sid_b, note)
-        print(c(GREEN, "  ✓ 已关联:"))
+        print(c(GREEN, "  ✓ Linked:"))
         print(c(GRAY, f"    {sid_a[:24]}"))
         print(c(GRAY, f"    {sid_b[:24]}"))
         if note:
-            print(c(GRAY, f"    备注: {note}"))
+            print(c(GRAY, f"    Note: {note}"))
 
     # ── /chat unlink <id1> <id2> ─────────────────────────
     elif sub == "unlink":
         parts = target.split(None, 1)
         if len(parts) < 2:
-            print(c(RED, "  用法: /chat unlink <id/序号1> <id/序号2>"))
+            print(c(RED, "  Usage: /chat unlink <id/index1> <id/index2>"))
             return
         sid_a = _resolve_session_id(parts[0])
         sid_b = _resolve_session_id(parts[1])
         if not sid_a or not sid_b:
-            print(c(RED, "  ✗ 无法解析会话 ID"))
+            print(c(RED, "  ✗ Could not resolve session ID"))
             return
         unlink_sessions(sid_a, sid_b)
-        print(c(GREEN, f"  ✓ 已取消关联 {sid_a[:20]} ↔ {sid_b[:20]}"))
+        print(c(GREEN, f"  ✓ Unlinked {sid_a[:20]} <-> {sid_b[:20]}"))
 
     # ── /chat related <id|n> ─────────────────────────────
     elif sub == "related":
         if not target:
-            print(c(RED, "  用法: /chat related <序号 或 id>"))
+            print(c(RED, "  Usage: /chat related <index or id>"))
             return
         sid = _resolve_session_id(target)
         if not sid:
-            print(c(RED, f"  ✗ 找不到会话 '{target}'"))
+            print(c(RED, f"  ✗ Session not found: '{target}'"))
             return
         linked = get_linked_sessions(sid)
         if not linked:
-            print(c(GRAY, f"  会话 {sid[:24]} 没有关联的对话。"))
-            print(c(GRAY, "  使用 /chat link 创建关联。"))
+            print(c(GRAY, f"  Session {sid[:24]} has no linked conversations."))
+            print(c(GRAY, "  Use /chat link to create a link."))
             return
-        print(c(BOLD, f"\n  会话 {sid[:24]} 的关联对话（{len(linked)} 个）："))
+        print(c(BOLD, f"\n  Linked conversations for session {sid[:24]} ({len(linked)}):"))
         for item in linked:
             m = item["meta"]
             note = item["note"]
             print(c(CYAN, f"  {m['id'][:24]}") +
-                  c(GRAY, f"  {m['updated_at'][:16]}  {m['msg_count']}条  model={m['model']}"))
+                  c(GRAY, f"  {m['updated_at'][:16]}  {m['msg_count']} msgs  model={m['model']}"))
             if note:
-                print(c(GRAY, f"    备注: {note}"))
+                print(c(GRAY, f"    Note: {note}"))
             print()
 
     else:
         print(c(GRAY, (
-            f"  未知子命令 '{sub}'。\n"
-            "  可用: list · view · export · find · tag · untag · bytag · link · unlink · related"
+            f"  Unknown sub-command '{sub}'.\n"
+            "  Available: list · view · export · find · tag · untag · bytag · link · unlink · related"
         )))
 
 
@@ -377,13 +377,13 @@ async def cmd_chat(ctx: CommandContext) -> None:
 @register("/save")
 async def cmd_save(ctx: CommandContext) -> None:
     sid = session_save(ctx.session, ctx.arg)
-    print(c(GREEN, f"  ✓ 已保存 session_id={sid}"))
+    print(c(GREEN, f"  ✓ Saved session_id={sid}"))
 
 
 @register("/load")
 async def cmd_load(ctx: CommandContext) -> None:
     if not ctx.arg:
-        print(c(RED, "  用法: /load <name 或 序号>"))
+        print(c(RED, "  Usage: /load <name or index>"))
         return
     result = session_load(ctx.session, ctx.arg)
     print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
@@ -397,32 +397,32 @@ async def cmd_resume(ctx: CommandContext) -> None:
     session = ctx.session
     arg = ctx.arg
     if arg:
-        # /resume <n> — 直接恢复指定序号
+        # /resume <n> restores the specified sequence directly.
         result = session_load(session, arg)
         print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
         if result.startswith("OK"):
             logger.debug("session_load OK (resume), msgs to display: {}", len(session.messages))
             set_deferred_history(session.messages)
         return
-    # /resume — 显示最近会话列表并交互选择
+    # /resume lists recent sessions and lets the user choose interactively.
     rows = list_sessions(10)
     if not rows:
-        print(c(GRAY, "  暂无已保存会话"))
+        print(c(GRAY, "  No saved sessions."))
         return
-    print(c(BOLD, "\n  最近会话："))
+    print(c(BOLD, "\n  Recent sessions:"))
     for i, r in enumerate(rows):
-        name = r["name"] or "(未命名)"
+        name = r["name"] or "(untitled)"
         ts = str(r["updated_at"])[:16] if r["updated_at"] else ""
         msgs = r["msg_count"] if r["msg_count"] else 0
         model = r["model"] if r["model"] else ""
         print(
             c(GRAY, f"  [{i+1:2d}] ") +
             c(CYAN, name) +
-            c(GRAY, f"  {ts}  {msgs}条  model={model}")
+            c(GRAY, f"  {ts}  {msgs} msgs  model={model}")
         )
-    print(c(GRAY, "\n  输入序号恢复，或 Enter 取消"))
+    print(c(GRAY, "\n  Enter an index to resume, or press Enter to cancel."))
     try:
-        pick = input(cp(BOLD, "  选择 [1-" + str(len(rows)) + "]: ")).strip()
+        pick = input(cp(BOLD, "  Select [1-" + str(len(rows)) + "]: ")).strip()
         if pick.isdigit():
             idx = int(pick) - 1
             if 0 <= idx < len(rows):
@@ -431,7 +431,7 @@ async def cmd_resume(ctx: CommandContext) -> None:
                 if result.startswith("OK"):
                     set_deferred_history(session.messages)
             else:
-                print(c(RED, "  序号超出范围"))
+                print(c(RED, "  Selection out of range"))
     except (EOFError, KeyboardInterrupt):
         print()
 
@@ -454,14 +454,14 @@ async def cmd_sessions(ctx: CommandContext) -> None:
         ]
         ctx.sink.print_json(data)
         return
-    print(c(BOLD, f"\n  已保存会话 (DB: {DB_PATH})："))
+    print(c(BOLD, f"\n  Saved sessions (DB: {DB_PATH}):"))
     print(session_list())
 
 
 @register("/del")
 async def cmd_del(ctx: CommandContext) -> None:
     if not ctx.arg:
-        print(c(RED, "  用法: /del <name 或 序号>"))
+        print(c(RED, "  Usage: /del <name or index>"))
         return
     result = session_delete(ctx.session, ctx.arg)
     print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
@@ -470,7 +470,7 @@ async def cmd_del(ctx: CommandContext) -> None:
 @register("/rename")
 async def cmd_rename(ctx: CommandContext) -> None:
     if not ctx.arg or not ctx.arg2:
-        print(c(RED, "  用法: /rename <序号或名称> <新名称>"))
+        print(c(RED, "  Usage: /rename <index or name> <new name>"))
         return
     result = session_rename(ctx.session, ctx.arg, ctx.arg2)
     print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
@@ -480,7 +480,7 @@ async def cmd_rename(ctx: CommandContext) -> None:
 @register("/memorize")
 async def cmd_memorize(ctx: CommandContext) -> None:
     topic = (ctx.arg + " " + ctx.arg2).strip() or "general"
-    print(c(YELLOW, f"  🧠 正在总结「{topic}」..."))
+    print(c(YELLOW, f"  🧠 Summarizing '{topic}'..."))
     result = memorize(ctx.session, topic)
     print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
 
@@ -488,11 +488,11 @@ async def cmd_memorize(ctx: CommandContext) -> None:
 @register("/forget")
 async def cmd_forget(ctx: CommandContext) -> None:
     if not ctx.arg:
-        print(c(RED, "  用法: /forget <id>"))
+        print(c(RED, "  Usage: /forget <id>"))
         return
     try:
         delete_knowledge(int(ctx.arg))
-        print(c(GREEN, f"  ✓ 已删除知识条目 id={ctx.arg}"))
+        print(c(GREEN, f"  ✓ Deleted knowledge entry id={ctx.arg}"))
     except Exception as e:
         print(c(RED, f"  ✗ {e}"))
 
@@ -521,11 +521,11 @@ async def cmd_pin(ctx: CommandContext) -> None:
                 pin_message_by_seq(session.session_id, seq, True)
                 role = non_sys[seq].get("role", "?")
                 preview = str(non_sys[seq].get("content", ""))[:50].replace("\n", " ")
-                print(c(GREEN, f"  ✓ 精准 Pin [{seq}] [{role}]: {preview}"))
+                print(c(GREEN, f"  ✓ Pinned message [{seq}] [{role}]: {preview}"))
             else:
-                print(c(RED, f"  ✗ 序号 {seq} 超出范围（共 {len(non_sys)} 条非 system 消息）"))
+                print(c(RED, f"  ✗ Index {seq} out of range ({len(non_sys)} non-system messages)"))
         except ValueError:
-            print(c(RED, "  用法: /pin msg <序号>  (先 /history 查看序号)"))
+            print(c(RED, "  Usage: /pin msg <index>  (use /history first)"))
     else:
         n = int(arg) if arg.isdigit() else 2
         count = 0
@@ -537,13 +537,13 @@ async def cmd_pin(ctx: CommandContext) -> None:
                 count += 1
                 if count >= n:
                     break
-        print(c(GREEN, f"  ✓ 已 Pin 最近 {count} 条"))
+        print(c(GREEN, f"  ✓ Pinned latest {count} messages"))
 
 
 @register("/unpin")
 async def cmd_unpin(ctx: CommandContext) -> None:
     count = sum(1 for m in ctx.session.messages if m.pop("_pinned", None))
-    print(c(GREEN, f"  ✓ 已解除 {count} 条 Pin"))
+    print(c(GREEN, f"  ✓ Unpinned {count} messages"))
 
 
 @register("/undo")
@@ -551,9 +551,9 @@ async def cmd_undo(ctx: CommandContext) -> None:
     n = int(ctx.arg) if ctx.arg.isdigit() else 1
     removed, _last_text = ctx.session.undo(n)
     if removed:
-        print(c(GREEN, f"  ↩ 已撤回 {removed} 条消息"))
+        print(c(GREEN, f"  ↩ Undid {removed} messages"))
     else:
-        print(c(GRAY, "  ↩ 无可撤回的消息"))
+        print(c(GRAY, "  ↩ Nothing to undo"))
 
 
 # ── /compact ────────────────────────────────────────────────
@@ -562,20 +562,21 @@ async def cmd_compact(ctx: CommandContext) -> None:
     """Lightweight summary → clear (preserve pins) → summary as first msg."""
     session = ctx.session
     _summary_prompt = (
-        "请用 3-5 句话总结以下对话的关键进展、已确认的结论和待办事项。"
-        "保持技术细节（如偏移量、地址、文件路径）。仅输出总结，不要寒暄。"
+        "Summarize the following conversation in 3-5 sentences: key progress, "
+        "confirmed conclusions, and remaining tasks. Preserve technical details "
+        "such as offsets, addresses, and file paths. Output only the summary."
     )
     _compact_msgs = [
         m for m in session.messages
         if m.get("role") != "system" and not m.get("_pinned")
     ]
     if len(_compact_msgs) < 2:
-        print(c(GRAY, "  ↕ 上下文太短，无需压缩"))
+        print(c(GRAY, "  ↕ Context is too short to compact."))
         return
 
-    print(c(CYAN, "  🔄 正在压缩上下文..."))
+    print(c(CYAN, "  🔄 Compacting context..."))
     _summarize_msgs = [
-        {"role": "system", "content": "你是一个对话摘要助手。"},
+        {"role": "system", "content": "You are a conversation summarization assistant."},
         *_compact_msgs,
         {"role": "user", "content": _summary_prompt},
     ]
@@ -586,7 +587,7 @@ async def cmd_compact(ctx: CommandContext) -> None:
             max_tokens=1024, tools_schema=None,
         ):
             if "_error" in delta:
-                print(c(RED, f"  ✗ 摘要生成失败: {delta['_error']}"))
+                print(c(RED, f"  ✗ Summary generation failed: {delta['_error']}"))
                 _summary_buf = ""
                 break
             choices = delta.get("choices") or []
@@ -596,7 +597,7 @@ async def cmd_compact(ctx: CommandContext) -> None:
             if chunk:
                 _summary_buf += chunk
     except Exception as e:
-        print(c(RED, f"  ✗ 摘要异常: {e}"))
+        print(c(RED, f"  ✗ Summary error: {e}"))
         _summary_buf = ""
 
     if _summary_buf:
@@ -611,8 +612,8 @@ async def cmd_compact(ctx: CommandContext) -> None:
         })
         _chars = _ctx_chars(session.messages)
         print(c(GREEN,
-            f"  ✓ 已压缩 | 保留 {len(pinned)} 条 Pin + 摘要 | "
-            f"上下文: {_chars//4:,} tokens"
+            f"  ✓ Compacted | kept {len(pinned)} pinned messages + summary | "
+            f"context: {_chars//4:,} tokens"
         ))
 
 
@@ -622,9 +623,9 @@ async def cmd_think(ctx: CommandContext) -> None:
     session = ctx.session
     arg = ctx.arg
     if not arg:
-        print(c(RED, "  用法: /think <prompt>  (单次触发推理模式)"))
+        print(c(RED, "  Usage: /think <prompt>  (single reasoning-mode turn)"))
         return
-    # 单次触发：在本次请求中切换到推理 Worker 或增加 thinking 预算
+    # Single trigger: switch to a reasoning worker for this request when possible.
     _think_alias = None
     for _candidate in ("ds-v4-pro", "ds-v4-flash"):
         _ok, _ = validate_api_key(_candidate)
@@ -634,16 +635,16 @@ async def cmd_think(ctx: CommandContext) -> None:
     if _think_alias:
         old_alias = session.model_alias
         session.model_alias = _think_alias
-        print(c(MAGENTA, f"  🧠 推理模式: {old_alias} → {_think_alias}"))
+        print(c(MAGENTA, f"  🧠 Reasoning mode: {old_alias} -> {_think_alias}"))
         try:
             session.run_turn(arg)
         finally:
             session.model_alias = old_alias
-            print(c(GRAY, f"  ↩ 已恢复模型: {old_alias}"))
+            print(c(GRAY, f"  ↩ Restored model: {old_alias}"))
     else:
-        # 无推理 Worker，直接以当前模型执行（注入 thinking 指令）
+        # No reasoning worker is available; run with the current model and prefix the instruction.
         _think_prefix = (
-            "[THINKING MODE] 请逐步推理，展示完整思维链。\n\n"
+            "[THINKING MODE] Reason carefully step by step before answering.\n\n"
         )
         session.run_turn(_think_prefix + arg)
 
@@ -653,6 +654,6 @@ async def cmd_think(ctx: CommandContext) -> None:
 async def cmd_mode(ctx: CommandContext) -> None:
     _runtime_state.user_mode = not _runtime_state.user_mode
     if _runtime_state.user_mode:
-        print(c(GREEN, "  ✓ 已切换到 USER 模式（简洁输出，屏蔽底层错误）"))
+        print(c(GREEN, "  ✓ Switched to USER mode (concise output, lower-level errors hidden)"))
     else:
-        print(c(CYAN, "  ✓ 已切换到 DEV 模式（极致透明，显示所有细节）"))
+        print(c(CYAN, "  ✓ Switched to DEV mode (transparent output with all details)"))

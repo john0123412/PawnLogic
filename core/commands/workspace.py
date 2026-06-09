@@ -42,7 +42,7 @@ Directory: {cwd}
 {goal}
 
 ## 📋 Current Tasks
-- [ ] 初始规划
+- [ ] Initial planning
 
 ## ✅ Completed
 (none yet)
@@ -56,19 +56,19 @@ Directory: {cwd}
 
 
 def _init_project(cwd: str, description: str) -> str:
-    """在 cwd 生成 .pawn_state.md，返回成功/失败消息。"""
+    """Create .pawn_state.md in cwd and return a status path or cancellation."""
     state_path = Path(cwd) / STATE_FILENAME
     if state_path.exists():
         overwrite = input(
-            c(YELLOW, "  .pawn_state.md 已存在，覆盖? [y/N]: ")
+            c(YELLOW, "  .pawn_state.md already exists. Overwrite? [y/N]: ")
         ).strip().lower()
         if overwrite != "y":
-            return "已取消"
+            return "cancelled"
 
     content = _STATE_TEMPLATE.format(
         ts=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
         cwd=cwd,
-        goal=description or "(未填写，请直接编辑 .pawn_state.md)",
+        goal=description or "(Not filled in. Edit .pawn_state.md directly.)",
     )
     state_path.write_text(content, encoding="utf-8")
     return str(state_path)
@@ -79,15 +79,15 @@ def _init_project(cwd: str, description: str) -> str:
 # ════════════════════════════════════════════════════════
 
 def _handle_workspace_cmd(arg: str, arg2: str, session) -> None:
-    """``/workspace`` 子命令分派器。
+    """``/workspace`` sub-command dispatcher.
 
-    支持：
-        /workspace                         — 等价 status
-        /workspace status                  — 概览
-        /workspace cleanup                 — 等价 cleanup plan
-        /workspace cleanup plan            — 生成清理清单（只读 + 备份）
-        /workspace cleanup execute         — 按清单归档 + DB 同步
-        /workspace cleanup restore [path]  — 从备份回滚
+    Supported:
+        /workspace                         - same as status
+        /workspace status                  - overview
+        /workspace cleanup                 - same as cleanup plan
+        /workspace cleanup plan            - generate plan (read-only + backup)
+        /workspace cleanup execute         - archive by plan + DB sync
+        /workspace cleanup restore [path]  - restore from backup
     """
     from core import workspace_cleanup as wc
 
@@ -98,17 +98,17 @@ def _handle_workspace_cmd(arg: str, arg2: str, session) -> None:
     if sub == "status":
         info = wc.workspace_status()
         if not info.get("exists"):
-            print(c(RED, "  workspace 目录不存在"))
+            print(c(RED, "  workspace directory does not exist"))
             return
-        print(c(BOLD, "\n  Workspace 状态:"))
-        print(f"  路径        : {c(CYAN, info['path'])}")
-        print(f"  总大小      : {c(GREEN, info['size_human'])}")
-        print(f"  文件数      : {info['n_files']}")
-        print(f"  子目录      : {info['n_dirs']}（其中 session_*: {info['session_dirs']}）")
+        print(c(BOLD, "\n  Workspace status:"))
+        print(f"  Path        : {c(CYAN, info['path'])}")
+        print(f"  Total size  : {c(GREEN, info['size_human'])}")
+        print(f"  Files       : {info['n_files']}")
+        print(f"  Directories : {info['n_dirs']} (session_*: {info['session_dirs']})")
         print(f"  symlinks   : {info['n_symlinks']}")
-        print(c(GRAY, f"  DB 会话数  : {info['db_sessions']}（workspace_dir 为空: {info['db_empty']}）"))
+        print(c(GRAY, f"  DB sessions : {info['db_sessions']} (empty workspace_dir: {info['db_empty']})"))
         if info["last_backup"]:
-            print(c(GRAY, f"  最近备份   : {info['last_backup']}"))
+            print(c(GRAY, f"  Last backup : {info['last_backup']}"))
         print()
         return
 
@@ -117,75 +117,75 @@ def _handle_workspace_cmd(arg: str, arg2: str, session) -> None:
         action = sub2 or "plan"
 
         if action == "plan":
-            print(c(YELLOW, "  ▶ Phase 0: 生成全量备份..."))
+            print(c(YELLOW, "  ▶ Phase 0: creating full backup..."))
             try:
                 bak = wc.make_backup()
-                print(c(GREEN, f"    ✓ 备份: {bak.name} ({bak.stat().st_size // 1024} KB)"))
+                print(c(GREEN, f"    ✓ Backup: {bak.name} ({bak.stat().st_size // 1024} KB)"))
             except Exception as exc:
-                print(c(RED, f"    ✗ 备份失败: {exc}"))
+                print(c(RED, f"    ✗ Backup failed: {exc}"))
                 return
 
-            print(c(YELLOW, "  ▶ Phase 1: 扫描 + 分类 (只读)..."))
+            print(c(YELLOW, "  ▶ Phase 1: scan + classify (read-only)..."))
             rows, db = wc.scan()
             plan_path = wc.render_plan(rows, db)
             stats: dict[str, int] = {}
             for r in rows:
                 stats[r["confidence"]] = stats.get(r["confidence"], 0) + 1
-            print(c(GREEN, f"    ✓ 清单: {plan_path}"))
-            print(c(BOLD, "\n  扫描结果:"))
+            print(c(GREEN, f"    ✓ Plan: {plan_path}"))
+            print(c(BOLD, "\n  Scan results:"))
             for k in ("LOCKED", "SAFE", "MID", "HIGH", "SENSITIVE"):
                 cnt = stats.get(k, 0)
                 if cnt:
                     print(f"    {wc._CONF_ICON[k]} {k:10} {cnt}")
-            print(c(GRAY, "\n  审阅清单后，使用 /workspace cleanup execute 按建议归档"))
-            print(c(GRAY, "  或编辑清单文件后再 execute（人工确认 SENSITIVE 项）"))
+            print(c(GRAY, "\n  Review the plan, then run /workspace cleanup execute to archive suggested items."))
+            print(c(GRAY, "  Or edit the plan file first, especially to manually confirm SENSITIVE items."))
             return
 
         elif action == "execute":
-            print(c(YELLOW, "  ▶ 重新扫描以获取最新状态..."))
+            print(c(YELLOW, "  ▶ Rescanning for the latest state..."))
             rows, db = wc.scan()
             plan_action_count = sum(1 for r in rows if r["action"] == "ARCHIVE")
             if plan_action_count == 0:
-                print(c(GREEN, "  ✓ 没有可归档项，workspace 已经整洁"))
+                print(c(GREEN, "  ✓ Nothing to archive; workspace is already clean."))
                 return
-            print(c(YELLOW, f"  ▶ 即将归档 {plan_action_count} 项 + DB workspace_dir 补写..."))
+            print(c(YELLOW, f"  ▶ Archiving {plan_action_count} items and backfilling DB workspace_dir..."))
             try:
                 result = wc.execute_cleanup(rows, db)
-                print(c(GREEN, f"    ✓ 归档: {len(result['moved'])} 项"))
-                print(c(GRAY,  f"      跳过: {len(result['skipped'])} 项"))
-                print(c(GREEN, f"    ✓ DB 补写: {result['db_updated']} 条会话"))
-                print(c(GRAY,  f"    归档目录: {result['archive_root']}"))
+                print(c(GREEN, f"    ✓ Archived: {len(result['moved'])} items"))
+                print(c(GRAY,  f"      Skipped: {len(result['skipped'])} items"))
+                print(c(GREEN, f"    ✓ DB backfilled: {result['db_updated']} sessions"))
+                print(c(GRAY,  f"    Archive directory: {result['archive_root']}"))
                 print(c(GRAY,  f"    Manifest: {result['manifest']}"))
             except Exception as exc:
                 logger.error("cleanup execute failed | exc={!r}", exc)
-                print(c(RED, f"    ✗ 失败: {exc}"))
+                print(c(RED, f"    ✗ Failed: {exc}"))
             return
 
         elif action == "restore":
             backup_arg = parts[3].strip() if (parts := arg2.split(None, 1)) and len(parts) > 1 else ""
             backup_path = Path(backup_arg).expanduser() if backup_arg else None
-            print(c(YELLOW, "  ⚠ 即将从备份回滚 workspace（当前内容会被重命名为 _replaced_<ts>/）"))
+            print(c(YELLOW, "  ⚠ Restoring workspace from backup. Current contents will be renamed to _replaced_<ts>/."))
             try:
                 from core.workspace_cleanup import restore_from_backup
                 result = restore_from_backup(backup_path)
                 if result["ok"]:
-                    print(c(GREEN, f"    ✓ 已回滚: {result['restored_from']}"))
+                    print(c(GREEN, f"    ✓ Restored from: {result['restored_from']}"))
                     if result.get("old_workspace_renamed_to"):
-                        print(c(GRAY, f"      旧 workspace 备份: {result['old_workspace_renamed_to']}"))
+                        print(c(GRAY, f"      Previous workspace backup: {result['old_workspace_renamed_to']}"))
                 else:
                     print(c(RED, f"    ✗ {result.get('error')}"))
             except Exception as exc:
                 logger.error("cleanup restore failed | exc={!r}", exc)
-                print(c(RED, f"    ✗ 失败: {exc}"))
+                print(c(RED, f"    ✗ Failed: {exc}"))
             return
 
         else:
-            print(c(RED, f"  未知子命令 'cleanup {action}'"))
-            print(c(GRAY, "  可用: plan / execute / restore"))
+            print(c(RED, f"  Unknown sub-command 'cleanup {action}'"))
+            print(c(GRAY, "  Available: plan / execute / restore"))
             return
 
-    print(c(RED, f"  未知子命令 'workspace {sub}'"))
-    print(c(GRAY, "  可用: status | cleanup [plan|execute|restore]"))
+    print(c(RED, f"  Unknown sub-command 'workspace {sub}'"))
+    print(c(GRAY, "  Available: status | cleanup [plan|execute|restore]"))
 
 
 # ════════════════════════════════════════════════════════
@@ -202,7 +202,7 @@ async def cmd_cd(ctx: CommandContext) -> None:
         _session_cwd[0] = session.cwd
         session._reset_system_prompt()
         state_exists = (Path(session.cwd) / STATE_FILENAME).exists()
-        state_tag = c(CYAN, "  [State.md 已检测]") if state_exists else ""
+        state_tag = c(CYAN, "  [State.md detected]") if state_exists else ""
         print(c(GREEN, f"  ✓ cwd: {session.cwd}{state_tag}"))
     except Exception as e:
         print(c(RED, f"  ✗ {e}"))
@@ -213,7 +213,7 @@ async def cmd_file(ctx: CommandContext) -> None:
     session = ctx.session
     arg = ctx.arg
     if not arg:
-        print(c(RED, "  用法: /file <path>"))
+        print(c(RED, "  Usage: /file <path>"))
         return
     content = tool_read_file({"path": arg})
     session.messages.append({
@@ -222,9 +222,9 @@ async def cmd_file(ctx: CommandContext) -> None:
     })
     session.messages.append({
         "role": "assistant",
-        "content": f"已载入 `{arg}` ({len(content)} 字符)",
+        "content": f"Loaded `{arg}` ({len(content)} characters)",
     })
-    print(c(GREEN, f"  ✓ 已载入 {arg}"))
+    print(c(GREEN, f"  ✓ Loaded {arg}"))
 
 
 @register("/init_project")
@@ -232,13 +232,13 @@ async def cmd_init_project(ctx: CommandContext) -> None:
     session = ctx.session
     desc = (ctx.arg + " " + ctx.arg2).strip()
     result = _init_project(session.cwd, desc)
-    if result == "已取消":
-        print(c(YELLOW, "  已取消"))
+    if result == "cancelled":
+        print(c(YELLOW, "  Cancelled"))
     else:
-        session._reset_system_prompt()   # 立即注入新的 State.md
-        print(c(GREEN, f"  ✓ 已创建 {result}"))
-        print(c(GRAY,  "  State.md 已注入 System Prompt，/clear 后也会保持。"))
-        print(c(GRAY,  "  提示：直接说出任务，Agent 将遵循规格驱动格式执行并自动提交 git。"))
+        session._reset_system_prompt()   # inject the new State.md immediately
+        print(c(GREEN, f"  ✓ Created {result}"))
+        print(c(GRAY,  "  State.md has been injected into the system prompt and persists after /clear."))
+        print(c(GRAY,  "  Tip: state the task directly; the agent will follow the spec-driven flow and commit automatically."))
 
 
 @register("/workspace")

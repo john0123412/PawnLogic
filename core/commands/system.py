@@ -77,8 +77,8 @@ async def cmd_clear(ctx: CommandContext) -> None:
     session._reset_system_prompt()
     session.messages.extend(pinned)
     state_exists = (Path(session.cwd) / STATE_FILENAME).exists()
-    state_note = c(GREEN, "  (State.md 将在下轮自动注入)") if state_exists else ""
-    print(c(GREEN, f"  ✓ 已清空（保留 {len(pinned)} 条 Pin 消息）{state_note}"))
+    state_note = c(GREEN, "  (State.md will be injected on the next turn)") if state_exists else ""
+    print(c(GREEN, f"  ✓ Cleared context; kept {len(pinned)} pinned messages.{state_note}"))
 
 
 @register("/context")
@@ -92,9 +92,9 @@ async def cmd_context(ctx: CommandContext) -> None:
     filled = int(min(pct, 100) / 100 * 30)
     bcol = RED if pct > 80 else (YELLOW if pct > 50 else GREEN)
     bar = c(bcol, "█" * filled) + c(GRAY, "░" * (30 - filled))
-    warn = c(YELLOW, "  ⚠ 超80%，建议 /clear") if pct > 80 else ""
+    warn = c(YELLOW, "  ⚠ Above 80%; consider /clear") if pct > 80 else ""
     print(
-        f"\n  {c(BOLD, '上下文')}  {len(msgs)}条  Pin:{c(GREEN, str(pinned))}"
+        f"\n  {c(BOLD, 'Context')}  {len(msgs)} messages  Pin:{c(GREEN, str(pinned))}"
         f"  ~{tok:,} tokens\n  [{bar}] {pct:.1f}%  {warn}\n"
     )
 
@@ -102,7 +102,7 @@ async def cmd_context(ctx: CommandContext) -> None:
 @register("/history")
 async def cmd_history(ctx: CommandContext) -> None:
     session = ctx.session
-    print(c(CYAN, f"\n  {len(session.messages)} 条消息（序号不含 system）："))
+    print(c(CYAN, f"\n  {len(session.messages)} messages (indices exclude system messages):"))
     seq = 0
     for m in session.messages:
         role = m.get("role", "?")
@@ -157,7 +157,7 @@ async def cmd_state(ctx: CommandContext) -> None:
         print(c(BOLD, f"\n  {p}："))
         print(p.read_text(encoding="utf-8"))
     else:
-        print(c(GRAY, f"  当前目录没有 {STATE_FILENAME}。用 /init_project 创建。"))
+        print(c(GRAY, f"  Current directory has no {STATE_FILENAME}. Create one with /init_project."))
 
 
 @register("/stats")
@@ -169,18 +169,18 @@ async def cmd_stats(ctx: CommandContext) -> None:
     tot = pt + ct
     est_usd = tot / 1_000_000 * 1.50
     if tot + tt == 0:
-        print(c(GRAY, "  (本次会话暂无 API 调用记录)"))
+        print(c(GRAY, "  (No API calls recorded in this session.)"))
     elif _runtime_state.quiet_mode:
         print(c(GRAY, f"  stats: ↑{pt:,} ↓{ct:,} total={tot:,} tools={tt} ~${est_usd:.4f}"))
     else:
-        print(c(BOLD, "\n  ╔══ 会话用量审计 ════════════════════════════╗"))
+        print(c(BOLD, "\n  ╔══ Session Usage Audit ═════════════════════╗"))
         print(f"  ║  Prompt tokens    : {c(CYAN, f'{pt:>10,}')}               ║")
         print(f"  ║  Completion tokens: {c(CYAN, f'{ct:>10,}')}               ║")
         print(f"  ║  Total tokens     : {c(YELLOW, f'{tot:>10,}')}               ║")
         print(f"  ║  Tool calls       : {c(GREEN, f'{tt:>10,}')}               ║")
         print(f"  ║  Est. cost        : {c(GRAY, f'~${est_usd:.4f} USD'):>18}         ║")
         print(c(BOLD,  "  ╚══════════════════════════════════════════════╝"))
-        print(c(GRAY, "  (成本估算基于 $1.50/1M tokens 均值，仅供参考)"))
+        print(c(GRAY, "  (Cost estimate uses a $1.50/1M tokens average; informational only.)"))
 
 
 @register("/time")
@@ -195,9 +195,9 @@ async def cmd_time(ctx: CommandContext) -> None:
         session._reset_system_prompt()
         if new_budget > 0:
             m, s = divmod(new_budget, 60)
-            print(c(GREEN, f"  ✓ 时间预算已设为 {m}m{s}s"))
+            print(c(GREEN, f"  ✓ Time budget set to {m}m{s}s"))
         else:
-            print(c(GREEN, "  ✓ 时间预算已关闭（不限时）"))
+            print(c(GREEN, "  ✓ Time budget disabled."))
     else:
         if budget > 0:
             m, s = divmod(budget, 60)
@@ -205,14 +205,14 @@ async def cmd_time(ctx: CommandContext) -> None:
             remaining = max(0, budget - elapsed)
             rm, rs = divmod(int(remaining), 60)
             mode = c(RED, " [URGENT]") if session._urgent_mode else ""
-            print(c(BOLD, "\n  ⏱  时间预算："))
-            print(f"  预算: {c(CYAN, f'{m}m{s}s')}")
-            print(f"  已用: {c(YELLOW, f'{int(elapsed)}s')}")
-            print(f"  剩余: {c(GREEN if remaining > 30 else RED, f'{rm}m{rs}s')}{mode}")
-            print(c(GRAY, "\n  /time <秒数> 修改 | /time 0 关闭"))
+            print(c(BOLD, "\n  ⏱  Time budget:"))
+            print(f"  Budget   : {c(CYAN, f'{m}m{s}s')}")
+            print(f"  Elapsed  : {c(YELLOW, f'{int(elapsed)}s')}")
+            print(f"  Remaining: {c(GREEN if remaining > 30 else RED, f'{rm}m{rs}s')}{mode}")
+            print(c(GRAY, "\n  /time <seconds> to change | /time 0 to disable"))
         else:
-            print(c(GRAY, "  时间预算未设置（不限时）"))
-            print(c(GRAY, "  /time <秒数> 设置 | 例: /time 300 = 5分钟"))
+            print(c(GRAY, "  No time budget is set."))
+            print(c(GRAY, "  /time <seconds> to set | example: /time 300 = 5 minutes"))
 
 
 @register("/failures")
@@ -221,14 +221,14 @@ async def cmd_failures(ctx: CommandContext) -> None:
     sub = arg.lower().strip() if arg else "list"
     if sub == "clear":
         n = clear_failures()
-        print(c(GREEN, f"  ✓ 已清空 {n} 条失败记录"))
+        print(c(GREEN, f"  ✓ Cleared {n} failure records"))
     elif sub == "list" or sub.isdigit():
         n = int(sub) if sub.isdigit() else 20
         rows = list_failures(n)
         if not rows:
-            print(c(GREEN, "  ✓ 暂无失败记录（防御性审计数据库为空）"))
+            print(c(GREEN, "  ✓ No failure records; defensive audit database is empty."))
         else:
-            print(c(BOLD, f"\n  失败记录（最近 {len(rows)} 条）："))
+            print(c(BOLD, f"\n  Failure records (latest {len(rows)}):"))
             for i, r in enumerate(rows):
                 etype = r["error_type"] or "?"
                 ts = r["created_at"][:16] if r["created_at"] else ""
@@ -242,7 +242,7 @@ async def cmd_failures(ctx: CommandContext) -> None:
                 )
                 print(c(GRAY, f"       {msg}"))
     else:
-        print(c(GRAY, "  用法: /failures [list|clear|N]"))
+        print(c(GRAY, "  Usage: /failures [list|clear|N]"))
 
 
 # ════════════════════════════════════════════════════════
@@ -251,7 +251,7 @@ async def cmd_failures(ctx: CommandContext) -> None:
 
 def _tier_confirmation(label: str, tier: dict) -> str:
     return (
-        f"  ✓ 已切换到 {label}: "
+        f"  ✓ Switched to {label}: "
         f"tokens={tier['max_tokens']:,}, "
         f"ctx={tier['ctx_max_chars']:,}, "
         f"iter={tier['max_iter']}"
@@ -261,7 +261,7 @@ def _tier_confirmation(label: str, tier: dict) -> str:
 async def cmd_low(ctx: CommandContext) -> None:
     DYNAMIC_CONFIG.update(TIER_LOW)
     ctx.session._reset_system_prompt()
-    print(c(GREEN, _tier_confirmation("/low 日常模式", TIER_LOW)))
+    print(c(GREEN, _tier_confirmation("/low light mode", TIER_LOW)))
     print(fmt_config())
 
 
@@ -269,7 +269,7 @@ async def cmd_low(ctx: CommandContext) -> None:
 async def cmd_mid(ctx: CommandContext) -> None:
     DYNAMIC_CONFIG.update(TIER_MID)
     ctx.session._reset_system_prompt()
-    print(c(YELLOW, _tier_confirmation("/mid 开发模式", TIER_MID)))
+    print(c(YELLOW, _tier_confirmation("/mid development mode", TIER_MID)))
     print(fmt_config())
 
 
@@ -277,7 +277,7 @@ async def cmd_mid(ctx: CommandContext) -> None:
 async def cmd_deep(ctx: CommandContext) -> None:
     DYNAMIC_CONFIG.update(TIER_DEEP)
     ctx.session._reset_system_prompt()
-    print(c(BOLD + MAGENTA, _tier_confirmation("/deep 全火力模式", TIER_DEEP)))
+    print(c(BOLD + MAGENTA, _tier_confirmation("/deep full-power mode", TIER_DEEP)))
     print(fmt_config())
 
 
@@ -285,7 +285,7 @@ async def cmd_deep(ctx: CommandContext) -> None:
 async def cmd_max(ctx: CommandContext) -> None:
     DYNAMIC_CONFIG.update(TIER_MAX)
     ctx.session._reset_system_prompt()
-    print(c(BOLD + RED, _tier_confirmation("/max 极限火力模式", TIER_MAX)))
+    print(c(BOLD + RED, _tier_confirmation("/max maximum mode", TIER_MAX)))
     print(fmt_config())
 
 
@@ -293,13 +293,13 @@ async def cmd_max(ctx: CommandContext) -> None:
 async def cmd_normal(ctx: CommandContext) -> None:
     DYNAMIC_CONFIG.update(NORMAL_CONFIG)
     ctx.session._reset_system_prompt()
-    print(c(GREEN, "  ✓ 已重置到 /mid"))
+    print(c(GREEN, "  ✓ Reset to /mid"))
     print(fmt_config())
 
 
 @register("/limits")
 async def cmd_limits(ctx: CommandContext) -> None:
-    print(c(BOLD, "\n  当前运行时限制："))
+    print(c(BOLD, "\n  Current runtime limits:"))
     print(fmt_config())
     print(c(GRAY, "  /low /mid /deep /max  |  /tokens /ctx /iter /toolsize /fetchsize"))
 
@@ -312,7 +312,7 @@ async def cmd_limits(ctx: CommandContext) -> None:
 async def cmd_tokens(ctx: CommandContext) -> None:
     arg = ctx.arg
     if not arg:
-        print(c(GRAY, f"  当前: {DYNAMIC_CONFIG['max_tokens']}  /tokens <n>"))
+        print(c(GRAY, f"  Current: {DYNAMIC_CONFIG['max_tokens']}  /tokens <n>"))
         return
     try:
         n = max(256, min(65536, int(arg)))
@@ -320,14 +320,14 @@ async def cmd_tokens(ctx: CommandContext) -> None:
         ctx.session._reset_system_prompt()
         print(c(GREEN, f"  ✓ max_tokens={n}"))
     except ValueError:
-        print(c(RED, "  ✗ 无效数字"))
+        print(c(RED, "  ✗ Invalid number"))
 
 
 @register("/ctx")
 async def cmd_ctx(ctx: CommandContext) -> None:
     arg = ctx.arg
     if not arg:
-        print(c(GRAY, f"  当前: {DYNAMIC_CONFIG['ctx_max_chars']}  /ctx <n>"))
+        print(c(GRAY, f"  Current: {DYNAMIC_CONFIG['ctx_max_chars']}  /ctx <n>"))
         return
     try:
         n = max(10_000, int(arg))
@@ -336,44 +336,44 @@ async def cmd_ctx(ctx: CommandContext) -> None:
         ctx.session._reset_system_prompt()
         print(c(GREEN, f"  ✓ ctx_max_chars={n}"))
     except ValueError:
-        print(c(RED, "  ✗ 无效数字"))
+        print(c(RED, "  ✗ Invalid number"))
 
 
 @register("/iter")
 async def cmd_iter(ctx: CommandContext) -> None:
     arg = ctx.arg
     if not arg:
-        print(c(GRAY, f"  当前: {DYNAMIC_CONFIG['max_iter']}  /iter <n>"))
+        print(c(GRAY, f"  Current: {DYNAMIC_CONFIG['max_iter']}  /iter <n>"))
         return
     try:
         n = max(1, int(arg))
         DYNAMIC_CONFIG["max_iter"] = n
         print(c(GREEN, f"  ✓ max_iter={n}"))
     except ValueError:
-        print(c(RED, "  ✗ 无效数字"))
+        print(c(RED, "  ✗ Invalid number"))
 
 
 @register("/toolsize")
 async def cmd_toolsize(ctx: CommandContext) -> None:
     arg = ctx.arg
     if not arg:
-        print(c(GRAY, f"  当前: {DYNAMIC_CONFIG['tool_max_chars']}"))
+        print(c(GRAY, f"  Current: {DYNAMIC_CONFIG['tool_max_chars']}"))
         return
     try:
         DYNAMIC_CONFIG["tool_max_chars"] = max(1000, int(arg))
         print(c(GREEN, f"  ✓ tool_max_chars={DYNAMIC_CONFIG['tool_max_chars']}"))
     except ValueError:
-        print(c(RED, "  ✗ 无效数字"))
+        print(c(RED, "  ✗ Invalid number"))
 
 
 @register("/fetchsize")
 async def cmd_fetchsize(ctx: CommandContext) -> None:
     arg = ctx.arg
     if not arg:
-        print(c(GRAY, f"  当前: {DYNAMIC_CONFIG['fetch_max_chars']}"))
+        print(c(GRAY, f"  Current: {DYNAMIC_CONFIG['fetch_max_chars']}"))
         return
     try:
         DYNAMIC_CONFIG["fetch_max_chars"] = max(1000, int(arg))
         print(c(GREEN, f"  ✓ fetch_max_chars={DYNAMIC_CONFIG['fetch_max_chars']}"))
     except ValueError:
-        print(c(RED, "  ✗ 无效数字"))
+        print(c(RED, "  ✗ Invalid number"))

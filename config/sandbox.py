@@ -1,4 +1,4 @@
-"""config/sandbox.py — 沙箱语言表、Docker 镜像、浏览器配置"""
+"""config/sandbox.py - sandbox languages, Docker images, and browser config."""
 from .paths import PAWNLOGIC_HOME
 
 SANDBOX_LANGS = {

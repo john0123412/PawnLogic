@@ -1,4 +1,4 @@
-"""config/security.py — 安全名单与输出工具函数"""
+"""config/security.py - security allow/deny lists and output helpers."""
 import os
 from .paths import PAWNLOGIC_HOME
 from core.state import state as _state
@@ -57,22 +57,22 @@ DANGEROUS_PATTERNS = [
 ]
 
 _ERROR_MAP = {
-    "Traceback":            "❌ 系统忙，请稍后重试",
-    "ConnectionError":      "❌ 网络连接失败，请检查网络",
-    "TimeoutError":         "❌ 请求超时，请稍后重试",
-    "RateLimitError":       "❌ API 调用频率过高，请稍后重试",
-    "AuthenticationError":  "❌ API Key 无效，请用 /setkey 重新配置",
-    "PermissionError":      "❌ 权限不足，请检查文件权限",
-    "FileNotFoundError":    "❌ 文件未找到，请检查路径",
-    "ModuleNotFoundError":  "❌ 缺少依赖模块，请安装后重试",
-    "JSONDecodeError":      "❌ 数据解析失败，请稍后重试",
-    "API Error":            "❌ API 调用失败，请稍后重试",
-    "ERROR":                "❌ 操作失败，请稍后重试",
+    "Traceback":            "❌ System is busy. Please try again later.",
+    "ConnectionError":      "❌ Network connection failed. Please check your network.",
+    "TimeoutError":         "❌ Request timed out. Please try again later.",
+    "RateLimitError":       "❌ API rate limit exceeded. Please try again later.",
+    "AuthenticationError":  "❌ API key is invalid. Reconfigure it with /setkey.",
+    "PermissionError":      "❌ Permission denied. Please check file permissions.",
+    "FileNotFoundError":    "❌ File not found. Please check the path.",
+    "ModuleNotFoundError":  "❌ Missing dependency module. Install it and try again.",
+    "JSONDecodeError":      "❌ Failed to parse response data. Please try again later.",
+    "API Error":            "❌ API call failed. Please try again later.",
+    "ERROR":                "❌ Operation failed. Please try again later.",
 }
 
 
 def user_friendly_error(raw_error: str) -> str:
-    """USER_MODE 专用：将原始错误信息转为用户友好的简洁提示。"""
+    """Convert raw errors into concise user-facing messages in USER_MODE."""
     if not _state.user_mode:
         return raw_error
     for keyword, friendly in _ERROR_MAP.items():
@@ -83,7 +83,7 @@ def user_friendly_error(raw_error: str) -> str:
 
 
 def smart_truncate(text: str, head: int = 30, tail: int = 30) -> str:
-    """保留文本前 head 行和后 tail 行，丢弃中间内容并插入标记。"""
+    """Keep the first head lines and last tail lines, replacing the middle."""
     lines = text.splitlines()
     total = len(lines)
     if total <= head + tail:
