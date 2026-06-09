@@ -300,6 +300,52 @@ def test_api_client_stream_request_respects_pending_interrupt(monkeypatch):
         interrupts.clear_interrupt()
 
 
+def test_interrupt_state_is_thread_local(monkeypatch):
+    _drop_project_modules("core.interrupts", force=True)
+    from core import interrupts
+    import threading
+
+    states = []
+
+    interrupts.request_interrupt()
+
+    def worker():
+        states.append(interrupts.interrupted())
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join(timeout=2)
+
+    try:
+        assert interrupts.interrupted() is True
+        assert states == [False]
+    finally:
+        interrupts.clear_interrupt()
+
+
+def test_turn_interrupt_handler_prints_feedback_once(monkeypatch):
+    _drop_project_modules("core.interrupts", force=True)
+    from core import interrupts
+
+    writes = []
+    handlers = {}
+
+    monkeypatch.setattr(interrupts.signal, "getsignal", lambda sig: handlers.get(sig))
+    monkeypatch.setattr(interrupts.signal, "signal", lambda sig, handler: handlers.setdefault(sig, handler))
+    monkeypatch.setattr(interrupts.sys.stdout, "write", lambda text: writes.append(text))
+    monkeypatch.setattr(interrupts.sys.stdout, "flush", lambda: None)
+    monkeypatch.setattr(interrupts.sys.stdin, "fileno", lambda: (_ for _ in ()).throw(OSError("no tty")))
+
+    with interrupts.turn_interrupt_handler():
+        handler = handlers[interrupts.signal.SIGINT]
+        handler(interrupts.signal.SIGINT, None)
+        handler(interrupts.signal.SIGINT, None)
+
+    feedback = [text for text in writes if "[interrupt] Stopping current response" in text]
+    assert len(feedback) == 1
+    assert interrupts.interrupted() is False
+
+
 def test_api_client_nonstream_parser_handles_nonstandard_responses(monkeypatch):
     _drop_project_modules("config")
     _drop_project_modules("core.api_client", force=True)

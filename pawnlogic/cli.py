@@ -5,7 +5,7 @@ PawnLogic CLI.
 Multi-provider runtime, vision support, SQLite persistence, CoT guidance,
 GSA skill archive, spec-driven execution, and GSD project state.
 """
-import os, sys, shutil, argparse, time, asyncio, traceback
+import os, sys, shutil, argparse, time, asyncio, traceback, signal
 
 if sys.version_info < (3, 10):
     print(
@@ -405,6 +405,23 @@ def _safe_write_history(path: str) -> None:
     try:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         readline.write_history_file(path)
+    except Exception:
+        pass
+
+
+def _read_text_cache(path: Path) -> str:
+    """Read a small UTF-8 text cache file, returning empty on any failure."""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+def _write_text_cache(path: Path, text: str) -> None:
+    """Write a small UTF-8 text cache file, ignoring non-critical failures."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text.strip() + "\n", encoding="utf-8")
     except Exception:
         pass
 
@@ -1184,8 +1201,9 @@ async def main():
         _all_words.append(_w)
         _all_meta[_w] = _desc
 
-    # readline history file path.
+    # readline history file path and last-submitted prompt cache.
     _history_path = str(_PAWNLOGIC_DIR / ".input_history")
+    _last_input_path = _PAWNLOGIC_DIR / ".last_input"
 
     if prompt_toolkit_enabled:
         # Use PawnCompleter directly. It has built-in fuzzy matching.
@@ -1266,6 +1284,15 @@ async def main():
             if b.text.startswith('/'):
                 b.start_completion(select_first=False)
 
+        @_kb.add('c-z')
+        def _(event):
+            last_input = _read_text_cache(_last_input_path)
+            if not last_input:
+                return
+            b = event.app.current_buffer
+            b.text = last_input
+            b.cursor_position = len(last_input)
+
         # ──────────────────────────────────────────────────────────
 
         _pt_session = PromptSession(
@@ -1326,9 +1353,27 @@ async def main():
     _re_edit_default = ""     # after Ctrl+C, previous user text becomes prompt default
     _last_sigint_time = 0.0   # double Ctrl+C exit timer
     _sigint_pending   = False # first Ctrl+C seen; waiting for confirmation
+    _pending_last_input_restore = False
+
+    def _restore_last_input_on_sigtstp(_signum, _frame):
+        nonlocal _pending_last_input_restore
+        _pending_last_input_restore = True
+
+    _previous_sigtstp = None
+    try:
+        _previous_sigtstp = signal.getsignal(signal.SIGTSTP)
+        signal.signal(signal.SIGTSTP, _restore_last_input_on_sigtstp)
+    except Exception:
+        _previous_sigtstp = None
 
     while True:
         try:
+            if _pending_last_input_restore:
+                _pending_last_input_restore = False
+                _cached_input = _read_text_cache(_last_input_path)
+                if _cached_input:
+                    _re_edit_default = _cached_input
+
             # ════════════════════════════════════════════════════════
             # Invisible-history fix: pre-render before any prompt_toolkit API:
             #   [1] _display_session_history prints ANSI output and flushes.
@@ -1379,6 +1424,7 @@ async def main():
                     print(c(CYAN, "\n  Goodbye! 👋"))
                     break
                 continue
+            _write_text_cache(_last_input_path, raw)
             try:
                 with turn_interrupt_handler():
                     session.run_turn(raw)
@@ -1393,19 +1439,16 @@ async def main():
                     print(c(YELLOW, "  [interrupted] Edit and press Enter to retry."))
 
         except KeyboardInterrupt:
-            # Double Ctrl+C exits when the second press happens within 5 seconds.
+            # Idle input state: Ctrl+C only arms the double-press exit flow.
+            # Turn rollback is handled exclusively by the in-flight
+            # TurnInterrupted branch around session.run_turn().
             _now = time.monotonic()
             if _sigint_pending and (_now - _last_sigint_time < 5.0):
                 print(c(CYAN, "\n  Goodbye! 👋"))
                 break
             _last_sigint_time = _now
             _sigint_pending   = True
-            removed, last_text = session.undo(1)
-            if removed:
-                session._autosave()
-            if removed:
-                _re_edit_default = last_text
-            print(c(YELLOW, "\n  [hint] Press Ctrl+C again to exit."))
+            print(c(YELLOW, "\n  [confirm] Press Ctrl+C again within 5s to exit. Current input is unchanged."))
             continue
         except EOFError:
             # Ctrl+D exits immediately.
@@ -1422,6 +1465,11 @@ async def main():
         t.cancel()
     if pending:
         await asyncio.gather(*pending, return_exceptions=True)
+    if _previous_sigtstp is not None:
+        try:
+            signal.signal(signal.SIGTSTP, _previous_sigtstp)
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     try:

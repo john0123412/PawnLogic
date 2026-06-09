@@ -88,6 +88,7 @@ sys.modules["core.skill_manager"].SkillScanner = MagicMock(return_value=_mock_sc
 from core.session import (  # noqa: E402
     AgentSession,
     TurnInterrupted,
+    _ThinkingSpinner,
     _ctx_chars,
     _drop_dangling_tool_call_messages,
     _trim_and_compact_context,
@@ -502,6 +503,160 @@ def test_run_turn_interrupt_raises_for_cli_rollback(monkeypatch):
 
     assert s.messages[-1]["role"] == "user"
     assert s.messages[-1]["content"] == "interrupt me"
+
+
+def _prepare_run_turn_session(monkeypatch):
+    from config import DYNAMIC_CONFIG
+    import core.session as session_mod
+
+    s = _make_session()
+    s._time_budget_sec = 0
+    s._turn_prompt_tokens = 0
+    s._turn_completion_tokens = 0
+    s._turn_tool_calls = 0
+    s.total_prompt_tokens = 0
+    s.total_completion_tokens = 0
+    s.total_tool_calls = 0
+    s._save_lock = threading.Lock()
+    s._naming_lock = threading.Lock()
+
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 3)
+    monkeypatch.setattr(session_mod, "validate_api_key", lambda _m: (True, ""))
+    monkeypatch.setattr(s, "_reset_system_prompt", MagicMock())
+    monkeypatch.setattr(s, "_maybe_update_summary", MagicMock())
+    monkeypatch.setattr(s, "_build_api_messages", lambda: s.messages)
+    monkeypatch.setattr(s, "_autosave", MagicMock())
+    return s, session_mod
+
+
+def test_run_turn_starts_and_stops_thinking_spinner(monkeypatch):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+
+    starts = []
+    stops = []
+
+    class FakeSpinner:
+        def __init__(self, enabled, label="Thinking"):
+            starts.append(("init", enabled, label))
+
+        def start(self):
+            starts.append(("start",))
+
+        def stop(self):
+            stops.append(("stop",))
+
+    monkeypatch.setattr(session_mod, "_ThinkingSpinner", FakeSpinner)
+    monkeypatch.setattr(session_mod, "stream_request", lambda *_a, **_kw: iter([
+        {"choices": [{"delta": {"content": "done"}}]},
+    ]))
+
+    s.run_turn("show spinner")
+
+    assert ("init", True, "Thinking") in starts
+    assert ("start",) in starts
+    assert stops
+
+
+def test_user_mode_reasoning_keeps_spinner_until_visible_output(monkeypatch):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+
+    events = []
+
+    class FakeSpinner:
+        def __init__(self, enabled, label="Thinking"):
+            events.append(("init", enabled, label))
+
+        def start(self):
+            events.append(("start",))
+
+        def stop(self):
+            events.append(("stop",))
+
+    def fake_stream_request(*_args, **_kwargs):
+        events.append(("yield", "usage"))
+        yield {"_usage": {"prompt_tokens": 1, "completion_tokens": 0}}
+        events.append(("yield", "reasoning"))
+        yield {"choices": [{"delta": {"reasoning_content": "hidden thought"}}]}
+        events.append(("yield", "content"))
+        yield {"choices": [{"delta": {"content": "done"}}]}
+
+    monkeypatch.setattr(session_mod, "_ThinkingSpinner", FakeSpinner)
+    monkeypatch.setattr(session_mod, "stream_request", fake_stream_request)
+
+    s.run_turn("keep spinner while reasoning")
+
+    assert ("init", True, "Thinking") in events
+    assert events.index(("yield", "usage")) < events.index(("yield", "reasoning"))
+    assert events.index(("yield", "reasoning")) < events.index(("yield", "content"))
+    assert ("stop",) not in events[:events.index(("yield", "content"))]
+    assert ("stop",) in events[events.index(("yield", "content")):]
+
+
+def test_usage_and_reasoning_only_response_retries_until_visible_output(monkeypatch):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    calls = []
+
+    def fake_stream_request(*_args, **_kwargs):
+        calls.append("call")
+        if len(calls) == 1:
+            return iter([
+                {"_usage": {"prompt_tokens": 1, "completion_tokens": 12}},
+                {"choices": [{"delta": {"reasoning_content": "hidden only"}}]},
+            ])
+        return iter([
+            {"choices": [{"delta": {"content": "visible answer"}}]},
+        ])
+
+    monkeypatch.setattr(session_mod, "stream_request", fake_stream_request)
+    monkeypatch.setattr(session_mod.time, "sleep", lambda _seconds: None)
+
+    s.run_turn("retry empty visible response")
+
+    assert len(calls) == 2
+    assert s.messages[-1]["role"] == "assistant"
+    assert s.messages[-1]["content"] == "visible answer"
+
+
+def test_run_turn_accepts_message_content_in_stream_choice(monkeypatch):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+
+    monkeypatch.setattr(session_mod, "stream_request", lambda *_args, **_kwargs: iter([
+        {
+            "_usage": {"prompt_tokens": 1, "completion_tokens": 5},
+            "choices": [{"message": {"content": "message fallback answer"}}],
+        },
+    ]))
+
+    s.run_turn("provider sends message content")
+
+    assert s.messages[-1]["role"] == "assistant"
+    assert s.messages[-1]["content"] == "message fallback answer"
+
+
+def test_thinking_spinner_can_be_disabled_for_non_tty(monkeypatch):
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    spinner = _ThinkingSpinner(enabled=True)
+    spinner.start()
+    spinner.stop()
+    assert spinner._thread is None
+
+
+def test_thinking_spinner_stop_is_idempotent_after_clearing(monkeypatch):
+    writes = []
+
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "write", lambda text: writes.append(text))
+    monkeypatch.setattr(sys.stdout, "flush", lambda: None)
+
+    spinner = _ThinkingSpinner(enabled=True)
+    spinner._printed = True
+    spinner._thread = MagicMock()
+
+    spinner.stop()
+    spinner.stop()
+
+    clear_writes = [text for text in writes if text.startswith("\r")]
+    assert len(clear_writes) == 1
 
 
 # ══════════════════════════════════════════════════════════

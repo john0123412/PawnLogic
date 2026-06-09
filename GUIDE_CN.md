@@ -365,7 +365,7 @@ PawnLogic/
 │   ├── naming.py        # 自动命名与工作区
 │   └── provider_tui.py  # Provider 管理 TUI
 ├── tools/               # 工具实现
-└── skills/              # 本地技能包
+└── skills/              # 源码 checkout 技能包（不随 PyPI wheel 发布）
 ```
 
 ### 运行时数据（`~/.pawnlogic/`）
@@ -376,6 +376,7 @@ PawnLogic/
 ├── custom_providers.json   # 自定义 Provider（不含密钥）
 ├── pawn.db                 # SQLite 数据库
 ├── mcp_configs.json        # MCP 服务声明
+├── skills/                 # 可选用户安装技能包
 ├── workspace/              # Agent 工作区
 └── logs/                   # 审计日志
 ```

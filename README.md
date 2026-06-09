@@ -45,11 +45,13 @@ pip install -e ".[dev]"
 pawn             # first run launches the API configuration wizard
 ```
 
-**Optional CTF skill pack** (pwntools / ROPgadget / ropper + the `skills/ctf_*` markdown):
+**Optional CTF tooling** (pwntools / ROPgadget / ropper):
 ```bash
 pip install "pawnlogic[ctf]"       # package install
 pip install -e ".[ctf]"            # source checkout
 ```
+PyPI and curl installations do not include local `skills/` packs. Use a source
+checkout or `/sp install <repo_url>` when you want repository-backed skill packs.
 
 Source-checkout launcher fallback:
 ```bash
@@ -161,6 +163,7 @@ All runtime data and API keys are stored in `~/.pawnlogic/` — **never in the p
 ├── mcp_configs.json        # MCP server declarations
 ├── pawn.db                 # sessions, messages, knowledge base
 ├── global_skills.md        # GSA skill archive
+├── skills/                 # optional user-installed skill packs
 ├── workspace/              # per-session working directories
 └── logs/                   # audit logs
 ```

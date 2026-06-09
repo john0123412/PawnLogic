@@ -11,22 +11,30 @@ from types import FrameType
 from collections.abc import Iterator
 
 
-_INTERRUPTED = threading.Event()
+_INTERRUPTS = threading.local()
+
+
+def _event() -> threading.Event:
+    event = getattr(_INTERRUPTS, "event", None)
+    if event is None:
+        event = threading.Event()
+        _INTERRUPTS.event = event
+    return event
 
 
 def request_interrupt() -> None:
     """Mark the current turn as interrupted."""
-    _INTERRUPTED.set()
+    _event().set()
 
 
 def clear_interrupt() -> None:
     """Clear any pending turn-interrupt request."""
-    _INTERRUPTED.clear()
+    _event().clear()
 
 
 def interrupted() -> bool:
     """Return whether a turn interrupt has been requested."""
-    return _INTERRUPTED.is_set()
+    return _event().is_set()
 
 
 def raise_if_interrupted() -> None:
@@ -41,9 +49,18 @@ def turn_interrupt_handler() -> Iterator[None]:
     previous = signal.getsignal(signal.SIGINT)
     fd: int | None = None
     old_attrs: list[int | bytes] | None = None
+    feedback_printed = False
 
     def _handler(_signum: int, _frame: FrameType | None) -> None:
+        nonlocal feedback_printed
         request_interrupt()
+        if not feedback_printed:
+            feedback_printed = True
+            try:
+                sys.stdout.write("\n  [interrupt] Stopping current response; returning to edit mode...\n")
+                sys.stdout.flush()
+            except Exception:
+                pass
 
     clear_interrupt()
     try:

@@ -465,6 +465,26 @@ def test_quiet_flag_is_removed(tmp_path):
     assert "unrecognized arguments: --quiet" in result.stderr
 
 
+def test_idle_ctrl_c_does_not_rollback_session_turns():
+    source = (ROOT / "pawnlogic" / "cli.py").read_text(encoding="utf-8")
+    marker = "# Idle input state: Ctrl+C only arms the double-press exit flow."
+    idle_branch = source[source.index(marker):source.index("        except EOFError:", source.index(marker))]
+
+    assert "session.undo" not in idle_branch
+    assert "session._autosave" not in idle_branch
+    assert "Press Ctrl+C again within 5s to exit" in idle_branch
+    assert "Current input is unchanged" in idle_branch
+
+
+def test_ctrl_z_restores_last_input_cache_binding():
+    source = (ROOT / "pawnlogic" / "cli.py").read_text(encoding="utf-8")
+
+    assert '".last_input"' in source
+    assert "@_kb.add('c-z')" in source
+    assert "b.text = last_input" in source
+    assert "_write_text_cache(_last_input_path, raw)" in source
+
+
 def test_latest_documented_model_aliases_are_registered():
     from config.providers import MODELS
 

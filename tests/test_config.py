@@ -89,6 +89,35 @@ assert config.BROWSER_CONFIG['screenshot_dir'] == str(config.PAWNLOGIC_HOME / 'w
     assert result.returncode == 0, result.stderr
 
 
+def test_skills_dir_falls_back_to_pawnlogic_home_when_source_skills_missing(tmp_path):
+    pawn_home = tmp_path / "pawn-home"
+    source_skills = Path(ROOT) / "skills"
+    code = """
+import os
+import pathlib
+
+real_exists = pathlib.Path.exists
+source_skills = pathlib.Path(os.environ['SOURCE_SKILLS']).resolve()
+
+def fake_exists(path):
+    if path.resolve() == source_skills:
+        return False
+    return real_exists(path)
+
+pathlib.Path.exists = fake_exists
+import config
+assert config.SKILLS_DIR == config.PAWNLOGIC_HOME / 'skills'
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "PAWNLOGIC_HOME": str(pawn_home), "SOURCE_SKILLS": str(source_skills)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 # ── Tiers ─────────────────────────────────────────────────
 
 def test_tier_keys_present():

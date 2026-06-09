@@ -44,11 +44,13 @@ pip install -e ".[dev]"
 pawn             # 首次运行自动进入 API 配置向导
 ```
 
-**可选 CTF skill 包**（pwntools / ROPgadget / ropper + `skills/ctf_*` 文档）：
+**可选 CTF 工具链**（pwntools / ROPgadget / ropper）：
 ```bash
 pip install "pawnlogic[ctf]"       # 包安装
 pip install -e ".[ctf]"            # 源码 checkout
 ```
+PyPI 和 curl 安装版不包含本地 `skills/` 包。如需仓库型技能包，请使用源码
+checkout，或在运行时执行 `/sp install <repo_url>` 安装。
 
 源码 checkout 启动器备用方式：
 ```bash

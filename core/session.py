@@ -26,6 +26,7 @@ Existing GSA, Anti-Loop, concurrency truncation, Pwn constraints, and
 auto-intuition features are preserved.
 """
 
+import itertools
 import importlib
 import os, json, sys, threading, time
 from datetime import datetime
@@ -84,6 +85,45 @@ def _dynamic_config() -> dict:
         return importlib.import_module("config").DYNAMIC_CONFIG
     except Exception:
         return DYNAMIC_CONFIG
+
+
+class _ThinkingSpinner:
+    """Small terminal spinner shown while the model has not produced output."""
+
+    def __init__(self, enabled: bool, label: str = "Thinking") -> None:
+        self.enabled = enabled and sys.stdout.isatty()
+        self.label = label
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._printed = False
+        self._stopped = False
+
+    def start(self) -> None:
+        if self._stopped or not self.enabled or self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True, name="thinking-spinner")
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._stopped:
+            return
+        self._stopped = True
+        if not self._thread:
+            return
+        self._stop.set()
+        self._thread.join(timeout=1.0)
+        if self._printed:
+            sys.stdout.write("\r" + " " * (len(self.label) + 8) + "\r")
+            sys.stdout.flush()
+        self._thread = None
+
+    def _run(self) -> None:
+        for frame in itertools.cycle("|/-\\"):
+            if self._stop.wait(0.12):
+                return
+            self._printed = True
+            sys.stdout.write(c(GRAY, f"\r  {frame} {self.label}..."))
+            sys.stdout.flush()
 
 # P3 + P4: Docker containerization. Optional dependency; silently skip if absent.
 try:
@@ -1979,81 +2019,90 @@ class AgentSession:
                     # Hide it in user mode; stream it in gray in debug mode.
                     reasoning_buf = ""
                     _reasoning_printed = False   # Whether the "🧠 [thinking]" prefix was printed.
-                    _user_thinking_printed = False
-                    _tokens_before = self._turn_completion_tokens
+                    _spinner = _ThinkingSpinner(_user_mode())
+                    _spinner.start()
 
-                    for delta in stream_request(
-                        _api_msgs, self.model_alias,
-                        tools_schema=current_tools,
-                        max_tokens=current_max_tokens,
-                    ):
-                        if "_error" in delta:
-                            _err_detail = delta["_error"]
-                            if _user_mode():
-                                print(c(RED, f"\n  {user_friendly_error(_err_detail)}"))
-                            else:
-                                print(c(RED, f"\nAPI Error: {_err_detail}"))
-                            logger.error(
-                                "API stream error | model={} session={} iteration={} raw_error={}",
-                                self.model_alias, self.session_id[:8], iteration, _err_detail,
-                            )
-                            self.messages.pop(); return
+                    try:
+                        for delta in stream_request(
+                            _api_msgs, self.model_alias,
+                            tools_schema=current_tools,
+                            max_tokens=current_max_tokens,
+                        ):
+                            if "_error" in delta:
+                                _spinner.stop()
+                                _err_detail = delta["_error"]
+                                if _user_mode():
+                                    print(c(RED, f"\n  {user_friendly_error(_err_detail)}"))
+                                else:
+                                    print(c(RED, f"\nAPI Error: {_err_detail}"))
+                                logger.error(
+                                    "API stream error | model={} session={} iteration={} raw_error={}",
+                                    self.model_alias, self.session_id[:8], iteration, _err_detail,
+                                )
+                                self.messages.pop(); return
 
-                        choices = delta.get("choices", [])
-                        if not choices: continue
-                        d     = choices[0].get("delta", {})
-                        chunk = d.get("content") or ""
+                            choices = delta.get("choices", [])
+                            if not choices:
+                                if "_usage" in delta:
+                                    u  = delta["_usage"]
+                                    pt = u.get("prompt_tokens", 0) or u.get("input_tokens", 0)
+                                    ct = u.get("completion_tokens", 0) or u.get("output_tokens", 0)
+                                    self._turn_prompt_tokens     += pt
+                                    self._turn_completion_tokens += ct
+                                    self.total_prompt_tokens     += pt
+                                    self.total_completion_tokens += ct
+                                continue
+                            choice = choices[0]
+                            d     = choice.get("delta") or choice.get("message") or {}
+                            chunk = d.get("content") or ""
 
-                        # thinking-mode: capture reasoning_content deltas.
-                        r_chunk = d.get("reasoning_content") or ""
-                        if r_chunk:
-                            reasoning_buf += r_chunk
-                            # Stream only in debug mode, not user mode.
-                            if _debug_mode():
-                                if not _reasoning_printed:
-                                    sys.stdout.write(c(GRAY + DIM, "\n  🧠 [thinking] "))
-                                    _reasoning_printed = True
-                                sys.stdout.write(c(GRAY + DIM, r_chunk))
-                                sys.stdout.flush()
-                            elif not _user_thinking_printed:
-                                sys.stdout.write(c(GRAY, "\n  Thinking..."))
-                                sys.stdout.flush()
-                                _user_thinking_printed = True
+                            # thinking-mode: capture reasoning_content deltas.
+                            r_chunk = d.get("reasoning_content") or ""
+                            if r_chunk:
+                                reasoning_buf += r_chunk
+                                # Stream only in debug mode, not user mode.
+                                if _debug_mode():
+                                    _spinner.stop()
+                                    if not _reasoning_printed:
+                                        sys.stdout.write(c(GRAY + DIM, "\n  🧠 [thinking] "))
+                                        _reasoning_printed = True
+                                    sys.stdout.write(c(GRAY + DIM, r_chunk))
+                                    sys.stdout.flush()
 
-                        # ── Usage accounting (_usage injected by api_client) ──
-                        if "_usage" in delta:
-                            u  = delta["_usage"]
-                            pt = u.get("prompt_tokens", 0) or u.get("input_tokens", 0)
-                            ct = u.get("completion_tokens", 0) or u.get("output_tokens", 0)
-                            self._turn_prompt_tokens     += pt
-                            self._turn_completion_tokens += ct
-                            self.total_prompt_tokens     += pt
-                            self.total_completion_tokens += ct
+                            # ── Usage accounting (_usage injected by api_client) ──
+                            if "_usage" in delta:
+                                u  = delta["_usage"]
+                                pt = u.get("prompt_tokens", 0) or u.get("input_tokens", 0)
+                                ct = u.get("completion_tokens", 0) or u.get("output_tokens", 0)
+                                self._turn_prompt_tokens     += pt
+                                self._turn_completion_tokens += ct
+                                self.total_prompt_tokens     += pt
+                                self.total_completion_tokens += ct
 
-                        if chunk:
-                            # Add a newline when switching from thinking to normal output.
-                            if _reasoning_printed and _debug_mode():
-                                sys.stdout.write("\n")
-                                sys.stdout.flush()
-                                _reasoning_printed = False   # Only newline once.
-                            if _user_thinking_printed:
-                                sys.stdout.write("\n")
-                                sys.stdout.flush()
-                                _user_thinking_printed = False
-                            printable = renderer.feed(chunk)
-                            if printable: sys.stdout.write(printable); sys.stdout.flush()
-                            text_buf += chunk
+                            if chunk:
+                                _spinner.stop()
+                                # Add a newline when switching from thinking to normal output.
+                                if _reasoning_printed and _debug_mode():
+                                    sys.stdout.write("\n")
+                                    sys.stdout.flush()
+                                    _reasoning_printed = False   # Only newline once.
+                                printable = renderer.feed(chunk)
+                                if printable: sys.stdout.write(printable); sys.stdout.flush()
+                                text_buf += chunk
 
-                        for tcd in (d.get("tool_calls") or []):
-                            idx = tcd.get("index", 0)
-                            if idx not in tc_buf:
-                                tc_buf[idx] = {
-                                    "id": ensure_tool_call_id(tcd, iteration, idx),
-                                    "name": "", "args": "",
-                                }
-                            fn = tcd.get("function", {})
-                            tc_buf[idx]["name"] += fn.get("name") or ""
-                            tc_buf[idx]["args"] += fn.get("arguments") or ""
+                            for tcd in (d.get("tool_calls") or []):
+                                _spinner.stop()
+                                idx = tcd.get("index", 0)
+                                if idx not in tc_buf:
+                                    tc_buf[idx] = {
+                                        "id": ensure_tool_call_id(tcd, iteration, idx),
+                                        "name": "", "args": "",
+                                    }
+                                fn = tcd.get("function", {})
+                                tc_buf[idx]["name"] += fn.get("name") or ""
+                                tc_buf[idx]["args"] += fn.get("arguments") or ""
+                    finally:
+                        _spinner.stop()
 
                     leftover = renderer.flush()
 
@@ -2116,8 +2165,9 @@ class AgentSession:
                     # ─────────────────────────────────────────────────────────
 
                     # Empty-response detection with exponential-backoff retry.
-                    _no_new_tokens = (self._turn_completion_tokens == _tokens_before)
-                    _empty_response = (not text_buf.strip() and not tc_buf and _no_new_tokens)
+                    # Usage-only and hidden reasoning-only deltas are not user-visible
+                    # answers, even when the provider reports completion tokens.
+                    _empty_response = not text_buf.strip() and not tc_buf
 
                     if not _empty_response:
                         break   # Valid response; exit retry loop.

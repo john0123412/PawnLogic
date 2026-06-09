@@ -71,11 +71,11 @@ version = {attr = "config.paths.VERSION"}
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["pawnlogic*", "config*", "core*", "tools*", "utils*", "skills*"]
-# CTF skill packs are large and optional; install via `pip install pawnlogic[ctf]`
-# to opt into pwntools/ROPgadget/ropper. The skill markdown lives outside the wheel
-# and ships separately (see CONTRIBUTING.md for the ctf-skills add-on).
-exclude = ["skills.ctf_*"]
+include = ["pawnlogic*", "config*", "core*", "tools*", "utils*"]
+# Local skill packs are source-checkout assets, not runtime package data.
+# PyPI wheels and sdists must not include skills/ so pip/curl installations
+# start with an empty user skill-pack directory.
+exclude = ["skills*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.md", "*.json", "*.sh", "*.txt"]

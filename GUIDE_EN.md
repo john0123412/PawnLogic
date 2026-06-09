@@ -371,7 +371,7 @@ PawnLogic/
 │   ├── naming.py        # Auto-naming & workspace
 │   └── provider_tui.py  # Provider TUI
 ├── tools/               # Tool implementations
-└── skills/              # Local skill packs
+└── skills/              # Source-checkout skill packs (not shipped in PyPI wheels)
 ```
 
 ### Runtime Data (`~/.pawnlogic/`)
@@ -382,6 +382,7 @@ PawnLogic/
 ├── custom_providers.json   # Custom providers, no keys
 ├── pawn.db                 # SQLite database
 ├── mcp_configs.json        # MCP server declarations
+├── skills/                 # Optional user-installed skill packs
 ├── workspace/              # Agent working directories
 └── logs/                   # Audit logs
 ```

@@ -363,10 +363,12 @@ from pathlib import Path
 from zipfile import ZipFile
 wheel = next(Path("dist").glob("*.whl"))
 with ZipFile(wheel) as zf:
-    count = sum(name.startswith("skills/ctf") for name in zf.namelist())
+    count = sum(name.startswith("skills/") for name in zf.namelist())
 print(count)
 raise SystemExit(0 if count == 0 else 1)
 PY
 ```
 
-The wheel should not include optional `skills/ctf_*` packs by default.
+The wheel should not include any `skills/` packs by default. Local skill packs
+are source-checkout or user-installed assets; pip/curl installations should use
+`~/.pawnlogic/skills` only when the user installs packs explicitly.
