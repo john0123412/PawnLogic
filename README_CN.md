@@ -3,7 +3,7 @@
 # 🤖 PawnLogic
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.0.7-blue.svg)](config/paths.py)
+[![Version](https://img.shields.io/pypi/v/pawnlogic.svg?label=version)](https://pypi.org/project/pawnlogic/)
 [![PyPI](https://img.shields.io/pypi/v/pawnlogic.svg?cache=no)](https://pypi.org/project/pawnlogic/)
 [![CI](https://github.com/john0123412/PawnLogic/actions/workflows/main_ci.yml/badge.svg)](https://github.com/john0123412/PawnLogic/actions/workflows/main_ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
@@ -15,7 +15,8 @@
 
 - Linux 或 WSL2
 - Python 3.10+
-- `pip` 和 `git`
+- `pip`
+- 只有源码 checkout 或开发时才需要 `git`
 - 如需全局 `pawn` 命令，`~/.local/bin` 需要在 `PATH` 中
 
 ## ⚡ 快速开始
@@ -45,7 +46,8 @@ pawn             # 首次运行自动进入 API 配置向导
 
 **可选 CTF skill 包**（pwntools / ROPgadget / ropper + `skills/ctf_*` 文档）：
 ```bash
-pip install -e ".[ctf]"
+pip install "pawnlogic[ctf]"       # 包安装
+pip install -e ".[ctf]"            # 源码 checkout
 ```
 
 源码 checkout 启动器备用方式：
@@ -120,10 +122,19 @@ DeepSeek 默认 active。自定义 Provider 只有在 Key 已配置、模型已�
 
 ## MCP 工具集成
 
+pip 或一行安装脚本用户，PawnLogic 启动时会在 `~/.pawnlogic/` 下生成可编辑模板：
+
+```bash
+pawn   # 生成 ~/.pawnlogic/env.example 和 ~/.pawnlogic/mcp_configs.example.json
+cp ~/.pawnlogic/mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
+# 编辑 ~/.pawnlogic/mcp_configs.json，并通过 /setkey 或 ~/.pawnlogic/.env 填入 TAVILY_API_KEY= 等
+pawn   # mcp_configs.json 存在时，MCP 服务器会自动加载
+```
+
+源码 checkout 用户也可以直接复制仓库模板：
+
 ```bash
 cp mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
-# 编辑 mcp_configs.json，在 ~/.pawnlogic/.env 中添加 TAVILY_API_KEY= 等
-pawn   # MCP 服务器自动加载
 ```
 
 支持的 MCP 服务器：**Tavily**（搜索）、**Playwright**（浏览器自动化）、**Filesystem**（文件系统桥接）。

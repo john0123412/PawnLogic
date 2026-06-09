@@ -205,6 +205,52 @@ def test_fresh_venv_pip_install_exposes_pawn_command(tmp_path):
     assert "PawnLogic" in result.stdout
 
 
+def test_fresh_install_generates_runtime_config_templates(tmp_path):
+    install_venv = tmp_path / "install-venv"
+    runtime_home = tmp_path / "home" / ".pawnlogic"
+    subprocess.run(
+        [sys.executable, "-m", "venv", str(install_venv)],
+        check=True,
+        timeout=60,
+    )
+
+    py = install_venv / "bin" / "python"
+    pawn = install_venv / "bin" / "pawn"
+    subprocess.run(
+        [str(py), "-m", "pip", "install", "--upgrade", str(ROOT)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+        timeout=120,
+    )
+
+    result = subprocess.run(
+        [str(pawn), "--json", "--eval", "ping"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={
+            **_clean_runtime_env(tmp_path),
+            "PAWNLOGIC_HOME": str(runtime_home),
+            "PAWNLOGIC_TEST_MODE": "true",
+        },
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    env_template = runtime_home / "env.example"
+    mcp_template = runtime_home / "mcp_configs.example.json"
+    assert env_template.exists()
+    assert "PawnLogic .env template" in env_template.read_text(encoding="utf-8")
+    assert mcp_template.exists()
+    mcp_data = json.loads(mcp_template.read_text(encoding="utf-8"))
+    assert mcp_data["mcpServers"]["fetch"]["enabled"] is False
+    assert not (runtime_home / ".env").exists()
+    assert not (runtime_home / "mcp_configs.json").exists()
+
+
 def test_pawn_symlink_launcher_executes_checkout_script(tmp_path):
     project = tmp_path / "project"
     project.mkdir()

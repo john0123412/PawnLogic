@@ -131,7 +131,8 @@
 
 - Linux or WSL2
 - Python 3.10+
-- `pip` and `git`
+- `pip`
+- `git` only for source checkout or development
 - `~/.local/bin` in `PATH` for the global `pawn` command
 
 ### WSL2 / Ubuntu (recommended)
@@ -178,10 +179,20 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ### MCP Tools
 
+For pip or one-line installer users, PawnLogic creates editable templates in
+`~/.pawnlogic/` on startup:
+
+```bash
+pawn   # creates ~/.pawnlogic/env.example and ~/.pawnlogic/mcp_configs.example.json
+cp ~/.pawnlogic/mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
+# Edit ~/.pawnlogic/mcp_configs.json and add keys with /setkey or ~/.pawnlogic/.env
+pawn   # MCP servers load automatically when mcp_configs.json exists
+```
+
+For source checkout users, the repository template can also be copied directly:
+
 ```bash
 cp mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
-# Edit mcp_configs.json and add keys to ~/.pawnlogic/.env
-pawn   # MCP servers load automatically
 ```
 
 The example keeps the external `fetch` MCP disabled by default because
@@ -193,6 +204,14 @@ The example keeps the external `fetch` MCP disabled by default because
 ## API Key Setup
 
 All keys are stored in `~/.pawnlogic/.env`. **No secrets in the project directory.**
+For pip or one-line installer users, `pawn` creates `~/.pawnlogic/env.example`
+as an editable template. You can either run the first-run wizard, run `/setkey`,
+or copy the template manually:
+
+```bash
+cp ~/.pawnlogic/env.example ~/.pawnlogic/.env
+chmod 600 ~/.pawnlogic/.env
+```
 
 ```bash
 # LLM providers

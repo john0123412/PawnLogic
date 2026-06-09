@@ -131,7 +131,8 @@
 
 - Linux 或 WSL2
 - Python 3.10+
-- `pip` 和 `git`
+- `pip`
+- 只有源码 checkout 或开发时才需要 `git`
 - 如需全局 `pawn` 命令，`~/.local/bin` 需要在 `PATH` 中
 
 ### WSL2 / Ubuntu（推荐）
@@ -178,10 +179,19 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ### MCP 工具接入
 
+pip 或一行安装脚本用户，PawnLogic 启动时会在 `~/.pawnlogic/` 下生成可编辑模板：
+
+```bash
+pawn   # 生成 ~/.pawnlogic/env.example 和 ~/.pawnlogic/mcp_configs.example.json
+cp ~/.pawnlogic/mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
+# 编辑 ~/.pawnlogic/mcp_configs.json，并通过 /setkey 或 ~/.pawnlogic/.env 填入对应 Key
+pawn   # mcp_configs.json 存在时，MCP 服务会自动加载
+```
+
+源码 checkout 用户也可以直接复制仓库模板：
+
 ```bash
 cp mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
-# 编辑 mcp_configs.json，在 ~/.pawnlogic/.env 中填入对应 Key
-pawn   # MCP 服务自动加载
 ```
 
 示例配置默认禁用外部 `fetch` MCP，因为 `uvx mcp-server-fetch` 可能在启动时访问 PyPI。
@@ -192,6 +202,13 @@ pawn   # MCP 服务自动加载
 ## API Key 配置
 
 所有 Key 存储在 `~/.pawnlogic/.env`，**项目目录中不含任何密钥**。
+pip 或一行安装脚本用户，`pawn` 会生成 `~/.pawnlogic/env.example` 作为可编辑模板。
+你可以使用首次启动向导、运行 `/setkey`，或手动复制模板：
+
+```bash
+cp ~/.pawnlogic/env.example ~/.pawnlogic/.env
+chmod 600 ~/.pawnlogic/.env
+```
 
 ```bash
 # 大模型

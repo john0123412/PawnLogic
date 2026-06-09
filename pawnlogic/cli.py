@@ -150,6 +150,87 @@ except ImportError:
 # Proxy initialization runs first.
 import urllib.request
 
+ENV_TEMPLATE = """# PawnLogic .env template.
+#
+# Copy this file to ~/.pawnlogic/.env or run `pawn` and use the first-run
+# wizard. This file stores secrets only. MCP server declarations belong in
+# mcp_configs.json.
+#
+# Security: never commit .env files.
+
+# Recommended default provider.
+# DeepSeek key URL: https://platform.deepseek.com
+DEEPSEEK_API_KEY=
+
+# Optional AI providers.
+ANTHROPIC_API_KEY=
+OPENAI_API_KEY=
+QWEN_API_KEY=
+ZHIPU_API_KEY=
+SILICON_API_KEY=
+MOONSHOT_API_KEY=
+GROQ_API_KEY=
+
+# Custom provider examples. Add the provider with /provider before use.
+XIAOMI_API_KEY=
+
+# MCP tool keys. Only required when the matching MCP server is enabled.
+TAVILY_API_KEY=
+BROWSERBASE_API_KEY=
+BROWSERBASE_PROJECT_ID=
+
+# Advanced local endpoint.
+# LOCAL_API_URL=http://localhost:11434/v1/chat/completions
+
+# Optional runtime settings.
+# PAWNLOGIC_DEFAULT_MODEL=ds-chat
+# PAWNLOGIC_LOG_LEVEL=INFO
+"""
+
+MCP_CONFIG_TEMPLATE = """{
+  "mcpServers": {
+    "tavily": {
+      "command": "npx",
+      "args": ["-y", "tavily-mcp"],
+      "env": {
+        "TAVILY_API_KEY": "${TAVILY_API_KEY}"
+      }
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/tmp"
+      ]
+    },
+    "fetch": {
+      "enabled": false,
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "allow_network_install": false
+    }
+  }
+}
+"""
+
+
+def _ensure_runtime_templates(runtime_dir: Path) -> None:
+    """Create user-editable config templates without enabling optional tools."""
+    templates = {
+        "env.example": ENV_TEMPLATE,
+        "mcp_configs.example.json": MCP_CONFIG_TEMPLATE,
+    }
+    for name, content in templates.items():
+        path = runtime_dir / name
+        if not path.exists():
+            path.write_text(content, encoding="utf-8")
+
+
 def _install_proxy():
     hp  = os.environ.get("HTTP_PROXY")  or os.environ.get("http_proxy")
     hsp = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
@@ -628,6 +709,7 @@ def _ensure_runtime_dir_writable(path: Path) -> None:
     with open(probe, "w", encoding="utf-8") as f:
         f.write("ok")
     probe.unlink(missing_ok=True)
+    _ensure_runtime_templates(path)
 
 
 # ════════════════════════════════════════════════════════

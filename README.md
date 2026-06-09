@@ -3,7 +3,7 @@
 # 🤖 PawnLogic
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.0.7-blue.svg)](config/paths.py)
+[![Version](https://img.shields.io/pypi/v/pawnlogic.svg?label=version)](https://pypi.org/project/pawnlogic/)
 [![PyPI](https://img.shields.io/pypi/v/pawnlogic.svg?cache=no)](https://pypi.org/project/pawnlogic/)
 [![CI](https://github.com/john0123412/PawnLogic/actions/workflows/main_ci.yml/badge.svg)](https://github.com/john0123412/PawnLogic/actions/workflows/main_ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
@@ -15,7 +15,8 @@
 
 - Linux or WSL2
 - Python 3.10+
-- `pip` and `git`
+- `pip`
+- `git` only for source checkout or development
 - `~/.local/bin` in `PATH` if you want the global `pawn` command
 
 ## ⚡ Quick Start
@@ -46,7 +47,8 @@ pawn             # first run launches the API configuration wizard
 
 **Optional CTF skill pack** (pwntools / ROPgadget / ropper + the `skills/ctf_*` markdown):
 ```bash
-pip install -e ".[ctf]"
+pip install "pawnlogic[ctf]"       # package install
+pip install -e ".[ctf]"            # source checkout
 ```
 
 Source-checkout launcher fallback:
@@ -121,10 +123,20 @@ All keys are stored in `~/.pawnlogic/.env`. Provider configs (no keys) go to `~/
 
 ## MCP Tool Integration
 
+For pip or one-line installer users, PawnLogic creates editable templates in
+`~/.pawnlogic/` on startup:
+
+```bash
+pawn   # creates ~/.pawnlogic/env.example and ~/.pawnlogic/mcp_configs.example.json
+cp ~/.pawnlogic/mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
+# edit ~/.pawnlogic/mcp_configs.json, add TAVILY_API_KEY= etc. with /setkey or ~/.pawnlogic/.env
+pawn   # MCP servers load automatically when mcp_configs.json exists
+```
+
+For source checkout users, the repository template can also be copied directly:
+
 ```bash
 cp mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
-# edit mcp_configs.json, add TAVILY_API_KEY= etc. to ~/.pawnlogic/.env
-pawn   # MCP servers load automatically
 ```
 
 Supported MCP servers: **Tavily** (search), **Playwright** (browser automation), **Filesystem** (file bridge).
