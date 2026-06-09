@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.0.8] - 2026-06-09
+
+### Fixed
+- Stabilized interactive `Ctrl+C` handling: in-flight interrupts now show
+  immediate feedback, roll back only the current turn, and no longer leak the
+  interrupt flag into background auto-naming threads.
+- Fixed user-mode streamed output being erased by the thinking spinner during
+  multi-chunk responses.
+- Fixed restored-history and `Ctrl+Z` prompts that could submit successfully
+  but show only token usage when providers returned usage-only, reasoning-only,
+  or `choices[].message.content` stream payloads.
+
+### Changed
+- PyPI wheels and sdists no longer include `skills/`. Local skill packs are now
+  source-checkout or user-installed assets; installed users use
+  `~/.pawnlogic/skills` when they add packs explicitly.
+- Documentation now distinguishes source-checkout skill packs from pip/curl
+  runtime data.
+
+### Tests
+- 305 tests passing.
+- `ruff check .`, source compile checks, package build, `twine check`, and
+  wheel/sdist skill-exclusion checks passing.
+
 ## [0.0.7] - 2026-06-08
 
 ### Added
