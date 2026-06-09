@@ -56,3 +56,41 @@ def test_mcp_env_overrides_are_deliberate_even_when_sensitive(monkeypatch):
     )
 
     assert env["OPENAI_API_KEY"] == "sk-parent"
+
+
+def test_mcp_server_enabled_false_is_skipped():
+    reason = mcp_client_manager._server_skip_reason("fetch", {"enabled": False})
+
+    assert reason == "disabled by config (enabled=false)"
+
+
+def test_legacy_fetch_uvx_is_skipped_by_default(monkeypatch):
+    monkeypatch.delenv("PAWNLOGIC_MCP_ALLOW_NETWORK_INSTALL", raising=False)
+
+    reason = mcp_client_manager._server_skip_reason(
+        "fetch",
+        {"command": "uvx", "args": ["mcp-server-fetch"]},
+    )
+
+    assert "may fetch from PyPI" in reason
+
+
+def test_legacy_fetch_uvx_allows_explicit_network_install(monkeypatch):
+    monkeypatch.delenv("PAWNLOGIC_MCP_ALLOW_NETWORK_INSTALL", raising=False)
+
+    reason = mcp_client_manager._server_skip_reason(
+        "fetch",
+        {
+            "command": "uvx",
+            "args": ["mcp-server-fetch"],
+            "allow_network_install": True,
+        },
+    )
+
+    assert reason is None
+
+
+def test_mcp_server_startup_timeout_defaults_and_clamps():
+    assert mcp_client_manager._server_startup_timeout({}) == 15
+    assert mcp_client_manager._server_startup_timeout({"startup_timeout": 0}) == 1
+    assert mcp_client_manager._server_startup_timeout({"startup_timeout": "2.5"}) == 2.5

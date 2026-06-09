@@ -11,12 +11,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml README.md LICENSE mcp_configs.example.json ./
 COPY config/ ./config/
 COPY core/ ./core/
 COPY tools/ ./tools/
 COPY utils/ ./utils/
 COPY skills/ ./skills/
+COPY pawnlogic/ ./pawnlogic/
 COPY main.py ./
 
 RUN pip install --upgrade pip && pip install -e .

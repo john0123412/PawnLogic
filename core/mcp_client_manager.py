@@ -49,9 +49,10 @@ from config.security import scrub_sensitive_env
 # ════════════════════════════════════════════════════════
 # Constants.
 # ════════════════════════════════════════════════════════
-DEFAULT_TIMEOUT  = 30                      # Default call_tool timeout, seconds.
-STARTUP_TIMEOUT  = 60                      # Total server startup timeout.
-NAME_SEPARATOR   = "__"                    # Tool-name prefix separator.
+DEFAULT_TIMEOUT = 30                       # Default call_tool timeout, seconds.
+STARTUP_TIMEOUT = 60                       # Total server startup timeout.
+DEFAULT_SERVER_STARTUP_TIMEOUT = 15        # Per-server initialization timeout.
+NAME_SEPARATOR = "__"                      # Tool-name prefix separator.
 WORKSPACE_ASSETS = PAWNLOGIC_HOME / "workspace" / "mcp_assets"
 
 _ENV_VAR_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
@@ -64,6 +65,7 @@ _MCP_BASE_ENV_KEYS = {
     "SYSTEMROOT", "COMSPEC", "PATHEXT",
 }
 _TRUTHY_CONFIG_VALUES = {"1", "true", "yes", "on"}
+_FALSEY_CONFIG_VALUES = {"0", "false", "no", "off"}
 
 
 # ════════════════════════════════════════════════════════
@@ -89,6 +91,52 @@ def _config_truthy(value: object) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in _TRUTHY_CONFIG_VALUES
+
+
+def _config_enabled(value: object, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in _FALSEY_CONFIG_VALUES:
+        return False
+    if normalized in _TRUTHY_CONFIG_VALUES:
+        return True
+    return default
+
+
+def _server_startup_timeout(conf: dict) -> float:
+    raw = conf.get("startup_timeout", os.environ.get("MCP_SERVER_STARTUP_TIMEOUT"))
+    if raw is None:
+        return DEFAULT_SERVER_STARTUP_TIMEOUT
+    try:
+        return max(1.0, float(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_SERVER_STARTUP_TIMEOUT
+
+
+def _is_legacy_fetch_uvx(name: str, conf: dict) -> bool:
+    cmd = Path(str(conf.get("command", ""))).name
+    args = [str(a) for a in (conf.get("args") or [])]
+    return name == "fetch" and cmd == "uvx" and bool(args) and args[0] == "mcp-server-fetch"
+
+
+def _server_skip_reason(name: str, conf: dict) -> str | None:
+    if not _config_enabled(conf.get("enabled"), default=True):
+        return "disabled by config (enabled=false)"
+
+    allow_network_install = (
+        _config_truthy(conf.get("allow_network_install"))
+        or _config_truthy(os.environ.get("PAWNLOGIC_MCP_ALLOW_NETWORK_INSTALL"))
+    )
+    if _is_legacy_fetch_uvx(name, conf) and not allow_network_install:
+        return (
+            "skipped legacy 'uvx mcp-server-fetch' startup because it may fetch "
+            "from PyPI and block Pawn startup; use built-in fetch_url or set "
+            "allow_network_install=true to opt in"
+        )
+    return None
 
 
 def _minimal_mcp_env(source_env: dict[str, str]) -> dict[str, str]:
@@ -331,8 +379,20 @@ class MCPClientManager:
             if not isinstance(conf, dict):
                 logger.warning(f"[MCP] skip '{name}': entry is not an object")
                 continue
+            skip_reason = _server_skip_reason(name, conf)
+            if skip_reason:
+                logger.info(f"[MCP] skip '{name}': {skip_reason}")
+                continue
             try:
-                await self._connect_one(name, conf)
+                await asyncio.wait_for(
+                    self._connect_one(name, conf),
+                    timeout=_server_startup_timeout(conf),
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[MCP] ⚠ server '{name}' INIT TIMEOUT after "
+                    f"{_server_startup_timeout(conf):g}s → tools unavailable"
+                )
             except Exception as e:
                 # One server failing must not affect other servers, but log loudly.
                 logger.warning(

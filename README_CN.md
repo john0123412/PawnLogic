@@ -127,6 +127,8 @@ pawn   # MCP 服务器自动加载
 ```
 
 支持的 MCP 服务器：**Tavily**（搜索）、**Playwright**（浏览器自动化）、**Filesystem**（文件系统桥接）。
+示例配置默认禁用外部 `fetch` MCP，因为 `uvx mcp-server-fetch` 可能在启动时访问 PyPI。
+请优先使用 PawnLogic 内置的 `fetch_url`；只有明确需要时，再手动启用该 MCP 并允许网络安装。
 
 ## 数据目录结构
 

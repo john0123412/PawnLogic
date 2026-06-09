@@ -20,8 +20,10 @@
       ]
     },
     "fetch": {
+      "enabled": false,
       "command": "uvx",
-      "args": ["mcp-server-fetch"]
+      "args": ["mcp-server-fetch"],
+      "allow_network_install": false
     }
   }
 }

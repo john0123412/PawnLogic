@@ -184,6 +184,9 @@ cp mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
 pawn   # MCP 服务自动加载
 ```
 
+示例配置默认禁用外部 `fetch` MCP，因为 `uvx mcp-server-fetch` 可能在启动时访问 PyPI。
+请优先使用 PawnLogic 内置的 `fetch_url`；只有明确需要时，再手动启用该 MCP 并允许网络安装。
+
 ---
 
 ## API Key 配置
