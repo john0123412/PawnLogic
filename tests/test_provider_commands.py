@@ -747,6 +747,7 @@ def test_load_custom_providers_ignores_existing_non_chat_models(tmp_path, monkey
 def test_provider_add_cli_fetches_without_nested_event_loop(monkeypatch):
     alias = "pytest_relay"
     env_key = "PYTEST_RELAY_API_KEY"
+    assert provider_cmd.provider_config is provider_config
     monkeypatch.setenv(env_key, "test-key")
     monkeypatch.setattr("builtins.input", lambda _prompt: "")
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
@@ -786,6 +787,7 @@ def test_provider_add_cli_fetches_without_nested_event_loop(monkeypatch):
 def test_provider_fetch_prints_filter_and_alias_summary(monkeypatch, capsys):
     alias = "pytest_fetch_summary"
     env_key = "PYTEST_FETCH_SUMMARY_API_KEY"
+    assert provider_cmd.provider_config is provider_config
     monkeypatch.setenv(env_key, "test-key")
     provider_cmd.PROVIDERS[alias] = {
         "base_url": "https://api.example.com/v1",

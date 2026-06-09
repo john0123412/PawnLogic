@@ -168,6 +168,38 @@ def test_persistence_save_load_restores_session(isolated_memory, monkeypatch, tm
     assert target.reset_called is True
 
 
+def test_persistence_load_drops_and_persists_dangling_tool_calls(isolated_memory, monkeypatch, tmp_path):
+    _drop_project_modules("core.persistence", force=True)
+    from core import persistence
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setattr(persistence, "init_db", isolated_memory.init_db)
+
+    source = FakeSession(
+        session_id="session-dangling",
+        cwd=str(tmp_path),
+        workspace_dir=str(tmp_path / "workspace"),
+        messages=[
+            {"role": "user", "content": "inspect"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call_missing", "function": {"name": "find_files"}}],
+            },
+        ],
+    )
+
+    persistence.session_save(source, "Dangling")
+
+    target = FakeSession(session_id="empty")
+    result = persistence.session_load(target, "Dangling")
+
+    assert result.startswith("OK: loaded [session-dangling]")
+    assert [m["role"] for m in target.messages] == ["user"]
+    persisted = isolated_memory.load_messages("session-dangling")
+    assert [m["role"] for m in persisted] == ["user"]
+
+
 def test_memorize_uses_call_once_and_sanitizes_topic(monkeypatch, tmp_path):
     _drop_project_modules("core.persistence", force=True)
     from core import persistence
@@ -253,6 +285,19 @@ def test_api_client_sse_sanitizer_and_circuit_breaker(monkeypatch):
     api_client._cb_record_success(provider)
     assert api_client._CIRCUIT_BREAKERS[provider]["state"] == "closed"
     assert api_client._CIRCUIT_BREAKERS[provider]["failures"] == 0
+
+
+def test_api_client_stream_request_respects_pending_interrupt(monkeypatch):
+    _drop_project_modules("config", "core.api_client", "core.interrupts", force=True)
+    from core import api_client
+    from core import interrupts
+
+    interrupts.request_interrupt()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            next(api_client.stream_request([{"role": "user", "content": "x"}], "ds-v4-flash"))
+    finally:
+        interrupts.clear_interrupt()
 
 
 def test_api_client_nonstream_parser_handles_nonstandard_responses(monkeypatch):

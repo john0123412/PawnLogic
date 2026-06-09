@@ -26,6 +26,7 @@ Existing GSA, Anti-Loop, concurrency truncation, Pwn constraints, and
 auto-intuition features are preserved.
 """
 
+import importlib
 import os, json, sys, threading, time
 from datetime import datetime
 from pathlib import Path
@@ -75,6 +76,14 @@ def _user_mode() -> bool:
 
 def _debug_mode() -> bool:
     return bool(_runtime_state.debug_mode)
+
+
+def _dynamic_config() -> dict:
+    """Return the currently loaded mutable runtime config."""
+    try:
+        return importlib.import_module("config").DYNAMIC_CONFIG
+    except Exception:
+        return DYNAMIC_CONFIG
 
 # P3 + P4: Docker containerization. Optional dependency; silently skip if absent.
 try:
@@ -527,7 +536,8 @@ def _trim_and_compact_context(msgs: list) -> int:
     Then the compacted content is merged into one assistant summary inserted
     after the system message.
     """
-    if _ctx_chars(msgs) <= DYNAMIC_CONFIG["ctx_max_chars"]:
+    cfg = _dynamic_config()
+    if _ctx_chars(msgs) <= cfg["ctx_max_chars"]:
         return 0
 
     KEEP_TAIL = 10
@@ -571,6 +581,42 @@ def _trim_and_compact_context(msgs: list) -> int:
     msgs.insert(1, summary_msg)
 
     return len(old_msgs)
+
+
+class TurnInterrupted(KeyboardInterrupt):
+    """Raised when an in-flight turn is interrupted and should be rolled back."""
+
+
+def _drop_dangling_tool_call_messages(msgs: list) -> list:
+    """Return a copy without assistant tool calls that lack matching tool output."""
+    cleaned: list = []
+    i = 0
+    while i < len(msgs):
+        msg = msgs[i]
+        calls = msg.get("tool_calls") or []
+        if msg.get("role") != "assistant" or not calls:
+            cleaned.append(msg)
+            i += 1
+            continue
+
+        expected_ids = [
+            call.get("id")
+            for call in calls
+            if isinstance(call, dict) and call.get("id")
+        ]
+        j = i + 1
+        actual_ids: list[str] = []
+        while j < len(msgs) and msgs[j].get("role") == "tool":
+            tool_call_id = msgs[j].get("tool_call_id")
+            if tool_call_id:
+                actual_ids.append(tool_call_id)
+            j += 1
+
+        if expected_ids and all(call_id in actual_ids for call_id in expected_ids):
+            cleaned.append(msg)
+            cleaned.extend(msgs[i + 1:j])
+        i = j
+    return cleaned
 
 # ════════════════════════════════════════════════════════
 # XML plan renderer.
@@ -964,7 +1010,7 @@ class AgentSession:
         return MODELS.get(self.model_alias, MODELS[DEFAULT_MODEL])
 
     def _reset_system_prompt(self, knowledge_query: str = ""):
-        cfg = DYNAMIC_CONFIG
+        cfg = _dynamic_config()
         knowledge_block = ""
         if knowledge_query:
             rows = search_knowledge(knowledge_query, limit=3)
@@ -1354,7 +1400,7 @@ class AgentSession:
         The summary covers only old history outside the sliding window and never
         includes the latest N turns.
         """
-        cfg = DYNAMIC_CONFIG
+        cfg = _dynamic_config()
         threshold   = cfg.get("ctx_summary_threshold", 8)
         sliding     = cfg.get("ctx_sliding_turns", 5)
         refresh_gap = max(threshold // 2, 3)
@@ -1466,7 +1512,7 @@ class AgentSession:
         if len(msgs) <= 1:
             return list(msgs)
 
-        cfg     = DYNAMIC_CONFIG
+        cfg     = _dynamic_config()
         sliding = cfg.get("ctx_sliding_turns", 5)
 
         turns = self._count_turns(msgs)
@@ -1474,7 +1520,7 @@ class AgentSession:
 
         # No trimming needed when turn count is below the threshold.
         if total_turns <= sliding + 2:
-            return list(msgs)
+            return _drop_dangling_tool_call_messages(msgs)
 
         # Anchor: always keep the first 2 turns as the task goal.
         anchor_end = turns[1][1] if len(turns) >= 2 else (turns[0][1] if turns else 1)
@@ -1498,7 +1544,7 @@ class AgentSession:
             if i >= window_start_idx:
                 result.append(m)
 
-        return result
+        return _drop_dangling_tool_call_messages(result)
 
     # ════════════════════════════════════════════════════
     # Module 2: auto-intuition retrieval helper.
@@ -1710,18 +1756,19 @@ class AgentSession:
         self._turn_tool_calls        = 0
 
         # P1: Time-aware initialization.
+        dynamic_cfg = _dynamic_config()
         self._turn_start_time = time.monotonic()
-        self._time_budget_sec = DYNAMIC_CONFIG.get("time_budget_sec", 0)
+        self._time_budget_sec = dynamic_cfg.get("time_budget_sec", 0)
         self._urgent_mode     = False
         if self._time_budget_sec > 0:
             _mins = self._time_budget_sec // 60
             _secs = self._time_budget_sec % 60
             print(c(GRAY, f"  ⏱  Time budget: {_mins}m{_secs}s"))
 
-        max_iter           = DYNAMIC_CONFIG["max_iter"]
+        max_iter           = dynamic_cfg["max_iter"]
         renderer           = _PlanRenderer()
         is_vision_model    = self.model.get("vision", False)
-        current_max_tokens = 4096 if is_vision_model else DYNAMIC_CONFIG["max_tokens"]
+        current_max_tokens = 4096 if is_vision_model else dynamic_cfg["max_tokens"]
         if is_vision_model:
             print(c(YELLOW, "  ℹ Tool calls are disabled for vision models"))
             current_tools = None
@@ -2413,7 +2460,7 @@ class AgentSession:
                         if _user_mode() or name in _VERBOSE_TOOLS:
                             result = smart_truncate(result, head=30, tail=30)
                         else:
-                            limit = DYNAMIC_CONFIG["tool_max_chars"]
+                            limit = _dynamic_config()["tool_max_chars"]
                             if len(result) > limit:
                                 result = result[:limit//2] + f"\n...[truncated to {limit} chars]...\n" + result[-limit//4:]
 
@@ -2518,9 +2565,8 @@ class AgentSession:
                     ))
 
             except KeyboardInterrupt:
-                print(c(YELLOW, "\n  [Interrupted]"))
                 self._autosave()
-                return
+                raise TurnInterrupted()
 
         print(c(RED, f"\n[Reached max_iter={max_iter}; use /mid, /deep, or /iter <n> to raise it]"))
         logger.warning(
@@ -2571,7 +2617,7 @@ class AgentSession:
         msgs_snapshot = [dict(m) for m in self.messages]
         sid, model_alias, cwd, workspace_dir, cfg_snap = (
             self.session_id, self.model_alias, self.cwd, self.workspace_dir,
-            dict(DYNAMIC_CONFIG)
+            dict(_dynamic_config())
         )
         def _do():
             if not self._save_lock.acquire(blocking=False): return

@@ -84,6 +84,14 @@ def session_load(session, query: str) -> str:
 
     # Restore messages.
     msgs = load_messages(sid)
+    try:
+        from core.session import _drop_dangling_tool_call_messages
+        cleaned_msgs = _drop_dangling_tool_call_messages(msgs)
+        if len(cleaned_msgs) != len(msgs):
+            msgs = cleaned_msgs
+            save_messages(sid, msgs)
+    except Exception:
+        pass
     session.messages.clear()
 
     # Normalize model alias. If the DB has a stale alias or the provider key is

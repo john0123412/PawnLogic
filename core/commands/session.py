@@ -551,6 +551,7 @@ async def cmd_undo(ctx: CommandContext) -> None:
     n = int(ctx.arg) if ctx.arg.isdigit() else 1
     removed, _last_text = ctx.session.undo(n)
     if removed:
+        ctx.session._autosave()
         print(c(GREEN, f"  ↩ Undid {removed} messages"))
     else:
         print(c(GRAY, "  ↩ Nothing to undo"))

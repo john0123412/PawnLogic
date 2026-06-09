@@ -17,6 +17,8 @@ import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 ROOT = str(Path(__file__).resolve().parent.parent)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
@@ -85,7 +87,9 @@ sys.modules["core.skill_manager"].SkillScanner = MagicMock(return_value=_mock_sc
 # Now import the real session functions
 from core.session import (  # noqa: E402
     AgentSession,
+    TurnInterrupted,
     _ctx_chars,
+    _drop_dangling_tool_call_messages,
     _trim_and_compact_context,
     _is_plan_exempt,
     _tool_call_missing_plan,
@@ -338,6 +342,49 @@ def test_count_turns_with_tool_messages():
     assert turns[0][0] == 1   # start after system
 
 
+def test_drop_dangling_tool_call_messages_removes_unmatched_assistant_calls():
+    msgs = [
+        _msg("system", "sys"),
+        _msg("user", "q"),
+        _msg("assistant", "", tool_calls=[{"id": "call_a", "function": {"name": "find_files"}}]),
+        _msg("user", "next question"),
+    ]
+
+    cleaned = _drop_dangling_tool_call_messages(msgs)
+
+    assert [m["role"] for m in cleaned] == ["system", "user", "user"]
+    assert msgs[-2]["role"] == "assistant"
+
+
+def test_build_api_messages_drops_dangling_tail_tool_calls():
+    s = _make_session()
+    s.messages = [
+        _msg("system", "sys"),
+        _msg("user", "q"),
+        _msg("assistant", "", tool_calls=[{"id": "call_a", "function": {"name": "find_files"}}]),
+    ]
+
+    built = s._build_api_messages()
+
+    assert [m["role"] for m in built] == ["system", "user"]
+    assert all(not m.get("tool_calls") for m in built)
+
+
+def test_build_api_messages_drops_dangling_tool_calls_before_new_user():
+    s = _make_session()
+    s.messages = [
+        _msg("system", "sys"),
+        _msg("user", "q"),
+        _msg("assistant", "", tool_calls=[{"id": "call_a", "function": {"name": "find_files"}}]),
+        _msg("user", "next"),
+    ]
+
+    built = s._build_api_messages()
+
+    assert [m["role"] for m in built] == ["system", "user", "user"]
+    assert all(not m.get("tool_calls") for m in built)
+
+
 def test_run_turn_injects_plan_missing_for_non_exempt_tool(monkeypatch):
     import json
     from config import DYNAMIC_CONFIG
@@ -413,12 +460,48 @@ def test_history_summary_skips_empty_stream_choices(monkeypatch):
         {"choices": []},
         {"choices": [{"delta": {"content": "older turns summarized"}}]},
     ]))
-    session_mod.logger.warning.reset_mock()
+    warning_mock = MagicMock()
+    monkeypatch.setattr(session_mod.logger, "warning", warning_mock)
 
     s._maybe_update_summary(s.messages, current_turn_count=3)
 
     assert s._history_summary == "older turns summarized"
-    session_mod.logger.warning.assert_not_called()
+    warning_mock.assert_not_called()
+
+
+def test_run_turn_interrupt_raises_for_cli_rollback(monkeypatch):
+    from config import DYNAMIC_CONFIG
+    import core.session as session_mod
+
+    s = _make_session()
+    s._time_budget_sec = 0
+    s._turn_prompt_tokens = 0
+    s._turn_completion_tokens = 0
+    s._turn_tool_calls = 0
+    s.total_prompt_tokens = 0
+    s.total_completion_tokens = 0
+    s.total_tool_calls = 0
+    s._save_lock = threading.Lock()
+    s._naming_lock = threading.Lock()
+
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 3)
+    monkeypatch.setattr(session_mod, "validate_api_key", lambda _m: (True, ""))
+    monkeypatch.setattr(s, "_reset_system_prompt", MagicMock())
+    monkeypatch.setattr(s, "_maybe_update_summary", MagicMock())
+    monkeypatch.setattr(s, "_build_api_messages", lambda: s.messages)
+    monkeypatch.setattr(s, "_autosave", MagicMock())
+
+    def interrupted_stream(*_args, **_kwargs):
+        raise KeyboardInterrupt
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(session_mod, "stream_request", interrupted_stream)
+
+    with pytest.raises(TurnInterrupted):
+        s.run_turn("interrupt me")
+
+    assert s.messages[-1]["role"] == "user"
+    assert s.messages[-1]["content"] == "interrupt me"
 
 
 # ══════════════════════════════════════════════════════════

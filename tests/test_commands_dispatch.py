@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
 
 import pytest
 
@@ -133,6 +134,22 @@ def test_no_legacy_dispatcher_attributes(cmd_pkg):
     assert not hasattr(cmd_pkg, "_LEGACY_DISPATCHER"), (
         "_LEGACY_DISPATCHER global should have been removed in step 6"
     )
+
+
+def test_undo_command_autosaves_after_removal(capsys):
+    from core.commands import CommandContext
+    from core.commands.session import cmd_undo
+
+    autosave = MagicMock()
+    session = SimpleNamespace(
+        undo=lambda n: (2, "previous prompt"),
+        _autosave=autosave,
+    )
+
+    asyncio.run(cmd_undo(CommandContext(verb="/undo", arg="1", arg2="", session=session)))
+
+    autosave.assert_called_once_with()
+    assert "Undid 2 messages" in capsys.readouterr().out
 
 
 # ════════════════════════════════════════════════════════

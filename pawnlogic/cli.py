@@ -257,7 +257,9 @@ try:
     from core.session     import (
         AgentSession, STATE_FILENAME,
         attach_external_mcp_tools, detach_external_mcp_tools,
+        TurnInterrupted,
     )
+    from core.interrupts import turn_interrupt_handler
     from core.memory import init_db
     from core.persistence import session_load, _display_session_history
     # loguru logging module
@@ -1378,9 +1380,17 @@ async def main():
                     break
                 continue
             try:
-                session.run_turn(raw)
-            except KeyboardInterrupt:
-                print(c(YELLOW, "\n  [interrupted]"))
+                with turn_interrupt_handler():
+                    session.run_turn(raw)
+            except TurnInterrupted:
+                removed, last_text = session.undo(1)
+                session._autosave()
+                _re_edit_default = last_text or raw
+                _sigint_pending = False
+                if removed:
+                    print(c(YELLOW, "  [interrupted] Turn rolled back; edit and press Enter to retry."))
+                else:
+                    print(c(YELLOW, "  [interrupted] Edit and press Enter to retry."))
 
         except KeyboardInterrupt:
             # Double Ctrl+C exits when the second press happens within 5 seconds.
@@ -1391,6 +1401,8 @@ async def main():
             _last_sigint_time = _now
             _sigint_pending   = True
             removed, last_text = session.undo(1)
+            if removed:
+                session._autosave()
             if removed:
                 _re_edit_default = last_text
             print(c(YELLOW, "\n  [hint] Press Ctrl+C again to exit."))

@@ -41,6 +41,7 @@ from pathlib import Path
 
 from prompt_toolkit import prompt as ptk_prompt
 
+import config.providers as provider_config
 from config import (
     CUSTOM_PROVIDERS_PATH, MODELS, PROVIDERS,
     get_api_format, get_provider_config, list_vision_models,
@@ -467,7 +468,6 @@ def _provider_test(session, model_alias: str = "") -> None:
 
 def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str = "openai") -> bool:
     """Non-interactive: /provider add <alias> <base_url> <ENV_KEY> [anthropic]."""
-    from config.providers import save_custom_provider as _save_cp, load_custom_providers
     if alias in PROVIDERS:
         print(c(YELLOW, f"  ⚠ Provider '{alias}' already exists; config will be overwritten."))
     fmt = api_format if api_format in ("openai", "anthropic") else "openai"
@@ -478,9 +478,9 @@ def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str =
         "api_format":  fmt,
         "active":      False,
     }
-    _save_cp(alias, prov_cfg, {})
+    provider_config.save_custom_provider(alias, prov_cfg, {})
     PROVIDERS[alias] = prov_cfg
-    load_custom_providers()
+    provider_config.load_custom_providers()
     print(c(GREEN, f"  ✓ Provider registered. Make sure {env_key} is configured in .env."))
     print(c(CYAN, f"  To show it in /model, run /provider activate {alias}."))
     if not os.getenv(env_key, ""):
@@ -605,11 +605,6 @@ async def _provider_fetch(alias: str) -> None:
         _model_alias_changes,
         _model_is_chat_candidate,
     )
-    from config.providers import (
-        custom_model_alias,
-        save_custom_provider as _save_cp,
-        load_custom_providers,
-    )
 
     _BUILTIN = {"deepseek", "openai", "anthropic"}
     if alias in _BUILTIN:
@@ -686,12 +681,12 @@ async def _provider_fetch(alias: str) -> None:
         return
 
     models_cfg = {
-        custom_model_alias(alias, str(cfg.get("id") or mid), mid): cfg
+        provider_config.custom_model_alias(alias, str(cfg.get("id") or mid), mid): cfg
         for mid, cfg in candidates
         if mid in set(chosen_ids)
     }
-    _save_cp(alias, PROVIDERS[alias], models_cfg, replace_models=True)
-    load_custom_providers()
+    provider_config.save_custom_provider(alias, PROVIDERS[alias], models_cfg, replace_models=True)
+    provider_config.load_custom_providers()
 
     print(c(GREEN, f"  ✓ Registered {len(models_cfg)} models."))
     if is_provider_active(alias):

@@ -14,6 +14,7 @@ import json, re, os, ssl, socket, time, threading
 import http.client
 from urllib.parse import urlparse
 from config import get_provider_config, MODELS, DEFAULT_MODEL, DYNAMIC_CONFIG
+from core.interrupts import raise_if_interrupted
 
 
 # Custom exceptions.
@@ -592,6 +593,7 @@ def stream_request(
     proxy = _detect_proxy()
 
     for attempt in range(_RETRY_MAX):
+        raise_if_interrupted()
         # Circuit-breaker check.
         if not _cb_allow(provider):
             yield {"_error": f"circuit open: {provider} (consecutive failures; paused {_CB_RESET_SEC}s)"}
@@ -653,6 +655,7 @@ def stream_request(
                 current_event = ""
                 state: dict = {"tool_blocks": {}}
                 while True:
+                    raise_if_interrupted()
                     try:
                         raw_line = resp.readline()
                     except socket.timeout:
@@ -684,6 +687,7 @@ def stream_request(
                     data_raw = line[6:].strip()
                     parsed = _anthropic_parse_sse(current_event, data_raw, state)
                     if parsed is not None:
+                        raise_if_interrupted()
                         if "_usage" in parsed:
                             yield {"_usage": parsed["_usage"]}
                         if "choices" in parsed:
@@ -696,6 +700,7 @@ def stream_request(
             else:
                 # Native OpenAI SSE parsing.
                 while True:
+                    raise_if_interrupted()
                     try:
                         raw_line = resp.readline()
                     except socket.timeout:
@@ -725,6 +730,7 @@ def stream_request(
 
                     parsed = parse_sse_delta(data_raw)
                     if parsed is not None:
+                        raise_if_interrupted()
                         choices = parsed.get("choices", [])
                         if choices:
                             partial_text += choices[0].get("delta", {}).get("content") or ""
