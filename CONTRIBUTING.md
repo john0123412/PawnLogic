@@ -18,7 +18,9 @@ compatibility `python main.py` path all use the same runtime implementation in
 ## Running Tests
 
 ```bash
-PAWNLOGIC_HOME="$(mktemp -d)" venv/bin/python -m pytest tests/ -v
+tmp_home="$(mktemp -d)"
+trap 'rm -rf "$tmp_home"' EXIT
+PAWNLOGIC_HOME="$tmp_home" python -m pytest tests/ -v
 ```
 
 ## Docker Smoke Test (optional, hits a real provider)
@@ -87,6 +89,6 @@ refactor / docs / chore / test
 ## Pull Request Checklist
 
 - [ ] `python -m py_compile` passes on all modified files
-- [ ] `PAWNLOGIC_HOME="$(mktemp -d)" venv/bin/python -m pytest tests/` passes
+- [ ] `PAWNLOGIC_HOME="$tmp_home" python -m pytest tests/` passes with a temporary `PAWNLOGIC_HOME`
 - [ ] No secrets or API keys committed
 - [ ] PR description filled in (use the template)

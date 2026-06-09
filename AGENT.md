@@ -1,8 +1,8 @@
 # PawnLogic - Agent Instructions
 
-This file is the repository-level operating guide for coding agents working on
-PawnLogic. Keep it in sync with `CLAUDE.md` whenever project workflow, provider
-behavior, documentation policy, or verification requirements change.
+This file is the repository-level operating guide and single source of truth
+for coding agents working on PawnLogic. `CLAUDE.md` is intentionally a thin
+wrapper that imports this file; do not duplicate the shared instructions there.
 
 ## Project Summary
 
@@ -47,7 +47,7 @@ Before every commit, run staged-diff leak scans:
 ```bash
 git diff --cached | grep -nE "/home/[^/ ]+/|/Users/[^/ ]+/|C:\\\\Users\\\\" || true
 git diff --cached | grep -nE "DESKTOP-[A-Z0-9-]+|\.local\b|\.lan\b" || true
-git diff --cached | grep -nE "sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{50,}|tp-[a-z0-9]{30,}" || true
+git diff --cached | grep -nE "sk-ant-[A-Za-z0-9_-]{20,}|sk-(proj-|svcacct-|live-)?[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{50,}|tp-[a-z0-9]{30,}|AIza[A-Za-z0-9_-]{35}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|(OPENAI|ANTHROPIC|DEEPSEEK|AZURE|GOOGLE|GEMINI|MISTRAL|OPENROUTER|TOGETHER|DASHSCOPE|MOONSHOT|ZHIPU|XAI)[A-Z0-9_]*(API_)?KEY[[:space:]]*[:=][[:space:]]*['\"]?[A-Za-z0-9_./+=-]{20,}" || true
 ```
 
 If any match is a real leak, stop and fix it before committing.
@@ -122,6 +122,8 @@ Documentation drift is considered a bug.
   equivalent.
 - `GUIDE_EN.md` and `GUIDE_CN.md` must stay structurally and semantically
   equivalent.
+- `tools/check_doc_structure.py` and the Docs workflow must enforce matching
+  heading level/order for the English and Chinese documentation pairs.
 - English and Chinese docs may use different natural language, but they must
   keep the same sections, command lists, examples, FAQ topics, provider rules,
   and behavior descriptions.
@@ -158,7 +160,9 @@ The repository must remain clean of local runtime state.
 - Runtime provider config belongs in `~/.pawnlogic/custom_providers.json`.
 - Runtime secrets belong in `~/.pawnlogic/.env`.
 - Runtime sessions belong in `~/.pawnlogic/pawn.db`.
-- Tests must isolate runtime data with `PAWNLOGIC_HOME="$(mktemp -d)"`.
+- Tests must isolate runtime data with a temporary `PAWNLOGIC_HOME`.
+- Prefer pytest `tmp_path` fixtures for tests. In shell commands, create the
+  directory with `mktemp -d` and install a cleanup trap before running pytest.
 - Ignored local cache files such as `.aider.tags.cache.v4/cache.db` may exist
   locally, but they must not be staged or committed.
 - Smoke-test symlinks such as `.env.smoke` and `custom_providers.smoke.json`
@@ -175,35 +179,43 @@ git status --short --untracked-files=all
 ## Required Verification
 
 Use the narrowest fast test first, then full verification before commit.
+Commands below assume the intended virtual environment or CI Python is already
+active. Use `python -m ...`; do not hardcode `venv/bin/python`.
 
 Provider/model changes:
 
 ```bash
-PAWNLOGIC_HOME="$(mktemp -d)" PAWNLOGIC_TEST_MODE=true \
-  venv/bin/python -m pytest tests/test_provider_commands.py -q --timeout=60
+tmp_home="$(mktemp -d)"
+trap 'rm -rf "$tmp_home"' EXIT
+PAWNLOGIC_HOME="$tmp_home" PAWNLOGIC_TEST_MODE=true \
+  python -m pytest tests/test_provider_commands.py -q --timeout=60
 ```
 
 Full test suite:
 
 ```bash
-PAWNLOGIC_HOME="$(mktemp -d)" PAWNLOGIC_TEST_MODE=true \
-  venv/bin/python -m pytest tests/ -q --timeout=60
+tmp_home="$(mktemp -d)"
+trap 'rm -rf "$tmp_home"' EXIT
+PAWNLOGIC_HOME="$tmp_home" PAWNLOGIC_TEST_MODE=true \
+  python -m pytest tests/ -q --timeout=60
 ```
 
 Lint:
 
 ```bash
-venv/bin/python -m ruff check .
+python -m ruff check .
 ```
 
 CLI smoke checks:
 
 ```bash
-PAWNLOGIC_HOME="$(mktemp -d)" PAWNLOGIC_TEST_MODE=true MCP_ENABLED=false \
-  PROMPT_TOOLKIT_ENABLED=0 venv/bin/python main.py --help
-PAWNLOGIC_HOME="$(mktemp -d)" PAWNLOGIC_TEST_MODE=true MCP_ENABLED=false \
-  PROMPT_TOOLKIT_ENABLED=0 venv/bin/python -m pawnlogic --help
-PAWNLOGIC_HOME="$(mktemp -d)" PAWNLOGIC_TEST_MODE=true MCP_ENABLED=false \
+tmp_home="$(mktemp -d)"
+trap 'rm -rf "$tmp_home"' EXIT
+PAWNLOGIC_HOME="$tmp_home" PAWNLOGIC_TEST_MODE=true MCP_ENABLED=false \
+  PROMPT_TOOLKIT_ENABLED=0 python main.py --help
+PAWNLOGIC_HOME="$tmp_home" PAWNLOGIC_TEST_MODE=true MCP_ENABLED=false \
+  PROMPT_TOOLKIT_ENABLED=0 python -m pawnlogic --help
+PAWNLOGIC_HOME="$tmp_home" PAWNLOGIC_TEST_MODE=true MCP_ENABLED=false \
   PROMPT_TOOLKIT_ENABLED=0 ./pawn.sh --help
 ```
 
@@ -221,8 +233,20 @@ provider behavior, CLI help, or tests.
 - Keep commits focused and reviewable.
 - Do not include unrelated generated files, caches, build output, local runtime
   config, or database files.
+- If the user asks to preserve completed edits or says changes may be deleted,
+  first create a local commit for only the relevant files before cleanup,
+  branch changes, or other risky follow-up work:
+
+```bash
+git add <files>
+git commit -m "<type>: <summary>"
+```
+
 - Use staged leak scans before committing.
 - Confirm `git status --short --branch --untracked-files=all` after commit.
+- Do not push local commits to any remote branch until the user has manually
+  verified the local build/run result and explicitly instructed the push.
+  Passing local tests is necessary but not sufficient for remote delivery.
 - For fixes, release preparation, and any change that affects packaging or CI,
   create and push a remote test branch first. Do not push directly to `main`
   until the remote branch Actions are green or the user explicitly instructs a
@@ -247,10 +271,24 @@ provider behavior, CLI help, or tests.
   files before reporting completion: remove `dist/`, `build/`, and
   `*.egg-info/` unless the user explicitly asks to keep them.
 - After every release workflow change or published release, re-check that
-  `CLAUDE.md` and `AGENT.md` are synchronized except for their title/opening
-  audience wording.
+  `CLAUDE.md` remains a thin wrapper that imports `AGENT.md`.
 - Record the PyPI publish result and release URL in the final report for any
   release task.
+
+## Release Failure Handling
+
+- If PyPI upload fails before any artifact is accepted, fix the issue and retry
+  the same version only after confirming PyPI does not already contain it.
+- PyPI does not allow replacing files for an existing version. If any artifact
+  was accepted and the release has a serious defect, publish a new patch version
+  instead of trying to overwrite the same version.
+- Yank a broken PyPI release when users should avoid installing it but the
+  release should remain visible for dependency resolution and audit history.
+- If the GitHub Release is created but PyPI upload failed, mark the GitHub
+  Release as draft or delete it, then recreate/update it only after PyPI
+  publishing succeeds.
+- Record the failed version, PyPI project state, and chosen recovery action in
+  `CHANGELOG.md` or the release task notes when the failure affects users.
 
 ## Architecture Notes
 
@@ -304,9 +342,11 @@ Forbidden version-bump edits:
 Version-bump validation:
 
 ```bash
-rg -n "0\.[0-9]+\.[0-9]+|[1-9][0-9]*\.[0-9]+\.[0-9]+" \
-  --glob '!dist/**' --glob '!build/**' --glob '!*.egg-info/**'
-git diff --stat
+rg -n '^VERSION = "[0-9]+\.[0-9]+\.[0-9]+"' config/paths.py
+rg -n 'pypi/v/pawnlogic|^## \[[0-9]+\.[0-9]+\.[0-9]+\]|^[|] [0-9]+\.[0-9]+\.[0-9]+' \
+  README.md README_CN.md CHANGELOG.md SECURITY.md
+git diff --stat -- config/paths.py README.md README_CN.md CHANGELOG.md SECURITY.md
+git diff --name-only | rg -v '^(config/paths\.py|README(_CN)?\.md|CHANGELOG\.md|SECURITY\.md)$' || true
 ```
 
 The diff should be limited to the fixed locations above unless the task
@@ -316,9 +356,9 @@ Build verification:
 
 ```bash
 rm -rf dist/ build/
-venv/bin/python -m build
-venv/bin/python -m twine check dist/*
-venv/bin/python - <<'PY'
+python -m build
+python -m twine check dist/*
+python - <<'PY'
 from pathlib import Path
 from zipfile import ZipFile
 wheel = next(Path("dist").glob("*.whl"))

@@ -1,0 +1,55 @@
+name: Docs
+
+on:
+  push:
+    branches:
+      - main
+      - "chore/**"
+      - "fix/**"
+      - "i18n/**"
+      - "docs/**"
+      - "test/**"
+    paths:
+      - "README.md"
+      - "README_CN.md"
+      - "GUIDE_EN.md"
+      - "GUIDE_CN.md"
+      - "AGENT.md"
+      - "CLAUDE.md"
+      - "tools/check_doc_structure.py"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "README_CN.md"
+      - "GUIDE_EN.md"
+      - "GUIDE_CN.md"
+      - "AGENT.md"
+      - "CLAUDE.md"
+      - "tools/check_doc_structure.py"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  structure:
+    name: Check translated document structure
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check heading structure
+        run: python tools/check_doc_structure.py
