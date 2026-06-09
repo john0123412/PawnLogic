@@ -165,6 +165,23 @@ pawn
 
 The first run launches the configuration wizard automatically.
 
+### Runtime Output Modes
+
+```bash
+pawn                              # interactive user-friendly mode
+pawn --debug                      # interactive mode with detailed diagnostics
+pawn --eval "your prompt"         # single execution then exit
+pawn --eval "prompt" --json       # machine-readable JSON output
+```
+
+Default `pawn` hides raw tool-call arguments, parser diagnostics, detailed API
+errors, and reasoning streams. It may show concise status such as `Thinking...`
+or a short tool progress line. Use `pawn --debug` when troubleshooting provider
+connectivity, parser behavior, tool-call arguments, or low-level API failures.
+`--json` is for scripting output with `--eval`; it is not the debug display
+mode. During an interactive session, `/mode` toggles between user-friendly and
+debug output.
+
 ### Source-checkout launcher fallback
 
 ```bash
@@ -239,7 +256,7 @@ Check key status at runtime: `/keys`
 | Command | Description |
 |---------|-------------|
 | `/model [alias]` | Switch model (only shows active providers with configured keys) |
-| `/mode` | Toggle USER / DEV output mode |
+| `/mode` | Toggle user-friendly/debug output |
 | `/clear` | Clear context, keep pins |
 | `/context` | Context size + token estimate |
 | `/pin [n]` | Pin last n messages |

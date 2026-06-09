@@ -54,7 +54,7 @@ def make_args():
             "json":    False,
             "session": None,
             "model":   None,
-            "quiet":   True,
+            "debug":   False,
         }
         defaults.update(overrides)
         return types.SimpleNamespace(**defaults)

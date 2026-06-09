@@ -32,14 +32,15 @@ from pathlib import Path
 from config import (
     DYNAMIC_CONFIG, MODELS, DEFAULT_MODEL,
     validate_api_key, VERSION, GLOBAL_SKILLS_PATH,
-    QUIET_MODE, smart_truncate,
+    smart_truncate,
     AGENT_PHASES,
-    USER_MODE, user_friendly_error,
+    user_friendly_error,
     is_fast_model, find_fast_peer,
     SKILLS_DIR,
 )
 from utils.ansi import c, BOLD, DIM, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
 from core.api_client import stream_request, ensure_tool_call_id
+from core.state import state as _runtime_state
 from core.memory import (
     init_db, _gen_id, search_knowledge, format_knowledge_for_prompt,
     update_session_naming,
@@ -66,6 +67,14 @@ from tools.pwn_chain import (tool_pwn_env, tool_inspect_binary, tool_pwn_rop,
                               tool_pwn_timed_debug, PWN_SCHEMAS)
 from tools.vision    import analyze_local_image, VISION_SCHEMAS
 from core.logger import logger, audit_tool_call
+
+
+def _user_mode() -> bool:
+    return bool(_runtime_state.user_mode)
+
+
+def _debug_mode() -> bool:
+    return bool(_runtime_state.debug_mode)
 
 # P3 + P4: Docker containerization. Optional dependency; silently skip if absent.
 try:
@@ -325,8 +334,8 @@ def tool_search_skills(args: dict) -> str:
     # Use format_for_prompt for full guidance, including script execution commands.
     result = _skill_scanner.format_for_prompt(packs)
 
-    # Concise USER_MODE output.
-    if USER_MODE:
+    # Concise user-mode output.
+    if _user_mode():
         names = [p.get("name", "?") for p in packs]
         print(c(GREEN, f"  🚀 [P6] Matched {len(packs)} skill packs: {', '.join(names)}"))
 
@@ -925,11 +934,11 @@ class AgentSession:
     ) -> None:
         """Pretty-print the auto-naming result to stdout.
 
-        USER_MODE prints one concise line; DEV prints full paths for debugging.
+        User mode prints one concise line; debug mode prints full paths.
         Any error is swallowed (UI never blocks naming persistence).
         """
         try:
-            if USER_MODE:
+            if _user_mode():
                 if final_dirname:
                     print(c(CYAN, f"  🏷  Session auto-named -> {title} · Workspace: {final_dirname}/"))
                 else:
@@ -1654,7 +1663,7 @@ class AgentSession:
                                 "--- RAW (truncated 4096) ---\n{}\n--- END ---",
                                 self.model_alias, self.session_id[:8], e, json_str[:4096],
                             )
-                            if USER_MODE:
+                            if _user_mode():
                                 print(c(RED, "  ❌ System is busy. Please try again later."))
                             else:
                                 print(c(RED, f"  ✗ [Hybrid Parser] JSON fallback parse failed: {e}"))
@@ -1723,11 +1732,12 @@ class AgentSession:
                 if s.get("function", {}).get("name") in phase_whitelist
                 or s.get("function", {}).get("name") in ("switch_phase", "bump_skill")  # ★
             ]
-            print(c(GRAY,
-                f"  📡 [Phase:{self.current_phase}] "
-                f"Loaded {len(current_tools)} tools "
-                f"({', '.join(s['function']['name'] for s in current_tools)})"
-            ))
+            if _debug_mode():
+                print(c(GRAY,
+                    f"  📡 [Phase:{self.current_phase}] "
+                    f"Loaded {len(current_tools)} tools "
+                    f"({', '.join(s['function']['name'] for s in current_tools)})"
+                ))
 
         _plan_rejected    = 0
         _dir_search_count = 0
@@ -1752,7 +1762,7 @@ class AgentSession:
 
                 # P6.5: show loaded skill-pack status on the first iteration.
                 if iteration == 0 and self._loaded_skill_packs:
-                    if USER_MODE:
+                    if _user_mode():
                         print(c(GREEN, _skill_scanner.format_user_message(self._loaded_skill_packs)))
                     else:
                         for _sp in self._loaded_skill_packs:
@@ -1839,9 +1849,10 @@ class AgentSession:
                             f"Extract key findings, paths already ruled out, and the current best direction:\n\n{_obs_text}"
                         )
                         self.messages.append({"role": "user", "content": _summary_prompt})
-                        print(c(CYAN,
-                            f"  🔄 [Logic Refresh] Phase summary triggered (iteration={iteration})"
-                        ))
+                        if _debug_mode():
+                            print(c(CYAN,
+                                f"  🔄 [Logic Refresh] Phase summary triggered (iteration={iteration})"
+                            ))
                         logger.info(
                             "Logic Refresh: phase summary triggered | "
                             "session={} iteration={} obs_count={}",
@@ -1893,9 +1904,10 @@ class AgentSession:
                         "  5. Ask the user to confirm target environment details"
                     )
                     self.messages.append({"role": "user", "content": _anti_loop_msg})
-                    print(c(YELLOW,
-                        f"  🔁 [Anti-Loop] Detected {_repeat_error_count} repeated errors; injected bypass hint"
-                    ))
+                    if _debug_mode():
+                        print(c(YELLOW,
+                            f"  🔁 [Anti-Loop] Detected {_repeat_error_count} repeated errors; injected bypass hint"
+                        ))
                     logger.warning(
                         "Anti-Loop: repeated error detected | "
                         "session={} iteration={} count={}",
@@ -1916,9 +1928,10 @@ class AgentSession:
                     # thinking-mode fix: accumulate reasoning_content separately.
                     # Some reasoning models return reasoning_content deltas that must
                     # be preserved and sent back as-is, or they may return HTTP 400.
-                    # Hide it in USER_MODE; stream it in gray in DEV mode.
+                    # Hide it in user mode; stream it in gray in debug mode.
                     reasoning_buf = ""
                     _reasoning_printed = False   # Whether the "🧠 [thinking]" prefix was printed.
+                    _user_thinking_printed = False
                     _tokens_before = self._turn_completion_tokens
 
                     for delta in stream_request(
@@ -1928,7 +1941,7 @@ class AgentSession:
                     ):
                         if "_error" in delta:
                             _err_detail = delta["_error"]
-                            if USER_MODE:
+                            if _user_mode():
                                 print(c(RED, f"\n  {user_friendly_error(_err_detail)}"))
                             else:
                                 print(c(RED, f"\nAPI Error: {_err_detail}"))
@@ -1947,13 +1960,17 @@ class AgentSession:
                         r_chunk = d.get("reasoning_content") or ""
                         if r_chunk:
                             reasoning_buf += r_chunk
-                            # Stream only in DEV mode, not USER_MODE.
-                            if not USER_MODE:
+                            # Stream only in debug mode, not user mode.
+                            if _debug_mode():
                                 if not _reasoning_printed:
                                     sys.stdout.write(c(GRAY + DIM, "\n  🧠 [thinking] "))
                                     _reasoning_printed = True
                                 sys.stdout.write(c(GRAY + DIM, r_chunk))
                                 sys.stdout.flush()
+                            elif not _user_thinking_printed:
+                                sys.stdout.write(c(GRAY, "\n  Thinking..."))
+                                sys.stdout.flush()
+                                _user_thinking_printed = True
 
                         # ── Usage accounting (_usage injected by api_client) ──
                         if "_usage" in delta:
@@ -1967,10 +1984,14 @@ class AgentSession:
 
                         if chunk:
                             # Add a newline when switching from thinking to normal output.
-                            if _reasoning_printed and not USER_MODE:
+                            if _reasoning_printed and _debug_mode():
                                 sys.stdout.write("\n")
                                 sys.stdout.flush()
                                 _reasoning_printed = False   # Only newline once.
+                            if _user_thinking_printed:
+                                sys.stdout.write("\n")
+                                sys.stdout.flush()
+                                _user_thinking_printed = False
                             printable = renderer.feed(chunk)
                             if printable: sys.stdout.write(printable); sys.stdout.flush()
                             text_buf += chunk
@@ -1989,7 +2010,7 @@ class AgentSession:
                     leftover = renderer.flush()
 
                     # P7: raw tool_call argument logging for driver escaping diagnostics.
-                    if tc_buf and not USER_MODE:
+                    if tc_buf and _debug_mode():
                         for _idx, _tc in tc_buf.items():
                             _raw_name = _tc["name"]
                             _raw_args = _tc["args"]
@@ -2029,10 +2050,11 @@ class AgentSession:
                                 "_args_parsed": call["args"],
                             }
                             label = "XML" if source == "xml" else "JSON"
-                            print(c(GRAY,
-                                f"  ⚙ [Hybrid Parser/{label}] Intercepted tool call: {call['name']} "
-                                f"(params: {list(call['args'].keys())})"
-                            ))
+                            if _debug_mode():
+                                print(c(GRAY,
+                                    f"  ⚙ [Hybrid Parser/{label}] Intercepted tool call: {call['name']} "
+                                    f"(params: {list(call['args'].keys())})"
+                                ))
                             logger.info(
                                 "Hybrid Parser/{} intercepted | "
                                 "model={} session={} iteration={} tool={}",
@@ -2054,10 +2076,11 @@ class AgentSession:
 
                     _api_retry += 1
                     if _api_retry >= _API_RETRY_MAX:
-                        print(c(YELLOW,
-                            f"\n  ⚠ [API Recovery] Received {_api_retry} consecutive empty responses; "
-                            "injecting recovery hint and continuing..."
-                        ))
+                        if _debug_mode():
+                            print(c(YELLOW,
+                                f"\n  ⚠ [API Recovery] Received {_api_retry} consecutive empty responses; "
+                                "injecting recovery hint and continuing..."
+                            ))
                         logger.warning(
                             "API empty response: retries exhausted | "
                             "model={} session={} iteration={} retries={}",
@@ -2074,10 +2097,11 @@ class AgentSession:
                         break   # Exit retry loop and proceed to the next iteration.
 
                     _wait = min(2 ** _api_retry, 8)
-                    print(c(YELLOW,
-                        f"\n  ⚠ [API Recovery] Invalid response received; attempting recovery... "
-                        f"({_api_retry}/{_API_RETRY_MAX}, waiting {_wait}s)"
-                    ))
+                    if _debug_mode():
+                        print(c(YELLOW,
+                            f"\n  ⚠ [API Recovery] Invalid response received; attempting recovery... "
+                            f"({_api_retry}/{_API_RETRY_MAX}, waiting {_wait}s)"
+                        ))
                     logger.warning(
                         "API empty response detected, retrying | "
                         "model={} session={} iteration={} attempt={} wait={}s",
@@ -2140,10 +2164,11 @@ class AgentSession:
 
                 elif _plan_rejected > 0:
                     # Soft intercept: tools still run; inject correction signal after results.
-                    print(c(YELLOW,
-                        f"  💭 [CoT Soft #{_plan_rejected}/{_MAX_SOFT_CORRECTIONS}] "
-                        "Missing <plan> detected; tools will run and the correction signal will be injected after results..."
-                    ))
+                    if _debug_mode():
+                        print(c(YELLOW,
+                            f"  💭 [CoT Soft #{_plan_rejected}/{_MAX_SOFT_CORRECTIONS}] "
+                            "Missing <plan> detected; tools will run and the correction signal will be injected after results..."
+                        ))
                     logger.debug(
                         "CoT Guard: soft intercept #{} | model={} session={} iteration={}",
                         _plan_rejected, self.model_alias, self.session_id[:8], iteration,
@@ -2155,7 +2180,8 @@ class AgentSession:
                     orig = len(tc_buf)
                     kept = sorted(tc_buf.keys())[:_MAX_CONCURRENT_TOOLS]
                     tc_buf = {k: tc_buf[k] for k in kept}
-                    print(c(YELLOW, f"  ✂ [Concurrency Limit] Truncated {orig} tool calls to the first {_MAX_CONCURRENT_TOOLS}."))
+                    if _debug_mode():
+                        print(c(YELLOW, f"  ✂ [Concurrency Limit] Truncated {orig} tool calls to the first {_MAX_CONCURRENT_TOOLS}."))
                     logger.warning(
                         "Concurrent tool limit | model={} session={} original={} kept={}",
                         self.model_alias, self.session_id[:8], orig, _MAX_CONCURRENT_TOOLS,
@@ -2199,9 +2225,9 @@ class AgentSession:
                     preview  = ", ".join(f"{k}={repr(v)[:40]}" for k, v in fn_args.items())
                     iter_tag = c(GRAY, f"[{iteration+1}/{max_iter}]")
 
-                    # P6: in USER_MODE, detect skill-pack script calls and simplify output.
+                    # In user mode, detect skill-pack script calls and simplify output.
                     _is_skill_call = False
-                    if USER_MODE and name == "run_shell":
+                    if _user_mode() and name == "run_shell":
                         _cmd = fn_args.get("command", "") or fn_args.get("_raw_args", "")
                         _skills_dir_str = str(SKILLS_DIR).replace("\\", "/")
                         if _skills_dir_str in _cmd.replace("\\", "/") and any(
@@ -2215,7 +2241,10 @@ class AgentSession:
                             print(c(GREEN, f"  🚀 [P6] Running automated validation script for {_pack_hint}...") + f" {iter_tag}")
 
                     if not _is_skill_call:
-                        print(c(YELLOW, f"  🔧 {name}") + c(GRAY, f"({preview[:80]})") + f" {iter_tag}")
+                        if _debug_mode():
+                            print(c(YELLOW, f"  🔧 {name}") + c(GRAY, f"({preview[:80]})") + f" {iter_tag}")
+                        else:
+                            print(c(YELLOW, f"  Working with {name}...") + f" {iter_tag}")
 
                     # switch_phase intercept; mutate instance state directly.
                     if name == "switch_phase":
@@ -2269,10 +2298,11 @@ class AgentSession:
                                 _fail_rows = check_failure(name, args_keywords=preview[:200], limit=3)
                                 if _fail_rows:
                                     _failure_warning = format_failures_for_prompt(_fail_rows)
-                                    print(c(YELLOW,
-                                        f"  ⚠ [Anti-Pattern] {name} has "
-                                        f"{len(_fail_rows)} historical failure records"
-                                    ))
+                                    if _debug_mode():
+                                        print(c(YELLOW,
+                                            f"  ⚠ [Anti-Pattern] {name} has "
+                                            f"{len(_fail_rows)} historical failure records"
+                                        ))
                             except Exception:
                                 pass
 
@@ -2298,7 +2328,7 @@ class AgentSession:
 
                         except Exception as _tool_exc:
                             _raw_err = f"ERROR: {type(_tool_exc).__name__}: {_tool_exc}"
-                            result = user_friendly_error(_raw_err) if USER_MODE else _raw_err
+                            result = user_friendly_error(_raw_err) if _user_mode() else _raw_err
                             _audit_ok = False
                         _elapsed_ms = int((time.monotonic() - _t0) * 1000)
 
@@ -2355,7 +2385,7 @@ class AgentSession:
                                             error_msg   = result[:300],
                                             args_preview= preview[:200],
                                         )
-                                        if _ok:
+                                        if _ok and _debug_mode():
                                             print(c(YELLOW, f"  📝 [GSA Sink] {_msg}"))
                             except Exception:
                                 pass  # Failure recording must not block the main flow.
@@ -2379,7 +2409,7 @@ class AgentSession:
                         except Exception:
                             pass  # Audit logging must not block the main flow.
 
-                        if QUIET_MODE or name in _VERBOSE_TOOLS:
+                        if _user_mode() or name in _VERBOSE_TOOLS:
                             result = smart_truncate(result, head=30, tail=30)
                         else:
                             limit = DYNAMIC_CONFIG["tool_max_chars"]
@@ -2501,9 +2531,7 @@ class AgentSession:
 
     # ── Per-turn usage summary ───────────────────────────
     def _print_turn_summary(self):
-        """Print token + tool-call summary after each turn.
-        Uses config.QUIET_MODE (imported at module level) — no NameError.
-        """
+        """Print token and tool-call summary after each turn."""
         pt = self._turn_prompt_tokens
         ct = self._turn_completion_tokens
         tt = self._turn_tool_calls
@@ -2512,8 +2540,7 @@ class AgentSession:
         tot_pt = self.total_prompt_tokens
         tot_ct = self.total_completion_tokens
         tot_tt = self.total_tool_calls
-        if QUIET_MODE:
-            # Ultra-minimal single line
+        if _user_mode():
             cum = (f"  cum:↑{tot_pt:,}↓{tot_ct:,}🔧{tot_tt}"
                    if tot_pt != pt or tot_tt != tt else "")
             print(c(GRAY, f"  [↑{pt:,}tok ↓{ct:,}tok 🔧{tt}]{cum}"))

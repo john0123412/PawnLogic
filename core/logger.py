@@ -91,14 +91,14 @@ def audit_tool_call(
 def setup_logger(stderr_level: str = "INFO", file_level: str = "DEBUG") -> None:
     """
     Initialize loguru dual output.
-    Call after argparse has completed and config.QUIET_MODE is known.
+    Call after argparse has completed and the runtime output mode is known.
     Repeated calls remove and rebuild handlers, so this is idempotent.
 
     Parameters
     ----------
     stderr_level : str
         Minimum terminal output level. Defaults to "INFO".
-        Use "WARNING" in QUIET_MODE to reduce noise.
+        Use "WARNING" in default user mode or JSON mode to reduce noise.
     file_level : str
         Minimum file output level. Defaults to "DEBUG" for full records.
     """

@@ -167,6 +167,8 @@ def test_source_and_module_help_use_same_runtime(tmp_path):
     assert module_result.returncode == 0, module_result.stdout + module_result.stderr
     assert main_result.stdout == module_result.stdout
     assert "PawnLogic" in main_result.stdout
+    assert "--debug" in main_result.stdout
+    assert "--quiet" not in main_result.stdout
 
 
 def test_fresh_venv_pip_install_exposes_pawn_command(tmp_path):
@@ -417,7 +419,7 @@ def test_first_run_gate_treats_custom_provider_keys_uniformly(tmp_path):
 def test_first_run_wizard_sets_selected_model_and_secures_env(tmp_path):
     env = _clean_runtime_env(tmp_path)
     result = subprocess.run(
-        [sys.executable, str(ROOT / "main.py"), "--quiet"],
+        [sys.executable, str(ROOT / "main.py")],
         cwd=ROOT,
         env=env,
         input="2\nsk-test-openai\n/exit\n",
@@ -434,6 +436,25 @@ def test_first_run_wizard_sets_selected_model_and_secures_env(tmp_path):
     env_path = Path(env["PAWNLOGIC_HOME"]) / ".env"
     assert env_path.read_text(encoding="utf-8").strip().endswith("OPENAI_API_KEY=sk-test-openai")
     assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
+
+
+def test_quiet_flag_is_removed(tmp_path):
+    env = _clean_runtime_env(tmp_path)
+    env["PAWNLOGIC_TEST_MODE"] = "true"
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "main.py"), "--quiet"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=15,
+    )
+
+    assert result.returncode != 0
+    assert "unrecognized arguments: --quiet" in result.stderr
 
 
 def test_latest_documented_model_aliases_are_registered():

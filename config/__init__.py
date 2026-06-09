@@ -61,9 +61,8 @@ WEB_STRATEGY = {
 }
 
 # Backward compatibility: USER_MODE / QUIET_MODE.
-# These flags are now managed by core.state.
-# Module-level variables remain for `import config; config.QUIET_MODE = True`.
-# Direct assignment here does not update core.state.state; new code should
-# import `state` from core.state instead.
-USER_MODE: bool = False
+# These flags are now managed by core.state. Module-level variables remain for
+# older imports, but direct assignment here does not update core.state.state.
+# New code should import `state` from core.state instead.
+USER_MODE: bool = True
 QUIET_MODE: bool = False

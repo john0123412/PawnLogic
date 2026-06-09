@@ -319,7 +319,7 @@ class SkillScanner:
         return "\n\n".join(blocks)
 
     def format_user_message(self, packs: list[dict]) -> str:
-        """Concise USER_MODE status message."""
+        """Concise user-mode status message."""
         if not packs:
             return ""
         names = [p.get("name", "?") for p in packs]

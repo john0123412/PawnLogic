@@ -108,12 +108,12 @@ def test_slash_keys(spawn_pawnlogic):
 
 
 def test_slash_mode(spawn_pawnlogic):
-    """Send /mode and verify output contains USER/DEV mode info."""
+    """Send /mode and verify output contains user/debug mode info."""
     child = spawn_pawnlogic
     try:
         _wait_for_prompt(child)
         child.sendline("/mode")
-        child.expect(["USER", "DEV", "mode", "Mode"], timeout=10)
+        child.expect(["Debug mode enabled", "User-friendly mode enabled"], timeout=10)
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
         pytest.fail(f"/mode failed: {e}")

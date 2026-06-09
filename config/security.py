@@ -72,7 +72,7 @@ _ERROR_MAP = {
 
 
 def user_friendly_error(raw_error: str) -> str:
-    """Convert raw errors into concise user-facing messages in USER_MODE."""
+    """Convert raw errors into concise user-facing messages in user mode."""
     if not _state.user_mode:
         return raw_error
     for keyword, friendly in _ERROR_MAP.items():

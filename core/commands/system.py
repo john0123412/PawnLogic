@@ -170,7 +170,7 @@ async def cmd_stats(ctx: CommandContext) -> None:
     est_usd = tot / 1_000_000 * 1.50
     if tot + tt == 0:
         print(c(GRAY, "  (No API calls recorded in this session.)"))
-    elif _runtime_state.quiet_mode:
+    elif _runtime_state.user_mode:
         print(c(GRAY, f"  stats: ↑{pt:,} ↓{ct:,} total={tot:,} tools={tt} ~${est_usd:.4f}"))
     else:
         print(c(BOLD, "\n  ╔══ Session Usage Audit ═════════════════════╗"))

@@ -60,10 +60,16 @@ If `pawn` is not found after package or installer setup, run
 
 **CLI usage:**
 ```bash
-pawn                              # interactive mode
+pawn                              # interactive user-friendly mode
+pawn --debug                      # interactive mode with detailed diagnostics
 pawn --eval "your prompt"         # single execution then exit
 pawn --eval "prompt" --json       # JSON output (for scripting)
 ```
+
+Default `pawn` hides raw tool-call arguments, parser diagnostics, and reasoning
+streams. Use `pawn --debug` when you need detailed terminal logs, tool-call
+visibility, API error details, and parser diagnostics. In an interactive
+session, `/mode` toggles between the same user-friendly and debug output modes.
 
 ## What's New
 
@@ -110,7 +116,7 @@ All keys are stored in `~/.pawnlogic/.env`. Provider configs (no keys) go to `~/
 
 ```bash
 /model [alias]          # switch model, showing active configured providers
-/mode                   # toggle USER / DEV output mode
+/mode                   # toggle user-friendly/debug output
 /chat find <keyword>    # full-text search across all sessions
 /think <prompt>         # single deep-reasoning turn
 /compact                # summarize + clear context

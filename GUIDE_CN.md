@@ -165,6 +165,20 @@ pawn
 
 首次运行自动进入配置向导。
 
+### 运行时输出模式
+
+```bash
+pawn                              # 用户友好的交互模式
+pawn --debug                      # 显示详细诊断信息的交互模式
+pawn --eval "your prompt"         # 单次执行后退出
+pawn --eval "prompt" --json       # 机器可读 JSON 输出
+```
+
+默认 `pawn` 会隐藏原始工具参数、解析器诊断、详细 API 错误和 reasoning 流，只显示
+`Thinking...` 或简短工具进度等状态。排查 Provider 连通性、解析器行为、工具参数
+或底层 API 失败时，使用 `pawn --debug`。`--json` 用于配合 `--eval` 输出脚本可读
+结果，不是 debug 显示模式。交互会话中，`/mode` 会在用户友好输出和 debug 输出之间切换。
+
 ### 源码 checkout 启动器备用方式
 
 ```bash
@@ -236,7 +250,7 @@ MYRELAY_API_KEY=...
 | 命令 | 说明 |
 |------|------|
 | `/model [alias]` | 切换模型（只显示 active 且已配置 Key 的 Provider） |
-| `/mode` | 切换 USER / DEV 输出模式 |
+| `/mode` | 切换用户友好 / debug 输出 |
 | `/clear` | 清空上下文（保留 Pin 消息） |
 | `/context` | 上下文大小 / Token 估算 |
 | `/pin [n]` | 固定最近 n 条消息（默认 2） |

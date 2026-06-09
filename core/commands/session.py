@@ -652,8 +652,12 @@ async def cmd_think(ctx: CommandContext) -> None:
 # ── /mode ───────────────────────────────────────────────────
 @register("/mode")
 async def cmd_mode(ctx: CommandContext) -> None:
-    _runtime_state.user_mode = not _runtime_state.user_mode
+    import config
+
+    _runtime_state.debug_mode = not _runtime_state.debug_mode
+    _runtime_state.user_mode = not _runtime_state.debug_mode
+    config.USER_MODE = _runtime_state.user_mode
     if _runtime_state.user_mode:
-        print(c(GREEN, "  ✓ Switched to USER mode (concise output, lower-level errors hidden)"))
+        print(c(GREEN, "  ✓ User-friendly mode enabled (tool details hidden)"))
     else:
-        print(c(CYAN, "  ✓ Switched to DEV mode (transparent output with all details)"))
+        print(c(CYAN, "  ✓ Debug mode enabled (tool calls and diagnostics visible)"))

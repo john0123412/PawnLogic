@@ -10,8 +10,9 @@ from dataclasses import dataclass, field
 @dataclass
 class RuntimeState:
     # Output mode.
-    user_mode: bool = False       # True = user-friendly mode; False = developer mode.
-    quiet_mode: bool = False      # True = quiet mode.
+    user_mode: bool = True        # True = user-friendly mode; False = debug mode.
+    debug_mode: bool = False      # True = detailed terminal diagnostics.
+    quiet_mode: bool = False      # Legacy compatibility; no CLI flag sets this.
 
     # Model state.
     current_model: str = "ds-v4-flash"

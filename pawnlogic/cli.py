@@ -281,7 +281,7 @@ HELP_TEXT = f"""
 {c(BOLD+CYAN, f"PawnLogic {VERSION} — Commands")}
 
 {c(BOLD, "Conversation")}
-  {c(YELLOW, "/mode")}            Toggle USER / DEV output mode
+  {c(YELLOW, "/mode")}            Toggle user-friendly/debug output
   {c(YELLOW, "/model [alias]")}   Switch model; only active providers with keys are shown
   {c(YELLOW, "/clear")}           Clear context while keeping pinned messages
   {c(YELLOW, "/context")}         Show context size and token estimate
@@ -806,10 +806,10 @@ async def main():
         add_help=True,
     )
     parser.add_argument(
-        "-q", "--quiet",
+        "--debug",
         action="store_true",
         default=False,
-        help="Quiet mode: suppress banner and decorative output.",
+        help="Show detailed logs, tool calls, parser diagnostics, and reasoning streams.",
     )
     parser.add_argument(
         "--model", "-m",
@@ -832,9 +832,12 @@ async def main():
         metavar="ID",
         help="Resume a specific session by ID (use with --eval).",
     )
-    args, _ = parser.parse_known_args()
-    config.QUIET_MODE = args.quiet  # mutate the single canonical flag in config
-    _runtime_state.quiet_mode = args.quiet  # sync to state
+    args = parser.parse_args()
+    _runtime_state.debug_mode = bool(args.debug)
+    _runtime_state.user_mode = not _runtime_state.debug_mode
+    _runtime_state.quiet_mode = False
+    config.QUIET_MODE = False
+    config.USER_MODE = _runtime_state.user_mode
 
     # Output sink stage-2 integration point. Select human or JSON output and
     # register the process-level singleton for dispatch() fallback injection.
@@ -874,21 +877,21 @@ async def main():
             print(c(RED, f"  ✗ {detail}"))
         sys.exit(1)
 
-    # Initialize loguru dual output. Quiet mode and --json keep terminal logs at
-    # WARNING+ to avoid noise; files always retain DEBUG diagnostics.
+    # Initialize loguru dual output. Default user mode and --json keep terminal
+    # logs at WARNING+ to avoid noise; --debug shows INFO-level diagnostics.
     setup_logger(
         stderr_level=(
-            "WARNING"
-            if (args.json or _runtime_state.quiet_mode or _runtime_state.user_mode)
-            else "INFO"
+            "INFO"
+            if (_runtime_state.debug_mode and not args.json)
+            else "WARNING"
         ),
         file_level="DEBUG",
     )
     logger.info(
-        "PawnLogic {} starting | model={} quiet={}",
+        "PawnLogic {} starting | model={} debug={}",
         config.VERSION,
         args.model or config.DEFAULT_MODEL,
-        _runtime_state.quiet_mode,
+        _runtime_state.debug_mode,
     )
 
     try:
@@ -982,7 +985,7 @@ async def main():
         + (" ✓" if any(validate_api_key(m)[0] for m in vision_models) else "  (key required)")
     )
 
-    if not _runtime_state.quiet_mode:
+    if _runtime_state.debug_mode:
         print(f"""
 {c(BOLD+CYAN,"╔══════════════════════════════════════════════════════╗")}
 {c(BOLD+CYAN,"║")}  {c(BOLD,f"PawnLogic {VERSION}")}  {c(GRAY,"· Plan · Vision · GSD · SQLite")}   {c(BOLD+CYAN,"║")}
@@ -1002,7 +1005,7 @@ async def main():
     else:
         key_sym = "✓" if key_ok else "✗"
         prx_sym = f" proxy={PROXY_STATUS}" if PROXY_STATUS else ""
-        print(c(GRAY, f"PawnLogic {VERSION}  model={session.model_alias}  key{key_sym}{prx_sym}  /help"))
+        print(c(GRAY, f"PawnLogic {VERSION}  model={session.model_alias}  key{key_sym}{prx_sym}  /help  /mode debug"))
 
     # ════════════════════════════════════════════════════════
     # Startup session resume prompt.
@@ -1063,7 +1066,7 @@ async def main():
     ]
 
     _cmd_meta = {
-        "/mode":          "Toggle USER / DEV output mode",
+        "/mode":          "Toggle user-friendly/debug output",
         "/model":         "Switch AI model (/model ds-v4-flash)",
         "/clear":         "Clear context while keeping pinned messages",
         "/context":       "Show context size and token estimate",
@@ -1275,7 +1278,7 @@ async def main():
             reserve_space_for_menu=4,
         )
 
-        if not _runtime_state.quiet_mode:
+        if _runtime_state.debug_mode:
             print(c(GRAY, "  🐚 Tab completion enabled (advanced mode)"))
             if _HAS_RICH:
                 print(c(GRAY, "  📝 Markdown rendering and code highlighting enabled"))
@@ -1308,7 +1311,7 @@ async def main():
             import atexit
             atexit.register(lambda: _safe_write_history(_history_path))
 
-        if not _runtime_state.quiet_mode:
+        if _runtime_state.debug_mode:
             print(c(GRAY, "  🐚 Tab completion enabled (basic mode)"))
             if _PT_IMPORT_ERROR:
                 print(c(YELLOW, f"  ⚠ prompt_toolkit failed to load: {_PT_IMPORT_ERROR}"))
