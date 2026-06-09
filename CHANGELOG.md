@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.0.8] - 2026-06-09
 
+### Added
+- Fresh installs now generate runtime config templates for environment keys and
+  MCP setup, so pip/curl users start with documented local config files.
+- Documentation structure checks now guard the English/Chinese README and guide
+  heading layout, with `CLAUDE.md` kept as a thin `AGENT.md` wrapper.
+
 ### Fixed
 - Stabilized interactive `Ctrl+C` handling: in-flight interrupts now show
   immediate feedback, roll back only the current turn, and no longer leak the
@@ -18,6 +24,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   or `choices[].message.content` stream payloads.
 
 ### Changed
+- Normal interactive mode is now user-friendly by default. Raw tool-call
+  arguments, parser diagnostics, reasoning streams, and nonfatal diagnostics are
+  shown only in `--debug` mode or after toggling `/mode`.
+- Source prompts and user-facing provider/session/workspace command copy were
+  normalized to English while keeping Chinese documentation aligned.
+- Example MCP configuration now disables the external `fetch` server by default
+  because `uvx mcp-server-fetch` can contact PyPI during startup; users can opt
+  in explicitly when they need it.
 - PyPI wheels and sdists no longer include `skills/`. Local skill packs are now
   source-checkout or user-installed assets; installed users use
   `~/.pawnlogic/skills` when they add packs explicitly.
