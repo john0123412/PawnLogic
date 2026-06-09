@@ -1416,7 +1416,6 @@ class AgentSession:
             summary_alias = self.model_alias
 
         try:
-            from core.api_client import stream_request
             summary_chunks: list[str] = []
             for delta in stream_request(
                 [
@@ -1427,9 +1426,10 @@ class AgentSession:
                 tools_schema=None,
                 max_tokens=600,
             ):
-                if "choices" not in delta:
+                choices = delta.get("choices") or []
+                if not choices:
                     continue
-                chunk = (delta["choices"][0].get("delta") or {}).get("content") or ""
+                chunk = (choices[0].get("delta") or {}).get("content") or ""
                 if chunk:
                     summary_chunks.append(chunk)
 
@@ -1442,11 +1442,12 @@ class AgentSession:
                     "Current dynamic window turns: {} | model={}",
                     sliding, summary_alias,
                 )
-                print(c(CYAN,
-                    f"  🗜  [Context Pruning] History summary updated (kept latest {sliding} turns)"
-                ))
+                if _debug_mode():
+                    print(c(CYAN,
+                        f"  🗜  [Context Pruning] History summary updated (kept latest {sliding} turns)"
+                    ))
         except Exception as exc:
-            logger.warning(
+            logger.debug(
                 "History summary generation failed (non-fatal) | exc={!r}", exc
             )
 

@@ -106,6 +106,9 @@ The repository has one CLI runtime implementation.
 - Default `pawn` startup is user-friendly mode. It must hide raw tool-call
   internals, parser diagnostics, detailed reasoning streams, and low-level API
   errors unless the user explicitly enables debug output.
+- Default user-friendly mode must not print internal loguru WARNING diagnostics
+  to the terminal. Non-fatal internal diagnostics belong in debug/file logs; use
+  concise user-facing print messages for issues the user must act on.
 - `pawn --debug` is the only startup flag for detailed terminal diagnostics.
   Do not reintroduce `--quiet`; use debug mode and runtime state flags instead.
 - `/mode` remains the interactive switch between user-friendly output and debug

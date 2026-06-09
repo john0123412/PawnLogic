@@ -171,6 +171,14 @@ def test_source_and_module_help_use_same_runtime(tmp_path):
     assert "--quiet" not in main_result.stdout
 
 
+def test_default_cli_suppresses_internal_terminal_logs():
+    source = (ROOT / "pawnlogic" / "cli.py").read_text(encoding="utf-8")
+
+    assert 'if (_runtime_state.debug_mode and not args.json)' in source
+    assert 'else "CRITICAL"' in source
+    assert '"INFO"' in source
+
+
 def test_fresh_venv_pip_install_exposes_pawn_command(tmp_path):
     install_venv = tmp_path / "install-venv"
     subprocess.run(

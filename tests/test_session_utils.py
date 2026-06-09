@@ -392,6 +392,35 @@ def test_run_turn_injects_plan_missing_for_non_exempt_tool(monkeypatch):
     )
 
 
+def test_history_summary_skips_empty_stream_choices(monkeypatch):
+    from config import DYNAMIC_CONFIG
+    import core.session as session_mod
+
+    s = _make_session()
+    s.messages = [
+        _msg("system", "sys"),
+        _msg("user", "q1"),
+        _msg("assistant", "a1"),
+        _msg("user", "q2"),
+        _msg("assistant", "a2"),
+        _msg("user", "q3"),
+        _msg("assistant", "a3"),
+    ]
+
+    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_summary_threshold", 3)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_sliding_turns", 1)
+    monkeypatch.setattr(session_mod, "stream_request", lambda *_a, **_kw: iter([
+        {"choices": []},
+        {"choices": [{"delta": {"content": "older turns summarized"}}]},
+    ]))
+    session_mod.logger.warning.reset_mock()
+
+    s._maybe_update_summary(s.messages, current_turn_count=3)
+
+    assert s._history_summary == "older turns summarized"
+    session_mod.logger.warning.assert_not_called()
+
+
 # ══════════════════════════════════════════════════════════
 # AgentSession.undo
 # ══════════════════════════════════════════════════════════

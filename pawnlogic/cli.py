@@ -877,13 +877,14 @@ async def main():
             print(c(RED, f"  ✗ {detail}"))
         sys.exit(1)
 
-    # Initialize loguru dual output. Default user mode and --json keep terminal
-    # logs at WARNING+ to avoid noise; --debug shows INFO-level diagnostics.
+    # Initialize loguru dual output. Default user mode and --json suppress
+    # internal terminal logs; user-actionable failures are printed explicitly.
+    # --debug shows INFO-level diagnostics on the terminal.
     setup_logger(
         stderr_level=(
             "INFO"
             if (_runtime_state.debug_mode and not args.json)
-            else "WARNING"
+            else "CRITICAL"
         ),
         file_level="DEBUG",
     )

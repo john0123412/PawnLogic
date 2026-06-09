@@ -98,7 +98,8 @@ def setup_logger(stderr_level: str = "INFO", file_level: str = "DEBUG") -> None:
     ----------
     stderr_level : str
         Minimum terminal output level. Defaults to "INFO".
-        Use "WARNING" in default user mode or JSON mode to reduce noise.
+        Use "CRITICAL" in default user mode or JSON mode to suppress internal
+        non-fatal diagnostics on the terminal.
     file_level : str
         Minimum file output level. Defaults to "DEBUG" for full records.
     """
