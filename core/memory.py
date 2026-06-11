@@ -10,7 +10,7 @@ Features:
 
 Concurrency:
   · threading.local() per-thread connections
-  · busy_timeout = 200ms
+  · centralized busy_timeout + write retry/backoff
   · PRAGMA tuning
   · incremental message saving
 """
@@ -25,6 +25,33 @@ from core.logger import logger
 # ════════════════════════════════════════════════════════
 
 _tls = threading.local()
+SQLITE_BUSY_TIMEOUT_MS = 1000
+SQLITE_WRITE_RETRIES = 4
+SQLITE_WRITE_BACKOFF_SEC = (0.05, 0.1, 0.2, 0.4)
+
+
+def _is_retryable_write_error(exc: sqlite3.OperationalError) -> bool:
+    msg = str(exc).lower()
+    return "locked" in msg or "busy" in msg
+
+
+def _write_with_retry(session_id: str, operation: str, write_fn):
+    """Run one SQLite write with the shared locked/busy retry policy."""
+    sid = session_id or "-"
+    for attempt in range(1, SQLITE_WRITE_RETRIES + 1):
+        try:
+            return write_fn()
+        except sqlite3.OperationalError as exc:
+            if not _is_retryable_write_error(exc):
+                logger.error("{} | {} | retry_count={} | {}", sid, operation, attempt - 1, exc)
+                raise
+            if attempt >= SQLITE_WRITE_RETRIES:
+                logger.error("{} | {} | retry_count={} | {}", sid, operation, attempt, exc)
+                raise
+            logger.warning("{} | {} | retry_count={} | {}", sid, operation, attempt, exc)
+            delay = SQLITE_WRITE_BACKOFF_SEC[min(attempt - 1, len(SQLITE_WRITE_BACKOFF_SEC) - 1)]
+            time.sleep(delay)
+    return None
 
 def _get_tls_conn() -> sqlite3.Connection:
     conn = getattr(_tls, "conn", None)
@@ -35,8 +62,13 @@ def _get_tls_conn() -> sqlite3.Connection:
             pass
 
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), timeout=0.2, check_same_thread=False)
+    conn = sqlite3.connect(
+        str(DB_PATH),
+        timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+        check_same_thread=False,
+    )
     conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
     conn.executescript("""
         PRAGMA journal_mode       = WAL;
         PRAGMA synchronous        = NORMAL;
@@ -316,29 +348,32 @@ def update_session_naming(
     name_source: str = "auto",
 ) -> bool:
     """Update generated naming metadata without overriding manual names."""
-    with get_conn() as conn:
-        row = conn.execute("SELECT name, name_source FROM sessions WHERE id=?", (session_id,)).fetchone()
-        if not row:
-            return False
-        current_source = row["name_source"] or ""
-        current_name = row["name"] or ""
-        final_name = current_name
-        final_source = current_source or name_source
-        if current_source != "manual" and title.strip():
-            final_name = title.strip()
-            final_source = name_source
-        cur = conn.execute("""
-            UPDATE sessions
-            SET name=?, auto_name=COALESCE(NULLIF(?, ''), auto_name),
-                workspace_dir=COALESCE(NULLIF(?, ''), workspace_dir),
-                workspace_alias=COALESCE(NULLIF(?, ''), workspace_alias),
-                name_source=?, updated_at=?
-            WHERE id=?
-        """, (
-            final_name, auto_name.strip(), workspace_dir.strip(), workspace_alias.strip(),
-            final_source or "auto", _now(), session_id,
-        ))
-        return cur.rowcount > 0
+    def _write() -> bool:
+        with get_conn() as conn:
+            row = conn.execute("SELECT name, name_source FROM sessions WHERE id=?", (session_id,)).fetchone()
+            if not row:
+                return False
+            current_source = row["name_source"] or ""
+            current_name = row["name"] or ""
+            final_name = current_name
+            final_source = current_source or name_source
+            if current_source != "manual" and title.strip():
+                final_name = title.strip()
+                final_source = name_source
+            cur = conn.execute("""
+                UPDATE sessions
+                SET name=?, auto_name=COALESCE(NULLIF(?, ''), auto_name),
+                    workspace_dir=COALESCE(NULLIF(?, ''), workspace_dir),
+                    workspace_alias=COALESCE(NULLIF(?, ''), workspace_alias),
+                    name_source=?, updated_at=?
+                WHERE id=?
+            """, (
+                final_name, auto_name.strip(), workspace_dir.strip(), workspace_alias.strip(),
+                final_source or "auto", _now(), session_id,
+            ))
+            return cur.rowcount > 0
+
+    return _write_with_retry(session_id, "update_session_naming", _write)
 
 # ════════════════════════════════════════════════════════
 # Tag management.
@@ -655,42 +690,37 @@ def save_messages(session_id: str, messages: list):
     prev_pins     = _pinned_snapshot.get(session_id, {})
     needs_full    = (last_seq == -1 or current_total < last_seq + 1)
 
-    for _retry in range(3):
-        try:
-            with get_conn() as conn:
-                if needs_full:
-                    conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
-                    if all_rows:
-                        conn.executemany("""
-                            INSERT INTO messages
-                                (session_id, seq, role, content, tool_calls, tool_call_id,
-                                 is_pinned, reasoning_content, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, all_rows)
-                else:
-                    new_rows = [r for r in all_rows if r[1] > last_seq]
-                    if new_rows:
-                        conn.executemany("""
-                            INSERT OR REPLACE INTO messages
-                                (session_id, seq, role, content, tool_calls, tool_call_id,
-                                 is_pinned, reasoning_content, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, new_rows)
-                    cur_pins = {r[1]: r[6] for r in all_rows}
-                    for seq_idx, pinned in cur_pins.items():
-                        if prev_pins.get(seq_idx, 0) != pinned:
-                            conn.execute(
-                                "UPDATE messages SET is_pinned=? WHERE session_id=? AND seq=?",
-                                (pinned, session_id, seq_idx),
-                            )
-            _last_saved_seq[session_id]  = current_total - 1
-            _pinned_snapshot[session_id] = {r[1]: r[6] for r in all_rows}
-            break
-        except sqlite3.OperationalError as e:
-            if _retry == 2:
-                logger.error(f"save_messages failed after 3 retries: {e}")
+    def _write() -> None:
+        with get_conn() as conn:
+            if needs_full:
+                conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
+                if all_rows:
+                    conn.executemany("""
+                        INSERT INTO messages
+                            (session_id, seq, role, content, tool_calls, tool_call_id,
+                             is_pinned, reasoning_content, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, all_rows)
             else:
-                time.sleep(0.1 * (_retry + 1))
+                new_rows = [r for r in all_rows if r[1] > last_seq]
+                if new_rows:
+                    conn.executemany("""
+                        INSERT OR REPLACE INTO messages
+                            (session_id, seq, role, content, tool_calls, tool_call_id,
+                             is_pinned, reasoning_content, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, new_rows)
+                cur_pins = {r[1]: r[6] for r in all_rows}
+                for seq_idx, pinned in cur_pins.items():
+                    if prev_pins.get(seq_idx, 0) != pinned:
+                        conn.execute(
+                            "UPDATE messages SET is_pinned=? WHERE session_id=? AND seq=?",
+                            (pinned, session_id, seq_idx),
+                        )
+
+    _write_with_retry(session_id, "save_messages", _write)
+    _last_saved_seq[session_id]  = current_total - 1
+    _pinned_snapshot[session_id] = {r[1]: r[6] for r in all_rows}
 
 def load_messages(session_id: str) -> list[dict]:
     with get_conn() as conn:
@@ -1006,16 +1036,20 @@ def write_failure(
     """
     import hashlib
     args_hash = hashlib.md5(args_summary[:100].encode()).hexdigest()[:12]
-    with get_conn() as conn:
-        cur = conn.execute("""
-            INSERT INTO agent_failures
-                (tool_name, args_hash, args_preview, error_msg, error_type, session_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            tool_name, args_hash, args_summary[:200],
-            error_msg[:500], error_type, session_id, _now(),
-        ))
-        return cur.lastrowid
+
+    def _write() -> int:
+        with get_conn() as conn:
+            cur = conn.execute("""
+                INSERT INTO agent_failures
+                    (tool_name, args_hash, args_preview, error_msg, error_type, session_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                tool_name, args_hash, args_summary[:200],
+                error_msg[:500], error_type, session_id, _now(),
+            ))
+            return cur.lastrowid
+
+    return _write_with_retry(session_id, "write_failure", _write)
 
 
 def check_failure(tool_name: str, args_keywords: str = "", limit: int = 3) -> list[sqlite3.Row]:
