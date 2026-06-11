@@ -90,6 +90,14 @@ def set_active_sink(sink: Any) -> None:
     _active_sink = sink
 
 
+def swap_active_sink(sink: Any) -> Any:
+    """Replace the active sink and return the previous sink for restoration."""
+    global _active_sink
+    old = _active_sink
+    _active_sink = sink
+    return old
+
+
 def get_active_sink() -> Any:
     """Return the current sink, or a freshly-built HumanSink if none was set.
 
@@ -102,11 +110,23 @@ def get_active_sink() -> Any:
     return HumanSink()
 
 
+def sink_print(*args: Any, sep: str = " ", end: str = "\n", flush: bool = False) -> None:
+    """Print through the active sink while preserving basic print() ergonomics."""
+    text = sep.join(str(arg) for arg in args)
+    sink = get_active_sink()
+    if end == "\n":
+        sink.print(text)
+    else:
+        sink.write(text + end)
+
+
 __all__ = [
     "EXIT_SENTINEL",
     "fmt_config",
     "set_deferred_history",
     "take_deferred_history",
     "set_active_sink",
+    "swap_active_sink",
     "get_active_sink",
+    "sink_print",
 ]

@@ -69,7 +69,7 @@ from utils.ansi import (
 )
 
 from core.commands import CommandContext, register
-from core.commands._common import set_deferred_history
+from core.commands._common import set_deferred_history, sink_print as _print
 
 
 # ════════════════════════════════════════════════════════
@@ -119,10 +119,10 @@ def _memo_to_skills(session, content: str, verbose: bool = True) -> str:
             return "ERROR: No assistant reply is available to archive. Add content after /memo."
         content = last_ai
         if verbose:
-            print(c(GRAY, f"  (Using previous assistant reply, {len(content)} characters)"))
+            _print(c(GRAY, f"  (Using previous assistant reply, {len(content)} characters)"))
 
     if verbose:
-        print(c(YELLOW, f"  🧠 [GSA] Classifying and archiving (model: {session.model_alias})..."))
+        _print(c(YELLOW, f"  🧠 [GSA] Classifying and archiving (model: {session.model_alias})..."))
 
     ok, msg = write_skill(
         model_alias=session.model_alias,
@@ -146,14 +146,14 @@ def _handle_chat(arg: str, arg2: str, session) -> None:
         n = int(target) if target.isdigit() else 20
         rows = list_sessions(n)
         if not rows:
-            print(c(GRAY, "  (No saved sessions.)"))
+            _print(c(GRAY, "  (No saved sessions.)"))
             return
-        print(c(BOLD, f"\n  Conversation history (latest {len(rows)}):"))
+        _print(c(BOLD, f"\n  Conversation history (latest {len(rows)}):"))
         for i, r in enumerate(rows):
             tags_str = c(CYAN, f"  [{r['tags']}]") if r["tags"] else ""
             display_name = r["name"] or r["auto_name"] or r["workspace_alias"]
             name_str = c(YELLOW, display_name) if display_name else c(GRAY, "(untitled)")
-            print(
+            _print(
                 c(GRAY, f"  [{i + 1:2d}] ") +
                 c(CYAN, f"{r['id'][:24]}") +
                 f"  {name_str}{tags_str}\n"
@@ -163,23 +163,23 @@ def _handle_chat(arg: str, arg2: str, session) -> None:
     # ── /chat view <id|n> ────────────────────────────────
     elif sub == "view":
         if not target:
-            print(c(RED, "  Usage: /chat view <index or session_id prefix>"))
+            _print(c(RED, "  Usage: /chat view <index or session_id prefix>"))
             return
         sid = _resolve_session_id(target)
         if not sid:
-            print(c(RED, f"  ✗ Session not found: '{target}'"))
+            _print(c(RED, f"  ✗ Session not found: '{target}'"))
             return
         meta = get_session(sid)
         msgs = get_session_messages_pretty(sid)
         display_name = meta["name"] or meta["auto_name"] or meta["workspace_alias"] or "(untitled)"
-        print(c(BOLD, f"\n  ╔ Session {sid}"))
-        print(c(GRAY, f"  ║ Name   : {display_name}"))
-        print(c(GRAY, f"  ║ Model  : {meta['model']}"))
-        print(c(GRAY, f"  ║ CWD    : {meta['cwd']}"))
-        print(c(GRAY, f"  ║ Tags   : {meta['tags'] or '-'}"))
-        print(c(GRAY, f"  ║ Updated: {meta['updated_at']}"))
-        print(c(GRAY, f"  ╚ {len(msgs)} messages"))
-        print()
+        _print(c(BOLD, f"\n  ╔ Session {sid}"))
+        _print(c(GRAY, f"  ║ Name   : {display_name}"))
+        _print(c(GRAY, f"  ║ Model  : {meta['model']}"))
+        _print(c(GRAY, f"  ║ CWD    : {meta['cwd']}"))
+        _print(c(GRAY, f"  ║ Tags   : {meta['tags'] or '-'}"))
+        _print(c(GRAY, f"  ║ Updated: {meta['updated_at']}"))
+        _print(c(GRAY, f"  ╚ {len(msgs)} messages"))
+        _print()
 
         for m in msgs:
             role = m["role"]
@@ -190,25 +190,25 @@ def _handle_chat(arg: str, arg2: str, session) -> None:
             if role == "system":
                 continue  # system messages are intentionally hidden because they are long
             elif role == "user":
-                print(c(BOLD + "\033[96m", "  🧑 You") + f" {seq_tag}{pin_tag} {ts}")
+                _print(c(BOLD + "\033[96m", "  🧑 You") + f" {seq_tag}{pin_tag} {ts}")
                 for line in m["content_full"].splitlines()[:10]:
-                    print(f"     {line}")
+                    _print(f"     {line}")
                 if m["content_full"].count("\n") > 10:
-                    print(c(GRAY, f"     ...({m['content_full'].count(chr(10)) + 1} lines total)"))
+                    _print(c(GRAY, f"     ...({m['content_full'].count(chr(10)) + 1} lines total)"))
             elif role == "assistant":
-                print(c(BOLD + "\033[92m", "  🤖 Agent") + f" {seq_tag}{pin_tag} {ts}")
+                _print(c(BOLD + "\033[92m", "  🤖 Agent") + f" {seq_tag}{pin_tag} {ts}")
                 for line in m["content_full"].splitlines()[:8]:
-                    print(f"     {line}")
+                    _print(f"     {line}")
                 if m["content_full"].count("\n") > 8:
-                    print(c(GRAY, f"     ...({m['content_full'].count(chr(10)) + 1} lines total)"))
+                    _print(c(GRAY, f"     ...({m['content_full'].count(chr(10)) + 1} lines total)"))
             elif role == "tool":
-                print(c(GRAY, "  🔩 tool") + f" {seq_tag} {ts}  {m['preview']}")
-            print()
+                _print(c(GRAY, "  🔩 tool") + f" {seq_tag} {ts}  {m['preview']}")
+            _print()
 
     # ── /chat export <id|n> [path] ──────────────────────
     elif sub == "export":
         if not target:
-            print(c(RED, "  Usage: /chat export <index or id> [output file path]"))
+            _print(c(RED, "  Usage: /chat export <index or id> [output file path]"))
             return
         parts = target.split(None, 1)
         id_part = parts[0]
@@ -216,12 +216,12 @@ def _handle_chat(arg: str, arg2: str, session) -> None:
 
         sid = _resolve_session_id(id_part)
         if not sid:
-            print(c(RED, f"  ✗ Session not found: '{id_part}'"))
+            _print(c(RED, f"  ✗ Session not found: '{id_part}'"))
             return
 
         md_content = export_session_to_markdown(sid)
         if md_content.startswith("ERROR:"):
-            print(c(RED, f"  {md_content}"))
+            _print(c(RED, f"  {md_content}"))
             return
 
         if out_arg:
@@ -231,133 +231,133 @@ def _handle_chat(arg: str, arg2: str, session) -> None:
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(md_content, encoding="utf-8")
-        print(c(GREEN, f"  ✓ Conversation exported -> {out_path}"))
-        print(c(GRAY, f"  {len(md_content)} characters / {md_content.count(chr(10))} lines"))
+        _print(c(GREEN, f"  ✓ Conversation exported -> {out_path}"))
+        _print(c(GRAY, f"  {len(md_content)} characters / {md_content.count(chr(10))} lines"))
 
     # ── /chat find <keywords> ────────────────────────────
     elif sub == "find":
         if not target:
-            print(c(RED, "  Usage: /chat find <search terms>"))
+            _print(c(RED, "  Usage: /chat find <search terms>"))
             return
-        print(c(YELLOW, f"  🔍 Searching across sessions: '{target}' ..."))
+        _print(c(YELLOW, f"  🔍 Searching across sessions: '{target}' ..."))
         results = full_text_search(target, limit=10)
         if not results:
-            print(c(GRAY, "  No matches found."))
+            _print(c(GRAY, "  No matches found."))
             return
-        print(c(BOLD, f"\n  Found matches in {len(results)} sessions:"))
+        _print(c(BOLD, f"\n  Found matches in {len(results)} sessions:"))
         for r in results:
-            print(c(CYAN, f"\n  [{r['session_id'][:20]}]") +
+            _print(c(CYAN, f"\n  [{r['session_id'][:20]}]") +
                   c(YELLOW, f"  {r['session_name'] or '(untitled)'}") +
                   c(GRAY, f"  {r['updated_at'][:16]}  tags={r['tags'] or '-'}"))
             for hit in r["hits"]:
                 role_icon = "🧑" if hit["role"] == "user" else ("🤖" if hit["role"] == "assistant" else "🔩")
-                print(c(GRAY, f"    [{hit['seq']:3d}] {role_icon} ") + hit["snippet"])
+                _print(c(GRAY, f"    [{hit['seq']:3d}] {role_icon} ") + hit["snippet"])
 
     # ── /chat tag <id|n> <tags> ──────────────────────────
     elif sub == "tag":
         parts = target.split(None, 1)
         if len(parts) < 2:
-            print(c(RED, "  Usage: /chat tag <index or id> <tag1,tag2,...>"))
+            _print(c(RED, "  Usage: /chat tag <index or id> <tag1,tag2,...>"))
             return
         sid = _resolve_session_id(parts[0])
         if not sid:
-            print(c(RED, f"  ✗ Session not found: '{parts[0]}'"))
+            _print(c(RED, f"  ✗ Session not found: '{parts[0]}'"))
             return
         ok = tag_session(sid, parts[1])
         if ok:
-            print(c(GREEN, f"  ✓ Added tags to session {sid[:20]}...: {parts[1]}"))
+            _print(c(GREEN, f"  ✓ Added tags to session {sid[:20]}...: {parts[1]}"))
         else:
-            print(c(RED, "  ✗ Operation failed"))
+            _print(c(RED, "  ✗ Operation failed"))
 
     # ── /chat untag <id|n> <tags> ────────────────────────
     elif sub == "untag":
         parts = target.split(None, 1)
         if len(parts) < 2:
-            print(c(RED, "  Usage: /chat untag <index or id> <tag1,tag2,...>"))
+            _print(c(RED, "  Usage: /chat untag <index or id> <tag1,tag2,...>"))
             return
         sid = _resolve_session_id(parts[0])
         if not sid:
-            print(c(RED, f"  ✗ Session not found: '{parts[0]}'"))
+            _print(c(RED, f"  ✗ Session not found: '{parts[0]}'"))
             return
         untag_session(sid, parts[1])
-        print(c(GREEN, f"  ✓ Removed tags: {parts[1]}"))
+        _print(c(GREEN, f"  ✓ Removed tags: {parts[1]}"))
 
     # ── /chat bytag <tag> ────────────────────────────────
     elif sub == "bytag":
         if not target:
-            print(c(RED, "  Usage: /chat bytag <tag>"))
+            _print(c(RED, "  Usage: /chat bytag <tag>"))
             return
         rows = find_sessions_by_tag(target)
         if not rows:
-            print(c(GRAY, f"  No sessions found with tag '{target}'."))
+            _print(c(GRAY, f"  No sessions found with tag '{target}'."))
             return
-        print(c(BOLD, f"\n  Sessions tagged '{target}' ({len(rows)}):"))
+        _print(c(BOLD, f"\n  Sessions tagged '{target}' ({len(rows)}):"))
         for i, r in enumerate(rows):
-            print(c(GRAY, f"  [{i + 1:2d}] ") + c(CYAN, r["id"][:24]) +
+            _print(c(GRAY, f"  [{i + 1:2d}] ") + c(CYAN, r["id"][:24]) +
                   c(GRAY, f"  {r['updated_at'][:16]}  {r['msg_count']} msgs  tags={r['tags']}"))
 
     # ── /chat link <id1> <id2> [note] ────────────────────
     elif sub == "link":
         parts = target.split(None, 2)
         if len(parts) < 2:
-            print(c(RED, "  Usage: /chat link <id/index1> <id/index2> [note]"))
+            _print(c(RED, "  Usage: /chat link <id/index1> <id/index2> [note]"))
             return
         sid_a = _resolve_session_id(parts[0])
         sid_b = _resolve_session_id(parts[1])
         note = parts[2] if len(parts) > 2 else ""
         if not sid_a or not sid_b:
-            print(c(RED, "  ✗ Could not resolve session ID"))
+            _print(c(RED, "  ✗ Could not resolve session ID"))
             return
         if sid_a == sid_b:
-            print(c(RED, "  ✗ Cannot link a session to itself"))
+            _print(c(RED, "  ✗ Cannot link a session to itself"))
             return
         link_sessions(sid_a, sid_b, note)
-        print(c(GREEN, "  ✓ Linked:"))
-        print(c(GRAY, f"    {sid_a[:24]}"))
-        print(c(GRAY, f"    {sid_b[:24]}"))
+        _print(c(GREEN, "  ✓ Linked:"))
+        _print(c(GRAY, f"    {sid_a[:24]}"))
+        _print(c(GRAY, f"    {sid_b[:24]}"))
         if note:
-            print(c(GRAY, f"    Note: {note}"))
+            _print(c(GRAY, f"    Note: {note}"))
 
     # ── /chat unlink <id1> <id2> ─────────────────────────
     elif sub == "unlink":
         parts = target.split(None, 1)
         if len(parts) < 2:
-            print(c(RED, "  Usage: /chat unlink <id/index1> <id/index2>"))
+            _print(c(RED, "  Usage: /chat unlink <id/index1> <id/index2>"))
             return
         sid_a = _resolve_session_id(parts[0])
         sid_b = _resolve_session_id(parts[1])
         if not sid_a or not sid_b:
-            print(c(RED, "  ✗ Could not resolve session ID"))
+            _print(c(RED, "  ✗ Could not resolve session ID"))
             return
         unlink_sessions(sid_a, sid_b)
-        print(c(GREEN, f"  ✓ Unlinked {sid_a[:20]} <-> {sid_b[:20]}"))
+        _print(c(GREEN, f"  ✓ Unlinked {sid_a[:20]} <-> {sid_b[:20]}"))
 
     # ── /chat related <id|n> ─────────────────────────────
     elif sub == "related":
         if not target:
-            print(c(RED, "  Usage: /chat related <index or id>"))
+            _print(c(RED, "  Usage: /chat related <index or id>"))
             return
         sid = _resolve_session_id(target)
         if not sid:
-            print(c(RED, f"  ✗ Session not found: '{target}'"))
+            _print(c(RED, f"  ✗ Session not found: '{target}'"))
             return
         linked = get_linked_sessions(sid)
         if not linked:
-            print(c(GRAY, f"  Session {sid[:24]} has no linked conversations."))
-            print(c(GRAY, "  Use /chat link to create a link."))
+            _print(c(GRAY, f"  Session {sid[:24]} has no linked conversations."))
+            _print(c(GRAY, "  Use /chat link to create a link."))
             return
-        print(c(BOLD, f"\n  Linked conversations for session {sid[:24]} ({len(linked)}):"))
+        _print(c(BOLD, f"\n  Linked conversations for session {sid[:24]} ({len(linked)}):"))
         for item in linked:
             m = item["meta"]
             note = item["note"]
-            print(c(CYAN, f"  {m['id'][:24]}") +
+            _print(c(CYAN, f"  {m['id'][:24]}") +
                   c(GRAY, f"  {m['updated_at'][:16]}  {m['msg_count']} msgs  model={m['model']}"))
             if note:
-                print(c(GRAY, f"    Note: {note}"))
-            print()
+                _print(c(GRAY, f"    Note: {note}"))
+            _print()
 
     else:
-        print(c(GRAY, (
+        _print(c(GRAY, (
             f"  Unknown sub-command '{sub}'.\n"
             "  Available: list · view · export · find · tag · untag · bytag · link · unlink · related"
         )))
@@ -377,16 +377,16 @@ async def cmd_chat(ctx: CommandContext) -> None:
 @register("/save")
 async def cmd_save(ctx: CommandContext) -> None:
     sid = session_save(ctx.session, ctx.arg)
-    print(c(GREEN, f"  ✓ Saved session_id={sid}"))
+    _print(c(GREEN, f"  ✓ Saved session_id={sid}"))
 
 
 @register("/load")
 async def cmd_load(ctx: CommandContext) -> None:
     if not ctx.arg:
-        print(c(RED, "  Usage: /load <name or index>"))
+        _print(c(RED, "  Usage: /load <name or index>"))
         return
     result = session_load(ctx.session, ctx.arg)
-    print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
+    _print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
     if result.startswith("OK"):
         logger.debug("session_load OK, msgs to display: {}", len(ctx.session.messages))
         set_deferred_history(ctx.session.messages)
@@ -399,7 +399,7 @@ async def cmd_resume(ctx: CommandContext) -> None:
     if arg:
         # /resume <n> restores the specified sequence directly.
         result = session_load(session, arg)
-        print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
+        _print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
         if result.startswith("OK"):
             logger.debug("session_load OK (resume), msgs to display: {}", len(session.messages))
             set_deferred_history(session.messages)
@@ -407,33 +407,33 @@ async def cmd_resume(ctx: CommandContext) -> None:
     # /resume lists recent sessions and lets the user choose interactively.
     rows = list_sessions(10)
     if not rows:
-        print(c(GRAY, "  No saved sessions."))
+        _print(c(GRAY, "  No saved sessions."))
         return
-    print(c(BOLD, "\n  Recent sessions:"))
+    _print(c(BOLD, "\n  Recent sessions:"))
     for i, r in enumerate(rows):
         name = r["name"] or "(untitled)"
         ts = str(r["updated_at"])[:16] if r["updated_at"] else ""
         msgs = r["msg_count"] if r["msg_count"] else 0
         model = r["model"] if r["model"] else ""
-        print(
+        _print(
             c(GRAY, f"  [{i+1:2d}] ") +
             c(CYAN, name) +
             c(GRAY, f"  {ts}  {msgs} msgs  model={model}")
         )
-    print(c(GRAY, "\n  Enter an index to resume, or press Enter to cancel."))
+    _print(c(GRAY, "\n  Enter an index to resume, or press Enter to cancel."))
     try:
         pick = input(cp(BOLD, "  Select [1-" + str(len(rows)) + "]: ")).strip()
         if pick.isdigit():
             idx = int(pick) - 1
             if 0 <= idx < len(rows):
                 result = session_load(session, str(idx + 1))
-                print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
+                _print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
                 if result.startswith("OK"):
                     set_deferred_history(session.messages)
             else:
-                print(c(RED, "  Selection out of range"))
+                _print(c(RED, "  Selection out of range"))
     except (EOFError, KeyboardInterrupt):
-        print()
+        _print()
 
 
 @register("/sessions")
@@ -454,47 +454,47 @@ async def cmd_sessions(ctx: CommandContext) -> None:
         ]
         ctx.sink.print_json(data)
         return
-    print(c(BOLD, f"\n  Saved sessions (DB: {DB_PATH}):"))
-    print(session_list())
+    _print(c(BOLD, f"\n  Saved sessions (DB: {DB_PATH}):"))
+    _print(session_list())
 
 
 @register("/del")
 async def cmd_del(ctx: CommandContext) -> None:
     if not ctx.arg:
-        print(c(RED, "  Usage: /del <name or index>"))
+        _print(c(RED, "  Usage: /del <name or index>"))
         return
     result = session_delete(ctx.session, ctx.arg)
-    print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
+    _print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
 
 
 @register("/rename")
 async def cmd_rename(ctx: CommandContext) -> None:
     if not ctx.arg or not ctx.arg2:
-        print(c(RED, "  Usage: /rename <index or name> <new name>"))
+        _print(c(RED, "  Usage: /rename <index or name> <new name>"))
         return
     result = session_rename(ctx.session, ctx.arg, ctx.arg2)
-    print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
+    _print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
 
 
 # ── Knowledge: /memorize /forget ────────────────────────────
 @register("/memorize")
 async def cmd_memorize(ctx: CommandContext) -> None:
     topic = (ctx.arg + " " + ctx.arg2).strip() or "general"
-    print(c(YELLOW, f"  🧠 Summarizing '{topic}'..."))
+    _print(c(YELLOW, f"  🧠 Summarizing '{topic}'..."))
     result = memorize(ctx.session, topic)
-    print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
+    _print(c(GREEN if result.startswith("OK") else RED, f"  {result}"))
 
 
 @register("/forget")
 async def cmd_forget(ctx: CommandContext) -> None:
     if not ctx.arg:
-        print(c(RED, "  Usage: /forget <id>"))
+        _print(c(RED, "  Usage: /forget <id>"))
         return
     try:
         delete_knowledge(int(ctx.arg))
-        print(c(GREEN, f"  ✓ Deleted knowledge entry id={ctx.arg}"))
+        _print(c(GREEN, f"  ✓ Deleted knowledge entry id={ctx.arg}"))
     except Exception as e:
-        print(c(RED, f"  ✗ {e}"))
+        _print(c(RED, f"  ✗ {e}"))
 
 
 # ── /memo ───────────────────────────────────────────────────
@@ -503,7 +503,7 @@ async def cmd_memo(ctx: CommandContext) -> None:
     raw_content = (ctx.arg + " " + ctx.arg2).strip()
     result = _memo_to_skills(ctx.session, raw_content, verbose=True)
     col = GREEN if result.startswith("✓") else (YELLOW if result.startswith("⚠") else RED)
-    print(c(col, f"  {result}"))
+    _print(c(col, f"  {result}"))
 
 
 # ── Pin / Unpin / Undo ──────────────────────────────────────
@@ -521,11 +521,11 @@ async def cmd_pin(ctx: CommandContext) -> None:
                 pin_message_by_seq(session.session_id, seq, True)
                 role = non_sys[seq].get("role", "?")
                 preview = str(non_sys[seq].get("content", ""))[:50].replace("\n", " ")
-                print(c(GREEN, f"  ✓ Pinned message [{seq}] [{role}]: {preview}"))
+                _print(c(GREEN, f"  ✓ Pinned message [{seq}] [{role}]: {preview}"))
             else:
-                print(c(RED, f"  ✗ Index {seq} out of range ({len(non_sys)} non-system messages)"))
+                _print(c(RED, f"  ✗ Index {seq} out of range ({len(non_sys)} non-system messages)"))
         except ValueError:
-            print(c(RED, "  Usage: /pin msg <index>  (use /history first)"))
+            _print(c(RED, "  Usage: /pin msg <index>  (use /history first)"))
     else:
         n = int(arg) if arg.isdigit() else 2
         count = 0
@@ -537,13 +537,13 @@ async def cmd_pin(ctx: CommandContext) -> None:
                 count += 1
                 if count >= n:
                     break
-        print(c(GREEN, f"  ✓ Pinned latest {count} messages"))
+        _print(c(GREEN, f"  ✓ Pinned latest {count} messages"))
 
 
 @register("/unpin")
 async def cmd_unpin(ctx: CommandContext) -> None:
     count = sum(1 for m in ctx.session.messages if m.pop("_pinned", None))
-    print(c(GREEN, f"  ✓ Unpinned {count} messages"))
+    _print(c(GREEN, f"  ✓ Unpinned {count} messages"))
 
 
 @register("/undo")
@@ -552,9 +552,9 @@ async def cmd_undo(ctx: CommandContext) -> None:
     removed, _last_text = ctx.session.undo(n)
     if removed:
         ctx.session._autosave()
-        print(c(GREEN, f"  ↩ Undid {removed} messages"))
+        _print(c(GREEN, f"  ↩ Undid {removed} messages"))
     else:
-        print(c(GRAY, "  ↩ Nothing to undo"))
+        _print(c(GRAY, "  ↩ Nothing to undo"))
 
 
 # ── /compact ────────────────────────────────────────────────
@@ -572,10 +572,10 @@ async def cmd_compact(ctx: CommandContext) -> None:
         if m.get("role") != "system" and not m.get("_pinned")
     ]
     if len(_compact_msgs) < 2:
-        print(c(GRAY, "  ↕ Context is too short to compact."))
+        _print(c(GRAY, "  ↕ Context is too short to compact."))
         return
 
-    print(c(CYAN, "  🔄 Compacting context..."))
+    _print(c(CYAN, "  🔄 Compacting context..."))
     _summarize_msgs = [
         {"role": "system", "content": "You are a conversation summarization assistant."},
         *_compact_msgs,
@@ -588,7 +588,7 @@ async def cmd_compact(ctx: CommandContext) -> None:
             max_tokens=1024, tools_schema=None,
         ):
             if "_error" in delta:
-                print(c(RED, f"  ✗ Summary generation failed: {delta['_error']}"))
+                _print(c(RED, f"  ✗ Summary generation failed: {delta['_error']}"))
                 _summary_buf = ""
                 break
             choices = delta.get("choices") or []
@@ -598,7 +598,7 @@ async def cmd_compact(ctx: CommandContext) -> None:
             if chunk:
                 _summary_buf += chunk
     except Exception as e:
-        print(c(RED, f"  ✗ Summary error: {e}"))
+        _print(c(RED, f"  ✗ Summary error: {e}"))
         _summary_buf = ""
 
     if _summary_buf:
@@ -612,7 +612,7 @@ async def cmd_compact(ctx: CommandContext) -> None:
             "_pinned": True,
         })
         _chars = _ctx_chars(session.messages)
-        print(c(GREEN,
+        _print(c(GREEN,
             f"  ✓ Compacted | kept {len(pinned)} pinned messages + summary | "
             f"context: {_chars//4:,} tokens"
         ))
@@ -624,7 +624,7 @@ async def cmd_think(ctx: CommandContext) -> None:
     session = ctx.session
     arg = ctx.arg
     if not arg:
-        print(c(RED, "  Usage: /think <prompt>  (single reasoning-mode turn)"))
+        _print(c(RED, "  Usage: /think <prompt>  (single reasoning-mode turn)"))
         return
     # Single trigger: switch to a reasoning worker for this request when possible.
     _think_alias = None
@@ -636,12 +636,12 @@ async def cmd_think(ctx: CommandContext) -> None:
     if _think_alias:
         old_alias = session.model_alias
         session.model_alias = _think_alias
-        print(c(MAGENTA, f"  🧠 Reasoning mode: {old_alias} -> {_think_alias}"))
+        _print(c(MAGENTA, f"  🧠 Reasoning mode: {old_alias} -> {_think_alias}"))
         try:
             session.run_turn(arg)
         finally:
             session.model_alias = old_alias
-            print(c(GRAY, f"  ↩ Restored model: {old_alias}"))
+            _print(c(GRAY, f"  ↩ Restored model: {old_alias}"))
     else:
         # No reasoning worker is available; run with the current model and prefix the instruction.
         _think_prefix = (
@@ -659,6 +659,6 @@ async def cmd_mode(ctx: CommandContext) -> None:
     _runtime_state.user_mode = not _runtime_state.debug_mode
     config.USER_MODE = _runtime_state.user_mode
     if _runtime_state.user_mode:
-        print(c(GREEN, "  ✓ User-friendly mode enabled (tool details hidden)"))
+        _print(c(GREEN, "  ✓ User-friendly mode enabled (tool details hidden)"))
     else:
-        print(c(CYAN, "  ✓ Debug mode enabled (tool calls and diagnostics visible)"))
+        _print(c(CYAN, "  ✓ Debug mode enabled (tool calls and diagnostics visible)"))

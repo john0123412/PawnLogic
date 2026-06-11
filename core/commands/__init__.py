@@ -81,11 +81,16 @@ async def dispatch(ctx: CommandContext) -> Any:
 
     handler = COMMANDS.get(ctx.verb)
     if handler is not None:
-        return await handler(ctx)
+        from core.commands._common import set_active_sink, swap_active_sink
+        old_sink = swap_active_sink(ctx.sink)
+        try:
+            return await handler(ctx)
+        finally:
+            set_active_sink(old_sink)
 
     # Unknown verb - match legacy behavior of printing a hint.
     from utils.ansi import c, GRAY
-    print(c(GRAY, f"  Unknown command '{ctx.verb}'. Type /help."))
+    ctx.sink.print(c(GRAY, f"  Unknown command '{ctx.verb}'. Type /help."))
     return None
 
 

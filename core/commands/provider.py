@@ -65,6 +65,7 @@ from utils.ansi import (
 from utils.key_utils import mask_key
 
 from core.commands import CommandContext, register
+from core.commands._common import sink_print as _print
 
 
 # ────────────────────────────────────────────────────────
@@ -136,7 +137,7 @@ def _run_key_wizard() -> bool:
     """Interactive setup wizard shown when no API key is configured.
     Return True when at least one key was configured.
     """
-    print(f"""
+    _print(f"""
 {c(BOLD+CYAN, "╔════════════════════════════════════════════════╗")}
 {c(BOLD+CYAN, "║")}  {c(BOLD, f"PawnLogic {VERSION}")} - First-Run Setup Wizard     {c(BOLD+CYAN,"║")}
 {c(BOLD+CYAN, "╚════════════════════════════════════════════════╝")}
@@ -150,10 +151,10 @@ Select providers to configure. You can run this multiple times:
         already = ""
         if env_var and os.environ.get(env_var):
             already = c(GREEN, "  [configured ✓]")
-        print(f"  {c(CYAN, f'[{num}]')} {c(BOLD, f'{label:18}')} {c(GRAY, hint)}{already}")
+        _print(f"  {c(CYAN, f'[{num}]')} {c(BOLD, f'{label:18}')} {c(GRAY, hint)}{already}")
 
-    print(f"\n  {c(GRAY, '[0]')} Skip for now. Configure later with export KEY=sk-... or /setkey.")
-    print()
+    _print(f"\n  {c(GRAY, '[0]')} Skip for now. Configure later with export KEY=sk-... or /setkey.")
+    _print()
 
     configured_any = False
 
@@ -161,7 +162,7 @@ Select providers to configure. You can run this multiple times:
         try:
             choice = input(cp(BOLD, "  Enter number(s), e.g. 1 5: ")).strip()
         except (EOFError, KeyboardInterrupt):
-            print()
+            _print()
             break
 
         if choice == "0" or not choice:
@@ -172,7 +173,7 @@ Select providers to configure. You can run this multiple times:
         for sel in selected:
             matched = next((p for p in _WIZARD_PROVIDERS if p[0] == sel), None)
             if not matched:
-                print(c(RED, f"  ✗ Invalid selection '{sel}'"))
+                _print(c(RED, f"  ✗ Invalid selection '{sel}'"))
                 continue
 
             num, env_var, label, hint, no_key = matched
@@ -184,11 +185,11 @@ Select providers to configure. You can run this multiple times:
                 if local_url:
                     os.environ["LOCAL_API_URL"] = local_url
                     _write_key_to_shell("LOCAL_API_URL", local_url)
-                print(c(GREEN, "  ✓ Ollama configured. Make sure ollama serve is running."))
+                _print(c(GREEN, "  ✓ Ollama configured. Make sure ollama serve is running."))
                 configured_any = True
                 continue
 
-            print(c(GRAY, f"\n  Get a {label} key:"))
+            _print(c(GRAY, f"\n  Get a {label} key:"))
             _KEY_URLS = {
                 "PAWN_API_KEY":       "https://portal.nousresearch.com/api-keys",
                 "DEEPSEEK_API_KEY":   "https://platform.deepseek.com/api_keys",
@@ -200,21 +201,21 @@ Select providers to configure. You can run this multiple times:
             }
             url = _KEY_URLS.get(env_var, "")
             if url:
-                print(c(CYAN, f"  Key URL: {url}"))
+                _print(c(CYAN, f"  Key URL: {url}"))
 
             try:
                 key = ptk_prompt(f"  Paste {env_var} and press Enter: ").strip()
             except (EOFError, KeyboardInterrupt):
-                print()
+                _print()
                 continue
 
             if not key:
-                print(c(YELLOW, "  Skipped: no value entered."))
+                _print(c(YELLOW, "  Skipped: no value entered."))
                 continue
 
             written_to = _write_key_to_shell(env_var, key)
-            print(c(GREEN, f"  ✓ {env_var} saved -> {written_to}"))
-            print(c(GRAY,  "  Injected into the current process; no terminal restart needed."))
+            _print(c(GREEN, f"  ✓ {env_var} saved -> {written_to}"))
+            _print(c(GRAY,  "  Injected into the current process; no terminal restart needed."))
             configured_any = True
 
         try:
@@ -225,7 +226,7 @@ Select providers to configure. You can run this multiple times:
             break
 
     if not configured_any:
-        print(c(YELLOW, "\n  No key configured. Use /setkey after startup to configure one.\n"))
+        _print(c(YELLOW, "\n  No key configured. Use /setkey after startup to configure one.\n"))
 
     return configured_any
 
@@ -248,15 +249,15 @@ def _visible_models() -> dict:
 # Provider management — list / add / remove / test / fetch
 # ════════════════════════════════════════════════════════
 
-def _provider_list() -> None:
+def _provider_list(sink=None) -> None:
     """List provider status for the human-readable provider sub-command path.
 
-    The JSON path reads the process-level active sink. If it is a JsonSink,
-    emit structured data; otherwise keep the colored table output.
+    The JSON path uses the passed command sink when available, falling back to
+    the process-level active sink for direct helper calls in tests.
     """
     from core.commands._common import get_active_sink
     from core.output import JsonSink
-    sink = get_active_sink()
+    sink = sink or get_active_sink()
     if isinstance(sink, JsonSink):
         data = []
         for pname, pinfo in PROVIDERS.items():
@@ -278,7 +279,7 @@ def _provider_list() -> None:
         sink.print_json(data)
         return
 
-    print(c(BOLD, "\n  Providers:"))
+    _print(c(BOLD, "\n  Providers:"))
     for pname, pinfo in PROVIDERS.items():
         fmt = pinfo.get("api_format", "openai")
         label = pinfo.get("label", pname)
@@ -293,68 +294,68 @@ def _provider_list() -> None:
         fmt_tag = c(MAGENTA, "[Anthropic]") if fmt == "anthropic" else c(GRAY, "[OpenAI]")
         active_tag = c(GREEN, "active") if is_provider_active(pname) else c(GRAY, "inactive")
         hint = pinfo.get("models_hint", "")
-        print(f"  {c(CYAN, f'{pname:16}')}{fmt_tag:14} {label:24} {ktag}  {active_tag}")
+        _print(f"  {c(CYAN, f'{pname:16}')}{fmt_tag:14} {label:24} {ktag}  {active_tag}")
         if hint:
-            print(f"  {'':16}{c(GRAY, hint)}")
-    print(c(GRAY, f"\n  Custom config: {CUSTOM_PROVIDERS_PATH}"))
-    print()
+            _print(f"  {'':16}{c(GRAY, hint)}")
+    _print(c(GRAY, f"\n  Custom config: {CUSTOM_PROVIDERS_PATH}"))
+    _print()
 
 
 def _provider_set_active(alias: str, active: bool) -> None:
     if not alias:
         verb = "activate" if active else "deactivate"
-        print(c(RED, f"  Usage: /provider {verb} <name>"))
+        _print(c(RED, f"  Usage: /provider {verb} <name>"))
         return
     if alias not in PROVIDERS:
-        print(c(RED, f"  ✗ Provider not found: {alias}"))
+        _print(c(RED, f"  ✗ Provider not found: {alias}"))
         return
     ok, msg = runtime_set_active(alias, active)
     if not ok:
         color = YELLOW if alias == "deepseek" and not active else RED
-        print(c(color, f"  ✗ {msg}"))
+        _print(c(color, f"  ✗ {msg}"))
         return
     state = "active" if active else "inactive"
-    print(c(GREEN, f"  ✓ Provider '{alias}' is now {state}."))
+    _print(c(GREEN, f"  ✓ Provider '{alias}' is now {state}."))
 
 
 def _provider_add() -> None:
     """Interactively add a custom provider."""
-    print(c(BOLD, "\n  Add Custom Provider"))
-    print(c(GRAY, "  Keys are stored in .env; provider config is stored in ~/.pawnlogic/custom_providers.json.\n"))
+    _print(c(BOLD, "\n  Add Custom Provider"))
+    _print(c(GRAY, "  Keys are stored in .env; provider config is stored in ~/.pawnlogic/custom_providers.json.\n"))
 
     try:
         name = input(cp(BOLD, "  Provider name (short ID, e.g. my_relay): ")).strip()
     except (EOFError, KeyboardInterrupt):
-        print()
+        _print()
         return
     if not name or name in PROVIDERS:
-        print(c(RED, f"  ✗ Invalid or duplicate provider name: {name}"))
+        _print(c(RED, f"  ✗ Invalid or duplicate provider name: {name}"))
         return
 
-    print(f"\n  {c(BOLD, 'API format:')}")
-    print(f"    {c(CYAN, '[1]')} OpenAI Chat Completions format")
-    print(f"    {c(CYAN, '[2]')} Anthropic Messages format")
+    _print(f"\n  {c(BOLD, 'API format:')}")
+    _print(f"    {c(CYAN, '[1]')} OpenAI Chat Completions format")
+    _print(f"    {c(CYAN, '[2]')} Anthropic Messages format")
     try:
         fmt_choice = input(cp(BOLD, "  Select [1/2]: ")).strip()
     except (EOFError, KeyboardInterrupt):
-        print()
+        _print()
         return
     api_format = "anthropic" if fmt_choice == "2" else "openai"
 
     try:
         base_url = input(cp(BOLD, "  Base URL (e.g. https://api.example.com/v1/chat/completions): ")).strip()
     except (EOFError, KeyboardInterrupt):
-        print()
+        _print()
         return
     if not base_url:
-        print(c(RED, "  ✗ URL cannot be empty."))
+        _print(c(RED, "  ✗ URL cannot be empty."))
         return
 
     env_var_name = f"{name.upper().replace('-', '_')}_API_KEY"
     try:
         key = ptk_prompt(f"  Paste API key and press Enter; it will be stored in .env -> {env_var_name}: ").strip()
     except (EOFError, KeyboardInterrupt):
-        print()
+        _print()
         return
 
     if key:
@@ -363,7 +364,7 @@ def _provider_add() -> None:
         except Exception:
             os.environ[env_var_name] = key
         _write_key_to_shell(env_var_name, key)
-        print(c(GREEN, f"  ✓ Key saved -> .env ({env_var_name})"))
+        _print(c(GREEN, f"  ✓ Key saved -> .env ({env_var_name})"))
 
     prov_cfg = {
         "base_url":    base_url,
@@ -375,43 +376,43 @@ def _provider_add() -> None:
     save_custom_provider(name, prov_cfg, {})
     PROVIDERS[name] = prov_cfg
 
-    print(c(GREEN, f"\n  ✓ Provider '{name}' added."))
-    print(c(GRAY,  f"    Format: {api_format}"))
-    print(c(GRAY,  f"    URL:  {base_url}"))
-    print(c(GRAY,  f"    Config: {CUSTOM_PROVIDERS_PATH}"))
-    print(c(CYAN,  f"    Next: run /provider fetch {name} to fetch the model list."))
-    print()
+    _print(c(GREEN, f"\n  ✓ Provider '{name}' added."))
+    _print(c(GRAY,  f"    Format: {api_format}"))
+    _print(c(GRAY,  f"    URL:  {base_url}"))
+    _print(c(GRAY,  f"    Config: {CUSTOM_PROVIDERS_PATH}"))
+    _print(c(CYAN,  f"    Next: run /provider fetch {name} to fetch the model list."))
+    _print()
 
 
 def _provider_remove(name: str = "") -> None:
     """Remove a custom provider."""
     if not name:
         if not CUSTOM_PROVIDERS_PATH.exists():
-            print(c(GRAY, "\n  No custom providers."))
+            _print(c(GRAY, "\n  No custom providers."))
             return
         try:
             data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
         except Exception:
-            print(c(RED, "\n  ✗ Failed to read the config file."))
+            _print(c(RED, "\n  ✗ Failed to read the config file."))
             return
         custom = list(data.get("providers", {}).keys())
         if not custom:
-            print(c(GRAY, "\n  No custom providers."))
+            _print(c(GRAY, "\n  No custom providers."))
             return
-        print(c(BOLD, "\n  Custom Providers:"))
+        _print(c(BOLD, "\n  Custom Providers:"))
         for i, n in enumerate(custom, 1):
-            print(f"    {c(CYAN, f'[{i}]')} {n}")
+            _print(f"    {c(CYAN, f'[{i}]')} {n}")
         try:
             choice = input(cp(BOLD, "  Enter index or name: ")).strip()
         except (EOFError, KeyboardInterrupt):
-            print()
+            _print()
             return
         if choice.isdigit() and 1 <= int(choice) <= len(custom):
             name = custom[int(choice) - 1]
         elif choice in custom:
             name = choice
         else:
-            print(c(RED, f"  ✗ Invalid selection: {choice}"))
+            _print(c(RED, f"  ✗ Invalid selection: {choice}"))
             return
 
     if remove_custom_provider(name):
@@ -420,9 +421,9 @@ def _provider_remove(name: str = "") -> None:
         to_remove = [a for a, m in MODELS.items() if m.get("provider") == name]
         for a in to_remove:
             del MODELS[a]
-        print(c(GREEN, f"  ✓ Removed provider '{name}'"))
+        _print(c(GREEN, f"  ✓ Removed provider '{name}'"))
     else:
-        print(c(RED, f"  ✗ Custom provider not found: {name}"))
+        _print(c(RED, f"  ✗ Custom provider not found: {name}"))
 
 
 async def _provider_test(session, model_alias: str = "") -> None:
@@ -431,15 +432,15 @@ async def _provider_test(session, model_alias: str = "") -> None:
         try:
             model_alias = input(cp(BOLD, "  Enter model alias to test: ")).strip()
         except (EOFError, KeyboardInterrupt):
-            print()
+            _print()
             return
     if model_alias not in MODELS:
-        print(c(RED, f"  ✗ Unknown model: {model_alias}"))
+        _print(c(RED, f"  ✗ Unknown model: {model_alias}"))
         return
 
     ok, env = validate_api_key(model_alias)
     if not ok:
-        print(c(RED, f"  ✗ {env} is not configured. Use /setkey or /provider add."))
+        _print(c(RED, f"  ✗ {env} is not configured. Use /setkey or /provider add."))
         return
 
     model_cfg = MODELS[model_alias]
@@ -449,20 +450,20 @@ async def _provider_test(session, model_alias: str = "") -> None:
     api_key = os.getenv(provider.get("api_key_env", ""), "")
     model_id = str(model_cfg.get("id") or model_alias)
 
-    print(c(GRAY, f"  Testing {model_alias} ({api_format}) -> {base_url} ..."))
-    print(c(GRAY, "  Sending a max_tokens=1 test request..."))
+    _print(c(GRAY, f"  Testing {model_alias} ({api_format}) -> {base_url} ..."))
+    _print(c(GRAY, "  Sending a max_tokens=1 test request..."))
 
     ok, msg, _ms = await test_connection(base_url, api_key, api_format, model_id)
     if ok:
-        print(c(GREEN, f"  ✓ Connection succeeded. {msg}"))
+        _print(c(GREEN, f"  ✓ Connection succeeded. {msg}"))
     else:
-        print(c(RED, f"  ✗ Test failed: {msg}"))
+        _print(c(RED, f"  ✗ Test failed: {msg}"))
 
 
 def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str = "openai") -> bool:
     """Non-interactive: /provider add <alias> <base_url> <ENV_KEY> [anthropic]."""
     if alias in PROVIDERS:
-        print(c(YELLOW, f"  ⚠ Provider '{alias}' already exists; config will be overwritten."))
+        _print(c(YELLOW, f"  ⚠ Provider '{alias}' already exists; config will be overwritten."))
     fmt = api_format if api_format in ("openai", "anthropic") else "openai"
     prov_cfg = {
         "base_url":    base_url,
@@ -474,13 +475,13 @@ def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str =
     provider_config.save_custom_provider(alias, prov_cfg, {})
     PROVIDERS[alias] = prov_cfg
     provider_config.load_custom_providers()
-    print(c(GREEN, f"  ✓ Provider registered. Make sure {env_key} is configured in .env."))
-    print(c(CYAN, f"  To show it in /model, run /provider activate {alias}."))
+    _print(c(GREEN, f"  ✓ Provider registered. Make sure {env_key} is configured in .env."))
+    _print(c(CYAN, f"  To show it in /model, run /provider activate {alias}."))
     if not os.getenv(env_key, ""):
-        print(c(CYAN, f"  Next: run /provider fetch {alias} to fetch models."))
+        _print(c(CYAN, f"  Next: run /provider fetch {alias} to fetch models."))
         return False
     if not sys.stdin.isatty():
-        print(c(CYAN, f"  Next: run /provider fetch {alias} to fetch models."))
+        _print(c(CYAN, f"  Next: run /provider fetch {alias} to fetch models."))
         return False
     try:
         ans = input(cp(BOLD, f"  Fetch {alias} models now? [Y/n]: ")).strip().lower()
@@ -575,27 +576,27 @@ async def _provider_fetch(alias: str) -> None:
     """/provider fetch <alias>: fetch /v1/models with pagination and register selections."""
     _BUILTIN = {"deepseek", "openai", "anthropic"}
     if alias in _BUILTIN:
-        print(c(RED, f"  ✗ Refusing to modify built-in provider '{alias}'."))
+        _print(c(RED, f"  ✗ Refusing to modify built-in provider '{alias}'."))
         return
 
     prov = PROVIDERS.get(alias)
     if not prov:
-        print(c(RED, f"  ✗ Provider '{alias}' not found. Run /provider add {alias} <url> <KEY> first."))
+        _print(c(RED, f"  ✗ Provider '{alias}' not found. Run /provider add {alias} <url> <KEY> first."))
         return
 
     api_key = os.getenv(prov.get("api_key_env", ""), "")
     if not api_key:
-        print(c(RED, f"  ✗ {prov.get('api_key_env')} is not configured. Set it in ~/.pawnlogic/.env first."))
+        _print(c(RED, f"  ✗ {prov.get('api_key_env')} is not configured. Set it in ~/.pawnlogic/.env first."))
         return
 
-    print(c(GRAY, f"  Requesting model list from {prov['base_url']} ..."))
+    _print(c(GRAY, f"  Requesting model list from {prov['base_url']} ..."))
     candidates, err, stats = await fetch_models(
         prov["base_url"],
         api_key,
         prov.get("api_format", "openai"),
     )
     if err:
-        print(c(RED, f"  ✗ Request failed: {err}"))
+        _print(c(RED, f"  ✗ Request failed: {err}"))
         return
 
     if not candidates:
@@ -604,10 +605,10 @@ async def _provider_fetch(alias: str) -> None:
             f"{int(stats.get('hidden_by_name', 0))} hidden by type/name; "
             f"{int(stats.get('hidden_by_probe', 0))} hidden by chat probe."
         )
-        print(c(YELLOW, f"  ⚠ No usable models were fetched. {summary}"))
+        _print(c(YELLOW, f"  ⚠ No usable models were fetched. {summary}"))
         return
 
-    print(
+    _print(
         c(
             GRAY,
             f"  Sync summary: {int(stats.get('returned', 0))} returned; "
@@ -618,18 +619,18 @@ async def _provider_fetch(alias: str) -> None:
     )
     alias_changes = model_alias_changes(alias, candidates)
     if alias_changes:
-        print(
+        _print(
             c(
                 GRAY,
                 f"  Alias note: {len(alias_changes)} model IDs will be saved with provider prefixes: "
                 f"{format_alias_preview(alias_changes)}.",
             )
         )
-    print(c(GREEN, f"  ✓ Fetched {len(candidates)} models. Select models to register:\n"))
+    _print(c(GREEN, f"  ✓ Fetched {len(candidates)} models. Select models to register:\n"))
     chosen_ids = await _provider_fetch_selector(candidates)
 
     if not chosen_ids:
-        print(c(GRAY, "  Cancelled. No models were registered."))
+        _print(c(GRAY, "  Cancelled. No models were registered."))
         return
 
     models_cfg = {
@@ -640,18 +641,18 @@ async def _provider_fetch(alias: str) -> None:
     provider_config.save_custom_provider(alias, PROVIDERS[alias], models_cfg, replace_models=True)
     provider_config.load_custom_providers()
 
-    print(c(GREEN, f"  ✓ Registered {len(models_cfg)} models."))
+    _print(c(GREEN, f"  ✓ Registered {len(models_cfg)} models."))
     if is_provider_active(alias):
-        print(c(CYAN, "  Provider is active. You can select these models in /model."))
+        _print(c(CYAN, "  Provider is active. You can select these models in /model."))
     else:
-        print(c(CYAN, f"  To show them in /model, run /provider activate {alias}."))
+        _print(c(CYAN, f"  To show them in /model, run /provider activate {alias}."))
 
 
 # ════════════════════════════════════════════════════════
 # /provider sub-command dispatcher
 # ════════════════════════════════════════════════════════
 
-async def _handle_provider_cmd(sub: str, sub_arg: str, session) -> None:
+async def _handle_provider_cmd(sub: str, sub_arg: str, session, sink=None) -> None:
     """Handle /provider sub-commands."""
 
     # /provider without arguments opens the interactive TUI panel.
@@ -664,7 +665,7 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session) -> None:
                 logger.error(f"[provider-tui] crashed: {_tui_err}")
                 import traceback
                 traceback.print_exc()
-                _provider_list()
+                _provider_list(sink)
                 return
             # Refresh completer if main.py exposed one. Names are
             # function-local in main(), so this swallows a NameError if
@@ -681,12 +682,12 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session) -> None:
             except Exception:
                 pass
         else:
-            _provider_list()
+            _provider_list(sink)
         return
 
     # /provider list
     if sub == "list":
-        _provider_list()
+        _provider_list(sink)
     elif sub == "add":
         parts_add = sub_arg.split() if sub_arg else []
         if len(parts_add) >= 3:
@@ -698,12 +699,12 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session) -> None:
             _provider_add()
     elif sub == "fetch":
         if not sub_arg:
-            print(c(RED, "  Usage: /provider fetch <name>"))
+            _print(c(RED, "  Usage: /provider fetch <name>"))
         else:
             await _provider_fetch(sub_arg.strip())
     elif sub == "update":
         if not sub_arg:
-            print(c(RED, "  Usage: /provider update <name>"))
+            _print(c(RED, "  Usage: /provider update <name>"))
         else:
             await _provider_fetch(sub_arg.strip())  # update = re-fetch
     elif sub in ("activate", "active"):
@@ -717,7 +718,7 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session) -> None:
         if inspect.isawaitable(maybe_result):
             await maybe_result
     else:
-        print(c(RED, f"  ✗ Unknown sub-command '{sub}'. Available: list · add · fetch · update · activate · deactivate · remove · test"))
+        _print(c(RED, f"  ✗ Unknown sub-command '{sub}'. Available: list · add · fetch · update · activate · deactivate · remove · test"))
 
 
 # ════════════════════════════════════════════════════════
@@ -855,7 +856,7 @@ async def cmd_keys(ctx: CommandContext) -> None:
             data[env] = bool(os.environ.get(env, ""))
         ctx.sink.print_json(data)
         return
-    print(c(BOLD, "\n  API Key status:"))
+    _print(c(BOLD, "\n  API Key status:"))
     for pname, pinfo in PROVIDERS.items():
         env = pinfo.get("api_key_env")
         if not env:
@@ -865,13 +866,13 @@ async def cmd_keys(ctx: CommandContext) -> None:
             tag = c(GREEN, f"✓ Configured ({mask_key(val)})")
         else:
             tag = c(RED, "✗ Not configured")
-        print(f"  {c(CYAN, f'{pname:14}')}{env:28} {tag}")
-    print(c(GRAY, "\n  Vision models: " + ", ".join(list_vision_models())))
+        _print(f"  {c(CYAN, f'{pname:14}')}{env:28} {tag}")
+    _print(c(GRAY, "\n  Vision models: " + ", ".join(list_vision_models())))
 
 
 @register("/provider")
 async def cmd_provider(ctx: CommandContext) -> None:
-    await _handle_provider_cmd(ctx.arg, ctx.arg2, ctx.session)
+    await _handle_provider_cmd(ctx.arg, ctx.arg2, ctx.session, ctx.sink)
 
 
 @register("/model")
@@ -882,7 +883,7 @@ async def cmd_model(ctx: CommandContext) -> None:
         # Claude Code style inline selector.
         _vm = _visible_models()
         if not _vm:
-            print(c(YELLOW, "  ⚠ No models with configured API keys are available. Use /setkey first."))
+            _print(c(YELLOW, "  ⚠ No models with configured API keys are available. Use /setkey first."))
         elif _HAS_PROMPT_TOOLKIT:
             from collections import defaultdict
             _groups: dict[str, list] = defaultdict(list)
@@ -890,20 +891,20 @@ async def cmd_model(ctx: CommandContext) -> None:
                 _prov_label = PROVIDERS.get(_cfg_m.get("provider", ""), {}).get("label", _cfg_m.get("provider", ""))
                 _groups[_prov_label].append((_alias, _cfg_m))
 
-            print(c(BOLD, "\n  Available models (active providers with configured keys):"))
+            _print(c(BOLD, "\n  Available models (active providers with configured keys):"))
             for _prov_label, _entries in _groups.items():
-                print(c(CYAN, f"  {_prov_label}") + c(GRAY, f"  [{len(_entries)} models]"))
+                _print(c(CYAN, f"  {_prov_label}") + c(GRAY, f"  [{len(_entries)} models]"))
 
             result = await cc_style_model_selector(_vm, session.model_alias)
             if result:
                 session.model_alias = result
                 ok, env = validate_api_key(result)
                 if not ok:
-                    print(c(YELLOW, f"  ⚠ Switched to {result}, but {env} is not set. Configure it with /setkey."))
+                    _print(c(YELLOW, f"  ⚠ Switched to {result}, but {env} is not set. Configure it with /setkey."))
                 else:
-                    print(c(GREEN, f"  ✓ Switched to {c(MODELS[result]['color'], result)}"))
+                    _print(c(GREEN, f"  ✓ Switched to {c(MODELS[result]['color'], result)}"))
             else:
-                print(c(GRAY, "  Cancelled"))
+                _print(c(GRAY, "  Cancelled"))
         else:
             # readline fallback: plain grouped list for active providers with keys.
             from collections import defaultdict
@@ -912,9 +913,9 @@ async def cmd_model(ctx: CommandContext) -> None:
                 _prov_label = PROVIDERS.get(_cfg_m.get("provider", ""), {}).get("label", _cfg_m.get("provider", ""))
                 _groups[_prov_label].append((_alias, _cfg_m))
 
-            print(c(BOLD, "\n  Available models:"))
+            _print(c(BOLD, "\n  Available models:"))
             for _prov_label, _entries in _groups.items():
-                print(c(CYAN, f"\n  ── {_prov_label} ──"))
+                _print(c(CYAN, f"\n  ── {_prov_label} ──"))
                 for _alias, _cfg_m in _entries:
                     tick = c(GREEN, " ◀ current") if _alias == session.model_alias else ""
                     _env_var = PROVIDERS.get(_cfg_m.get("provider", ""), {}).get("api_key_env", "")
@@ -922,18 +923,18 @@ async def cmd_model(ctx: CommandContext) -> None:
                     ktag = c(GREEN, f"[{mask_key(_raw_key)}]")
                     vtag = c(CYAN, " 📷") if _cfg_m.get("vision") else ""
                     ftag = c(MAGENTA, " [A]") if get_api_format(_alias) == "anthropic" else ""
-                    print(f"    {c(_cfg_m['color'], f'{_alias:14}')}{_cfg_m['desc']:30} {ktag}{vtag}{ftag}{tick}")
-            print(c(GRAY, "\n  Usage: /model <alias>  📷=vision capable  [A]=Anthropic format"))
+                    _print(f"    {c(_cfg_m['color'], f'{_alias:14}')}{_cfg_m['desc']:30} {ktag}{vtag}{ftag}{tick}")
+            _print(c(GRAY, "\n  Usage: /model <alias>  📷=vision capable  [A]=Anthropic format"))
     elif arg in MODELS:
         provider_name = MODELS[arg].get("provider", "")
         if not is_provider_active(provider_name):
-            print(c(YELLOW, f"  ⚠ Provider '{provider_name}' is not active. Run /provider activate {provider_name} first."))
+            _print(c(YELLOW, f"  ⚠ Provider '{provider_name}' is not active. Run /provider activate {provider_name} first."))
             return
         session.model_alias = arg
         ok, env = validate_api_key(arg)
         if not ok:
-            print(c(YELLOW, f"  ⚠ Switched to {arg}, but {env} is not set. Configure it with /setkey."))
+            _print(c(YELLOW, f"  ⚠ Switched to {arg}, but {env} is not set. Configure it with /setkey."))
         else:
-            print(c(GREEN, f"  ✓ Switched to {c(MODELS[arg]['color'], arg)}"))
+            _print(c(GREEN, f"  ✓ Switched to {c(MODELS[arg]['color'], arg)}"))
     else:
-        print(c(RED, f"  ✗ Unknown model '{arg}'"))
+        _print(c(RED, f"  ✗ Unknown model '{arg}'"))

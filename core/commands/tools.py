@@ -30,6 +30,7 @@ from utils.ansi import (
 )
 
 from core.commands import CommandContext, register
+from core.commands._common import sink_print as _print
 
 
 # ════════════════════════════════════════════════════════
@@ -41,17 +42,17 @@ async def cmd_knowledge(ctx: CommandContext) -> None:
     query = (ctx.arg + " " + ctx.arg2).strip()
     if query:
         rows = search_knowledge(query, limit=10)
-        print(c(BOLD, f"\n  Knowledge search: '{query}' - {len(rows)} results:"))
+        _print(c(BOLD, f"\n  Knowledge search: '{query}' - {len(rows)} results:"))
     else:
         rows = list(list_knowledge(20))
-        print(c(BOLD, f"\n  Knowledge base (latest {len(rows)}):"))
+        _print(c(BOLD, f"\n  Knowledge base (latest {len(rows)}):"))
     if not rows:
-        print(c(GRAY, "  (empty)"))
+        _print(c(GRAY, "  (empty)"))
     else:
         for r in rows:
-            print(c(CYAN, f"  [{r['id']:3d}] ") + c(YELLOW, r["topic"]) +
+            _print(c(CYAN, f"  [{r['id']:3d}] ") + c(YELLOW, r["topic"]) +
                   c(GRAY, f"  {r['created_at'][:16]}  tags={r['tags'] or '-'}"))
-            print(c(GRAY, f"       {str(r['content'])[:100]}"))
+            _print(c(GRAY, f"       {str(r['content'])[:100]}"))
 
 
 # ════════════════════════════════════════════════════════
@@ -60,23 +61,23 @@ async def cmd_knowledge(ctx: CommandContext) -> None:
 
 @register("/webstatus")
 async def cmd_webstatus(ctx: CommandContext) -> None:
-    print(c(BOLD, "\n  Web fetch tool status:"))
-    print(web_tool_status())
+    _print(c(BOLD, "\n  Web fetch tool status:"))
+    _print(web_tool_status())
 
 
 @register("/browserstatus")
 async def cmd_browserstatus(ctx: CommandContext) -> None:
     try:
         from tools.browser_ops import browser_tool_status
-        print(c(BOLD, "\n  Scrapling browser tool status:"))
-        print(browser_tool_status())
+        _print(c(BOLD, "\n  Scrapling browser tool status:"))
+        _print(browser_tool_status())
     except ImportError:
-        print(c(RED, "  ✗ browser_ops module is not loaded"))
+        _print(c(RED, "  ✗ browser_ops module is not loaded"))
 
 
 @register("/pwnenv")
 async def cmd_pwnenv(ctx: CommandContext) -> None:
-    print(tool_pwn_env({}))
+    _print(tool_pwn_env({}))
 
 
 # ════════════════════════════════════════════════════════
@@ -92,60 +93,60 @@ async def cmd_docker(ctx: CommandContext) -> None:
     )
     sub = arg.lower().strip() if arg else "status"
     if sub == "status":
-        print(c(BOLD, "\n  Docker status:"))
-        print(docker_status())
-        print(c(GRAY, f"\n  Available image aliases: {', '.join(DEFAULT_DOCKER_IMAGES.keys())}"))
-        print(c(GRAY, "  Usage: /docker status | /docker images | /docker ps | /docker containers"))
+        _print(c(BOLD, "\n  Docker status:"))
+        _print(docker_status())
+        _print(c(GRAY, f"\n  Available image aliases: {', '.join(DEFAULT_DOCKER_IMAGES.keys())}"))
+        _print(c(GRAY, "  Usage: /docker status | /docker images | /docker ps | /docker containers"))
     elif sub == "images":
         client = _get_docker_client()
         if not client:
-            print(c(RED, "  ✗ Docker is unavailable"))
+            _print(c(RED, "  ✗ Docker is unavailable"))
         else:
             images = client.images.list()
-            print(c(BOLD, f"\n  Local images ({len(images)}):"))
+            _print(c(BOLD, f"\n  Local images ({len(images)}):"))
             for img in images[:20]:
                 tags = ", ".join(img.tags) if img.tags else "<none>"
                 size_mb = img.attrs.get("Size", 0) / (1024 * 1024)
-                print(f"  {c(CYAN, tags):40} {c(GRAY, f'{size_mb:.0f}MB')}")
+                _print(f"  {c(CYAN, tags):40} {c(GRAY, f'{size_mb:.0f}MB')}")
     elif sub in ("ps", "containers"):
         client = _get_docker_client()
         if not client:
-            print(c(RED, "  ✗ Docker is unavailable"))
+            _print(c(RED, "  ✗ Docker is unavailable"))
         else:
             containers = client.containers.list(all=True)
             pawn_containers = [ct for ct in containers if ct.labels.get("pawn") == "true"]
-            print(c(BOLD, f"\n  PawnLogic containers ({len(pawn_containers)}):"))
+            _print(c(BOLD, f"\n  PawnLogic containers ({len(pawn_containers)}):"))
             for ct in pawn_containers:
                 name = ct.labels.get("pawn_name", ct.name)
                 status_color = GREEN if ct.status == "running" else RED
-                print(f"  {c(CYAN, name):20} {c(status_color, ct.status):12} {c(GRAY, ct.id[:12])}")
+                _print(f"  {c(CYAN, name):20} {c(status_color, ct.status):12} {c(GRAY, ct.id[:12])}")
             if not pawn_containers:
-                print(c(GRAY, "  (no PawnLogic containers)"))
+                _print(c(GRAY, "  (no PawnLogic containers)"))
     elif sub == "pull":
         image = arg2.strip() if arg2 else ""
         if not image:
-            print(c(RED, "  Usage: /docker pull <image name or alias>"))
+            _print(c(RED, "  Usage: /docker pull <image name or alias>"))
         else:
             from tools.docker_sandbox import _resolve_image
             resolved = _resolve_image(image)
             client = _get_docker_client()
             if not client:
-                print(c(RED, "  ✗ Docker is unavailable"))
+                _print(c(RED, "  ✗ Docker is unavailable"))
             else:
-                print(c(YELLOW, f"  📥 Pulling {resolved} ..."))
+                _print(c(YELLOW, f"  📥 Pulling {resolved} ..."))
                 try:
                     client.images.pull(resolved)
-                    print(c(GREEN, f"  ✓ Pulled {resolved}"))
+                    _print(c(GREEN, f"  ✓ Pulled {resolved}"))
                 except Exception as e:
-                    print(c(RED, f"  ✗ Pull failed: {e}"))
+                    _print(c(RED, f"  ✗ Pull failed: {e}"))
     elif sub == "clean":
         from tools.docker_sandbox import docker_prune_resources
-        print(c(YELLOW, "  🧹 Cleaning Docker resources..."))
+        _print(c(YELLOW, "  🧹 Cleaning Docker resources..."))
         result = docker_prune_resources()
         col = GREEN if result.startswith("✓") else RED
-        print(c(col, f"  {result}"))
+        _print(c(col, f"  {result}"))
     else:
-        print(c(GRAY, "  Usage: /docker status | /docker images | /docker ps | /docker pull <image> | /docker clean"))
+        _print(c(GRAY, "  Usage: /docker status | /docker images | /docker ps | /docker pull <image> | /docker clean"))
 
 
 # ════════════════════════════════════════════════════════
@@ -162,7 +163,7 @@ async def cmd_worker(ctx: CommandContext) -> None:
     if not target:
         # No argument: show an interactive-style menu.
         current = DYNAMIC_CONFIG.get("preferred_worker", "auto")
-        print(c(BOLD, "\n  Subtask worker models (used by delegate_task):"))
+        _print(c(BOLD, "\n  Subtask worker models (used by delegate_task):"))
         for i, alias in enumerate(_WORKER_MODEL_CANDIDATES):
             if alias not in MODELS:
                 continue
@@ -170,34 +171,34 @@ async def cmd_worker(ctx: CommandContext) -> None:
             ktag = c(GREEN, "[key✓]") if ok else c(RED, "[key✗]")
             desc = MODELS[alias].get("desc", "")
             tick = c(GREEN, " ◀ current") if alias == current else ""
-            print(
+            _print(
                 c(GRAY, f"  [{i+1}] ")
                 + c(CYAN, f"{alias:16}")
                 + f" {desc:30} {ktag}{tick}"
             )
         # auto option
         auto_tick = c(GREEN, " ◀ current") if current == "auto" else ""
-        print(
+        _print(
             c(GRAY, "  [A] ")
             + c(YELLOW, f"{'auto':16}")
             + f" {'Automatic routing by priority':30} {auto_tick}"
         )
-        print(c(GRAY, "\n  Usage: /worker <alias> or /worker auto"))
+        _print(c(GRAY, "\n  Usage: /worker <alias> or /worker auto"))
         return
 
     if target == "auto":
         DYNAMIC_CONFIG["preferred_worker"] = "auto"
         session._reset_system_prompt()
-        print(c(GREEN, "  ✓ Worker restored to automatic routing mode"))
+        _print(c(GREEN, "  ✓ Worker restored to automatic routing mode"))
         return
 
     if target in MODELS:
         ok, env = validate_api_key(target)
         if not ok:
-            print(c(YELLOW, f"  ⚠ Switched to {target}, but {env} is not set. Configure it with /setkey."))
+            _print(c(YELLOW, f"  ⚠ Switched to {target}, but {env} is not set. Configure it with /setkey."))
         DYNAMIC_CONFIG["preferred_worker"] = target
         session._reset_system_prompt()
-        print(c(GREEN, f"  ✓ Worker locked to {c(CYAN, target)}; subtasks will force this model."))
+        _print(c(GREEN, f"  ✓ Worker locked to {c(CYAN, target)}; subtasks will force this model."))
         return
 
     # Try numeric index matching.
@@ -207,11 +208,11 @@ async def cmd_worker(ctx: CommandContext) -> None:
             alias = _WORKER_MODEL_CANDIDATES[idx]
             DYNAMIC_CONFIG["preferred_worker"] = alias
             session._reset_system_prompt()
-            print(c(GREEN, f"  ✓ Worker locked to {c(CYAN, alias)}"))
+            _print(c(GREEN, f"  ✓ Worker locked to {c(CYAN, alias)}"))
         else:
-            print(c(RED, "  ✗ Selection out of range"))
+            _print(c(RED, "  ✗ Selection out of range"))
     except ValueError:
-        print(c(RED, f"  ✗ Unknown model '{target}'. Use /worker to list candidates."))
+        _print(c(RED, f"  ✗ Unknown model '{target}'. Use /worker to list candidates."))
 
 
 # ════════════════════════════════════════════════════════
@@ -226,7 +227,7 @@ async def cmd_skills(ctx: CommandContext) -> None:
     sub = arg.lower().strip() if arg else "toc"
 
     if sub == "path":
-        print(c(GRAY, f"  {GLOBAL_SKILLS_PATH}"))
+        _print(c(GRAY, f"  {GLOBAL_SKILLS_PATH}"))
         return
 
     if sub == "packs":
@@ -234,21 +235,21 @@ async def cmd_skills(ctx: CommandContext) -> None:
         from config import SKILLS_DIR
         packs = _skill_scanner.scan_all()
         if not packs:
-            print(c(GRAY,
+            _print(c(GRAY,
                 f"  No skill packs found under skills/.\n"
                 f"  Path: {SKILLS_DIR}\n"
                 "  Create one with: mkdir -p skills/my_skill && echo '# My Skill' > skills/my_skill/skill.md"
             ))
         else:
-            print(c(BOLD, f"\n  📦 Local skill packs ({len(packs)})"))
-            print(c(GRAY,  f"  Path: {SKILLS_DIR}\n"))
-            print(_skill_scanner.format_list())
-            print(c(GRAY, "\n  /skillpack rescan -> rescan  |  /skillpack <name> -> show details"))
+            _print(c(BOLD, f"\n  📦 Local skill packs ({len(packs)})"))
+            _print(c(GRAY,  f"  Path: {SKILLS_DIR}\n"))
+            _print(_skill_scanner.format_list())
+            _print(c(GRAY, "\n  /skillpack rescan -> rescan  |  /skillpack <name> -> show details"))
         return
 
     if sub == "view":
         if not GLOBAL_SKILLS_PATH.exists():
-            print(c(GRAY, "  global_skills.md has not been created. The agent can generate it after tasks, or use /memo."))
+            _print(c(GRAY, "  global_skills.md has not been created. The agent can generate it after tasks, or use /memo."))
             return
         lines_all = GLOBAL_SKILLS_PATH.read_text(encoding="utf-8").splitlines()
         total = len(lines_all)
@@ -259,17 +260,17 @@ async def cmd_skills(ctx: CommandContext) -> None:
             page = 0
         start = page * page_size
         end = min(start + page_size, total)
-        print(c(BOLD, f"\n  global_skills.md  ({total} lines, showing {start+1}-{end})\n"))
+        _print(c(BOLD, f"\n  global_skills.md  ({total} lines, showing {start+1}-{end})\n"))
         for line in lines_all[start:end]:
             if line.startswith("# "):
-                print(c(CYAN, line))
+                _print(c(CYAN, line))
             elif line.startswith("## "):
-                print(c(YELLOW, line))
+                _print(c(YELLOW, line))
             else:
-                print(f"  {line}")
+                _print(f"  {line}")
         if end < total:
             rem = (total - end + page_size - 1) // page_size
-            print(c(GRAY, f"\n  {rem} pages remain. Continue with /skills view <page>."))
+            _print(c(GRAY, f"\n  {rem} pages remain. Continue with /skills view <page>."))
         return
 
     # Default: table of contents.
@@ -285,22 +286,22 @@ async def cmd_skills(ctx: CommandContext) -> None:
                 if line.startswith("#")
             )
     if not GLOBAL_SKILLS_PATH.exists():
-        print(c(GRAY,
+        _print(c(GRAY,
             f"  global_skills.md has not been created.\n"
             f"  Path: {GLOBAL_SKILLS_PATH}\n"
             "  The agent can create it after tasks, or you can archive manually with /memo."
         ))
     else:
-        print(c(BOLD, "\n  📚 Global Skills Archive - Table of Contents"))
-        print(c(GRAY,  f"  Path: {GLOBAL_SKILLS_PATH}\n"))
+        _print(c(BOLD, "\n  📚 Global Skills Archive - Table of Contents"))
+        _print(c(GRAY,  f"  Path: {GLOBAL_SKILLS_PATH}\n"))
         for line in toc.splitlines():
             if line.startswith("# "):
-                print(c(CYAN + BOLD, f"  {line}"))
+                _print(c(CYAN + BOLD, f"  {line}"))
             elif line.startswith("## "):
-                print(c(YELLOW, f"    {line}"))
+                _print(c(YELLOW, f"    {line}"))
             else:
-                print(c(GRAY, f"  {line}"))
-        print(c(GRAY, "\n  /skills view -> full content  |  /skills packs -> local packs  |  /memo -> manual archive"))
+                _print(c(GRAY, f"  {line}"))
+        _print(c(GRAY, "\n  /skills view -> full content  |  /skills packs -> local packs  |  /memo -> manual archive"))
 
 
 # ════════════════════════════════════════════════════════
@@ -318,10 +319,10 @@ async def cmd_skillpack(ctx: CommandContext) -> None:
     if sub == "rescan":
         _skill_scanner.invalidate_cache()
         packs = _skill_scanner.scan_all()
-        print(c(GREEN, f"  ✓ Rescanned skills/ and found {len(packs)} skill packs"))
+        _print(c(GREEN, f"  ✓ Rescanned skills/ and found {len(packs)} skill packs"))
         if packs:
-            print(c(BOLD, "\n  Local skill packs:"))
-            print(_skill_scanner.format_list())
+            _print(c(BOLD, "\n  Local skill packs:"))
+            _print(_skill_scanner.format_list())
         return
 
     if sub == "sync":
@@ -329,68 +330,68 @@ async def cmd_skillpack(ctx: CommandContext) -> None:
             with Spinner("Syncing skill packs"):
                 results = _skill_scanner.sync_packs()
         else:
-            print(c(CYAN, "  🔄 Syncing all git-backed skill packs..."))
+            _print(c(CYAN, "  🔄 Syncing all git-backed skill packs..."))
             results = _skill_scanner.sync_packs()
         if not results:
-            print(c(GRAY, "  No git-backed skill pack directories found"))
+            _print(c(GRAY, "  No git-backed skill pack directories found"))
             return
         ok_count = sum(1 for r in results if r["status"] == "ok")
         err_count = len(results) - ok_count
-        print(c(GREEN, f"  ✓ Sync complete: {ok_count} succeeded, {err_count} failed"))
+        _print(c(GREEN, f"  ✓ Sync complete: {ok_count} succeeded, {err_count} failed"))
         for r in results:
             tag = c(GREEN, "✓") if r["status"] == "ok" else c(RED, "✗")
             detail = ""
             if not _runtime_state.user_mode:
                 detail = c(GRAY, f"  {r['detail']}")
-            print(f"    {tag} {r['name']}{detail}")
+            _print(f"    {tag} {r['name']}{detail}")
         if err_count > 0:
-            print(c(GRAY, "  Tip: enter the failed directory and run git pull for details"))
+            _print(c(GRAY, "  Tip: enter the failed directory and run git pull for details"))
         return
 
     if sub == "install":
         repo_url = arg2.strip() if arg2 else ""
         if not repo_url:
-            print(c(RED, "  Usage: /sp install <repo_url>"))
-            print(c(GRAY, "  Example: /sp install https://github.com/user/exploit-pack.git"))
+            _print(c(RED, "  Usage: /sp install <repo_url>"))
+            _print(c(GRAY, "  Example: /sp install https://github.com/user/exploit-pack.git"))
             return
         if _runtime_state.user_mode:
             with Spinner("Installing skill pack"):
                 result = _skill_scanner.install_pack(repo_url)
         else:
-            print(c(CYAN, f"  📥 Cloning {repo_url} ..."))
+            _print(c(CYAN, f"  📥 Cloning {repo_url} ..."))
             result = _skill_scanner.install_pack(repo_url)
         if result["status"] == "ok":
-            print(c(GREEN, f"  ✓ {result['detail']}"))
+            _print(c(GREEN, f"  ✓ {result['detail']}"))
             packs = _skill_scanner.scan_all()
             installed = [p for p in packs if result["name"] in p.get("_path", "").name]
             if installed:
-                print(c(BOLD, "\n  Newly installed skill packs:"))
+                _print(c(BOLD, "\n  Newly installed skill packs:"))
                 for p in installed:
                     name = p.get("name", "?")
                     desc = p.get("description", "")
                     scripts = p.get("scripts", [])
-                    print(c(GREEN, f"    📦 {name}"))
+                    _print(c(GREEN, f"    📦 {name}"))
                     if desc:
-                        print(c(GRAY, f"       {desc[:60]}"))
+                        _print(c(GRAY, f"       {desc[:60]}"))
                     if scripts:
-                        print(c(GRAY, f"       scripts: {', '.join(scripts)}"))
+                        _print(c(GRAY, f"       scripts: {', '.join(scripts)}"))
         else:
-            print(c(RED, f"  ✗ Install failed: {result['detail']}"))
+            _print(c(RED, f"  ✗ Install failed: {result['detail']}"))
         return
 
     if sub == "list" or sub == "":
         packs = _skill_scanner.scan_all()
         if not packs:
-            print(c(GRAY,
+            _print(c(GRAY,
                 f"  No skill packs found under skills/.\n"
                 f"  Path: {SKILLS_DIR}\n"
                 "  Create one with: mkdir -p skills/my_skill && echo '# My Skill' > skills/my_skill/skill.md"
             ))
         else:
-            print(c(BOLD, f"\n  📦 Local skill packs ({len(packs)})"))
-            print(c(GRAY,  f"  Path: {SKILLS_DIR}\n"))
-            print(_skill_scanner.format_list())
-            print(c(GRAY,
+            _print(c(BOLD, f"\n  📦 Local skill packs ({len(packs)})"))
+            _print(c(GRAY,  f"  Path: {SKILLS_DIR}\n"))
+            _print(_skill_scanner.format_list())
+            _print(c(GRAY,
                 "\n  /sp rescan -> rescan  |  /sp sync -> sync updates  |"
                 "  /sp install <url> -> install new pack  |  /sp <name> -> show details"
             ))
@@ -401,8 +402,8 @@ async def cmd_skillpack(ctx: CommandContext) -> None:
     matched = [p for p in packs if sub in p.get("name", "").lower()
                or sub in p.get("_path", "").name.lower()]
     if not matched:
-        print(c(RED, f"  ✗ No skill pack named '{sub}' was found"))
-        print(c(GRAY, "  Use /skillpack to list all available skill packs"))
+        _print(c(RED, f"  ✗ No skill pack named '{sub}' was found"))
+        _print(c(GRAY, "  Use /skillpack to list all available skill packs"))
         return
     for pack in matched:
         name = pack.get("name", "?")
@@ -414,20 +415,20 @@ async def cmd_skillpack(ctx: CommandContext) -> None:
         guide = pack.get("guide", "")
         pack_path = pack.get("_path", "")
 
-        print(c(BOLD, f"\n  📦 {name} v{ver}"))
+        _print(c(BOLD, f"\n  📦 {name} v{ver}"))
         if desc:
-            print(f"  {desc}")
-        print(c(GRAY, f"  Path: {pack_path}"))
+            _print(f"  {desc}")
+        _print(c(GRAY, f"  Path: {pack_path}"))
         if kw:
-            print(c(CYAN, f"  Keywords: {', '.join(kw)}"))
+            _print(c(CYAN, f"  Keywords: {', '.join(kw)}"))
         if tr:
-            print(c(CYAN, f"  Triggers: {', '.join(tr)}"))
+            _print(c(CYAN, f"  Triggers: {', '.join(tr)}"))
         if guide:
-            print(c(GREEN, f"  Guide: {pack_path / guide}"))
-            print(c(GRAY,  f"    → read_file(path='{pack_path / guide}')"))
+            _print(c(GREEN, f"  Guide: {pack_path / guide}"))
+            _print(c(GRAY,  f"    → read_file(path='{pack_path / guide}')"))
         if scripts:
-            print(c(GREEN, f"  Scripts: {', '.join(scripts)}"))
-            print(c(GRAY,  "    → Prefer running scripts over ad-hoc code"))
+            _print(c(GREEN, f"  Scripts: {', '.join(scripts)}"))
+            _print(c(GRAY,  "    → Prefer running scripts over ad-hoc code"))
 
 
 # Reference MAGENTA so that ruff doesn't flag the import as unused.

@@ -27,6 +27,7 @@ from tools.file_ops import _session_cwd, tool_read_file
 from utils.ansi import c, BOLD, GRAY, CYAN, GREEN, YELLOW, RED
 
 from core.commands import CommandContext, register
+from core.commands._common import sink_print as _print
 
 
 # ════════════════════════════════════════════════════════
@@ -98,18 +99,18 @@ def _handle_workspace_cmd(arg: str, arg2: str, session) -> None:
     if sub == "status":
         info = wc.workspace_status()
         if not info.get("exists"):
-            print(c(RED, "  workspace directory does not exist"))
+            _print(c(RED, "  workspace directory does not exist"))
             return
-        print(c(BOLD, "\n  Workspace status:"))
-        print(f"  Path        : {c(CYAN, info['path'])}")
-        print(f"  Total size  : {c(GREEN, info['size_human'])}")
-        print(f"  Files       : {info['n_files']}")
-        print(f"  Directories : {info['n_dirs']} (session_*: {info['session_dirs']})")
-        print(f"  symlinks   : {info['n_symlinks']}")
-        print(c(GRAY, f"  DB sessions : {info['db_sessions']} (empty workspace_dir: {info['db_empty']})"))
+        _print(c(BOLD, "\n  Workspace status:"))
+        _print(f"  Path        : {c(CYAN, info['path'])}")
+        _print(f"  Total size  : {c(GREEN, info['size_human'])}")
+        _print(f"  Files       : {info['n_files']}")
+        _print(f"  Directories : {info['n_dirs']} (session_*: {info['session_dirs']})")
+        _print(f"  symlinks   : {info['n_symlinks']}")
+        _print(c(GRAY, f"  DB sessions : {info['db_sessions']} (empty workspace_dir: {info['db_empty']})"))
         if info["last_backup"]:
-            print(c(GRAY, f"  Last backup : {info['last_backup']}"))
-        print()
+            _print(c(GRAY, f"  Last backup : {info['last_backup']}"))
+        _print()
         return
 
     # ── cleanup ────────────────────────────────────────
@@ -117,75 +118,75 @@ def _handle_workspace_cmd(arg: str, arg2: str, session) -> None:
         action = sub2 or "plan"
 
         if action == "plan":
-            print(c(YELLOW, "  ▶ Phase 0: creating full backup..."))
+            _print(c(YELLOW, "  ▶ Phase 0: creating full backup..."))
             try:
                 bak = wc.make_backup()
-                print(c(GREEN, f"    ✓ Backup: {bak.name} ({bak.stat().st_size // 1024} KB)"))
+                _print(c(GREEN, f"    ✓ Backup: {bak.name} ({bak.stat().st_size // 1024} KB)"))
             except Exception as exc:
-                print(c(RED, f"    ✗ Backup failed: {exc}"))
+                _print(c(RED, f"    ✗ Backup failed: {exc}"))
                 return
 
-            print(c(YELLOW, "  ▶ Phase 1: scan + classify (read-only)..."))
+            _print(c(YELLOW, "  ▶ Phase 1: scan + classify (read-only)..."))
             rows, db = wc.scan()
             plan_path = wc.render_plan(rows, db)
             stats: dict[str, int] = {}
             for r in rows:
                 stats[r["confidence"]] = stats.get(r["confidence"], 0) + 1
-            print(c(GREEN, f"    ✓ Plan: {plan_path}"))
-            print(c(BOLD, "\n  Scan results:"))
+            _print(c(GREEN, f"    ✓ Plan: {plan_path}"))
+            _print(c(BOLD, "\n  Scan results:"))
             for k in ("LOCKED", "SAFE", "MID", "HIGH", "SENSITIVE"):
                 cnt = stats.get(k, 0)
                 if cnt:
-                    print(f"    {wc._CONF_ICON[k]} {k:10} {cnt}")
-            print(c(GRAY, "\n  Review the plan, then run /workspace cleanup execute to archive suggested items."))
-            print(c(GRAY, "  Or edit the plan file first, especially to manually confirm SENSITIVE items."))
+                    _print(f"    {wc._CONF_ICON[k]} {k:10} {cnt}")
+            _print(c(GRAY, "\n  Review the plan, then run /workspace cleanup execute to archive suggested items."))
+            _print(c(GRAY, "  Or edit the plan file first, especially to manually confirm SENSITIVE items."))
             return
 
         elif action == "execute":
-            print(c(YELLOW, "  ▶ Rescanning for the latest state..."))
+            _print(c(YELLOW, "  ▶ Rescanning for the latest state..."))
             rows, db = wc.scan()
             plan_action_count = sum(1 for r in rows if r["action"] == "ARCHIVE")
             if plan_action_count == 0:
-                print(c(GREEN, "  ✓ Nothing to archive; workspace is already clean."))
+                _print(c(GREEN, "  ✓ Nothing to archive; workspace is already clean."))
                 return
-            print(c(YELLOW, f"  ▶ Archiving {plan_action_count} items and backfilling DB workspace_dir..."))
+            _print(c(YELLOW, f"  ▶ Archiving {plan_action_count} items and backfilling DB workspace_dir..."))
             try:
                 result = wc.execute_cleanup(rows, db)
-                print(c(GREEN, f"    ✓ Archived: {len(result['moved'])} items"))
-                print(c(GRAY,  f"      Skipped: {len(result['skipped'])} items"))
-                print(c(GREEN, f"    ✓ DB backfilled: {result['db_updated']} sessions"))
-                print(c(GRAY,  f"    Archive directory: {result['archive_root']}"))
-                print(c(GRAY,  f"    Manifest: {result['manifest']}"))
+                _print(c(GREEN, f"    ✓ Archived: {len(result['moved'])} items"))
+                _print(c(GRAY,  f"      Skipped: {len(result['skipped'])} items"))
+                _print(c(GREEN, f"    ✓ DB backfilled: {result['db_updated']} sessions"))
+                _print(c(GRAY,  f"    Archive directory: {result['archive_root']}"))
+                _print(c(GRAY,  f"    Manifest: {result['manifest']}"))
             except Exception as exc:
                 logger.error("cleanup execute failed | exc={!r}", exc)
-                print(c(RED, f"    ✗ Failed: {exc}"))
+                _print(c(RED, f"    ✗ Failed: {exc}"))
             return
 
         elif action == "restore":
             backup_arg = parts[3].strip() if (parts := arg2.split(None, 1)) and len(parts) > 1 else ""
             backup_path = Path(backup_arg).expanduser() if backup_arg else None
-            print(c(YELLOW, "  ⚠ Restoring workspace from backup. Current contents will be renamed to _replaced_<ts>/."))
+            _print(c(YELLOW, "  ⚠ Restoring workspace from backup. Current contents will be renamed to _replaced_<ts>/."))
             try:
                 from core.workspace_cleanup import restore_from_backup
                 result = restore_from_backup(backup_path)
                 if result["ok"]:
-                    print(c(GREEN, f"    ✓ Restored from: {result['restored_from']}"))
+                    _print(c(GREEN, f"    ✓ Restored from: {result['restored_from']}"))
                     if result.get("old_workspace_renamed_to"):
-                        print(c(GRAY, f"      Previous workspace backup: {result['old_workspace_renamed_to']}"))
+                        _print(c(GRAY, f"      Previous workspace backup: {result['old_workspace_renamed_to']}"))
                 else:
-                    print(c(RED, f"    ✗ {result.get('error')}"))
+                    _print(c(RED, f"    ✗ {result.get('error')}"))
             except Exception as exc:
                 logger.error("cleanup restore failed | exc={!r}", exc)
-                print(c(RED, f"    ✗ Failed: {exc}"))
+                _print(c(RED, f"    ✗ Failed: {exc}"))
             return
 
         else:
-            print(c(RED, f"  Unknown sub-command 'cleanup {action}'"))
-            print(c(GRAY, "  Available: plan / execute / restore"))
+            _print(c(RED, f"  Unknown sub-command 'cleanup {action}'"))
+            _print(c(GRAY, "  Available: plan / execute / restore"))
             return
 
-    print(c(RED, f"  Unknown sub-command 'workspace {sub}'"))
-    print(c(GRAY, "  Available: status | cleanup [plan|execute|restore]"))
+    _print(c(RED, f"  Unknown sub-command 'workspace {sub}'"))
+    _print(c(GRAY, "  Available: status | cleanup [plan|execute|restore]"))
 
 
 # ════════════════════════════════════════════════════════
@@ -203,9 +204,9 @@ async def cmd_cd(ctx: CommandContext) -> None:
         session._reset_system_prompt()
         state_exists = (Path(session.cwd) / STATE_FILENAME).exists()
         state_tag = c(CYAN, "  [State.md detected]") if state_exists else ""
-        print(c(GREEN, f"  ✓ cwd: {session.cwd}{state_tag}"))
+        _print(c(GREEN, f"  ✓ cwd: {session.cwd}{state_tag}"))
     except Exception as e:
-        print(c(RED, f"  ✗ {e}"))
+        _print(c(RED, f"  ✗ {e}"))
 
 
 @register("/file")
@@ -213,7 +214,7 @@ async def cmd_file(ctx: CommandContext) -> None:
     session = ctx.session
     arg = ctx.arg
     if not arg:
-        print(c(RED, "  Usage: /file <path>"))
+        _print(c(RED, "  Usage: /file <path>"))
         return
     content = tool_read_file({"path": arg})
     session.messages.append({
@@ -224,7 +225,7 @@ async def cmd_file(ctx: CommandContext) -> None:
         "role": "assistant",
         "content": f"Loaded `{arg}` ({len(content)} characters)",
     })
-    print(c(GREEN, f"  ✓ Loaded {arg}"))
+    _print(c(GREEN, f"  ✓ Loaded {arg}"))
 
 
 @register("/init_project")
@@ -233,12 +234,12 @@ async def cmd_init_project(ctx: CommandContext) -> None:
     desc = (ctx.arg + " " + ctx.arg2).strip()
     result = _init_project(session.cwd, desc)
     if result == "cancelled":
-        print(c(YELLOW, "  Cancelled"))
+        _print(c(YELLOW, "  Cancelled"))
     else:
         session._reset_system_prompt()   # inject the new State.md immediately
-        print(c(GREEN, f"  ✓ Created {result}"))
-        print(c(GRAY,  "  State.md has been injected into the system prompt and persists after /clear."))
-        print(c(GRAY,  "  Tip: state the task directly; the agent will follow the spec-driven flow and commit automatically."))
+        _print(c(GREEN, f"  ✓ Created {result}"))
+        _print(c(GRAY,  "  State.md has been injected into the system prompt and persists after /clear."))
+        _print(c(GRAY,  "  Tip: state the task directly; the agent will follow the spec-driven flow and commit automatically."))
 
 
 @register("/workspace")
