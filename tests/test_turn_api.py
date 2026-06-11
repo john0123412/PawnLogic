@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from core.turn_api import consume_model_stream
+from tests.helpers import fake_stream_response
 
 
 def _ensure_id(_tool_delta, iteration, idx):
@@ -40,7 +41,7 @@ def test_consume_model_stream_stops_on_http_error():
     seen = []
 
     result = consume_model_stream(
-        iter([{"_error": "HTTP 403 Forbidden: API key rejected."}]),
+        fake_stream_response({"_error": "HTTP 403 Forbidden: API key rejected."}),
         ensure_tool_call_id=_ensure_id,
         iteration=0,
         on_error=seen.append,
@@ -54,7 +55,7 @@ def test_consume_model_stream_stops_on_http_error():
 
 def test_consume_model_stream_collects_usage_reasoning_text_and_tool_calls():
     result = consume_model_stream(
-        iter([
+        fake_stream_response(
             {"_usage": {"prompt_tokens": 2, "completion_tokens": 3}},
             {"choices": [{"delta": {"reasoning_content": "hidden"}}]},
             {"choices": [{"delta": {"content": "visible"}}]},
@@ -78,7 +79,7 @@ def test_consume_model_stream_collects_usage_reasoning_text_and_tool_calls():
                     },
                 }],
             },
-        ]),
+        ),
         ensure_tool_call_id=_ensure_id,
         iteration=4,
     )

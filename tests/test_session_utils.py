@@ -14,6 +14,7 @@ Targets zero-dependency or minimal-dependency functions only:
 import sys
 import inspect
 import threading
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -33,21 +34,32 @@ for _key in list(sys.modules):
 # ── Import real config first, then patch heavy session.py deps ───────
 import config  # noqa: E402 — force-cache real package
 assert config.VERSION
+from tests.helpers import fake_stream_request, fake_stream_response, fake_stream_sequence  # noqa: E402
 
 # Heavy dependencies that session.py imports at module level — mock them
 # so we don't need a real DB, API key, or full environment.
 _MOCKS = [
-    "core.api_client", "core.memory", "core.gsa", "core.logger",
+    "core.memory", "core.gsa", "core.logger",
     "core.skill_manager", "core.mcp_client_manager",
     "tools.web_ops", "tools.sandbox",
     "tools.pwn_chain", "tools.vision",
     "tools.docker_sandbox", "tools.browser_ops", "tools.recon_ops",
     "tools.delegate_tool",
 ]
+
+
+class _StubModule(types.ModuleType):
+    def __getattr__(self, name: str):
+        value = MagicMock(name=f"{self.__name__}.{name}")
+        setattr(self, name, value)
+        return value
+
+
 def _mockable_module(name: str):
     module = sys.modules.get(name)
     if module is None:
-        module = MagicMock()
+        module = _StubModule(name)
+        module.__file__ = f"<test-stub:{name}>"
         sys.modules[name] = module
         return module
     if isinstance(module, MagicMock):
@@ -75,9 +87,6 @@ if _mock_deps["core.gsa"] is not None:
 if _mock_deps["core.logger"] is not None:
     _mock_deps["core.logger"].logger = MagicMock()
     _mock_deps["core.logger"].audit_tool_call = MagicMock()
-if _mock_deps["core.api_client"] is not None:
-    _mock_deps["core.api_client"].stream_request = MagicMock(return_value=iter([]))
-    _mock_deps["core.api_client"].ensure_tool_call_id = lambda tc, i, idx: f"id_{i}_{idx}"
 if _mock_deps["tools.web_ops"] is not None:
     _mock_deps["tools.web_ops"].WEB_SCHEMAS = []
 if _mock_deps["tools.sandbox"] is not None:
@@ -410,49 +419,33 @@ def test_build_api_messages_drops_dangling_tool_calls_before_new_user():
 
 def test_run_turn_injects_plan_missing_for_non_exempt_tool(monkeypatch):
     import json
-    from config import DYNAMIC_CONFIG
-    import core.session as session_mod
 
-    s = _make_session()
-    s._time_budget_sec = 0
-    s._turn_prompt_tokens = 0
-    s._turn_completion_tokens = 0
-    s._turn_tool_calls = 0
-    s.total_prompt_tokens = 0
-    s.total_completion_tokens = 0
-    s.total_tool_calls = 0
-    s._save_lock = threading.Lock()
-    s._naming_lock = threading.Lock()
-
-    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 3)
-    monkeypatch.setattr(session_mod, "validate_api_key", lambda _m: (True, ""))
-    monkeypatch.setattr(s, "_reset_system_prompt", MagicMock())
-    monkeypatch.setattr(s, "_maybe_update_summary", MagicMock())
-    monkeypatch.setattr(s, "_autosave", MagicMock())
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
     monkeypatch.setitem(session_mod.TOOL_MAP, "write_file", lambda _args: "OK: fake write")
 
-    calls = iter([
-        [{
-            "choices": [{
-                "delta": {
-                    "tool_calls": [{
-                        "index": 0,
-                        "id": "call_missing_plan",
-                        "function": {
-                            "name": "write_file",
-                            "arguments": json.dumps({"path": "x.txt", "content": "x"}),
-                        },
-                    }],
-                },
-            }],
-        }],
-        [{"choices": [{"delta": {"content": "done"}}]}],
-    ])
-
-    def fake_stream_request(*_args, **_kwargs):
-        return iter(next(calls))
-
-    monkeypatch.setattr(session_mod, "stream_request", fake_stream_request)
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_sequence(
+            ({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call_missing_plan",
+                            "function": {
+                                "name": "write_file",
+                                "arguments": json.dumps({"path": "x.txt", "content": "x"}),
+                            },
+                        }],
+                    },
+                }],
+            },),
+            ({
+                "choices": [{"delta": {"content": "done"}}],
+            },),
+        ),
+    )
 
     s.run_turn("write a file")
 
@@ -479,10 +472,16 @@ def test_history_summary_skips_empty_stream_choices(monkeypatch):
 
     monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_summary_threshold", 3)
     monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_sliding_turns", 1)
-    monkeypatch.setattr(session_mod, "stream_request", lambda *_a, **_kw: iter([
-        {"choices": []},
-        {"choices": [{"delta": {"content": "older turns summarized"}}]},
-    ]))
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_request(
+            {"choices": []},
+            {"choices": [{
+                "delta": {"content": "older turns summarized"},
+            }]},
+        ),
+    )
     warning_mock = MagicMock()
     monkeypatch.setattr(session_mod.logger, "warning", warning_mock)
 
@@ -493,26 +492,7 @@ def test_history_summary_skips_empty_stream_choices(monkeypatch):
 
 
 def test_run_turn_interrupt_raises_for_cli_rollback(monkeypatch):
-    from config import DYNAMIC_CONFIG
-    import core.session as session_mod
-
-    s = _make_session()
-    s._time_budget_sec = 0
-    s._turn_prompt_tokens = 0
-    s._turn_completion_tokens = 0
-    s._turn_tool_calls = 0
-    s.total_prompt_tokens = 0
-    s.total_completion_tokens = 0
-    s.total_tool_calls = 0
-    s._save_lock = threading.Lock()
-    s._naming_lock = threading.Lock()
-
-    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 3)
-    monkeypatch.setattr(session_mod, "validate_api_key", lambda _m: (True, ""))
-    monkeypatch.setattr(s, "_reset_system_prompt", MagicMock())
-    monkeypatch.setattr(s, "_maybe_update_summary", MagicMock())
-    monkeypatch.setattr(s, "_build_api_messages", lambda: s.messages)
-    monkeypatch.setattr(s, "_autosave", MagicMock())
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
 
     def interrupted_stream(*_args, **_kwargs):
         raise KeyboardInterrupt
@@ -568,9 +548,11 @@ def test_run_turn_starts_and_stops_thinking_spinner(monkeypatch):
             stops.append(("stop",))
 
     monkeypatch.setattr(session_mod, "_ThinkingSpinner", FakeSpinner)
-    monkeypatch.setattr(session_mod, "stream_request", lambda *_a, **_kw: iter([
-        {"choices": [{"delta": {"content": "done"}}]},
-    ]))
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_request({"choices": [{"delta": {"content": "done"}}]}),
+    )
 
     s.run_turn("show spinner")
 
@@ -621,13 +603,13 @@ def test_usage_and_reasoning_only_response_retries_until_visible_output(monkeypa
     def fake_stream_request(*_args, **_kwargs):
         calls.append("call")
         if len(calls) == 1:
-            return iter([
+            return fake_stream_response(
                 {"_usage": {"prompt_tokens": 1, "completion_tokens": 12}},
                 {"choices": [{"delta": {"reasoning_content": "hidden only"}}]},
-            ])
-        return iter([
+            )
+        return fake_stream_response(
             {"choices": [{"delta": {"content": "visible answer"}}]},
-        ])
+        )
 
     monkeypatch.setattr(session_mod, "stream_request", fake_stream_request)
     monkeypatch.setattr(session_mod.time, "sleep", lambda _seconds: None)
@@ -642,10 +624,14 @@ def test_usage_and_reasoning_only_response_retries_until_visible_output(monkeypa
 def test_run_turn_prints_api_retry_notice_before_final_output(monkeypatch, capsys):
     s, session_mod = _prepare_run_turn_session(monkeypatch)
 
-    monkeypatch.setattr(session_mod, "stream_request", lambda *_args, **_kwargs: iter([
-        {"_retry": "HTTP 502 Bad Gateway: provider gateway failed. Retrying in 0.1s (1/3)."},
-        {"choices": [{"delta": {"content": "visible answer"}}]},
-    ]))
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_request(
+            {"_retry": "HTTP 502 Bad Gateway: provider gateway failed. Retrying in 0.1s (1/3)."},
+            {"choices": [{"delta": {"content": "visible answer"}}]},
+        ),
+    )
 
     s.run_turn("retry notice")
 
@@ -659,9 +645,11 @@ def test_run_turn_prints_api_retry_notice_before_final_output(monkeypatch, capsy
 def test_run_turn_api_error_terminates_turn_without_hanging(monkeypatch, capsys, status):
     s, session_mod = _prepare_run_turn_session(monkeypatch)
 
-    monkeypatch.setattr(session_mod, "stream_request", lambda *_args, **_kwargs: iter([
-        {"_error": f"HTTP {status} provider error"},
-    ]))
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_request({"_error": f"HTTP {status} provider error"}),
+    )
 
     s.run_turn("provider failure")
 
@@ -673,12 +661,14 @@ def test_run_turn_api_error_terminates_turn_without_hanging(monkeypatch, capsys,
 def test_run_turn_accepts_message_content_in_stream_choice(monkeypatch):
     s, session_mod = _prepare_run_turn_session(monkeypatch)
 
-    monkeypatch.setattr(session_mod, "stream_request", lambda *_args, **_kwargs: iter([
-        {
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_request({
             "_usage": {"prompt_tokens": 1, "completion_tokens": 5},
             "choices": [{"message": {"content": "message fallback answer"}}],
-        },
-    ]))
+        }),
+    )
 
     s.run_turn("provider sends message content")
 
