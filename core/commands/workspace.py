@@ -22,8 +22,9 @@ import os
 from pathlib import Path
 
 from core.logger import logger
+from core.runtime_context import RuntimeContext
 from core.session import STATE_FILENAME
-from tools.file_ops import _session_cwd, tool_read_file
+from tools.file_ops import sync_runtime_context, tool_read_file
 from utils.ansi import c, BOLD, GRAY, CYAN, GREEN, YELLOW, RED
 
 from core.commands import CommandContext, register
@@ -200,7 +201,23 @@ async def cmd_cd(ctx: CommandContext) -> None:
     try:
         os.chdir(Path(target).expanduser())
         session.cwd = os.getcwd()
-        _session_cwd[0] = session.cwd
+        if hasattr(session, "_sync_runtime_context"):
+            session._sync_runtime_context()
+        else:
+            ctx = getattr(session, "runtime_context", None)
+            if ctx is None:
+                ctx = RuntimeContext.from_current(
+                    cwd=session.cwd,
+                    workspace_dir=getattr(session, "workspace_dir", None),
+                )
+                session.runtime_context = ctx
+            else:
+                ctx.update_paths(
+                    cwd=session.cwd,
+                    workspace_dir=getattr(session, "workspace_dir", ctx.workspace_dir),
+                )
+                ctx.sync_state_flags()
+            sync_runtime_context(ctx)
         session._reset_system_prompt()
         state_exists = (Path(session.cwd) / STATE_FILENAME).exists()
         state_tag = c(CYAN, "  [State.md detected]") if state_exists else ""

@@ -16,6 +16,8 @@ from core.memory import (
     rename_session, save_messages, load_messages, add_knowledge,
 )
 from core.naming import stable_workspace_dir
+from core.runtime_context import RuntimeContext
+from tools.file_ops import sync_runtime_context
 from utils.ansi import c, CYAN, GRAY, YELLOW, DIM
 
 # Prefer prompt_toolkit's render channel to avoid hijacked stdout.
@@ -129,9 +131,21 @@ def session_load(session, query: str) -> str:
     except Exception:
         pass
 
-    from tools.file_ops import _session_cwd, _session_workspace_dir
-    _session_cwd[0] = session.cwd
-    _session_workspace_dir[0] = session.workspace_dir
+    if hasattr(session, "_sync_runtime_context"):
+        session._sync_runtime_context()
+    else:
+        ctx = getattr(session, "runtime_context", None)
+        if ctx is None:
+            ctx = RuntimeContext.from_current(
+                cwd=session.cwd,
+                workspace_dir=session.workspace_dir,
+            )
+            session.runtime_context = ctx
+        else:
+            ctx.update_paths(cwd=session.cwd, workspace_dir=session.workspace_dir)
+            ctx.dynamic_config = DYNAMIC_CONFIG
+            ctx.sync_state_flags()
+        sync_runtime_context(ctx)
     session._reset_system_prompt()
     session.messages.extend(msgs)
     session.session_id = sid

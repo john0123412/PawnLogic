@@ -7,62 +7,8 @@ Verifies:
   3. Normal responses are unaffected.
 """
 
-import sys, types
-from unittest.mock import MagicMock
-from pathlib import Path
+import sys
 
-# Add project root to sys.path.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-# Mock config module to avoid importing real config side effects.
-mock_config = types.ModuleType("config")
-mock_config.DYNAMIC_CONFIG = {
-    "max_iter": 5,
-    "max_tokens": 4096,
-    "ctx_max_chars": 100000,
-    "tool_max_chars": 10000,
-    "time_budget_sec": 0,
-}
-mock_config.MODELS = {"test-model": {"id": "test-model-id", "color": "\033[32m"}}
-mock_config.DEFAULT_MODEL = "test-model"
-mock_config.validate_api_key = lambda m: (True, "TEST_KEY")
-mock_config.VERSION = "test"
-mock_config.GLOBAL_SKILLS_PATH = "/tmp"
-mock_config.QUIET_MODE = False
-mock_config.USER_MODE = False
-mock_config.smart_truncate = lambda s, **kw: s
-mock_config.AGENT_PHASES = {"RECON": ["run_shell", "read_file", "list_dir"]}
-mock_config.READ_BLACKLIST = []
-mock_config.WRITE_BLACKLIST = []
-mock_config.DANGEROUS_PATTERNS = []
-mock_config.SKILLS_DIR = "/tmp/skills"
-mock_config.user_friendly_error = lambda e: f"[User Error] {e}"
-mock_config.get_api_config = lambda m: ("http://localhost:8080", "sk-test")
-mock_config.get_api_format = lambda m: "openai"
-mock_config.get_provider_config = lambda m: {
-    "base_url": "http://localhost:8080",
-    "api_key": "sk-test",
-    "api_format": "openai",
-}
-sys.modules["config"] = mock_config
-
-# Mock other dependencies.
-for mod_name in ("utils.ansi", "core.logger", "core.memory", "core.gsa",
-                 "tools.file_ops", "tools.web_ops", "tools.sandbox",
-                 "tools.pwn_chain", "tools.vision", "core.skill_manager"):
-    if mod_name not in sys.modules:
-        sys.modules[mod_name] = MagicMock()
-
-# Ensure ANSI color constants are available.
-sys.modules["utils.ansi"].c = lambda color, text: text
-for attr in ("BOLD", "DIM", "GRAY", "CYAN", "GREEN", "YELLOW", "RED", "MAGENTA", "BLUE"):
-    setattr(sys.modules["utils.ansi"], attr, "")
-
-# Ensure logger is available.
-sys.modules["core.logger"].logger = MagicMock()
-sys.modules["core.logger"].audit_tool_call = MagicMock()
-
-# Import module under test.
 from core.api_client import APIEmptyResponseError
 
 

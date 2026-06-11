@@ -39,7 +39,7 @@ assert config.VERSION
 _MOCKS = [
     "core.api_client", "core.memory", "core.gsa", "core.logger",
     "core.skill_manager", "core.mcp_client_manager",
-    "tools.file_ops", "tools.web_ops", "tools.sandbox",
+    "tools.web_ops", "tools.sandbox",
     "tools.pwn_chain", "tools.vision",
     "tools.docker_sandbox", "tools.browser_ops", "tools.recon_ops",
     "tools.delegate_tool",
@@ -78,10 +78,6 @@ if _mock_deps["core.logger"] is not None:
 if _mock_deps["core.api_client"] is not None:
     _mock_deps["core.api_client"].stream_request = MagicMock(return_value=iter([]))
     _mock_deps["core.api_client"].ensure_tool_call_id = lambda tc, i, idx: f"id_{i}_{idx}"
-if _mock_deps["tools.file_ops"] is not None:
-    _mock_deps["tools.file_ops"]._session_cwd = [""]
-    _mock_deps["tools.file_ops"]._session_workspace_dir = [""]
-    _mock_deps["tools.file_ops"].FILE_SCHEMAS = []
 if _mock_deps["tools.web_ops"] is not None:
     _mock_deps["tools.web_ops"].WEB_SCHEMAS = []
 if _mock_deps["tools.sandbox"] is not None:
@@ -308,6 +304,11 @@ def _make_session():
         s.messages = [{"role": "system", "content": "sys"}]
         s.cwd = "/tmp"
         s.workspace_dir = "/tmp/test_ws"
+        from core.runtime_context import RuntimeContext
+        s.runtime_context = RuntimeContext.for_test(
+            cwd=s.cwd,
+            workspace_dir=s.workspace_dir,
+        )
         s.current_phase = "RECON"
         s._history_summary = ""
         s._summary_turn_count = 0

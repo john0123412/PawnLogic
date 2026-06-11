@@ -43,6 +43,7 @@ from config import (
 from utils.ansi import c, BOLD, DIM, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
 from core.api_client import stream_request, ensure_tool_call_id
 from core.state import state as _runtime_state
+from core.runtime_context import RuntimeContext
 from core.turn_api import TurnApiResult, consume_model_stream
 from core.memory import (
     init_db, _gen_id, search_knowledge, format_knowledge_for_prompt,
@@ -55,7 +56,7 @@ from core.gsa import load_relevant_skills, bump_skill, sink_failure_to_gsa  # �
 
 from tools.file_ops  import (tool_read_file, tool_read_file_lines, tool_write_file,
                               tool_patch_file, tool_list_dir, tool_find_files,
-                              tool_run_shell, _session_cwd, _session_workspace_dir,
+                              tool_run_shell, sync_runtime_context,
                               FILE_SCHEMAS)
 from core.naming import (
     stable_workspace_dir, should_name_session, generate_session_name,
@@ -827,9 +828,12 @@ class AgentSession:
         self.model_alias = DEFAULT_MODEL
         self.messages: list = []
         self.cwd         = os.getcwd()
-        _session_cwd[0]  = self.cwd
         self.workspace_dir = stable_workspace_dir(self.session_id)
-        _session_workspace_dir[0] = self.workspace_dir
+        self.runtime_context = RuntimeContext.from_current(
+            cwd=self.cwd,
+            workspace_dir=self.workspace_dir,
+        )
+        self._sync_runtime_context()
         self.current_phase = "RECON"   # initial MoE phase
         init_db()
         # P1: time-aware scheduling state. Must exist before _reset_system_prompt.
@@ -860,6 +864,20 @@ class AgentSession:
         self._summary_turn_count: int = 0        # turn count when summary was last generated
         # Call last because it depends on all attributes above.
         self._reset_system_prompt()
+
+    def _sync_runtime_context(self) -> None:
+        """Keep this session's RuntimeContext and legacy tool pointers aligned."""
+        ctx = getattr(self, "runtime_context", None)
+        if ctx is None:
+            ctx = RuntimeContext.from_current(
+                cwd=self.cwd,
+                workspace_dir=self.workspace_dir,
+            )
+            self.runtime_context = ctx
+        else:
+            ctx.update_paths(cwd=self.cwd, workspace_dir=self.workspace_dir)
+            ctx.sync_state_flags()
+        sync_runtime_context(ctx)
 
     def _time_remaining(self) -> float:
         """Return seconds remaining for the current turn; inf when budget is 0."""
@@ -917,8 +935,8 @@ class AgentSession:
     def _swap_workspace_dir(self, slug: str) -> tuple[str, str]:
         """Rename ``session_<id>/`` → ``<slug>/`` under ``~/.pawnlogic/workspace``,
         create a reverse symlink so pre-swap absolute paths still resolve,
-        then atomically update ``_session_workspace_dir[0]`` and
-        ``self.workspace_dir``.
+        then atomically update ``self.workspace_dir`` and the file-tool
+        runtime pointers.
 
         Collision handling mirrors ``create_workspace_alias``:
         try ``<slug>``, then ``<slug>-<id_tail>``, then ``<slug>-<id_tail>-N``.
@@ -1007,8 +1025,8 @@ class AgentSession:
 
             # 3. Atomic pointer update; CPython list-index assignment is atomic.
             new_abs = str(new_path.resolve())
-            _session_workspace_dir[0] = new_abs
             self.workspace_dir = new_abs
+            self._sync_runtime_context()
 
             logger.info(
                 "Workspace swapped | session={} {} → {} | path={}",

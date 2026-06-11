@@ -25,6 +25,12 @@ from core.logger import logger
 _session_cwd = [os.getcwd()]
 _session_workspace_dir = [WORKSPACE_DIR]
 
+
+def sync_runtime_context(ctx) -> None:
+    """Sync the active RuntimeContext into legacy file-tool pointers."""
+    _session_cwd[0] = str(ctx.cwd)
+    _session_workspace_dir[0] = str(ctx.workspace_dir)
+
 # Persistent environment cache for shell tools.
 _env_cache: dict = {}
 _env_cache_initialized = False
