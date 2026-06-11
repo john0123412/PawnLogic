@@ -250,10 +250,6 @@ def test_api_client_sse_sanitizer_and_circuit_breaker(monkeypatch):
     _drop_project_modules("core.api_client", force=True)
     from core import api_client
 
-    assert "HTTP 403" in api_client._format_http_error(403, b'{"error":"bad key"}')
-    assert "API key" in api_client._format_http_error(403, b'{"error":"bad key"}')
-    assert "HTTP 502" in api_client._format_http_error(502, b"bad gateway")
-
     parsed = api_client.parse_sse_delta(
         '{"choices":[{"delta":{"content":"hello"},"finish_reason":null,}],}'
     )

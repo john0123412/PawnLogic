@@ -31,6 +31,7 @@ from config.security import (  # noqa: E402
     smart_truncate,
     user_friendly_error,
 )
+from core.api_errors import format_http_error  # noqa: E402
 
 
 def _is_blocked(cmd: str) -> bool:
@@ -148,7 +149,7 @@ def test_scrub_sensitive_env_removes_credentials():
 
 
 def test_user_friendly_error_preserves_http_status_details():
-    msg = user_friendly_error('HTTP 403: {"error":{"message":"invalid api key"}}')
+    msg = user_friendly_error(format_http_error(403, b'{"error":{"message":"invalid api key"}}'))
 
     assert "HTTP 403" in msg
     assert "API key" in msg
@@ -156,7 +157,7 @@ def test_user_friendly_error_preserves_http_status_details():
 
 
 def test_user_friendly_error_explains_provider_5xx():
-    msg = user_friendly_error("HTTP 502: bad gateway")
+    msg = user_friendly_error(format_http_error(502, b"bad gateway"))
 
     assert "HTTP 502" in msg
     assert "provider" in msg.lower() or "gateway" in msg.lower()

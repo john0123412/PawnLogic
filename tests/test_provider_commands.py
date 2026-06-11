@@ -14,6 +14,7 @@ from prompt_toolkit.application import Application
 import main as pawn_main
 import pawnlogic.cli as pawn_cli
 from config import providers as provider_config
+from core.api_errors import format_http_error
 from core import provider_tui
 from core.commands import provider as provider_cmd
 
@@ -544,6 +545,48 @@ def test_provider_tui_connection_reports_http_400_body_when_json_invalid():
     assert "HTTP 400" in message
     assert "bad request" in message
     assert "Extra data" not in message
+
+
+def test_provider_tui_and_cli_share_http_error_message(monkeypatch, capsys):
+    body = '{"error":{"message":"missing entitlement","type":"auth","code":"forbidden"}}'
+    expected = format_http_error(403, body)
+    response = SimpleNamespace(
+        status_code=403,
+        text=body,
+        json=lambda: {"error": {"message": "missing entitlement"}},
+    )
+
+    ok, tui_message, ms = provider_tui._connection_result_from_response(response, 41)
+
+    assert ok is False
+    assert ms == 41
+    assert tui_message == expected
+
+    import httpx
+
+    alias = "pytest_http_error"
+    env_key = "PYTEST_HTTP_ERROR_API_KEY"
+    request = httpx.Request("GET", "https://api.example.com/v1/models")
+    http_response = httpx.Response(403, text=body, request=request)
+    provider_cmd.PROVIDERS[alias] = {
+        "base_url": "https://api.example.com/v1",
+        "api_key_env": env_key,
+        "label": "Relay",
+        "api_format": "openai",
+    }
+    monkeypatch.setenv(env_key, "test-key")
+
+    def fake_fetch_models_paginated(_models_url, _api_key):
+        raise httpx.HTTPStatusError("Forbidden", request=request, response=http_response)
+
+    monkeypatch.setattr(provider_cmd, "_fetch_models_paginated", fake_fetch_models_paginated)
+
+    try:
+        asyncio.run(provider_cmd._provider_fetch(alias))
+    finally:
+        provider_cmd.PROVIDERS.pop(alias, None)
+
+    assert expected in capsys.readouterr().out
 
 
 def test_provider_tui_add_wizard_saves_without_testing_connection(monkeypatch):

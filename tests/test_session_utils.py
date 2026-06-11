@@ -44,45 +44,66 @@ _MOCKS = [
     "tools.docker_sandbox", "tools.browser_ops", "tools.recon_ops",
     "tools.delegate_tool",
 ]
-for _m in _MOCKS:
-    if _m not in sys.modules:
-        sys.modules[_m] = MagicMock()
+def _mockable_module(name: str):
+    module = sys.modules.get(name)
+    if module is None:
+        module = MagicMock()
+        sys.modules[name] = module
+        return module
+    if isinstance(module, MagicMock):
+        return module
+    return None
 
 # Patch specific attributes session.py reads at import time
-sys.modules["core.memory"]._gen_id = lambda: "test_session_id_abc123"
-sys.modules["core.memory"].init_db = lambda: None
-sys.modules["core.memory"].search_knowledge = lambda *a, **kw: []
-sys.modules["core.memory"].format_knowledge_for_prompt = lambda *a, **kw: ""
-sys.modules["core.memory"].update_session_naming = MagicMock()
-sys.modules["core.memory"].write_failure = MagicMock()
-sys.modules["core.memory"].check_failure = MagicMock(return_value=[])
-sys.modules["core.memory"].count_failure = MagicMock(return_value=0)
-sys.modules["core.memory"].format_failures_for_prompt = MagicMock(return_value="")
-sys.modules["core.gsa"].load_relevant_skills = MagicMock(return_value=("", ""))
-sys.modules["core.gsa"].bump_skill = MagicMock(return_value=(True, "ok"))
-sys.modules["core.gsa"].sink_failure_to_gsa = MagicMock(return_value=(False, ""))
-sys.modules["core.gsa"].load_toc = MagicMock(return_value="")
-sys.modules["core.logger"].logger = MagicMock()
-sys.modules["core.logger"].audit_tool_call = MagicMock()
-sys.modules["core.api_client"].stream_request = MagicMock(return_value=iter([]))
-sys.modules["core.api_client"].ensure_tool_call_id = lambda tc, i, idx: f"id_{i}_{idx}"
-sys.modules["tools.file_ops"]._session_cwd = [""]
-sys.modules["tools.file_ops"]._session_workspace_dir = [""]
-sys.modules["tools.file_ops"].FILE_SCHEMAS = []
-sys.modules["tools.web_ops"].WEB_SCHEMAS = []
-sys.modules["tools.sandbox"].SANDBOX_SCHEMAS = []
-sys.modules["tools.pwn_chain"].PWN_SCHEMAS = []
-sys.modules["tools.vision"].VISION_SCHEMAS = []
-sys.modules["tools.docker_sandbox"].DOCKER_SCHEMAS = []
-sys.modules["tools.browser_ops"].BROWSER_SCHEMAS = []
-sys.modules["tools.recon_ops"].RECON_SCHEMAS = []
+_mock_deps = {_m: _mockable_module(_m) for _m in _MOCKS}
+
+if _mock_deps["core.memory"] is not None:
+    _mock_deps["core.memory"]._gen_id = lambda: "test_session_id_abc123"
+    _mock_deps["core.memory"].init_db = lambda: None
+    _mock_deps["core.memory"].search_knowledge = lambda *a, **kw: []
+    _mock_deps["core.memory"].format_knowledge_for_prompt = lambda *a, **kw: ""
+    _mock_deps["core.memory"].update_session_naming = MagicMock()
+    _mock_deps["core.memory"].write_failure = MagicMock()
+    _mock_deps["core.memory"].check_failure = MagicMock(return_value=[])
+    _mock_deps["core.memory"].count_failure = MagicMock(return_value=0)
+    _mock_deps["core.memory"].format_failures_for_prompt = MagicMock(return_value="")
+if _mock_deps["core.gsa"] is not None:
+    _mock_deps["core.gsa"].load_relevant_skills = MagicMock(return_value=("", ""))
+    _mock_deps["core.gsa"].bump_skill = MagicMock(return_value=(True, "ok"))
+    _mock_deps["core.gsa"].sink_failure_to_gsa = MagicMock(return_value=(False, ""))
+    _mock_deps["core.gsa"].load_toc = MagicMock(return_value="")
+if _mock_deps["core.logger"] is not None:
+    _mock_deps["core.logger"].logger = MagicMock()
+    _mock_deps["core.logger"].audit_tool_call = MagicMock()
+if _mock_deps["core.api_client"] is not None:
+    _mock_deps["core.api_client"].stream_request = MagicMock(return_value=iter([]))
+    _mock_deps["core.api_client"].ensure_tool_call_id = lambda tc, i, idx: f"id_{i}_{idx}"
+if _mock_deps["tools.file_ops"] is not None:
+    _mock_deps["tools.file_ops"]._session_cwd = [""]
+    _mock_deps["tools.file_ops"]._session_workspace_dir = [""]
+    _mock_deps["tools.file_ops"].FILE_SCHEMAS = []
+if _mock_deps["tools.web_ops"] is not None:
+    _mock_deps["tools.web_ops"].WEB_SCHEMAS = []
+if _mock_deps["tools.sandbox"] is not None:
+    _mock_deps["tools.sandbox"].SANDBOX_SCHEMAS = []
+if _mock_deps["tools.pwn_chain"] is not None:
+    _mock_deps["tools.pwn_chain"].PWN_SCHEMAS = []
+if _mock_deps["tools.vision"] is not None:
+    _mock_deps["tools.vision"].VISION_SCHEMAS = []
+if _mock_deps["tools.docker_sandbox"] is not None:
+    _mock_deps["tools.docker_sandbox"].DOCKER_SCHEMAS = []
+if _mock_deps["tools.browser_ops"] is not None:
+    _mock_deps["tools.browser_ops"].BROWSER_SCHEMAS = []
+if _mock_deps["tools.recon_ops"] is not None:
+    _mock_deps["tools.recon_ops"].RECON_SCHEMAS = []
 
 # Mock SkillScanner used at module level
-_mock_scanner = MagicMock()
-_mock_scanner.match.return_value = []
-_mock_scanner.format_for_prompt.return_value = ""
-_mock_scanner.format_user_message.return_value = ""
-sys.modules["core.skill_manager"].SkillScanner = MagicMock(return_value=_mock_scanner)
+if _mock_deps["core.skill_manager"] is not None:
+    _mock_scanner = MagicMock()
+    _mock_scanner.match.return_value = []
+    _mock_scanner.format_for_prompt.return_value = ""
+    _mock_scanner.format_user_message.return_value = ""
+    _mock_deps["core.skill_manager"].SkillScanner = MagicMock(return_value=_mock_scanner)
 
 # Now import the real session functions
 from core.session import (  # noqa: E402

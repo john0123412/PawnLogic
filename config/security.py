@@ -1,6 +1,5 @@
 """config/security.py - security allow/deny lists and output helpers."""
 import os
-import re
 from .paths import PAWNLOGIC_HOME
 from core.state import state as _state
 
@@ -71,44 +70,17 @@ _ERROR_MAP = {
     "ERROR":                "❌ Operation failed. Please try again later.",
 }
 
-_HTTP_USER_HINTS = {
-    400: "Bad request. Check the model, base URL, and provider compatibility.",
-    401: "Unauthorized. The API key is missing or invalid; reconfigure it with /setkey.",
-    403: "Forbidden. The API key was rejected or lacks access to this model/provider.",
-    404: "Not found. Check the provider Base URL and model ID.",
-    408: "Request timed out at the provider.",
-    422: "Provider rejected the request payload.",
-    429: "Rate limit or quota exceeded. Wait before retrying.",
-    500: "Provider internal server error. Retry later or switch provider.",
-    502: "Provider bad gateway. The upstream model service failed.",
-    503: "Provider unavailable or overloaded. Retry later or switch provider.",
-    504: "Provider gateway timeout. Retry later or switch provider.",
-}
-
-
-def _friendly_http_error(raw_error: str) -> str | None:
-    match = re.search(r"\bHTTP\s+(\d{3})\b", raw_error, flags=re.IGNORECASE)
-    if not match:
-        return None
-    status = int(match.group(1))
-    hint = _HTTP_USER_HINTS.get(status, "Provider returned an HTTP error.")
-    first_line = " ".join(raw_error.split())
-    if len(first_line) > 180:
-        first_line = first_line[:177] + "..."
-    return f"❌ HTTP {status}: {hint} ({first_line})"
-
 
 def user_friendly_error(raw_error: str) -> str:
     """Convert raw errors into concise user-facing messages in user mode."""
     if not _state.user_mode:
         return raw_error
-    http_msg = _friendly_http_error(raw_error)
-    if http_msg:
-        return http_msg
+    first_line = " ".join(raw_error.split())[:180]
+    if raw_error.lstrip().startswith("HTTP "):
+        return f"❌ {first_line}"
     for keyword, friendly in _ERROR_MAP.items():
         if keyword.lower() in raw_error.lower():
             return friendly
-    first_line = raw_error.split("\n")[0][:80]
     return f"❌ {first_line}"
 
 

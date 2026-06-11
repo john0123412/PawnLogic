@@ -18,6 +18,7 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 
 from config.paths import PAWNLOGIC_HOME
+from core.api_errors import format_http_error, format_transport_error
 from config.providers import (
     PROVIDERS, MODELS, CUSTOM_PROVIDERS_PATH,
     save_custom_provider, load_custom_providers, remove_custom_provider,
@@ -117,32 +118,6 @@ def _normalize_base_url(raw: str, api_format: str = "openai") -> str:
     return raw + "/v1" + suffix
 
 
-def _response_excerpt(text: str, limit: int = 120) -> str:
-    return " ".join(text.split())[:limit]
-
-
-def _provider_http_error(status: int, text: str) -> str:
-    try:
-        from core.api_client import _format_http_error
-        msg = _format_http_error(status, text)
-        if isinstance(msg, str):
-            return msg
-    except Exception:
-        pass
-    return f"HTTP {status}: {_response_excerpt(text)}"
-
-
-def _provider_transport_error(exc: BaseException) -> str:
-    try:
-        from core.api_client import _format_transport_error
-        msg = _format_transport_error(exc)
-        if isinstance(msg, str):
-            return msg
-    except Exception:
-        pass
-    return str(exc)[:120]
-
-
 def _connection_result_from_response(resp, ms: int) -> tuple[bool, str, int]:
     if 200 <= resp.status_code < 300:
         try:
@@ -153,15 +128,15 @@ def _connection_result_from_response(resp, ms: int) -> tuple[bool, str, int]:
 
     if resp.status_code == 400:
         if _model_rejection_reason(resp.text):
-            return False, _provider_http_error(400, resp.text), ms
+            return False, format_http_error(400, resp.text), ms
         try:
             body = resp.json()
         except ValueError:
-            return False, _provider_http_error(400, resp.text), ms
+            return False, format_http_error(400, resp.text), ms
         if isinstance(body, dict) and "error" in body:
             return True, f"Connected ({ms}ms; API returned validation error)", ms
 
-    return False, _provider_http_error(resp.status_code, resp.text), ms
+    return False, format_http_error(resp.status_code, resp.text), ms
 
 
 def _model_is_chat_candidate(model_id: str) -> bool:
@@ -305,9 +280,9 @@ async def _test_connection(
             int((time.monotonic() - t0) * 1000),
         )
     except httpx.HTTPError as e:
-        return False, _provider_transport_error(e), int((time.monotonic() - t0) * 1000)
+        return False, format_transport_error(e), int((time.monotonic() - t0) * 1000)
     except Exception as e:
-        return False, _provider_transport_error(e), int((time.monotonic() - t0) * 1000)
+        return False, format_transport_error(e), int((time.monotonic() - t0) * 1000)
 
 async def _fetch_models(
     base_url: str,
@@ -326,7 +301,7 @@ async def _fetch_models(
                 try:
                     resp.raise_for_status()
                 except httpx.HTTPStatusError as e:
-                    return [], _provider_http_error(e.response.status_code, e.response.text), stats
+                    return [], format_http_error(e.response.status_code, e.response.text), stats
                 body = resp.json()
                 all_data.extend(body.get("data", []))
                 if not body.get("has_more"):
@@ -336,9 +311,9 @@ async def _fetch_models(
     except httpx.TimeoutException:
         return [], "Connection timeout: provider did not return /v1/models within 15s.", stats
     except httpx.HTTPError as e:
-        return [], _provider_transport_error(e), stats
+        return [], format_transport_error(e), stats
     except Exception as e:
-        return [], _provider_transport_error(e), stats
+        return [], format_transport_error(e), stats
     stats["returned"] = len(all_data)
     candidates = []
     for item in all_data:
