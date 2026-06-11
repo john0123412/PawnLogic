@@ -25,7 +25,6 @@ commands and by main.py's startup wizard, which imports `_run_key_wizard`,
     _provider_set_active       show or hide a provider's models in /model
     _provider_remove           remove a custom provider
     _provider_test             smoke-test an API connection
-    _fetch_models_paginated    GET /v1/models with pagination
     _provider_fetch_selector   prompt_toolkit multi-select UI
     _provider_fetch            fetch + register models from a provider
 
@@ -36,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import inspect
 import sys
 from pathlib import Path
 
@@ -44,16 +44,21 @@ from prompt_toolkit import prompt as ptk_prompt
 import config.providers as provider_config
 from config import (
     CUSTOM_PROVIDERS_PATH, MODELS, PROVIDERS,
-    get_api_format, get_provider_config, list_vision_models,
+    get_api_format, list_vision_models,
     is_provider_active,
-    models_url_from_base_url,
     remove_custom_provider, save_custom_provider,
-    set_provider_active,
     validate_api_key,
 )
 from config.paths import VERSION
-from core.api_errors import format_http_error, format_transport_error
 from core.logger import logger
+from core.provider_runtime import (
+    fetch_models,
+    format_alias_preview,
+    model_alias_changes,
+    save_key,
+    set_active as runtime_set_active,
+    test_connection,
+)
 from utils.ansi import (
     c, cp, BOLD, CYAN, GRAY, GREEN, MAGENTA, RED, YELLOW,
 )
@@ -71,15 +76,6 @@ try:
 except ImportError:
     _HAS_PROMPT_TOOLKIT = False
     _PTStyle = None  # type: ignore
-
-
-# ────────────────────────────────────────────────────────
-# Path constants (shared layout — same as main.py)
-# ────────────────────────────────────────────────────────
-from config.paths import PAWNLOGIC_HOME
-
-_PAWNLOGIC_DIR = PAWNLOGIC_HOME
-_ENV_PATH = _PAWNLOGIC_DIR / ".env"
 
 
 # ════════════════════════════════════════════════════════
@@ -312,11 +308,10 @@ def _provider_set_active(alias: str, active: bool) -> None:
     if alias not in PROVIDERS:
         print(c(RED, f"  ✗ Provider not found: {alias}"))
         return
-    if alias == "deepseek" and not active:
-        print(c(YELLOW, "  ⚠ deepseek is the default provider and always stays active."))
-        return
-    if not set_provider_active(alias, active):
-        print(c(RED, f"  ✗ Failed to update provider state: {alias}"))
+    ok, msg = runtime_set_active(alias, active)
+    if not ok:
+        color = YELLOW if alias == "deepseek" and not active else RED
+        print(c(color, f"  ✗ {msg}"))
         return
     state = "active" if active else "inactive"
     print(c(GREEN, f"  ✓ Provider '{alias}' is now {state}."))
@@ -363,13 +358,8 @@ def _provider_add() -> None:
         return
 
     if key:
-        env_path = _ENV_PATH
-        env_line = f'\n{env_var_name}="{key}"\n'
         try:
-            existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
-            if env_var_name not in existing:
-                env_path.write_text(existing + env_line, encoding="utf-8")
-            os.environ[env_var_name] = key
+            save_key(env_var_name, key)
         except Exception:
             os.environ[env_var_name] = key
         _write_key_to_shell(env_var_name, key)
@@ -435,7 +425,7 @@ def _provider_remove(name: str = "") -> None:
         print(c(RED, f"  ✗ Custom provider not found: {name}"))
 
 
-def _provider_test(session, model_alias: str = "") -> None:
+async def _provider_test(session, model_alias: str = "") -> None:
     """Test provider connectivity."""
     if not model_alias:
         try:
@@ -452,19 +442,21 @@ def _provider_test(session, model_alias: str = "") -> None:
         print(c(RED, f"  ✗ {env} is not configured. Use /setkey or /provider add."))
         return
 
-    cfg = get_provider_config(model_alias)
-    print(c(GRAY, f"  Testing {model_alias} ({cfg['api_format']}) -> {cfg['base_url']} ..."))
+    model_cfg = MODELS[model_alias]
+    provider = PROVIDERS.get(model_cfg.get("provider"), {})
+    api_format = provider.get("api_format", "openai")
+    base_url = provider.get("base_url", "")
+    api_key = os.getenv(provider.get("api_key_env", ""), "")
+    model_id = str(model_cfg.get("id") or model_alias)
+
+    print(c(GRAY, f"  Testing {model_alias} ({api_format}) -> {base_url} ..."))
     print(c(GRAY, "  Sending a max_tokens=1 test request..."))
 
-    from core.api_client import call_once
-    text, err = call_once(
-        [{"role": "user", "content": "Say OK"}],
-        model_alias, max_tokens=1,
-    )
-    if err:
-        print(c(RED, f"  ✗ Test failed: {err}"))
+    ok, msg, _ms = await test_connection(base_url, api_key, api_format, model_id)
+    if ok:
+        print(c(GREEN, f"  ✓ Connection succeeded. {msg}"))
     else:
-        print(c(GREEN, f"  ✓ Connection succeeded. Response: {text[:80]}"))
+        print(c(RED, f"  ✗ Test failed: {msg}"))
 
 
 def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str = "openai") -> bool:
@@ -495,25 +487,6 @@ def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str =
     except (EOFError, KeyboardInterrupt):
         ans = "n"
     return ans in ("", "y")
-
-
-def _fetch_models_paginated(models_url: str, api_key: str) -> list:
-    """Request /v1/models with pagination and return all model entries."""
-    import httpx
-    all_data: list = []
-    url = f"{models_url}?limit=200"
-    while url:
-        resp = httpx.get(url, headers={"Authorization": f"Bearer {api_key}"}, timeout=15)
-        resp.raise_for_status()
-        body = resp.json()
-        all_data.extend(body.get("data", []))
-        if not body.get("has_more"):
-            break
-        cursor = body.get("next_cursor") or body.get("next_page")
-        if not cursor:
-            break
-        url = f"{models_url}?limit=200&after={cursor}"
-    return all_data
 
 
 async def _provider_fetch_selector(entries: list[tuple[str, dict]]) -> list[str]:
@@ -600,13 +573,6 @@ async def _provider_fetch_selector(entries: list[tuple[str, dict]]) -> list[str]
 
 async def _provider_fetch(alias: str) -> None:
     """/provider fetch <alias>: fetch /v1/models with pagination and register selections."""
-    from core.provider_tui import (
-        _filter_supported_chat_models,
-        _format_alias_preview,
-        _model_alias_changes,
-        _model_is_chat_candidate,
-    )
-
     _BUILTIN = {"deepseek", "openai", "anthropic"}
     if alias in _BUILTIN:
         print(c(RED, f"  ✗ Refusing to modify built-in provider '{alias}'."))
@@ -622,64 +588,41 @@ async def _provider_fetch(alias: str) -> None:
         print(c(RED, f"  ✗ {prov.get('api_key_env')} is not configured. Set it in ~/.pawnlogic/.env first."))
         return
 
-    models_url = models_url_from_base_url(prov["base_url"])
-    print(c(GRAY, f"  Requesting {models_url} ..."))
-
-    try:
-        data = _fetch_models_paginated(models_url, api_key)
-    except Exception as e:
-        try:
-            import httpx
-            if isinstance(e, httpx.HTTPStatusError):
-                msg = format_http_error(e.response.status_code, e.response.text)
-            else:
-                msg = format_transport_error(e)
-        except Exception:
-            msg = str(e)
-        print(c(RED, f"  ✗ Request failed: {msg}"))
-        return
-
-    candidates: list[tuple[str, dict]] = []
-    hidden_by_name = 0
-    for item in data:
-        mid = item.get("id", "")
-        if not mid or not _model_is_chat_candidate(mid):
-            hidden_by_name += 1
-            continue
-        vision = any(k in mid.lower() for k in ("vision", "vl", "visual"))
-        candidates.append((mid, {
-            "id":       mid,
-            "provider": alias,
-            "desc":     "Fetched model",
-            "color":    "\033[37m",
-            "vision":   vision,
-        }))
-
-    candidates, removed = await _filter_supported_chat_models(
+    print(c(GRAY, f"  Requesting model list from {prov['base_url']} ..."))
+    candidates, err, stats = await fetch_models(
         prov["base_url"],
         api_key,
-        candidates,
         prov.get("api_format", "openai"),
     )
+    if err:
+        print(c(RED, f"  ✗ Request failed: {err}"))
+        return
 
     if not candidates:
-        print(c(YELLOW, "  ⚠ No usable models were fetched. Check the API response format."))
+        summary = (
+            f"{int(stats.get('returned', 0))} returned; "
+            f"{int(stats.get('hidden_by_name', 0))} hidden by type/name; "
+            f"{int(stats.get('hidden_by_probe', 0))} hidden by chat probe."
+        )
+        print(c(YELLOW, f"  ⚠ No usable models were fetched. {summary}"))
         return
 
     print(
         c(
             GRAY,
-            f"  Sync summary: {len(data)} returned; {hidden_by_name} hidden by type/name; "
-            f"{removed} hidden by chat probe; {len(candidates)} selectable.",
+            f"  Sync summary: {int(stats.get('returned', 0))} returned; "
+            f"{int(stats.get('hidden_by_name', 0))} hidden by type/name; "
+            f"{int(stats.get('hidden_by_probe', 0))} hidden by chat probe; "
+            f"{int(stats.get('selectable', len(candidates)))} selectable.",
         )
     )
-    alias_changes = _model_alias_changes(alias, candidates)
+    alias_changes = model_alias_changes(alias, candidates)
     if alias_changes:
         print(
             c(
                 GRAY,
                 f"  Alias note: {len(alias_changes)} model IDs will be saved with provider prefixes: "
-                f"{_format_alias_preview(alias_changes)}.",
+                f"{format_alias_preview(alias_changes)}.",
             )
         )
     print(c(GREEN, f"  ✓ Fetched {len(candidates)} models. Select models to register:\n"))
@@ -690,7 +633,7 @@ async def _provider_fetch(alias: str) -> None:
         return
 
     models_cfg = {
-        provider_config.custom_model_alias(alias, str(cfg.get("id") or mid), mid): cfg
+        provider_config.custom_model_alias(alias, str(cfg.get("id") or mid), mid): {**cfg, "provider": alias}
         for mid, cfg in candidates
         if mid in set(chosen_ids)
     }
@@ -770,7 +713,9 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session) -> None:
     elif sub == "remove":
         _provider_remove(sub_arg)
     elif sub == "test":
-        _provider_test(session, sub_arg)
+        maybe_result = _provider_test(session, sub_arg)
+        if inspect.isawaitable(maybe_result):
+            await maybe_result
     else:
         print(c(RED, f"  ✗ Unknown sub-command '{sub}'. Available: list · add · fetch · update · activate · deactivate · remove · test"))
 

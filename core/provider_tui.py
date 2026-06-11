@@ -4,7 +4,7 @@ core/provider_tui.py — Interactive TUI for Provider Management
 All UI text in English. API Keys never displayed in plain text.
 """
 from __future__ import annotations
-import asyncio, json, os, time, datetime
+import asyncio, json, os
 from typing import Optional
 
 from prompt_toolkit.application import Application
@@ -17,24 +17,54 @@ from prompt_toolkit.widgets import TextArea, Frame
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 
-from config.paths import PAWNLOGIC_HOME
-from core.api_errors import format_http_error, format_transport_error
 from config.providers import (
     PROVIDERS, MODELS, CUSTOM_PROVIDERS_PATH,
     save_custom_provider, load_custom_providers, remove_custom_provider,
-    models_url_from_base_url, custom_model_alias, is_chat_model_candidate,
-    is_provider_active, set_provider_active,
+    is_provider_active,
+)
+from core.provider_runtime import (
+    candidate_save_alias as _candidate_save_alias,
+    connection_result_from_response as _connection_result_from_response,
+    fetch_models as _fetch_models,
+    filter_supported_chat_models as _filter_supported_chat_models,
+    first_provider_chat_model as _first_provider_chat_model,
+    format_alias_preview as _format_alias_preview,
+    format_model_sync_notice as _format_model_sync_notice,
+    model_alias_changes as _model_alias_changes,
+    model_is_chat_candidate as _model_is_chat_candidate,
+    model_rejection_reason as _model_rejection_reason,
+    normalize_base_url as _normalize_base_url,
+    probe_openai_chat_model as _probe_openai_chat_model,
+    REASONING_KEYWORDS as _REASONING_KEYWORDS,
+    record_sync_time as _record_sync_time,
+    save_key as _save_key_to_env,
+    set_active as _runtime_set_active,
+    sync_models_to_runtime as _sync_models_to_runtime,
+    test_connection as _test_connection,
 )
 
-_PAWNLOGIC_DIR = PAWNLOGIC_HOME
-_ENV_PATH = _PAWNLOGIC_DIR / ".env"
+__all__ = [
+    "ProviderTUI",
+    "run_provider_tui",
+    "TUI_STYLE",
+    "_candidate_save_alias",
+    "_connection_result_from_response",
+    "_fetch_models",
+    "_filter_supported_chat_models",
+    "_first_provider_chat_model",
+    "_format_alias_preview",
+    "_format_model_sync_notice",
+    "_model_alias_changes",
+    "_model_is_chat_candidate",
+    "_model_rejection_reason",
+    "_normalize_base_url",
+    "_probe_openai_chat_model",
+    "_save_key_to_env",
+    "_test_connection",
+]
+
 _BUILTIN = {"deepseek", "openai", "anthropic"}
 _ALWAYS_ACTIVE = {"deepseek"}
-_UNSUPPORTED_MODEL_MARKERS = (
-    "not supported", "unsupported", "model_not_found", "model not found",
-    "does not exist", "unknown model", "invalid model", "not available",
-)
-_REASONING_KEYWORDS = ("mimo", "deepseek", "qwq")  # Keep in sync with api_client._REASONING_MODEL_PATTERNS.
 _PAGE = 20  # rows per page in model selector
 
 TUI_STYLE = Style.from_dict({
@@ -82,258 +112,6 @@ def _last_synced(pname: str) -> str:
         return data.get("sync_times", {}).get(pname) or "Never"
     except Exception:
         return "Never"
-
-def _save_key_to_env(env_var: str, key: str) -> None:
-    _PAWNLOGIC_DIR.mkdir(parents=True, exist_ok=True)
-    existing = _ENV_PATH.read_text(encoding="utf-8") if _ENV_PATH.exists() else ""
-    lines = [l for l in existing.splitlines() if not l.startswith(f"{env_var}=")]
-    lines.append(f"{env_var}={key}")
-    _ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.chmod(_ENV_PATH, 0o600)
-    os.environ[env_var] = key
-
-def _record_sync_time(pname: str) -> None:
-    _PAWNLOGIC_DIR.mkdir(parents=True, exist_ok=True)
-    data: dict = {"providers": {}, "models": {}, "sync_times": {}}
-    if CUSTOM_PROVIDERS_PATH.exists():
-        try:
-            data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    data.setdefault("sync_times", {})[pname] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    CUSTOM_PROVIDERS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-def _sync_models_to_runtime() -> None:
-    """Merge custom_providers.json into in-memory MODELS. Never changes DEFAULT_MODEL."""
-    load_custom_providers()
-
-def _normalize_base_url(raw: str, api_format: str = "openai") -> str:
-    """Build the actual chat endpoint from whatever the user stored."""
-    raw = raw.rstrip("/")
-    if raw.endswith("/chat/completions") or raw.endswith("/messages"):
-        return raw
-    suffix = "/messages" if api_format == "anthropic" else "/chat/completions"
-    if raw.endswith("/v1"):
-        return raw + suffix
-    return raw + "/v1" + suffix
-
-
-def _connection_result_from_response(resp, ms: int) -> tuple[bool, str, int]:
-    if 200 <= resp.status_code < 300:
-        try:
-            resp.json()
-        except ValueError:
-            return True, f"Connected ({ms}ms; non-standard response)", ms
-        return True, f"Connected ({ms}ms)", ms
-
-    if resp.status_code == 400:
-        if _model_rejection_reason(resp.text):
-            return False, format_http_error(400, resp.text), ms
-        try:
-            body = resp.json()
-        except ValueError:
-            return False, format_http_error(400, resp.text), ms
-        if isinstance(body, dict) and "error" in body:
-            return True, f"Connected ({ms}ms; API returned validation error)", ms
-
-    return False, format_http_error(resp.status_code, resp.text), ms
-
-
-def _model_is_chat_candidate(model_id: str) -> bool:
-    return is_chat_model_candidate(model_id)
-
-
-def _candidate_save_alias(pname: str, mid: str, cfg: dict) -> str:
-    return custom_model_alias(pname, str(cfg.get("id") or mid), mid)
-
-
-def _model_alias_changes(pname: str, entries: list[tuple[str, dict]]) -> list[tuple[str, str]]:
-    changes = []
-    for mid, cfg in entries:
-        alias = _candidate_save_alias(pname, mid, cfg)
-        if alias != mid:
-            changes.append((mid, alias))
-    return changes
-
-
-def _format_alias_preview(changes: list[tuple[str, str]], limit: int = 3) -> str:
-    preview = ", ".join(f"{mid} -> {alias}" for mid, alias in changes[:limit])
-    if len(changes) > limit:
-        preview += f", ... +{len(changes) - limit} more"
-    return preview
-
-
-def _format_model_sync_notice(stats: dict, alias_changes: list[tuple[str, str]]) -> list[str]:
-    returned = int(stats.get("returned", 0))
-    hidden_name = int(stats.get("hidden_by_name", 0))
-    hidden_probe = int(stats.get("hidden_by_probe", 0))
-    selectable = int(stats.get("selectable", 0))
-    lines = [
-        (
-            f"Sync summary: {returned} returned; {hidden_name} hidden by type/name; "
-            f"{hidden_probe} hidden by chat probe; {selectable} selectable."
-        )
-    ]
-    if alias_changes:
-        lines.append(
-            f"Alias note: {len(alias_changes)} model IDs will be saved with provider prefix: "
-            f"{_format_alias_preview(alias_changes)}."
-        )
-    return lines
-
-
-def _first_provider_chat_model(pname: str) -> str:
-    for alias, cfg in MODELS.items():
-        if cfg.get("provider") != pname:
-            continue
-        model_id = str(cfg.get("id") or alias)
-        if _model_is_chat_candidate(model_id):
-            return model_id
-    return ""
-
-
-def _model_rejection_reason(response_text: str) -> str:
-    text = response_text.lower()
-    if any(marker in text for marker in _UNSUPPORTED_MODEL_MARKERS):
-        return "unsupported"
-    return ""
-
-
-async def _probe_openai_chat_model(client, endpoint: str, api_key: str, model_id: str) -> tuple[bool, str]:
-    payload = {
-        "model": model_id,
-        "max_tokens": 1,
-        "messages": [{"role": "user", "content": "hi"}],
-    }
-    headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
-    try:
-        resp = await client.post(endpoint, json=payload, headers=headers)
-    except Exception as e:
-        return False, str(e)[:80]
-    if 200 <= resp.status_code < 300:
-        return True, ""
-    reason = _model_rejection_reason(resp.text)
-    if reason:
-        return False, reason
-    if resp.status_code in (400, 401, 403):
-        return True, ""
-    return False, f"HTTP {resp.status_code}"
-
-
-async def _filter_supported_chat_models(
-    base_url: str,
-    api_key: str,
-    candidates: list[tuple[str, dict]],
-    api_format: str = "openai",
-) -> tuple[list[tuple[str, dict]], int]:
-    if api_format == "anthropic" or not candidates:
-        return candidates, 0
-
-    import httpx
-    endpoint = _normalize_base_url(base_url, api_format)
-    sem = asyncio.Semaphore(8)
-
-    async def probe(entry: tuple[str, dict]) -> tuple[bool, tuple[str, dict]]:
-        mid, _cfg = entry
-        async with sem:
-            ok, _reason = await _probe_openai_chat_model(client, endpoint, api_key, mid)
-        return ok, entry
-
-    async with httpx.AsyncClient(timeout=8) as client:
-        results = await asyncio.gather(*(probe(entry) for entry in candidates))
-
-    supported = [entry for ok, entry in results if ok]
-    return supported, len(candidates) - len(supported)
-
-
-async def _test_connection(
-    base_url: str,
-    api_key: str,
-    api_format: str,
-    model_id: str,
-) -> tuple[bool, str, int]:
-    import httpx
-    t0 = time.monotonic()
-    if not api_key:
-        return False, "API key is not configured.", 0
-    if not model_id:
-        return False, "No chat models loaded. Use Fetch / Sync Models first.", 0
-    endpoint = _normalize_base_url(base_url, api_format)
-    try:
-        if api_format == "anthropic":
-            payload = {"model": model_id, "max_tokens": 1,
-                       "messages": [{"role": "user", "content": "hi"}]}
-            headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01",
-                       "content-type": "application/json"}
-        else:
-            payload = {"model": model_id, "max_tokens": 1,
-                       "messages": [{"role": "user", "content": "hi"}]}
-            headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(endpoint, json=payload, headers=headers)
-        ms = int((time.monotonic() - t0) * 1000)
-        return _connection_result_from_response(resp, ms)
-    except httpx.TimeoutException:
-        return (
-            False,
-            "Connection timeout: provider did not respond within 10s.",
-            int((time.monotonic() - t0) * 1000),
-        )
-    except httpx.HTTPError as e:
-        return False, format_transport_error(e), int((time.monotonic() - t0) * 1000)
-    except Exception as e:
-        return False, format_transport_error(e), int((time.monotonic() - t0) * 1000)
-
-async def _fetch_models(
-    base_url: str,
-    api_key: str,
-    api_format: str = "openai",
-) -> tuple[list[tuple[str, dict]], str, dict]:
-    import httpx
-    models_url = models_url_from_base_url(base_url)
-    all_data: list = []
-    stats = {"returned": 0, "hidden_by_name": 0, "hidden_by_probe": 0, "selectable": 0}
-    url = f"{models_url}?limit=200"
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            while url:
-                resp = await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
-                try:
-                    resp.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    return [], format_http_error(e.response.status_code, e.response.text), stats
-                body = resp.json()
-                all_data.extend(body.get("data", []))
-                if not body.get("has_more"):
-                    break
-                cursor = body.get("next_cursor") or body.get("next_page")
-                url = f"{models_url}?limit=200&after={cursor}" if cursor else None
-    except httpx.TimeoutException:
-        return [], "Connection timeout: provider did not return /v1/models within 15s.", stats
-    except httpx.HTTPError as e:
-        return [], format_transport_error(e), stats
-    except Exception as e:
-        return [], format_transport_error(e), stats
-    stats["returned"] = len(all_data)
-    candidates = []
-    for item in all_data:
-        mid = item.get("id", "")
-        if not mid or not _model_is_chat_candidate(mid):
-            stats["hidden_by_name"] += 1
-            continue
-        ml = mid.lower()
-        vision    = any(k in ml for k in ("vision", "vl", "visual"))
-        reasoning = any(k in ml for k in _REASONING_KEYWORDS)
-        candidates.append((mid, {"id": mid, "provider": "", "desc": "fetched",
-                                  "color": "\033[37m", "vision": vision,
-                                  "reasoning": reasoning}))
-    filtered, removed = await _filter_supported_chat_models(base_url, api_key, candidates, api_format)
-    stats["hidden_by_probe"] = removed
-    stats["selectable"] = len(filtered)
-    if removed:
-        for _mid, cfg in filtered:
-            cfg["desc"] = f"fetched; {removed} unsupported hidden"
-    return filtered, "", stats
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ProviderTUI
@@ -1109,13 +887,13 @@ class ProviderTUI:
                 self._app.invalidate()
             return
         target = not is_provider_active(pname)
-        if set_provider_active(pname, target):
-            self._detail_status = f"✅ Provider is now {'active' if target else 'inactive'}."
+        ok, msg = _runtime_set_active(pname, target)
+        if ok:
+            self._detail_status = f"✅ {msg}"
             self._detail_status_style = "class:success"
         else:
-            self._detail_status = "✗ Failed to update provider active state."
+            self._detail_status = f"✗ {msg}"
             self._detail_status_style = "class:error"
-        load_custom_providers()
         if self._app:
             self._app.layout = self._build_layout()
             self._app.invalidate()

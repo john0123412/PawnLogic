@@ -15,7 +15,7 @@ import main as pawn_main
 import pawnlogic.cli as pawn_cli
 from config import providers as provider_config
 from core.api_errors import format_http_error
-from core import provider_tui
+from core import provider_runtime, provider_tui
 from core.commands import provider as provider_cmd
 
 
@@ -211,10 +211,10 @@ def test_provider_filter_supported_chat_models_removes_unsupported(monkeypatch):
     async def fake_probe(_client, _endpoint, _api_key, model_id):
         return (model_id != "old-model", "unsupported" if model_id == "old-model" else "")
 
-    monkeypatch.setattr(provider_tui, "_probe_openai_chat_model", fake_probe)
+    monkeypatch.setattr(provider_runtime, "probe_openai_chat_model", fake_probe)
 
     supported, removed = asyncio.run(
-        provider_tui._filter_supported_chat_models(
+        provider_runtime.filter_supported_chat_models(
             "https://api.example.com/v1",
             "test-key",
             [
@@ -243,7 +243,7 @@ def test_provider_sync_notice_reports_hidden_and_alias_changes():
 
 def test_provider_first_chat_model_prefers_registered_provider_chat_model(monkeypatch):
     monkeypatch.setattr(
-        provider_tui,
+        provider_runtime,
         "MODELS",
         {
             "gpt-image-2": {"id": "gpt-image-2", "provider": "relay"},
@@ -273,7 +273,7 @@ def test_provider_detail_test_uses_registered_provider_model(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        provider_tui,
+        provider_runtime,
         "MODELS",
         {
             "relay-chat": {"id": "relay-chat-id", "provider": alias},
@@ -318,6 +318,7 @@ def test_provider_detail_test_without_models_does_not_use_fallback_model(monkeyp
         },
     )
     monkeypatch.setattr(provider_tui, "MODELS", {})
+    monkeypatch.setattr(provider_runtime, "MODELS", {})
     called = False
 
     async def fake_test_connection(*_args, **_kwargs):
@@ -502,14 +503,14 @@ def test_provider_tui_toggle_active_updates_provider_state(monkeypatch):
     )
     seen = {}
 
-    def fake_set_provider_active(name, active):
+    def fake_runtime_set_active(name, active):
         seen["name"] = name
         seen["active"] = active
         provider_tui.PROVIDERS[name]["active"] = active
-        return True
+        return True, "Provider is now active."
 
-    monkeypatch.setattr(provider_tui, "set_provider_active", fake_set_provider_active)
-    monkeypatch.setattr(provider_tui, "load_custom_providers", lambda: None)
+    monkeypatch.setattr(provider_tui, "is_provider_active", lambda _name: False)
+    monkeypatch.setattr(provider_tui, "_runtime_set_active", fake_runtime_set_active)
 
     tui._toggle_provider_active(alias)
 
@@ -562,12 +563,8 @@ def test_provider_tui_and_cli_share_http_error_message(monkeypatch, capsys):
     assert ms == 41
     assert tui_message == expected
 
-    import httpx
-
     alias = "pytest_http_error"
     env_key = "PYTEST_HTTP_ERROR_API_KEY"
-    request = httpx.Request("GET", "https://api.example.com/v1/models")
-    http_response = httpx.Response(403, text=body, request=request)
     provider_cmd.PROVIDERS[alias] = {
         "base_url": "https://api.example.com/v1",
         "api_key_env": env_key,
@@ -576,10 +573,10 @@ def test_provider_tui_and_cli_share_http_error_message(monkeypatch, capsys):
     }
     monkeypatch.setenv(env_key, "test-key")
 
-    def fake_fetch_models_paginated(_models_url, _api_key):
-        raise httpx.HTTPStatusError("Forbidden", request=request, response=http_response)
+    async def fake_fetch_models(_base_url, _api_key, _api_format):
+        return [], expected, {"returned": 0, "hidden_by_name": 0, "hidden_by_probe": 0, "selectable": 0}
 
-    monkeypatch.setattr(provider_cmd, "_fetch_models_paginated", fake_fetch_models_paginated)
+    monkeypatch.setattr(provider_cmd, "fetch_models", fake_fetch_models)
 
     try:
         asyncio.run(provider_cmd._provider_fetch(alias))
@@ -841,9 +838,6 @@ def test_provider_fetch_prints_filter_and_alias_summary(monkeypatch, capsys):
     }
     saved = {}
 
-    async def fake_filter(_base_url, _api_key, candidates, _api_format="openai"):
-        return [(mid, cfg) for mid, cfg in candidates if mid != "unsupported-chat"], 1
-
     async def fake_selector(entries):
         return [mid for mid, _cfg in entries]
 
@@ -852,17 +846,17 @@ def test_provider_fetch_prints_filter_and_alias_summary(monkeypatch, capsys):
         saved["models_cfg"] = models_cfg
         saved["replace_models"] = replace_models
 
-    monkeypatch.setattr(
-        provider_cmd,
-        "_fetch_models_paginated",
-        lambda _models_url, _api_key: [
-            {"id": "gpt-5.4-mini"},
-            {"id": "gpt-image-2"},
-            {"id": "unsupported-chat"},
-            {"id": "relay-chat"},
-        ],
-    )
-    monkeypatch.setattr(provider_tui, "_filter_supported_chat_models", fake_filter)
+    async def fake_fetch_models(_base_url, _api_key, _api_format):
+        return (
+            [
+                ("gpt-5.4-mini", {"id": "gpt-5.4-mini", "provider": "", "desc": "fetched"}),
+                ("relay-chat", {"id": "relay-chat", "provider": "", "desc": "fetched"}),
+            ],
+            "",
+            {"returned": 4, "hidden_by_name": 1, "hidden_by_probe": 1, "selectable": 2},
+        )
+
+    monkeypatch.setattr(provider_cmd, "fetch_models", fake_fetch_models)
     monkeypatch.setattr(provider_cmd, "_provider_fetch_selector", fake_selector)
     monkeypatch.setattr(provider_config, "save_custom_provider", fake_save_custom_provider)
     monkeypatch.setattr(provider_config, "load_custom_providers", lambda: None)
@@ -890,13 +884,13 @@ def test_provider_activate_command_updates_active_state(monkeypatch, capsys):
     provider_cmd.PROVIDERS[alias] = {"api_key_env": "PYTEST_ACTIVE_CMD_API_KEY", "active": False}
     seen = {}
 
-    def fake_set_provider_active(name, active):
+    def fake_runtime_set_active(name, active):
         seen["name"] = name
         seen["active"] = active
         provider_cmd.PROVIDERS[name]["active"] = active
-        return True
+        return True, "Provider is now active."
 
-    monkeypatch.setattr(provider_cmd, "set_provider_active", fake_set_provider_active)
+    monkeypatch.setattr(provider_cmd, "runtime_set_active", fake_runtime_set_active)
 
     try:
         asyncio.run(provider_cmd._handle_provider_cmd("activate", alias, SimpleNamespace()))
