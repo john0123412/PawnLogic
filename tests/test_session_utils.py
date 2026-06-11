@@ -617,6 +617,22 @@ def test_usage_and_reasoning_only_response_retries_until_visible_output(monkeypa
     assert s.messages[-1]["content"] == "visible answer"
 
 
+def test_run_turn_prints_api_retry_notice_before_final_output(monkeypatch, capsys):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+
+    monkeypatch.setattr(session_mod, "stream_request", lambda *_args, **_kwargs: iter([
+        {"_retry": "HTTP 502 Bad Gateway: provider gateway failed. Retrying in 0.1s (1/3)."},
+        {"choices": [{"delta": {"content": "visible answer"}}]},
+    ]))
+
+    s.run_turn("retry notice")
+
+    out = capsys.readouterr().out
+    assert "HTTP 502" in out
+    assert "Retrying" in out
+    assert "visible answer" in out
+
+
 def test_run_turn_accepts_message_content_in_stream_choice(monkeypatch):
     s, session_mod = _prepare_run_turn_session(monkeypatch)
 

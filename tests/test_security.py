@@ -29,6 +29,7 @@ from config.security import (  # noqa: E402
     WRITE_BLACKLIST,
     scrub_sensitive_env,
     smart_truncate,
+    user_friendly_error,
 )
 
 
@@ -144,3 +145,18 @@ def test_scrub_sensitive_env_removes_credentials():
     assert scrubbed["NORMAL_VALUE"] == "ok"
     assert "OPENAI_API_KEY" not in scrubbed
     assert "CUSTOM_TOKEN" not in scrubbed
+
+
+def test_user_friendly_error_preserves_http_status_details():
+    msg = user_friendly_error('HTTP 403: {"error":{"message":"invalid api key"}}')
+
+    assert "HTTP 403" in msg
+    assert "API key" in msg
+    assert "Operation failed" not in msg
+
+
+def test_user_friendly_error_explains_provider_5xx():
+    msg = user_friendly_error("HTTP 502: bad gateway")
+
+    assert "HTTP 502" in msg
+    assert "provider" in msg.lower() or "gateway" in msg.lower()

@@ -106,8 +106,8 @@ _CIRCUIT_BREAKERS: dict[str, dict] = {}
 #              "failures": int, "opened_at": float}
 _CB_TRIP_AT   = 3      # Consecutive failures before opening the circuit.
 _CB_RESET_SEC = 30     # Seconds from OPEN to HALF_OPEN.
-_RETRY_MAX    = 3      # Maximum retry attempts.
-_RETRY_CODES  = {429, 502, 503}  # HTTP status codes that trigger backoff.
+_RETRY_MAX    = 3      # Maximum request attempts, including the first attempt.
+_RETRY_CODES  = {429, 500, 502, 503, 504}  # HTTP status codes that trigger backoff.
 
 
 def _cb_get(provider: str) -> dict:
@@ -153,8 +153,109 @@ def _cb_allow(provider: str) -> bool:
         return True
 
 # ── per-read / connect timeout ────────────────────────────
-_READ_TIMEOUT = 120   # Max wait per readline(), in seconds.
-_CONN_TIMEOUT = 40    # TCP handshake + proxy CONNECT timeout, in seconds.
+
+def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(max_value, value))
+
+
+_READ_TIMEOUT = _env_int("PAWNLOGIC_API_READ_TIMEOUT", 60, 5, 300)
+_CONN_TIMEOUT = _env_int("PAWNLOGIC_API_CONNECT_TIMEOUT", 20, 3, 120)
+_NONSTREAM_TIMEOUT = _env_int("PAWNLOGIC_API_NONSTREAM_TIMEOUT", 60, 5, 300)
+_RETRY_AFTER_MAX = 10
+
+_HTTP_STATUS_HINTS: dict[int, tuple[str, str]] = {
+    400: ("Bad Request", "provider rejected the request; check model ID, base URL, and request format."),
+    401: ("Unauthorized", "API key is missing or invalid; reconfigure it with /setkey."),
+    403: ("Forbidden", "API key was rejected or lacks access to this model/provider."),
+    404: ("Not Found", "endpoint or model was not found; check the provider Base URL and model ID."),
+    408: ("Request Timeout", "provider timed out before sending a response."),
+    409: ("Conflict", "provider rejected the request state; retry later or switch model."),
+    422: ("Unprocessable Entity", "provider rejected the payload; check model and parameter compatibility."),
+    429: ("Rate Limited", "provider rate limit or quota was hit; wait before retrying."),
+    500: ("Internal Server Error", "provider failed internally; retry later or switch provider."),
+    502: ("Bad Gateway", "provider gateway or upstream model service failed."),
+    503: ("Service Unavailable", "provider is overloaded or temporarily unavailable."),
+    504: ("Gateway Timeout", "provider gateway timed out waiting for the model service."),
+}
+
+
+def _response_excerpt(body: bytes | str, limit: int = 240) -> str:
+    if isinstance(body, bytes):
+        text = body.decode("utf-8", errors="replace")
+    else:
+        text = str(body or "")
+
+    text = text.strip()
+    if not text:
+        return ""
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return " ".join(text.split())[:limit]
+
+    if isinstance(parsed, dict):
+        err = parsed.get("error")
+        if isinstance(err, dict):
+            parts = [
+                str(err.get(k, "")).strip()
+                for k in ("message", "type", "code")
+                if err.get(k)
+            ]
+            if parts:
+                return " | ".join(parts)[:limit]
+        for key in ("message", "detail", "error"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:limit]
+    return " ".join(text.split())[:limit]
+
+
+def _format_http_error(status: int, body: bytes | str = b"") -> str:
+    label, hint = _HTTP_STATUS_HINTS.get(
+        status,
+        (http.client.responses.get(status, "HTTP Error"), "provider returned an error."),
+    )
+    msg = f"HTTP {status} {label}: {hint}"
+    excerpt = _response_excerpt(body)
+    if excerpt:
+        msg += f" Response: {excerpt}"
+    return msg
+
+
+def _format_transport_error(exc: BaseException, *, proxy: str | None = None) -> str:
+    hint = " Check network, proxy settings, and provider Base URL."
+    if isinstance(exc, socket.gaierror):
+        return f"DNS resolution failed: {exc}.{hint}"
+    if isinstance(exc, TimeoutError):
+        return f"Connection timeout ({_CONN_TIMEOUT}s): provider did not respond in time.{hint}"
+    if isinstance(exc, ConnectionRefusedError):
+        proxy_hint = f" Is proxy {proxy} running?" if proxy else ""
+        return f"Connection refused.{proxy_hint}{hint}"
+    if isinstance(exc, ConnectionResetError):
+        return f"Connection reset by provider.{hint}"
+    if isinstance(exc, BrokenPipeError):
+        return f"Connection closed while sending request.{hint}"
+    if isinstance(exc, OSError):
+        return f"Network error ({type(exc).__name__}): {exc}.{hint}"
+    return f"Connection failed ({type(exc).__name__}): {exc}.{hint}"
+
+
+def _retry_delay(attempt: int, retry_after: str | None = None) -> float:
+    if retry_after:
+        try:
+            return min(max(float(retry_after), 0.0), _RETRY_AFTER_MAX)
+        except ValueError:
+            pass
+    return float(min(2 ** (attempt + 1), 8))
+
+
+def _retry_notice(message: str, attempt: int, delay: float) -> str:
+    return f"{message} Retrying in {delay:g}s ({attempt + 1}/{_RETRY_MAX})."
 
 # ════════════════════════════════════════════════════════
 # Proxy detection.
@@ -193,10 +294,15 @@ def _open_connection(
     if parsed.query:
         path += "?" + parsed.query
 
+    if parsed.scheme not in ("http", "https") or not target_host:
+        raise ConnectionError(f"Invalid provider Base URL: {target_url!r}")
+
     if proxy_url:
         prx      = urlparse(proxy_url)
         prx_host = prx.hostname
         prx_port = prx.port or 8080
+        if not prx_host:
+            raise ConnectionError(f"Invalid proxy URL: {proxy_url!r}")
 
         # Step 1: TCP connect to proxy.
         raw_sock = socket.create_connection((prx_host, prx_port), timeout=timeout)
@@ -599,11 +705,6 @@ def stream_request(
             yield {"_error": f"circuit open: {provider} (consecutive failures; paused {_CB_RESET_SEC}s)"}
             return
 
-        # Exponential backoff; no wait on the first attempt.
-        if attempt > 0:
-            wait = min(2 ** attempt + (time.monotonic() % 1), 30)
-            time.sleep(wait)
-
         conn: http.client.HTTPConnection | None = None
         try:
             conn, path = _open_connection(base_url, proxy, timeout=_CONN_TIMEOUT)
@@ -629,19 +730,21 @@ def stream_request(
             # HTTP status codes that should be retried.
             if resp.status in _RETRY_CODES:
                 _cb_record_failure(provider)
+                err_body = resp.read(600)
+                err_msg = _format_http_error(resp.status, err_body)
+                if attempt >= _RETRY_MAX - 1:
+                    yield {"_error": err_msg}
+                    return
                 retry_after = resp.headers.get("Retry-After")
-                if retry_after:
-                    try:
-                        time.sleep(min(float(retry_after), 60))
-                    except ValueError:
-                        pass
-                resp.read(200)
+                delay = _retry_delay(attempt, retry_after)
+                yield {"_retry": _retry_notice(err_msg, attempt, delay)}
+                time.sleep(delay)
                 continue
 
             if resp.status != 200:
                 _cb_record_failure(provider)
-                err_body = resp.read(600).decode("utf-8", errors="replace")
-                yield {"_error": f"HTTP {resp.status}: {err_body}"}
+                err_body = resp.read(600)
+                yield {"_error": _format_http_error(resp.status, err_body)}
                 return
 
             # Connection established; reset circuit breaker.
@@ -659,7 +762,12 @@ def stream_request(
                     try:
                         raw_line = resp.readline()
                     except socket.timeout:
-                        yield {"_error": f"Read timeout ({_READ_TIMEOUT}s); check proxy/network"}
+                        yield {
+                            "_error": (
+                                f"Read timeout ({_READ_TIMEOUT}s): provider stopped sending stream data. "
+                                "Check network, proxy settings, or switch provider."
+                            )
+                        }
                         return
                     except (BrokenPipeError, ConnectionResetError) as e:
                         if partial_text:
@@ -668,8 +776,12 @@ def stream_request(
                         else:
                             _cb_record_failure(provider)
                             if attempt < _RETRY_MAX - 1:
+                                err_msg = _format_transport_error(e, proxy=proxy)
+                                delay = _retry_delay(attempt)
+                                yield {"_retry": _retry_notice(err_msg, attempt, delay)}
+                                time.sleep(delay)
                                 break
-                            yield {"_error": f"Connection dropped: {e}"}
+                            yield {"_error": _format_transport_error(e, proxy=proxy)}
                         return
 
                     if not raw_line:
@@ -704,7 +816,12 @@ def stream_request(
                     try:
                         raw_line = resp.readline()
                     except socket.timeout:
-                        yield {"_error": f"Read timeout ({_READ_TIMEOUT}s); check proxy/network"}
+                        yield {
+                            "_error": (
+                                f"Read timeout ({_READ_TIMEOUT}s): provider stopped sending stream data. "
+                                "Check network, proxy settings, or switch provider."
+                            )
+                        }
                         return
                     except (BrokenPipeError, ConnectionResetError) as e:
                         if partial_text:
@@ -713,8 +830,12 @@ def stream_request(
                         else:
                             _cb_record_failure(provider)
                             if attempt < _RETRY_MAX - 1:
+                                err_msg = _format_transport_error(e, proxy=proxy)
+                                delay = _retry_delay(attempt)
+                                yield {"_retry": _retry_notice(err_msg, attempt, delay)}
+                                time.sleep(delay)
                                 break
-                            yield {"_error": f"Connection dropped: {e}"}
+                            yield {"_error": _format_transport_error(e, proxy=proxy)}
                         return
 
                     if not raw_line:
@@ -743,27 +864,41 @@ def stream_request(
 
         except socket.timeout:
             _cb_record_failure(provider)
+            err_msg = _format_transport_error(
+                TimeoutError(
+                    f"no response within {_CONN_TIMEOUT}s connection/header timeout"
+                ),
+                proxy=proxy,
+            )
             if attempt < _RETRY_MAX - 1:
+                delay = _retry_delay(attempt)
+                yield {"_retry": _retry_notice(err_msg, attempt, delay)}
+                time.sleep(delay)
                 continue
-            yield {"_error": f"Connection timeout ({_CONN_TIMEOUT}s); check proxy address"}
-        except ConnectionRefusedError:
+            yield {"_error": err_msg}
+        except ConnectionRefusedError as e:
             _cb_record_failure(provider)
-            if attempt < _RETRY_MAX - 1:
-                continue
-            hint = f" (is proxy {proxy} running?)" if proxy else ""
-            yield {"_error": f"Connection refused{hint}"}
+            yield {"_error": _format_transport_error(e, proxy=proxy)}
         except ssl.SSLError as e:
             yield {"_error": f"SSL error: {e}"}
             return
         except ConnectionError as e:
             _cb_record_failure(provider)
-            if attempt < _RETRY_MAX - 1:
-                continue
             yield {"_error": str(e)}
+            return
+        except OSError as e:
+            _cb_record_failure(provider)
+            err_msg = _format_transport_error(e, proxy=proxy)
+            if attempt < _RETRY_MAX - 1:
+                delay = _retry_delay(attempt)
+                yield {"_retry": _retry_notice(err_msg, attempt, delay)}
+                time.sleep(delay)
+                continue
+            yield {"_error": err_msg}
         except KeyboardInterrupt:
             raise  # Propagate cleanly; finally handles conn cleanup.
         except Exception as e:
-            yield {"_error": str(e)}
+            yield {"_error": _format_transport_error(e, proxy=proxy)}
             return
         finally:
             if conn:
@@ -847,7 +982,7 @@ def call_once(
     conn: http.client.HTTPConnection | None = None
 
     try:
-        conn, path = _open_connection(base_url, proxy, timeout=60)
+        conn, path = _open_connection(base_url, proxy, timeout=_CONN_TIMEOUT)
 
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         if api_fmt == "anthropic":
@@ -860,13 +995,13 @@ def call_once(
             }
         conn.request("POST", path, body=body, headers=hdrs)
         if conn.sock:
-            conn.sock.settimeout(90)
+            conn.sock.settimeout(_NONSTREAM_TIMEOUT)
 
         resp = conn.getresponse()
         raw  = resp.read()
 
         if resp.status != 200:
-            return "", f"HTTP {resp.status}: {raw[:300].decode('utf-8', errors='replace')}"
+            return "", _format_http_error(resp.status, raw[:600])
 
         if api_fmt == "anthropic":
             return _anthropic_parse_response(raw)
@@ -874,9 +1009,16 @@ def call_once(
             return _parse_openai_nonstream_text(raw)
 
     except socket.timeout:
-        return "", "Non-streaming call timed out"
+        return "", (
+            f"Request timeout ({_NONSTREAM_TIMEOUT}s): provider did not finish "
+            "the non-streaming response. Check network/proxy or switch provider."
+        )
+    except ssl.SSLError as e:
+        return "", f"SSL error: {e}"
+    except (ConnectionError, OSError) as e:
+        return "", _format_transport_error(e, proxy=proxy)
     except Exception as e:
-        return "", str(e)
+        return "", _format_transport_error(e, proxy=proxy)
     finally:
         if conn:
             try: conn.close()

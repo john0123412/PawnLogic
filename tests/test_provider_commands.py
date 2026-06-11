@@ -541,7 +541,8 @@ def test_provider_tui_connection_reports_http_400_body_when_json_invalid():
 
     assert ok is False
     assert ms == 34
-    assert message.startswith('HTTP 400: {"error":"bad request"}')
+    assert "HTTP 400" in message
+    assert "bad request" in message
     assert "Extra data" not in message
 
 

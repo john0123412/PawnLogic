@@ -250,6 +250,10 @@ def test_api_client_sse_sanitizer_and_circuit_breaker(monkeypatch):
     _drop_project_modules("core.api_client", force=True)
     from core import api_client
 
+    assert "HTTP 403" in api_client._format_http_error(403, b'{"error":"bad key"}')
+    assert "API key" in api_client._format_http_error(403, b'{"error":"bad key"}')
+    assert "HTTP 502" in api_client._format_http_error(502, b"bad gateway")
+
     parsed = api_client.parse_sse_delta(
         '{"choices":[{"delta":{"content":"hello"},"finish_reason":null,}],}'
     )
@@ -298,6 +302,69 @@ def test_api_client_stream_request_respects_pending_interrupt(monkeypatch):
             next(api_client.stream_request([{"role": "user", "content": "x"}], "ds-v4-flash"))
     finally:
         interrupts.clear_interrupt()
+
+
+def test_api_client_stream_request_yields_retry_notice_for_retryable_http(monkeypatch):
+    _drop_project_modules("config")
+    _drop_project_modules("core.api_client", force=True)
+    from core import api_client
+
+    class FakeSocket:
+        def settimeout(self, _timeout):
+            pass
+
+    class FakeResponse:
+        def __init__(self, status, body=b"", lines=None):
+            self.status = status
+            self._body = body
+            self.headers = {}
+            self._lines = list(lines or [])
+
+        def read(self, _limit=-1):
+            return self._body
+
+        def readline(self):
+            if self._lines:
+                return self._lines.pop(0)
+            return b""
+
+    class FakeConn:
+        def __init__(self, response):
+            self.response = response
+            self.sock = FakeSocket()
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return self.response
+
+        def close(self):
+            pass
+
+    responses = [
+        FakeResponse(502, b'{"error":{"message":"upstream unavailable"}}'),
+        FakeResponse(
+            200,
+            lines=[
+                b'data: {"choices":[{"delta":{"content":"ok"}}]}\r\n',
+                b"data: [DONE]\r\n",
+            ],
+        ),
+    ]
+
+    monkeypatch.setattr(
+        api_client,
+        "_open_connection",
+        lambda *_args, **_kwargs: (FakeConn(responses.pop(0)), "/v1/chat/completions"),
+    )
+    monkeypatch.setattr(api_client.time, "sleep", lambda _seconds: None)
+
+    events = list(api_client.stream_request([{"role": "user", "content": "hi"}], "ds-v4-flash"))
+
+    assert events[0]["_retry"].startswith("HTTP 502")
+    assert "Retrying" in events[0]["_retry"]
+    assert events[1]["choices"][0]["delta"]["content"] == "ok"
 
 
 def test_interrupt_state_is_thread_local(monkeypatch):

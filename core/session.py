@@ -2028,6 +2028,19 @@ class AgentSession:
                             tools_schema=current_tools,
                             max_tokens=current_max_tokens,
                         ):
+                            if "_retry" in delta:
+                                _spinner.stop()
+                                _retry_detail = delta["_retry"]
+                                if _user_mode():
+                                    print(c(YELLOW, f"\n  {user_friendly_error(_retry_detail)}"))
+                                else:
+                                    print(c(YELLOW, f"\nAPI retry: {_retry_detail}"))
+                                logger.warning(
+                                    "API stream retry | model={} session={} iteration={} detail={}",
+                                    self.model_alias, self.session_id[:8], iteration, _retry_detail,
+                                )
+                                continue
+
                             if "_error" in delta:
                                 _spinner.stop()
                                 _err_detail = delta["_error"]

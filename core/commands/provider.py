@@ -81,6 +81,29 @@ _PAWNLOGIC_DIR = PAWNLOGIC_HOME
 _ENV_PATH = _PAWNLOGIC_DIR / ".env"
 
 
+def _provider_http_error(status: int, text: str) -> str:
+    try:
+        from core.api_client import _format_http_error
+        msg = _format_http_error(status, text)
+        if isinstance(msg, str):
+            return msg
+    except Exception:
+        pass
+    excerpt = " ".join(str(text or "").split())[:160]
+    return f"HTTP {status}: {excerpt}" if excerpt else f"HTTP {status}"
+
+
+def _provider_transport_error(exc: BaseException) -> str:
+    try:
+        from core.api_client import _format_transport_error
+        msg = _format_transport_error(exc)
+        if isinstance(msg, str):
+            return msg
+    except Exception:
+        pass
+    return str(exc)[:160]
+
+
 # ════════════════════════════════════════════════════════
 # Key wizard
 # ════════════════════════════════════════════════════════
@@ -627,7 +650,15 @@ async def _provider_fetch(alias: str) -> None:
     try:
         data = _fetch_models_paginated(models_url, api_key)
     except Exception as e:
-        print(c(RED, f"  ✗ Request failed: {e}"))
+        try:
+            import httpx
+            if isinstance(e, httpx.HTTPStatusError):
+                msg = _provider_http_error(e.response.status_code, e.response.text)
+            else:
+                msg = _provider_transport_error(e)
+        except Exception:
+            msg = str(e)
+        print(c(RED, f"  ✗ Request failed: {msg}"))
         return
 
     candidates: list[tuple[str, dict]] = []
