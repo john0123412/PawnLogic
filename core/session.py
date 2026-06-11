@@ -43,6 +43,7 @@ from config import (
 from utils.ansi import c, BOLD, DIM, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
 from core.api_client import stream_request, ensure_tool_call_id
 from core.state import state as _runtime_state
+from core.turn_api import TurnApiResult, consume_model_stream
 from core.memory import (
     init_db, _gen_id, search_knowledge, format_knowledge_for_prompt,
     update_session_naming,
@@ -1759,6 +1760,164 @@ class AgentSession:
 
         return results
 
+    def _record_turn_usage(self, usage: dict[str, int]) -> None:
+        pt = usage.get("prompt_tokens", 0)
+        ct = usage.get("completion_tokens", 0)
+        self._turn_prompt_tokens     += pt
+        self._turn_completion_tokens += ct
+        self.total_prompt_tokens     += pt
+        self.total_completion_tokens += ct
+
+    def _consume_api_stream_attempt(
+        self,
+        api_msgs: list,
+        current_tools: list | None,
+        current_max_tokens: int,
+        renderer: _PlanRenderer,
+        iteration: int,
+    ) -> TurnApiResult:
+        reasoning_printed = False
+        spinner = _ThinkingSpinner(_user_mode())
+        spinner.start()
+
+        def on_api_retry(retry_detail: str) -> None:
+            spinner.stop()
+            if _user_mode():
+                print(c(YELLOW, f"\n  {user_friendly_error(retry_detail)}"))
+            else:
+                print(c(YELLOW, f"\nAPI retry: {retry_detail}"))
+            logger.warning(
+                "API stream retry | model={} session={} iteration={} detail={}",
+                self.model_alias, self.session_id[:8], iteration, retry_detail,
+            )
+
+        def on_api_error(err_detail: str) -> None:
+            spinner.stop()
+            if _user_mode():
+                print(c(RED, f"\n  {user_friendly_error(err_detail)}"))
+            else:
+                print(c(RED, f"\nAPI Error: {err_detail}"))
+            logger.error(
+                "API stream error | model={} session={} iteration={} raw_error={}",
+                self.model_alias, self.session_id[:8], iteration, err_detail,
+            )
+
+        def on_reasoning_chunk(r_chunk: str) -> None:
+            nonlocal reasoning_printed
+            if not _debug_mode():
+                return
+            spinner.stop()
+            if not reasoning_printed:
+                sys.stdout.write(c(GRAY + DIM, "\n  🧠 [thinking] "))
+                reasoning_printed = True
+            sys.stdout.write(c(GRAY + DIM, r_chunk))
+            sys.stdout.flush()
+
+        def on_content_chunk(chunk: str) -> None:
+            nonlocal reasoning_printed
+            spinner.stop()
+            # Add a newline when switching from thinking to normal output.
+            if reasoning_printed and _debug_mode():
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                reasoning_printed = False
+            printable = renderer.feed(chunk)
+            if printable:
+                sys.stdout.write(printable)
+                sys.stdout.flush()
+
+        try:
+            result = consume_model_stream(
+                stream_request(
+                    api_msgs, self.model_alias,
+                    tools_schema=current_tools,
+                    max_tokens=current_max_tokens,
+                ),
+                ensure_tool_call_id=ensure_tool_call_id,
+                iteration=iteration,
+                on_retry=on_api_retry,
+                on_error=on_api_error,
+                on_reasoning=on_reasoning_chunk,
+                on_content=on_content_chunk,
+                on_tool_delta=spinner.stop,
+            )
+        finally:
+            spinner.stop()
+
+        self._record_turn_usage(result.usage)
+        return result
+
+    def _finalize_api_stream_result(
+        self,
+        result: TurnApiResult,
+        renderer: _PlanRenderer,
+        iteration: int,
+    ) -> tuple[str, dict, str]:
+        text_buf = result.text
+        tc_buf = result.tool_calls
+        reasoning_buf = result.reasoning
+
+        leftover = renderer.flush()
+
+        # P7: raw tool_call argument logging for driver escaping diagnostics.
+        if tc_buf and _debug_mode():
+            for idx, tc in tc_buf.items():
+                raw_name = tc["name"]
+                raw_args = tc["args"]
+                logger.debug(
+                    "RAW tool_call | session={} iter={} idx={} "
+                    "name={!r} args_preview={!r}",
+                    self.session_id[:8], iteration, idx,
+                    raw_name, raw_args[:200],
+                )
+
+        # P2: rich Markdown rendering for non-plan text.
+        if leftover:
+            try:
+                from pawnlogic.cli import render_agent_output
+                render_agent_output(leftover)
+            except (ImportError, Exception):
+                sys.stdout.write(leftover)
+                sys.stdout.flush()
+        print()
+
+        # Hybrid v2 parser: XML first, JSON fallback.
+        if not tc_buf and (
+            '<call name="' in text_buf or "<tool_call>" in text_buf
+        ):
+            extracted = self._extract_calls(text_buf)
+            for i, call in enumerate(extracted):
+                source = call["_source"]
+                call_id = (
+                    f"call_xml_{iteration}_{i}"
+                    if source == "xml"
+                    else f"call_fallback_{iteration}_{i}"
+                )
+                tc_buf[i] = {
+                    "id":           call_id,
+                    "name":         call["name"],
+                    "args":         json.dumps(call["args"], ensure_ascii=False),
+                    "_args_parsed": call["args"],
+                }
+                label = "XML" if source == "xml" else "JSON"
+                if _debug_mode():
+                    print(c(GRAY,
+                        f"  ⚙ [Hybrid Parser/{label}] Intercepted tool call: {call['name']} "
+                        f"(params: {list(call['args'].keys())})"
+                    ))
+                logger.info(
+                    "Hybrid Parser/{} intercepted | "
+                    "model={} session={} iteration={} tool={}",
+                    label, self.model_alias, self.session_id[:8],
+                    iteration, call["name"],
+                )
+            import re as _re
+            trim = _re.search(r'<call\s+name="|<tool_call>', text_buf)
+            if trim and extracted:
+                text_buf = text_buf[:trim.start()]
+
+        return text_buf, tc_buf, reasoning_buf
+
     # Main turn loop.
     def run_turn(self, user_input: str):
         self._reset_system_prompt(knowledge_query=user_input)
@@ -2012,170 +2171,15 @@ class AgentSession:
                 _api_msgs = self._build_api_messages()
 
                 while True:
-                    text_buf = ""; tc_buf = {}
-                    # thinking-mode fix: accumulate reasoning_content separately.
-                    # Some reasoning models return reasoning_content deltas that must
-                    # be preserved and sent back as-is, or they may return HTTP 400.
-                    # Hide it in user mode; stream it in gray in debug mode.
-                    reasoning_buf = ""
-                    _reasoning_printed = False   # Whether the "🧠 [thinking]" prefix was printed.
-                    _spinner = _ThinkingSpinner(_user_mode())
-                    _spinner.start()
+                    _api_result = self._consume_api_stream_attempt(
+                        _api_msgs, current_tools, current_max_tokens, renderer, iteration
+                    )
+                    if _api_result.error:
+                        self.messages.pop(); return
 
-                    try:
-                        for delta in stream_request(
-                            _api_msgs, self.model_alias,
-                            tools_schema=current_tools,
-                            max_tokens=current_max_tokens,
-                        ):
-                            if "_retry" in delta:
-                                _spinner.stop()
-                                _retry_detail = delta["_retry"]
-                                if _user_mode():
-                                    print(c(YELLOW, f"\n  {user_friendly_error(_retry_detail)}"))
-                                else:
-                                    print(c(YELLOW, f"\nAPI retry: {_retry_detail}"))
-                                logger.warning(
-                                    "API stream retry | model={} session={} iteration={} detail={}",
-                                    self.model_alias, self.session_id[:8], iteration, _retry_detail,
-                                )
-                                continue
-
-                            if "_error" in delta:
-                                _spinner.stop()
-                                _err_detail = delta["_error"]
-                                if _user_mode():
-                                    print(c(RED, f"\n  {user_friendly_error(_err_detail)}"))
-                                else:
-                                    print(c(RED, f"\nAPI Error: {_err_detail}"))
-                                logger.error(
-                                    "API stream error | model={} session={} iteration={} raw_error={}",
-                                    self.model_alias, self.session_id[:8], iteration, _err_detail,
-                                )
-                                self.messages.pop(); return
-
-                            choices = delta.get("choices", [])
-                            if not choices:
-                                if "_usage" in delta:
-                                    u  = delta["_usage"]
-                                    pt = u.get("prompt_tokens", 0) or u.get("input_tokens", 0)
-                                    ct = u.get("completion_tokens", 0) or u.get("output_tokens", 0)
-                                    self._turn_prompt_tokens     += pt
-                                    self._turn_completion_tokens += ct
-                                    self.total_prompt_tokens     += pt
-                                    self.total_completion_tokens += ct
-                                continue
-                            choice = choices[0]
-                            d     = choice.get("delta") or choice.get("message") or {}
-                            chunk = d.get("content") or ""
-
-                            # thinking-mode: capture reasoning_content deltas.
-                            r_chunk = d.get("reasoning_content") or ""
-                            if r_chunk:
-                                reasoning_buf += r_chunk
-                                # Stream only in debug mode, not user mode.
-                                if _debug_mode():
-                                    _spinner.stop()
-                                    if not _reasoning_printed:
-                                        sys.stdout.write(c(GRAY + DIM, "\n  🧠 [thinking] "))
-                                        _reasoning_printed = True
-                                    sys.stdout.write(c(GRAY + DIM, r_chunk))
-                                    sys.stdout.flush()
-
-                            # ── Usage accounting (_usage injected by api_client) ──
-                            if "_usage" in delta:
-                                u  = delta["_usage"]
-                                pt = u.get("prompt_tokens", 0) or u.get("input_tokens", 0)
-                                ct = u.get("completion_tokens", 0) or u.get("output_tokens", 0)
-                                self._turn_prompt_tokens     += pt
-                                self._turn_completion_tokens += ct
-                                self.total_prompt_tokens     += pt
-                                self.total_completion_tokens += ct
-
-                            if chunk:
-                                _spinner.stop()
-                                # Add a newline when switching from thinking to normal output.
-                                if _reasoning_printed and _debug_mode():
-                                    sys.stdout.write("\n")
-                                    sys.stdout.flush()
-                                    _reasoning_printed = False   # Only newline once.
-                                printable = renderer.feed(chunk)
-                                if printable: sys.stdout.write(printable); sys.stdout.flush()
-                                text_buf += chunk
-
-                            for tcd in (d.get("tool_calls") or []):
-                                _spinner.stop()
-                                idx = tcd.get("index", 0)
-                                if idx not in tc_buf:
-                                    tc_buf[idx] = {
-                                        "id": ensure_tool_call_id(tcd, iteration, idx),
-                                        "name": "", "args": "",
-                                    }
-                                fn = tcd.get("function", {})
-                                tc_buf[idx]["name"] += fn.get("name") or ""
-                                tc_buf[idx]["args"] += fn.get("arguments") or ""
-                    finally:
-                        _spinner.stop()
-
-                    leftover = renderer.flush()
-
-                    # P7: raw tool_call argument logging for driver escaping diagnostics.
-                    if tc_buf and _debug_mode():
-                        for _idx, _tc in tc_buf.items():
-                            _raw_name = _tc["name"]
-                            _raw_args = _tc["args"]
-                            logger.debug(
-                                "RAW tool_call | session={} iter={} idx={} "
-                                "name={!r} args_preview={!r}",
-                                self.session_id[:8], iteration, _idx,
-                                _raw_name, _raw_args[:200],
-                            )
-
-                    # P2: rich Markdown rendering for non-plan text.
-                    if leftover:
-                        try:
-                            from pawnlogic.cli import render_agent_output
-                            render_agent_output(leftover)
-                        except (ImportError, Exception):
-                            sys.stdout.write(leftover)
-                            sys.stdout.flush()
-                    print()
-
-                    # Hybrid v2 parser: XML first, JSON fallback.
-                    if not tc_buf and (
-                        '<call name="' in text_buf or "<tool_call>" in text_buf
-                    ):
-                        extracted = self._extract_calls(text_buf)
-                        for i, call in enumerate(extracted):
-                            source = call["_source"]
-                            call_id = (
-                                f"call_xml_{iteration}_{i}"
-                                if source == "xml"
-                                else f"call_fallback_{iteration}_{i}"
-                            )
-                            tc_buf[i] = {
-                                "id":           call_id,
-                                "name":         call["name"],
-                                "args":         json.dumps(call["args"], ensure_ascii=False),
-                                "_args_parsed": call["args"],
-                            }
-                            label = "XML" if source == "xml" else "JSON"
-                            if _debug_mode():
-                                print(c(GRAY,
-                                    f"  ⚙ [Hybrid Parser/{label}] Intercepted tool call: {call['name']} "
-                                    f"(params: {list(call['args'].keys())})"
-                                ))
-                            logger.info(
-                                "Hybrid Parser/{} intercepted | "
-                                "model={} session={} iteration={} tool={}",
-                                label, self.model_alias, self.session_id[:8],
-                                iteration, call["name"],
-                            )
-                        import re as _re
-                        _trim = _re.search(r'<call\s+name="|<tool_call>', text_buf)
-                        if _trim and extracted:
-                            text_buf = text_buf[:_trim.start()]
-                    # ─────────────────────────────────────────────────────────
+                    text_buf, tc_buf, reasoning_buf = self._finalize_api_stream_result(
+                        _api_result, renderer, iteration
+                    )
 
                     # Empty-response detection with exponential-backoff retry.
                     # Usage-only and hidden reasoning-only deltas are not user-visible

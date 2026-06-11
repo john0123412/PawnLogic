@@ -654,6 +654,21 @@ def test_run_turn_prints_api_retry_notice_before_final_output(monkeypatch, capsy
     assert "visible answer" in out
 
 
+@pytest.mark.parametrize("status", [403, 502])
+def test_run_turn_api_error_terminates_turn_without_hanging(monkeypatch, capsys, status):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+
+    monkeypatch.setattr(session_mod, "stream_request", lambda *_args, **_kwargs: iter([
+        {"_error": f"HTTP {status} provider error"},
+    ]))
+
+    s.run_turn("provider failure")
+
+    out = capsys.readouterr().out
+    assert f"HTTP {status}" in out
+    assert s.messages == [{"role": "system", "content": "sys"}]
+
+
 def test_run_turn_accepts_message_content_in_stream_choice(monkeypatch):
     s, session_mod = _prepare_run_turn_session(monkeypatch)
 
