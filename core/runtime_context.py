@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, MutableMapping
+from typing import Any
 
 
 @dataclass
@@ -26,7 +27,7 @@ class RuntimeContext:
         workspace_dir: str | Path | None = None,
         sink: Any = None,
         dynamic_config: MutableMapping[str, Any] | None = None,
-    ) -> "RuntimeContext":
+    ) -> RuntimeContext:
         """Build a context from the process' current runtime modules."""
         from config import DYNAMIC_CONFIG, WORKSPACE_DIR
         from core.state import state
@@ -59,7 +60,7 @@ class RuntimeContext:
         debug_mode: bool = False,
         user_mode: bool = True,
         dynamic_config: MutableMapping[str, Any] | None = None,
-    ) -> "RuntimeContext":
+    ) -> RuntimeContext:
         """Build an isolated context for unit tests."""
         if sink is None:
             from core.output import HumanSink
