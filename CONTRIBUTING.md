@@ -23,6 +23,39 @@ trap 'rm -rf "$tmp_home"' EXIT
 PAWNLOGIC_HOME="$tmp_home" python -m pytest tests/ -v
 ```
 
+## Developer Code Index
+
+PawnLogic includes a local, developer-only source index for code review and
+agent-assisted edits. It uses Python AST parsing and writes generated JSON to
+`.pawnlogic_index/`, which is ignored by git.
+
+Build or rebuild the full index:
+
+```bash
+python tools/code_index.py build
+```
+
+Update one changed file after editing it:
+
+```bash
+python tools/code_index.py update core/session.py
+```
+
+Find a function, class, or method definition:
+
+```bash
+python tools/code_index.py symbol stream_request
+```
+
+Find references and call sites:
+
+```bash
+python tools/code_index.py refs stream_request
+```
+
+The index is for source-checkout development only. Do not commit
+`.pawnlogic_index/`, and do not expose it through the installed `pawn` CLI.
+
 ## Docker Smoke Test (optional, hits a real provider)
 
 ```bash

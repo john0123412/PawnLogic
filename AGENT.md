@@ -182,6 +182,34 @@ Use the narrowest fast test first, then full verification before commit.
 Commands below assume the intended virtual environment or CI Python is already
 active. Use `python -m ...`; do not hardcode `venv/bin/python`.
 
+Developer code index:
+
+- `tools/code_index.py` is a source-checkout development aid for agents and
+  maintainers. It is not a runtime feature of the installed `pawn` command.
+- Before code audit, impact analysis, or multi-file edits, build or refresh the
+  local index:
+
+```bash
+python tools/code_index.py build
+```
+
+- Use the index before broad text searches when locating known functions,
+  classes, methods, or call sites:
+
+```bash
+python tools/code_index.py symbol <name>
+python tools/code_index.py refs <name>
+```
+
+- After editing an indexed Python file, update that file's index entry:
+
+```bash
+python tools/code_index.py update <path/to/file.py>
+```
+
+- Generated index files live under `.pawnlogic_index/`, are ignored by git, and
+  must never be staged or committed.
+
 Provider/model changes:
 
 ```bash

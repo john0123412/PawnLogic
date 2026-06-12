@@ -35,6 +35,7 @@ __pycache__/
 .aiderignore
 .cline/
 .thought
+.pawnlogic_index/
 
 # --- 编辑器与 IDE (JetBrains/VS Code) ---
 .idea/
