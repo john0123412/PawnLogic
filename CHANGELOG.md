@@ -5,6 +5,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.0.9] - 2026-06-12
+
+### Added
+- Centralized provider/API error formatting in `core/api_errors.py`, covering
+  HTTP 401/403/429/500/502/503/504 and transport failures with consistent CLI
+  and provider TUI messages.
+- Added `RuntimeContext` as the session-owned runtime state object for current
+  working directory, workspace path, output sink, mode flags, and dynamic
+  configuration.
+- Added architecture context documentation in `CONTEXT.md` and ADRs for
+  RuntimeContext and shared ProviderRuntime decisions.
+- Added SQLite write-contention tests for message autosave, session naming
+  updates, and failure-pattern writes.
+
+### Fixed
+- Provider API failures now return explicit user-visible errors instead of
+  appearing to hang when an API key is rejected, a gateway fails, or a provider
+  cannot be reached.
+- Stream retry notices are surfaced before final output, and HTTP 403/502 style
+  terminal errors now stop the turn cleanly without waiting for more chunks.
+- SQLite write paths now share a busy timeout, retry count, and backoff policy
+  for locked/busy database errors.
+
+### Changed
+- `AgentSession.run_turn` now delegates stream consumption to
+  `core/turn_api.py`, keeping turn orchestration separate from model-stream
+  parsing.
+- Provider CLI commands and the provider TUI now share `core/provider_runtime`
+  for connection tests, model fetching, API key saving, and activation state.
+- Slash command output is routed through output sinks, preserving human output
+  while keeping JSON/eval paths cleaner.
+- Ruff checks now include bugbear, simplification, pyupgrade, and Ruff-specific
+  hygiene rules, with legacy debt isolated through per-file ignores.
+- Run-turn tests now share reusable session and fake-stream helpers instead of
+  open-coded stream iterators.
+
+### Tests
+- 333 tests passing.
+- `ruff check .` passing.
+- Documentation heading structure checks passing.
+
 ## [0.0.8] - 2026-06-09
 
 ### Added
