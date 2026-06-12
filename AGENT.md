@@ -265,11 +265,21 @@ git commit -m "<type>: <summary>"
 - Create or update the GitHub Release only after the PyPI upload succeeds.
   Release notes must not be treated as complete before the package exists on
   PyPI.
+- The GitHub Release body must be sourced from the matching `CHANGELOG.md`
+  release section, for example `## [0.0.9] - YYYY-MM-DD`. Do not publish a
+  release whose visible release page contains only the tag/version name.
+  Automated release workflows must fail if the matching changelog section is
+  missing or empty.
 - Do not create a release tag or trigger production publishing from an untested
   `main` commit.
 - After a release completes, clean local build artifacts and release scratch
   files before reporting completion: remove `dist/`, `build/`, and
   `*.egg-info/` unless the user explicitly asks to keep them.
+- When a remote test branch created for release validation has passed and the
+  release changes have been merged or pushed to the target branch, delete the
+  remote test branch during cleanup, for example
+  `git push origin --delete test/release-<version>`, unless the branch is being
+  kept intentionally for incident investigation.
 - After every release workflow change or published release, re-check that
   `CLAUDE.md` remains a thin wrapper that imports `AGENT.md`.
 - Record the PyPI publish result and release URL in the final report for any

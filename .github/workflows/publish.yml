@@ -166,6 +166,37 @@ jobs:
           TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
         run: python3 -m twine upload dist/*
 
+      - name: Extract GitHub Release notes from CHANGELOG
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = (
+              rf"^## \[{re.escape(version)}\] - [^\n]*\n"
+              rf".*?(?=^## \[[0-9]+\.[0-9]+\.[0-9]+\] - |\Z)"
+          )
+          match = re.search(pattern, changelog, flags=re.MULTILINE | re.DOTALL)
+          if not match:
+              print(f"CHANGELOG.md has no release section for {version}", file=sys.stderr)
+              sys.exit(1)
+
+          notes = match.group(0).strip()
+          if "### " not in notes:
+              print(
+                  f"CHANGELOG.md release section for {version} has no detail headings",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          Path("release_notes.md").write_text(notes + "\n", encoding="utf-8")
+          PY
+
       # 仅 tag push 创建 GitHub Release；workflow_dispatch dry-run 不建
       - name: Create GitHub Release
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
@@ -173,7 +204,7 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
-          generate_release_notes: true   # 自动从 commits 生成 changelog summary
+          body_path: release_notes.md
           fail_on_unmatched_files: true
           files: |
             dist/*.whl
