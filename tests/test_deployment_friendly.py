@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -481,8 +482,59 @@ def test_ctrl_z_restores_last_input_cache_binding():
 
     assert '".last_input"' in source
     assert "@_kb.add('c-z')" in source
-    assert "b.text = last_input" in source
+    assert "_restore_last_input_buffer(" in source
     assert "_write_text_cache(_last_input_path, raw)" in source
+
+
+def test_ctrl_z_restore_preserves_unsent_buffer():
+    from pawnlogic import cli as cli_mod
+
+    class Buffer:
+        text = "draft command"
+        cursor_position = 0
+
+    state = {}
+    buffer = Buffer()
+
+    assert cli_mod._restore_last_input_buffer(buffer, "previous command", state) is True
+    assert buffer.text == "previous command"
+    assert buffer.cursor_position == len("previous command")
+
+    assert cli_mod._restore_last_input_buffer(buffer, "previous command", state) is True
+    assert buffer.text == "draft command"
+    assert buffer.cursor_position == len("draft command")
+
+
+def test_terminal_notice_uses_prompt_toolkit_safe_channel(monkeypatch):
+    from pawnlogic import cli as cli_mod
+
+    events = []
+
+    async def fake_run_in_terminal(callback):
+        events.append("run_in_terminal")
+        callback()
+
+    def fake_print(text):
+        events.append(("print", text))
+
+    monkeypatch.setattr(cli_mod, "_HAS_PROMPT_TOOLKIT", True)
+    monkeypatch.setattr(cli_mod, "_pt_run_in_terminal", fake_run_in_terminal)
+    monkeypatch.setattr("builtins.print", fake_print)
+
+    asyncio.run(cli_mod._terminal_notice("hello"))
+
+    assert events == ["run_in_terminal", ("print", "hello")]
+
+
+def test_idle_ctrl_c_notice_uses_plain_text():
+    source = (ROOT / "pawnlogic" / "cli.py").read_text(encoding="utf-8")
+    marker = "# Idle input state: Ctrl+C only arms the double-press exit flow."
+    idle_branch = source[source.index(marker):source.index("        except EOFError:", source.index(marker))]
+
+    assert "await _terminal_notice(" in idle_branch
+    assert "c(YELLOW" not in idle_branch
+    assert "c(CYAN" not in idle_branch
+    assert "\\x1b[" not in idle_branch
 
 
 def test_latest_documented_model_aliases_are_registered():

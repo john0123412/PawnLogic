@@ -20,7 +20,7 @@ from core.api_errors import (
     format_transport_error,
     retry_notice,
 )
-from core.interrupts import raise_if_interrupted
+from core.interrupts import clear_cancel_callback, raise_if_interrupted, set_cancel_callback
 
 
 # Custom exceptions.
@@ -157,6 +157,59 @@ def _cb_allow(provider: str) -> bool:
             return False             # Still in the open period.
         # half_open: allow one request.
         return True
+
+
+def _interruptible_sleep(delay: float) -> None:
+    """Sleep in short slices so Ctrl+C during retry backoff is processed promptly."""
+    deadline = time.monotonic() + max(0.0, delay)
+    while True:
+        raise_if_interrupted()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(0.1, remaining))
+    raise_if_interrupted()
+
+
+def _cancel_connection(
+    conn: http.client.HTTPConnection,
+    response: http.client.HTTPResponse | None = None,
+) -> None:
+    """Close the active streaming connection from the SIGINT path."""
+    sockets = []
+    sock = getattr(conn, "sock", None)
+    if sock:
+        sockets.append(sock)
+    if response is not None:
+        fp = getattr(response, "fp", None)
+        raw = getattr(fp, "raw", None)
+        for owner in (raw, fp):
+            if owner is None:
+                continue
+            response_sock = getattr(owner, "_sock", None) or getattr(owner, "sock", None)
+            if response_sock:
+                sockets.append(response_sock)
+
+    for active_sock in sockets:
+        try:
+            active_sock.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        try:
+            active_sock.close()
+        except Exception:
+            pass
+
+    try:
+        if response is not None:
+            response.close()
+    except Exception:
+        pass
+    try:
+        conn.close()
+    except Exception:
+        pass
+
 
 # ── per-read / connect timeout ────────────────────────────
 
@@ -621,8 +674,15 @@ def stream_request(
             return
 
         conn: http.client.HTTPConnection | None = None
+        cancel_callback = None
         try:
             conn, path = _open_connection(base_url, proxy, timeout=_CONN_TIMEOUT)
+            response_ref: dict[str, http.client.HTTPResponse | None] = {"response": None}
+            cancel_callback = lambda conn=conn, response_ref=response_ref: _cancel_connection(
+                conn,
+                response_ref["response"],
+            )
+            set_cancel_callback(cancel_callback)
 
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             if api_fmt == "anthropic":
@@ -641,6 +701,7 @@ def stream_request(
                 conn.sock.settimeout(_READ_TIMEOUT)
 
             resp = conn.getresponse()
+            response_ref["response"] = resp
 
             # HTTP status codes that should be retried.
             if resp.status in _RETRY_CODES:
@@ -653,7 +714,7 @@ def stream_request(
                 retry_after = resp.headers.get("Retry-After")
                 delay = _retry_delay(attempt, retry_after)
                 yield {"_retry": retry_notice(err_msg, attempt, _RETRY_MAX, delay)}
-                time.sleep(delay)
+                _interruptible_sleep(delay)
                 continue
 
             if resp.status != 200:
@@ -676,7 +737,9 @@ def stream_request(
                     raise_if_interrupted()
                     try:
                         raw_line = resp.readline()
+                        raise_if_interrupted()
                     except socket.timeout:
+                        raise_if_interrupted()
                         yield {
                             "_error": (
                                 f"Read timeout ({_READ_TIMEOUT}s): provider stopped sending stream data. "
@@ -684,7 +747,8 @@ def stream_request(
                             )
                         }
                         return
-                    except (BrokenPipeError, ConnectionResetError) as e:
+                    except OSError as e:
+                        raise_if_interrupted()
                         if partial_text:
                             yield {"_partial_end": True,
                                    "_error": f"Stream interrupted after partial content: {e}"}
@@ -696,7 +760,7 @@ def stream_request(
                                 )
                                 delay = _retry_delay(attempt)
                                 yield {"_retry": retry_notice(err_msg, attempt, _RETRY_MAX, delay)}
-                                time.sleep(delay)
+                                _interruptible_sleep(delay)
                                 break
                             yield {
                                 "_error": format_transport_error(
@@ -736,7 +800,9 @@ def stream_request(
                     raise_if_interrupted()
                     try:
                         raw_line = resp.readline()
+                        raise_if_interrupted()
                     except socket.timeout:
+                        raise_if_interrupted()
                         yield {
                             "_error": (
                                 f"Read timeout ({_READ_TIMEOUT}s): provider stopped sending stream data. "
@@ -744,7 +810,8 @@ def stream_request(
                             )
                         }
                         return
-                    except (BrokenPipeError, ConnectionResetError) as e:
+                    except OSError as e:
+                        raise_if_interrupted()
                         if partial_text:
                             yield {"_partial_end": True,
                                    "_error": f"Stream interrupted after partial content: {e}"}
@@ -756,7 +823,7 @@ def stream_request(
                                 )
                                 delay = _retry_delay(attempt)
                                 yield {"_retry": retry_notice(err_msg, attempt, _RETRY_MAX, delay)}
-                                time.sleep(delay)
+                                _interruptible_sleep(delay)
                                 break
                             yield {
                                 "_error": format_transport_error(
@@ -790,6 +857,7 @@ def stream_request(
                 continue
 
         except socket.timeout:
+            raise_if_interrupted()
             _cb_record_failure(provider)
             err_msg = format_transport_error(
                 TimeoutError(
@@ -801,10 +869,11 @@ def stream_request(
             if attempt < _RETRY_MAX - 1:
                 delay = _retry_delay(attempt)
                 yield {"_retry": retry_notice(err_msg, attempt, _RETRY_MAX, delay)}
-                time.sleep(delay)
+                _interruptible_sleep(delay)
                 continue
             yield {"_error": err_msg}
         except ConnectionRefusedError as e:
+            raise_if_interrupted()
             _cb_record_failure(provider)
             yield {
                 "_error": format_transport_error(
@@ -812,24 +881,28 @@ def stream_request(
                 )
             }
         except ssl.SSLError as e:
+            raise_if_interrupted()
             yield {"_error": f"SSL error: {e}"}
             return
         except ConnectionError as e:
+            raise_if_interrupted()
             _cb_record_failure(provider)
             yield {"_error": str(e)}
             return
         except OSError as e:
+            raise_if_interrupted()
             _cb_record_failure(provider)
             err_msg = format_transport_error(e, proxy=proxy, connect_timeout=_CONN_TIMEOUT)
             if attempt < _RETRY_MAX - 1:
                 delay = _retry_delay(attempt)
                 yield {"_retry": retry_notice(err_msg, attempt, _RETRY_MAX, delay)}
-                time.sleep(delay)
+                _interruptible_sleep(delay)
                 continue
             yield {"_error": err_msg}
         except KeyboardInterrupt:
             raise  # Propagate cleanly; finally handles conn cleanup.
         except Exception as e:
+            raise_if_interrupted()
             yield {
                 "_error": format_transport_error(
                     e, proxy=proxy, connect_timeout=_CONN_TIMEOUT
@@ -837,6 +910,8 @@ def stream_request(
             }
             return
         finally:
+            if cancel_callback is not None:
+                clear_cancel_callback(cancel_callback)
             if conn:
                 try: conn.close()
                 except Exception: pass

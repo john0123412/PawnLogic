@@ -14,6 +14,7 @@ Targets zero-dependency or minimal-dependency functions only:
 import sys
 import inspect
 import threading
+import time
 import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -505,6 +506,37 @@ def test_run_turn_interrupt_raises_for_cli_rollback(monkeypatch):
 
     assert s.messages[-1]["role"] == "user"
     assert s.messages[-1]["content"] == "interrupt me"
+
+
+def test_autoname_thread_swallows_keyboard_interrupt(monkeypatch):
+    s = _make_session()
+    import core.session as session_mod
+
+    s._turn_count = 2
+    s._naming_lock = threading.Lock()
+    warning_mock = MagicMock()
+    started = threading.Event()
+
+    def interrupted_name(**_kwargs):
+        started.set()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(session_mod, "should_name_session", lambda _msgs: True)
+    monkeypatch.setattr(session_mod, "pick_naming_model", lambda alias: alias)
+    monkeypatch.setattr(session_mod, "generate_session_name", interrupted_name)
+    monkeypatch.setattr(session_mod.logger, "warning", warning_mock)
+
+    s._maybe_autoname([{"role": "user", "content": "please solve this"}])
+
+    assert started.wait(timeout=1.0)
+    for _ in range(100):
+        if not s._naming_lock.locked():
+            break
+        time.sleep(0.01)
+
+    assert not s._naming_lock.locked()
+    warning_mock.assert_called()
+    assert "Auto naming interrupted" in warning_mock.call_args.args[0]
 
 
 def _prepare_run_turn_session(monkeypatch):

@@ -2832,6 +2832,11 @@ class AgentSession:
                     "Auto naming top-level failure (non-fatal) | session={} exc={!r}",
                     sid[:8], exc,
                 )
+            except BaseException as exc:
+                logger.warning(
+                    "Auto naming interrupted (non-fatal) | session={} exc={!r}",
+                    sid[:8], exc,
+                )
             finally:
                 try:
                     self._naming_lock.release()

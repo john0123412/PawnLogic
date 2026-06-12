@@ -70,12 +70,14 @@ try:
     from prompt_toolkit.styles import Style as _PTStyle
     from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.shortcuts import CompleteStyle
+    from prompt_toolkit.application import run_in_terminal as _pt_run_in_terminal
     from prompt_toolkit.patch_stdout import patch_stdout as _patch_stdout
     _HAS_PROMPT_TOOLKIT = True
 except Exception as _e:
     _PT_IMPORT_ERROR = str(_e)
     PromptSession = None
     _patch_stdout = None
+    _pt_run_in_terminal = None
     # Define dummy classes to prevent NameError in class definitions below
     class Completer:
         pass
@@ -83,6 +85,34 @@ except Exception as _e:
         pass
     class AutoSuggestFromHistory:
         pass
+
+
+async def _terminal_notice(text: str) -> None:
+    """Print a REPL notice without being erased by prompt_toolkit repainting."""
+    if _HAS_PROMPT_TOOLKIT and _pt_run_in_terminal:
+        await _pt_run_in_terminal(lambda: print(text))
+    else:
+        print(text)
+
+
+def _restore_last_input_buffer(buffer, last_input: str, state: dict[str, str]) -> bool:
+    """Restore the last submitted input while preserving current unsent text."""
+    if not last_input:
+        return False
+
+    current = getattr(buffer, "text", "")
+    alternate = state.get("alternate", "")
+    if current == last_input and alternate:
+        target = alternate
+        state["alternate"] = last_input
+    else:
+        if current and current != last_input:
+            state["alternate"] = current
+        target = last_input
+
+    buffer.text = target
+    buffer.cursor_position = len(target)
+    return True
 
 try:
     from rich.console import Console as _RichConsole
@@ -1270,6 +1300,7 @@ async def main():
         # Intercept backspace to force completion refresh in slash-command mode.
         from prompt_toolkit.key_binding import KeyBindings
         _kb = KeyBindings()
+        _ctrl_z_restore_state: dict[str, str] = {}
 
         @_kb.add('backspace')
         @_kb.add('c-h')  # compatible with some Linux terminal backspace values
@@ -1287,11 +1318,11 @@ async def main():
         @_kb.add('c-z')
         def _(event):
             last_input = _read_text_cache(_last_input_path)
-            if not last_input:
-                return
-            b = event.app.current_buffer
-            b.text = last_input
-            b.cursor_position = len(last_input)
+            _restore_last_input_buffer(
+                event.app.current_buffer,
+                last_input,
+                _ctrl_z_restore_state,
+            )
 
         # ──────────────────────────────────────────────────────────
 
@@ -1444,11 +1475,11 @@ async def main():
             # TurnInterrupted branch around session.run_turn().
             _now = time.monotonic()
             if _sigint_pending and (_now - _last_sigint_time < 5.0):
-                print(c(CYAN, "\n  Goodbye! 👋"))
+                await _terminal_notice("\n  Goodbye! 👋")
                 break
             _last_sigint_time = _now
             _sigint_pending   = True
-            print(c(YELLOW, "\n  [confirm] Press Ctrl+C again within 5s to exit. Current input is unchanged."))
+            await _terminal_notice("\n  [confirm] Press Ctrl+C again within 5s to exit. Current input is unchanged.")
             continue
         except EOFError:
             # Ctrl+D exits immediately.

@@ -8,10 +8,12 @@ import sys
 import termios
 from contextlib import contextmanager
 from types import FrameType
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 
 _INTERRUPTS = threading.local()
+_CANCEL_LOCK = threading.RLock()
+_current_cancel: Callable[[], None] | None = None
 
 
 def _event() -> threading.Event:
@@ -43,6 +45,33 @@ def raise_if_interrupted() -> None:
         raise KeyboardInterrupt
 
 
+def set_cancel_callback(callback: Callable[[], None]) -> None:
+    """Register a process-wide callback that aborts the active blocking I/O."""
+    global _current_cancel
+    with _CANCEL_LOCK:
+        _current_cancel = callback
+
+
+def clear_cancel_callback(callback: Callable[[], None]) -> None:
+    """Clear the active I/O cancel callback only when it still matches."""
+    global _current_cancel
+    with _CANCEL_LOCK:
+        if _current_cancel is callback:
+            _current_cancel = None
+
+
+def cancel_blocking_io() -> None:
+    """Abort the active blocking I/O operation, if one is registered."""
+    with _CANCEL_LOCK:
+        callback = _current_cancel
+    if callback is None:
+        return
+    try:
+        callback()
+    except Exception:
+        pass
+
+
 @contextmanager
 def turn_interrupt_handler() -> Iterator[None]:
     """Install a SIGINT handler that requests cooperative turn cancellation."""
@@ -54,6 +83,7 @@ def turn_interrupt_handler() -> Iterator[None]:
     def _handler(_signum: int, _frame: FrameType | None) -> None:
         nonlocal feedback_printed
         request_interrupt()
+        cancel_blocking_io()
         if not feedback_printed:
             feedback_printed = True
             try:

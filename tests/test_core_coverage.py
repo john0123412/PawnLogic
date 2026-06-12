@@ -354,7 +354,7 @@ def test_api_client_stream_request_yields_retry_notice_for_retryable_http(monkey
         "_open_connection",
         lambda *_args, **_kwargs: (FakeConn(responses.pop(0)), "/v1/chat/completions"),
     )
-    monkeypatch.setattr(api_client.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(api_client, "_interruptible_sleep", lambda _seconds: None)
 
     events = list(api_client.stream_request([{"role": "user", "content": "hi"}], "ds-v4-flash"))
 
@@ -386,11 +386,39 @@ def test_interrupt_state_is_thread_local(monkeypatch):
         interrupts.clear_interrupt()
 
 
+def test_interrupt_cancel_callback_stale_clear_keeps_current_callback(monkeypatch):
+    _drop_project_modules("core.interrupts", force=True)
+    from core import interrupts
+
+    calls = []
+
+    def callback_a():
+        calls.append("a")
+
+    def callback_b():
+        calls.append("b")
+
+    try:
+        interrupts.set_cancel_callback(callback_a)
+        interrupts.set_cancel_callback(callback_b)
+        interrupts.clear_cancel_callback(callback_a)
+
+        interrupts.cancel_blocking_io()
+
+        assert calls == ["b"]
+    finally:
+        interrupts.clear_cancel_callback(callback_b)
+
+    interrupts.cancel_blocking_io()
+    assert calls == ["b"]
+
+
 def test_turn_interrupt_handler_prints_feedback_once(monkeypatch):
     _drop_project_modules("core.interrupts", force=True)
     from core import interrupts
 
     writes = []
+    cancels = []
     handlers = {}
 
     monkeypatch.setattr(interrupts.signal, "getsignal", lambda sig: handlers.get(sig))
@@ -399,6 +427,7 @@ def test_turn_interrupt_handler_prints_feedback_once(monkeypatch):
     monkeypatch.setattr(interrupts.sys.stdout, "flush", lambda: None)
     monkeypatch.setattr(interrupts.sys.stdin, "fileno", lambda: (_ for _ in ()).throw(OSError("no tty")))
 
+    interrupts.set_cancel_callback(lambda: cancels.append("cancel"))
     with interrupts.turn_interrupt_handler():
         handler = handlers[interrupts.signal.SIGINT]
         handler(interrupts.signal.SIGINT, None)
@@ -406,7 +435,123 @@ def test_turn_interrupt_handler_prints_feedback_once(monkeypatch):
 
     feedback = [text for text in writes if "[interrupt] Stopping current response" in text]
     assert len(feedback) == 1
+    assert cancels == ["cancel", "cancel"]
     assert interrupts.interrupted() is False
+
+
+def test_api_client_stream_cancel_closes_connection_and_raises_keyboard_interrupt(monkeypatch):
+    _drop_project_modules("config", "core.api_client", "core.interrupts", force=True)
+    from core import api_client
+    from core import interrupts
+
+    class FakeSocket:
+        def __init__(self):
+            self.timeouts = []
+            self.shutdowns = []
+
+        def settimeout(self, timeout):
+            self.timeouts.append(timeout)
+
+        def shutdown(self, how):
+            self.shutdowns.append(how)
+
+    class FakeResponse:
+        status = 200
+
+        def __init__(self):
+            self.headers = {}
+            self.closed = 0
+
+        def readline(self):
+            interrupts.request_interrupt()
+            interrupts.cancel_blocking_io()
+            raise ConnectionResetError("closed by interrupt")
+
+        def close(self):
+            self.closed += 1
+
+    class FakeConn:
+        def __init__(self):
+            self.sock = FakeSocket()
+            self.closed = 0
+            self.response = FakeResponse()
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return self.response
+
+        def close(self):
+            self.closed += 1
+
+    conn = FakeConn()
+    monkeypatch.setattr(
+        api_client,
+        "_open_connection",
+        lambda *_args, **_kwargs: (conn, "/v1/chat/completions"),
+    )
+
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            list(api_client.stream_request([{"role": "user", "content": "hi"}], "ds-v4-flash"))
+    finally:
+        interrupts.clear_interrupt()
+
+    assert conn.sock.shutdowns == [api_client.socket.SHUT_RDWR]
+    assert conn.response.closed >= 1
+    assert conn.closed >= 1
+    closed_after_finally = conn.closed
+
+    interrupts.cancel_blocking_io()
+    assert conn.closed == closed_after_finally
+
+
+def test_api_client_retry_sleep_is_interruptible(monkeypatch):
+    _drop_project_modules("config", "core.api_client", "core.interrupts", force=True)
+    from core import api_client
+    from core import interrupts
+
+    class FakeSocket:
+        def settimeout(self, _timeout):
+            pass
+
+    class FakeResponse:
+        status = 502
+
+        def __init__(self):
+            self.headers = {}
+
+        def read(self, _limit=-1):
+            return b'{"error":{"message":"upstream unavailable"}}'
+
+    class FakeConn:
+        sock = FakeSocket()
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return FakeResponse()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        api_client,
+        "_open_connection",
+        lambda *_args, **_kwargs: (FakeConn(), "/v1/chat/completions"),
+    )
+    monkeypatch.setattr(api_client, "_retry_delay", lambda *_args, **_kwargs: 1.0)
+    monkeypatch.setattr(api_client.time, "sleep", lambda _seconds: interrupts.request_interrupt())
+
+    gen = api_client.stream_request([{"role": "user", "content": "hi"}], "ds-v4-flash")
+    try:
+        assert next(gen)["_retry"].startswith("HTTP 502")
+        with pytest.raises(KeyboardInterrupt):
+            next(gen)
+    finally:
+        interrupts.clear_interrupt()
 
 
 def test_api_client_nonstream_parser_handles_nonstandard_responses(monkeypatch):
