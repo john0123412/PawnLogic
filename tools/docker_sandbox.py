@@ -19,6 +19,7 @@ Dependencies:
 import os, re, tempfile
 
 from config import DYNAMIC_CONFIG, DANGEROUS_PATTERNS, WORKSPACE_DIR
+from core.state import state as _runtime_state
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN, MAGENTA, BOLD
 
 # ════════════════════════════════════════════════════════
@@ -171,6 +172,10 @@ def _check_docker_cmd(cmd: str) -> str | None:
     return None
 
 
+def _user_mode() -> bool:
+    return bool(_runtime_state.user_mode)
+
+
 # ════════════════════════════════════════════════════════
 # run_code_docker: disposable container execution.
 # ════════════════════════════════════════════════════════
@@ -255,6 +260,14 @@ def tool_run_code_docker(a: dict) -> str:
     else:
         image_name = _resolve_image(_LANG_IMAGE_MAP.get(language, "pwndocker"))
 
+    # Python dependency installation.
+    if language == "python" and install_deps:
+        pkgs = install_deps.split()
+        invalid = [pkg for pkg in pkgs if not _PKG_NAME_RE.fullmatch(pkg)]
+        if invalid:
+            return "ERROR: invalid Python package name(s): " + ", ".join(invalid)
+        run_cmd = f"pip install {' '.join(pkgs)} -q && {run_cmd}"
+
     client = _get_docker_client()
     if not client:
         return (
@@ -262,11 +275,6 @@ def tool_run_code_docker(a: dict) -> str:
             f"Ensure Docker CE is running: sudo systemctl start docker\n"
             f"Install the Python SDK: pip install docker"
         )
-
-    # Python dependency installation.
-    if language == "python" and install_deps:
-        pkgs = install_deps.split()
-        run_cmd = f"pip install {' '.join(pkgs)} -q && {run_cmd}"
 
     # Prepare temp directory and write code.
     with tempfile.TemporaryDirectory(prefix="pawn_docker_") as tmpdir:
@@ -528,6 +536,8 @@ def tool_pwn_container(a: dict) -> str:
             return f"ERROR: container '{name}' no longer exists; it may have been removed externally."
 
         print(c(MAGENTA, f"  [exec] {name} $ {command[:80]}"))
+        if _user_mode():
+            print(c(YELLOW, "  [Trust Boundary] Container exec runs arbitrary shell inside the target container."))
 
         try:
             exit_code, output = container.exec_run(

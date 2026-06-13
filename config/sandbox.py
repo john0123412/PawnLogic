@@ -27,6 +27,7 @@ BROWSER_CONFIG = {
     "screenshot_dir": str(PAWNLOGIC_HOME / "workspace" / "screenshots"),
     "stealthy":       True,
     "solve_cf":       True,
+    "allow_no_sandbox": False,
 }
 
 USER_AGENTS = [

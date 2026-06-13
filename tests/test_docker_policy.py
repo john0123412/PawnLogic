@@ -79,3 +79,15 @@ def test_docker_auto_pull_policy_allows_explicit_arg():
         )
         is None
     )
+
+
+def test_run_code_docker_rejects_invalid_python_dependency_names():
+    result = docker_sandbox.tool_run_code_docker(
+        {
+            "language": "python",
+            "code": "print(1)",
+            "install_deps": "requests;touch",
+        }
+    )
+
+    assert "invalid Python package name" in result

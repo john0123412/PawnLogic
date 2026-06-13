@@ -8,7 +8,7 @@ Patch support:
   - Legacy old_content/new_content arguments remain supported.
 """
 
-import os, re, difflib, subprocess
+import fnmatch, os, re, difflib, subprocess
 from pathlib import Path
 from config import (
     DYNAMIC_CONFIG,
@@ -34,6 +34,7 @@ def sync_runtime_context(ctx) -> None:
 # Persistent environment cache for shell tools.
 _env_cache: dict = {}
 _env_cache_initialized = False
+_run_shell_warning_emitted = False
 
 
 def _init_env_cache():
@@ -71,16 +72,65 @@ def _get_shell_env() -> dict:
     _init_env_cache()
     return _env_cache
 
+
+def _emit_run_shell_warning() -> None:
+    global _run_shell_warning_emitted
+    if _run_shell_warning_emitted:
+        return
+    from core.state import state as _runtime_state
+    if not _runtime_state.user_mode:
+        return
+    _run_shell_warning_emitted = True
+    print(c(YELLOW, "  [Trust Boundary] run_shell executes on the host shell. Pattern filters are limited and not a sandbox."))
+
 # ════════════════════════════════════════════════════════
 # Security checks.
 # ════════════════════════════════════════════════════════
 
-def _check_read(path: str):
+def _read_block_reason(path, action: str) -> str:
     abs_p = str(Path(path).expanduser().resolve())
     for bl in READ_BLACKLIST:
-        if abs_p.startswith(str(Path(bl).resolve())):
-            return False, f"SECURITY BLOCK: '{path}' may contain sensitive credentials; read denied."
+        bl_p = str(Path(bl).expanduser().resolve())
+        try:
+            is_blocked = os.path.commonpath([abs_p, bl_p]) == bl_p
+        except ValueError:
+            is_blocked = False
+        if is_blocked:
+            return f"SECURITY BLOCK: '{path}' may contain sensitive credentials; {action}."
+    return ""
+
+
+def _check_read(path: str):
+    reason = _read_block_reason(path, "read denied")
+    if reason:
+        return False, reason
     return True, ""
+
+
+def _check_directory_listing(path: Path) -> tuple[bool, str]:
+    reason = _read_block_reason(path, "directory enumeration denied")
+    if reason:
+        return False, reason
+    return True, ""
+
+
+def _is_read_blacklisted(path: Path) -> bool:
+    return bool(_read_block_reason(path, "read denied"))
+
+
+def _iter_visible_paths(root: Path):
+    for current, dirs, files in os.walk(root):
+        current_path = Path(current)
+        if _is_read_blacklisted(current_path):
+            dirs[:] = []
+            continue
+        dirs[:] = sorted(d for d in dirs if not _is_read_blacklisted(current_path / d))
+        for d in dirs:
+            yield current_path / d
+        for f in sorted(files):
+            candidate = current_path / f
+            if not _is_read_blacklisted(candidate):
+                yield candidate
 
 def _resolve_write_path(path: str) -> tuple:
     """Resolve writes into WORKSPACE_DIR.
@@ -140,6 +190,7 @@ def _run(cmd: str, timeout: int = 15, cwd: str = None, env=None) -> str:
             return f"SECURITY BLOCK: command matches dangerous pattern '{pat}'"
 
     logger.debug(f"[run_shell] executing: {cmd!r}  (timeout={timeout}s, cwd={work_dir})")
+    _emit_run_shell_warning()
     print(c(YELLOW, f"  ⚡ $ {cmd[:120]}"))
 
     proc = None
@@ -152,7 +203,7 @@ def _run(cmd: str, timeout: int = 15, cwd: str = None, env=None) -> str:
             stdin=subprocess.DEVNULL,
             cwd=work_dir,
             env=exec_env,
-            preexec_fn=os.setsid,
+            start_new_session=True,
         )
         stdout, stderr = proc.communicate(timeout=timeout)
         out = stdout.decode("utf-8", errors="ignore") + stderr.decode("utf-8", errors="ignore")
@@ -628,12 +679,20 @@ def tool_patch_file(a: dict) -> str:
 def tool_list_dir(a: dict) -> str:
     try:
         p = Path(a.get("path", ".")).expanduser()
+        ok, reason = _check_directory_listing(p)
+        if not ok:
+            return reason
         if not p.exists(): return f"ERROR: path does not exist: {a.get('path','.')}"
         recursive = a.get("recursive", False)
         lines = []
         if recursive:
             for root, dirs, files in os.walk(p):
-                dirs.sort(); files.sort()
+                root_path = Path(root)
+                if _is_read_blacklisted(root_path):
+                    dirs[:] = []
+                    continue
+                dirs[:] = sorted(d for d in dirs if not _is_read_blacklisted(root_path / d))
+                files = sorted(f for f in files if not _is_read_blacklisted(root_path / f))
                 level  = len(Path(root).relative_to(p).parts)
                 indent = "  " * level
                 rel    = Path(root).relative_to(p)
@@ -647,6 +706,8 @@ def tool_list_dir(a: dict) -> str:
         else:
             entries = sorted(p.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
             for e in entries[:200]:
+                if _is_read_blacklisted(e):
+                    continue
                 if e.is_dir(): lines.append(c(BLUE,  f"  📁 {e.name}/"))
                 else:          lines.append(f"  📄 {e.name}  {c(GRAY, str(e.stat().st_size)+'B')}")
         return "\n".join(lines) or "(empty directory)"
@@ -659,10 +720,19 @@ def tool_find_files(a: dict) -> str:
     max_r   = int(a.get("max_results", 50))
     results = []
     try:
+        ok, reason = _check_directory_listing(root)
+        if not ok:
+            return reason
+        pattern_path = pattern.replace("\\", "/").lstrip("/")
         if any(ch in pattern for ch in "*?["):
-            matches = list(root.glob(("**/" + pattern.lstrip("/")) if "/" not in pattern else pattern))
+            matches = []
+            for candidate in _iter_visible_paths(root):
+                rel = str(candidate.relative_to(root)).replace(os.sep, "/")
+                target = rel if "/" in pattern_path else candidate.name
+                if fnmatch.fnmatch(target, pattern_path):
+                    matches.append(candidate)
         else:
-            matches = [p for p in root.rglob("*") if pattern.lower() in p.name.lower()]
+            matches = [p for p in _iter_visible_paths(root) if pattern.lower() in p.name.lower()]
         matches.sort(key=lambda x: x.stat().st_mtime, reverse=True)
         for m in matches[:max_r]:
             rel = m.relative_to(root) if m.is_relative_to(root) else m
