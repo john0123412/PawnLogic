@@ -81,7 +81,7 @@ def test_pawn_completer_includes_live_visible_models_without_rebuild():
         ["/model", "/model ds-v4-flash"],
         meta_dict={"/model": "switch", "/model ds-v4-flash": "DeepSeek"},
         dynamic_model_provider=lambda: {
-            "1:gpt-5.5": {"desc": "fetched"},
+            "1:gpt-5.5": {"desc": "Dynamically fetched model"},
         },
     )
 
@@ -90,7 +90,7 @@ def test_pawn_completer_includes_live_visible_models_without_rebuild():
     meta_by_word = {completion.text: completion.display_meta_text for completion in completions}
 
     assert "/model 1:gpt-5.5" in words
-    assert meta_by_word["/model 1:gpt-5.5"] == "fetched"
+    assert meta_by_word["/model 1:gpt-5.5"] == "Dynamically fetched model"
     assert "/model 1:gpt-5.5" not in completer.meta_dict
 
 
@@ -99,7 +99,7 @@ def test_packaged_cli_completer_includes_live_visible_models_without_rebuild():
         ["/model", "/model ds-v4-flash"],
         meta_dict={"/model": "switch", "/model ds-v4-flash": "DeepSeek"},
         dynamic_model_provider=lambda: {
-            "1:gpt-5.5": {"desc": "fetched"},
+            "1:gpt-5.5": {"desc": "Dynamically fetched model"},
         },
     )
 
@@ -108,7 +108,7 @@ def test_packaged_cli_completer_includes_live_visible_models_without_rebuild():
     meta_by_word = {completion.text: completion.display_meta_text for completion in completions}
 
     assert "/model 1:gpt-5.5" in words
-    assert meta_by_word["/model 1:gpt-5.5"] == "fetched"
+    assert meta_by_word["/model 1:gpt-5.5"] == "Dynamically fetched model"
     assert "/model 1:gpt-5.5" not in completer.meta_dict
 
 
@@ -171,6 +171,47 @@ def test_load_custom_providers_defaults_only_deepseek_active_without_config(tmp_
 
     assert provider_config.PROVIDERS["deepseek"]["active"] is True
     assert provider_config.PROVIDERS["openai"]["active"] is False
+
+
+def test_load_custom_providers_defaults_missing_model_desc(tmp_path, monkeypatch):
+    path = tmp_path / "custom_providers.json"
+    monkeypatch.setattr(provider_config, "CUSTOM_PROVIDERS_PATH", path)
+    monkeypatch.setattr(
+        provider_config,
+        "PROVIDERS",
+        {
+            "deepseek": {"api_key_env": "DEEPSEEK_API_KEY"},
+        },
+    )
+    monkeypatch.setattr(provider_config, "MODELS", {})
+    path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "relay": {
+                        "base_url": "https://api.example.com/v1",
+                        "api_key_env": "RELAY_API_KEY",
+                        "label": "Relay",
+                        "api_format": "openai",
+                    }
+                },
+                "models": {
+                    "relay-chat": {"id": "relay-chat", "provider": "relay"},
+                    "relay-pro": {
+                        "id": "relay-pro",
+                        "provider": "relay",
+                        "desc": "Existing description",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    provider_config.load_custom_providers()
+
+    assert provider_config.MODELS["relay-chat"]["desc"] == "Custom model"
+    assert provider_config.MODELS["relay-pro"]["desc"] == "Existing description"
 
 
 def test_provider_set_active_persists_and_deepseek_cannot_deactivate(tmp_path, monkeypatch):
@@ -613,7 +654,7 @@ def test_provider_tui_add_wizard_saves_without_testing_connection(monkeypatch):
     monkeypatch.setattr(provider_tui, "_test_connection", fail_if_called)
     monkeypatch.setattr(provider_tui, "_save_key_to_env", fake_save_key_to_env)
     monkeypatch.setattr(provider_tui, "save_custom_provider", fake_save_custom_provider)
-    monkeypatch.setattr(provider_tui, "load_custom_providers", lambda: None)
+    monkeypatch.setattr(provider_tui, "init_providers", lambda force=False: None)
 
     try:
         asyncio.run(tui._wizard_confirm())
@@ -807,7 +848,7 @@ def test_provider_add_cli_fetches_without_nested_event_loop(monkeypatch):
     monkeypatch.setattr(provider_cmd, "_provider_list", lambda: None)
     monkeypatch.setattr(provider_cmd, "_provider_test", lambda _session, _arg: None)
     monkeypatch.setattr(provider_config, "save_custom_provider", fake_save_custom_provider)
-    monkeypatch.setattr(provider_config, "load_custom_providers", lambda: None)
+    monkeypatch.setattr(provider_config, "init_providers", lambda force=False: None)
 
     try:
         asyncio.run(
@@ -849,8 +890,22 @@ def test_provider_fetch_prints_filter_and_alias_summary(monkeypatch, capsys):
     async def fake_fetch_models(_base_url, _api_key, _api_format):
         return (
             [
-                ("gpt-5.4-mini", {"id": "gpt-5.4-mini", "provider": "", "desc": "fetched"}),
-                ("relay-chat", {"id": "relay-chat", "provider": "", "desc": "fetched"}),
+                (
+                    "gpt-5.4-mini",
+                    {
+                        "id": "gpt-5.4-mini",
+                        "provider": "",
+                        "desc": "Dynamically fetched model",
+                    },
+                ),
+                (
+                    "relay-chat",
+                    {
+                        "id": "relay-chat",
+                        "provider": "",
+                        "desc": "Dynamically fetched model",
+                    },
+                ),
             ],
             "",
             {"returned": 4, "hidden_by_name": 1, "hidden_by_probe": 1, "selectable": 2},
@@ -859,7 +914,7 @@ def test_provider_fetch_prints_filter_and_alias_summary(monkeypatch, capsys):
     monkeypatch.setattr(provider_cmd, "fetch_models", fake_fetch_models)
     monkeypatch.setattr(provider_cmd, "_provider_fetch_selector", fake_selector)
     monkeypatch.setattr(provider_config, "save_custom_provider", fake_save_custom_provider)
-    monkeypatch.setattr(provider_config, "load_custom_providers", lambda: None)
+    monkeypatch.setattr(provider_config, "init_providers", lambda force=False: None)
 
     try:
         asyncio.run(provider_cmd._provider_fetch(alias))
@@ -945,7 +1000,7 @@ def test_provider_add_cli_does_not_prompt_for_fetch_on_piped_input(monkeypatch):
 
     monkeypatch.setattr("builtins.input", fake_input)
     monkeypatch.setattr(provider_config, "save_custom_provider", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(provider_config, "load_custom_providers", lambda: None)
+    monkeypatch.setattr(provider_config, "init_providers", lambda force=False: None)
 
     try:
         should_fetch = provider_cmd._provider_add_cli(

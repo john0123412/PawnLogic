@@ -600,10 +600,12 @@ class PawnCompleter(Completer):
 def _has_any_api_key() -> bool:
     """Return whether at least one provider API key is present in process env.
 
-    PROVIDERS is merged with custom_providers.json by load_custom_providers()
-    during config.providers import, so built-in and custom providers are
-    handled uniformly without provider-name special cases.
+    PROVIDERS is merged with custom_providers.json by explicit init_providers()
+    during startup, so built-in and custom providers are handled uniformly
+    without provider-name special cases.
     """
+    from config.providers import init_providers
+    init_providers()
     return any(
         os.getenv(p["api_key_env"], "") not in ("", "YOUR_API_KEY_HERE")
         for p in PROVIDERS.values()
@@ -958,9 +960,8 @@ async def main():
             print(c(RED, f"  ✗ {detail}"))
         sys.exit(1)
     attach_external_mcp_tools()
-    # Sync custom providers/models into memory on every startup
-    from config.providers import load_custom_providers as _lcp
-    _lcp()
+    from config.providers import init_providers
+    init_providers(force=True)
 
     # First-run wizard.
     first_run_model_alias = None
@@ -971,8 +972,8 @@ async def main():
             first_run_model_alias = first_run_wizard()
         except (EOFError, KeyboardInterrupt):
             print(c(YELLOW, "\n  First-run setup cancelled. Use /setkey after startup to configure keys.\n"))
-        from config.providers import load_custom_providers
-        load_custom_providers()
+        from config.providers import init_providers
+        init_providers(force=True)
 
     # Fall back to the key wizard if no key is configured.
     any_key = any(

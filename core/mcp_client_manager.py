@@ -24,6 +24,7 @@ import base64
 import json
 import os
 import re
+import sys
 import threading
 import time
 import traceback
@@ -34,12 +35,15 @@ from typing import Callable, Optional
 try:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
+    from mcp.types import ListRootsResult, Root
     _MCP_AVAILABLE = True
 except ImportError:
     _MCP_AVAILABLE = False
     ClientSession = None
     StdioServerParameters = None
     stdio_client = None
+    ListRootsResult = None
+    Root = None
 
 from core.logger import logger
 from config.paths import PAWNLOGIC_HOME
@@ -54,6 +58,7 @@ STARTUP_TIMEOUT = 60                       # Total server startup timeout.
 DEFAULT_SERVER_STARTUP_TIMEOUT = 15        # Per-server initialization timeout.
 NAME_SEPARATOR = "__"                      # Tool-name prefix separator.
 WORKSPACE_ASSETS = PAWNLOGIC_HOME / "workspace" / "mcp_assets"
+MCP_STDERR_LOG_DIR = PAWNLOGIC_HOME / "logs" / "mcp"
 
 _ENV_VAR_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 _warned_vars: set[str] = set()             # Avoid duplicate warnings for one var.
@@ -114,6 +119,54 @@ def _server_startup_timeout(conf: dict) -> float:
         return max(1.0, float(raw))
     except (TypeError, ValueError):
         return DEFAULT_SERVER_STARTUP_TIMEOUT
+
+
+def _safe_server_log_name(name: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name).strip()).strip("._")
+    return safe or "server"
+
+
+def _mcp_stderr_log_path(name: str) -> Path:
+    return MCP_STDERR_LOG_DIR / f"{_safe_server_log_name(name)}.stderr.log"
+
+
+def _resolve_roots() -> list[Path]:
+    roots: list[Path] = []
+    candidates = []
+    try:
+        candidates.append(Path.cwd())
+    except Exception:
+        pass
+    workspace = PAWNLOGIC_HOME / "workspace"
+    try:
+        workspace.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    candidates.append(workspace)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.expanduser().resolve()
+        except Exception:
+            continue
+        key = str(resolved)
+        if key in seen or not resolved.exists() or not resolved.is_dir():
+            continue
+        seen.add(key)
+        roots.append(resolved)
+    return roots
+
+
+async def _roots_cb(_context) -> "ListRootsResult":
+    if ListRootsResult is None or Root is None:
+        raise RuntimeError("MCP root types are unavailable")
+    return ListRootsResult(
+        roots=[
+            Root(uri=path.as_uri(), name=path.name or str(path))
+            for path in _resolve_roots()
+        ]
+    )
 
 
 def _is_legacy_fetch_uvx(name: str, conf: dict) -> bool:
@@ -249,6 +302,7 @@ class MCPClientManager:
         self._ready  = threading.Event()
         self._failed = threading.Event()
         self._start_error: Optional[BaseException] = None
+        self._debug_stderr = False
 
     # Public API, synchronous from main thread.
     def start(self) -> bool:
@@ -371,6 +425,7 @@ class MCPClientManager:
             return
 
         servers = config.get("mcpServers", {}) or {}
+        self._debug_stderr = _config_truthy(config.get("debug_stderr"))
         if not servers:
             logger.warning(f"[MCP] config has empty mcpServers map")
             return
@@ -413,8 +468,17 @@ class MCPClientManager:
         # One sub-stack per server: local cleanup on failure, graft into global on success.
         sub = AsyncExitStack()
         try:
-            read, write = await sub.enter_async_context(stdio_client(params))
-            session = await sub.enter_async_context(ClientSession(read, write))
+            if self._debug_stderr:
+                errlog = sys.stderr
+            else:
+                MCP_STDERR_LOG_DIR.mkdir(parents=True, exist_ok=True)
+                errlog = sub.enter_context(
+                    open(_mcp_stderr_log_path(name), "a", encoding="utf-8")
+                )
+            read, write = await sub.enter_async_context(stdio_client(params, errlog=errlog))
+            session = await sub.enter_async_context(
+                ClientSession(read, write, list_roots_callback=_roots_cb)
+            )
             await session.initialize()
         except BaseException:
             await sub.aclose()                 # Clean up subprocess.

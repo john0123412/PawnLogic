@@ -474,7 +474,7 @@ def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str =
     }
     provider_config.save_custom_provider(alias, prov_cfg, {})
     PROVIDERS[alias] = prov_cfg
-    provider_config.load_custom_providers()
+    provider_config.init_providers(force=True)
     _print(c(GREEN, f"  ✓ Provider registered. Make sure {env_key} is configured in .env."))
     _print(c(CYAN, f"  To show it in /model, run /provider activate {alias}."))
     if not os.getenv(env_key, ""):
@@ -639,7 +639,7 @@ async def _provider_fetch(alias: str) -> None:
         if mid in set(chosen_ids)
     }
     provider_config.save_custom_provider(alias, PROVIDERS[alias], models_cfg, replace_models=True)
-    provider_config.load_custom_providers()
+    provider_config.init_providers(force=True)
 
     _print(c(GREEN, f"  ✓ Registered {len(models_cfg)} models."))
     if is_provider_active(alias):

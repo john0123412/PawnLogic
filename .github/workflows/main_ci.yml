@@ -5,39 +5,39 @@
 
 name: CI
 
-# ── 触发条件 ──────────────────────────────────────────────
+# ── Triggers ──────────────────────────────────────────────
 on:
   push:
     branches:
       - main
-      - "chore/**"            # 允许 pre-release 清理分支自验
-      - "fix/**"              # 允许修复分支自验
-      - "i18n/**"             # 允许国际化分支自验
-      - "test/**"             # 允许临时测试分支手动触发
-    paths-ignore:             # 纯文档改动不触发 CI
+      - "chore/**"            # Allow pre-release cleanup branch self-checks
+      - "fix/**"              # Allow fix branch self-checks
+      - "i18n/**"             # Allow i18n branch self-checks
+      - "test/**"             # Allow temporary test branch manual runs
+    paths-ignore:             # Documentation-only changes do not trigger CI
       - "**.md"
       - "docs/**"
       - ".gitignore"
       - "LICENSE"
   pull_request:
     branches: [main]
-  workflow_dispatch:          # 允许手动触发任意分支跑 CI
+  workflow_dispatch:          # Allow manual CI runs on any branch
 
-# ── FIX #4: 防止同分支并发重复运行 ─────────────────────────
+# ── FIX #4: Prevent duplicate concurrent runs on the same branch ─────
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# ── FIX #7: 最小权限原则 ────────────────────────────────────
+# ── FIX #7: Least-privilege permissions ──────────────────────────────
 permissions:
   contents: read
 
 jobs:
-  # ── 静态检查（先跑，快速失败）──────────────────────────────
+  # ── Static checks: run first and fail fast ─────────────────────────
   lint:
     name: "🔍 Lint (ruff)"
     runs-on: ubuntu-latest
-    timeout-minutes: 5             # FIX #2: 防止挂起
+    timeout-minutes: 5             # FIX #2: Prevent hangs
 
     steps:
       - uses: actions/checkout@v4
@@ -45,24 +45,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"             # FIX #3: 开启 pip 缓存
+          cache: "pip"             # FIX #3: Enable pip cache
 
       - name: Install ruff
         run: pip install ruff
 
-      # FIX #5: 补充 ruff lint（原来完全缺失）；只检查真正的错误，不强制风格
+      # FIX #5: Add ruff lint; check real errors without forcing style.
       - name: ruff check
         run: ruff check . --output-format=github
 
-  # ── 多版本测试矩阵 ──────────────────────────────────────────
+  # ── Multi-version test matrix ──────────────────────────────────────
   test:
     name: "🧪 Test (Python ${{ matrix.python-version }})"
-    needs: lint                    # lint 通过才运行测试
+    needs: lint                    # Run tests only after lint passes
     runs-on: ubuntu-latest
-    timeout-minutes: 15            # FIX #2: 防止 pytest 无限挂起
+    timeout-minutes: 15            # FIX #2: Prevent pytest from hanging forever
 
     strategy:
-      fail-fast: false             # FIX #6: 一个版本失败不取消其他
+      fail-fast: false             # FIX #6: Do not cancel other versions after one failure
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
 
@@ -78,7 +78,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: "pip"             # FIX #3: 开启 pip 缓存
+          cache: "pip"             # FIX #3: Enable pip cache
 
       - name: Install dependencies
         run: |
@@ -87,7 +87,7 @@ jobs:
           python --version
           python -m pip --version
 
-      # FIX #1: 原来 compileall -q . 扫描全目录（含 venv），改为只扫描源码
+      # FIX #1: Scan only source directories, not the whole tree or venv.
       - name: Syntax check (source only)
         run: python -m compileall -q core/ tools/ utils/ tests/
 
@@ -104,7 +104,7 @@ jobs:
           path: pytest-main-${{ matrix.python-version }}.log
           retention-days: 7
 
-  # ── 动态 E2E 测试（Agent 测试 Agent）──────────────────────
+  # ── Dynamic E2E tests: agent tests agent ───────────────────────────
   dynamic-test:
     name: "🤖 Dynamic E2E (Agent→Agent)"
     needs: test
@@ -115,9 +115,9 @@ jobs:
       PAWNLOGIC_TEST_MODE: "true"
       MCP_ENABLED: "false"
       PAWNLOGIC_HOME: /tmp/pawnlogic-e2e
-      DEEPSEEK_API_KEY: "sk-test-fake-key-for-ci"
-      PAWN_API_KEY: "test-fake-key"
-      ANTHROPIC_API_KEY: "sk-ant-test-fake"
+      DEEPSEEK_API_KEY: "ci-dummy-not-a-real-key"
+      PAWN_API_KEY: "ci-placeholder-key"
+      ANTHROPIC_API_KEY: "ci-anthropic-placeholder"
       TERM: "dumb"
       NO_COLOR: "1"
 

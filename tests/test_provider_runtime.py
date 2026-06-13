@@ -93,6 +93,7 @@ def test_provider_runtime_fetch_models_builds_candidates_and_stats(monkeypatch):
         "hidden_by_probe": 1,
         "selectable": 1,
     }
+    assert candidates[0][1]["desc"] == "Dynamically fetched model; 1 unsupported hidden"
 
 
 def test_provider_runtime_set_active_delegates_to_provider_config(monkeypatch):
@@ -105,7 +106,7 @@ def test_provider_runtime_set_active_delegates_to_provider_config(monkeypatch):
         return True
 
     monkeypatch.setattr(provider_runtime.provider_config, "set_provider_active", fake_set_provider_active)
-    monkeypatch.setattr(provider_runtime, "load_custom_providers", lambda: None)
+    monkeypatch.setattr(provider_runtime, "init_providers", lambda force=False: None)
 
     ok, message = provider_runtime.set_active("relay", True)
 

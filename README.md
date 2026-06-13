@@ -1,4 +1,4 @@
-**[English](README.md)** | [中文](README_CN.md)
+**[English](README.md)** | [Chinese](README_CN.md)
 
 # 🤖 PawnLogic
 
@@ -98,6 +98,10 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 | Anthropic | `claude-opus` `claude-sonnet` `claude-haiku` | Frontier reasoning, balanced, fast |
 
 DeepSeek is active by default. Custom providers appear in `/model` and Tab completion only after their key is configured, models are fetched, and the provider is activated.
+Descriptions shown by `/model` come from `~/.pawnlogic/custom_providers.json`
+for custom providers. Re-running `/provider update <name>` refreshes selected
+models from the provider and writes English fallback descriptions for fetched
+models.
 
 ## Provider Management
 
@@ -152,6 +156,12 @@ The example keeps the external `fetch` MCP disabled by default because `uvx mcp-
 may contact PyPI during startup. Use PawnLogic's built-in `fetch_url` unless you explicitly
 enable that MCP server and allow network installation.
 
+MCP subprocess stderr is written to `~/.pawnlogic/logs/mcp/<server>.stderr.log`
+by default so server startup banners do not pollute the main terminal. Set
+top-level `"debug_stderr": true` in `mcp_configs.json` when you want raw MCP
+stderr on the console for troubleshooting. PawnLogic also advertises MCP roots
+for the current working directory and `~/.pawnlogic/workspace`.
+
 ## Data Layout
 
 All runtime data and API keys are stored in `~/.pawnlogic/` — **never in the project directory**.
@@ -175,9 +185,9 @@ The project directory contains no secrets and is safe to commit or share.
 | Document | Description |
 |----------|-------------|
 | [**README.md**](README.md) | This page |
-| [**README_CN.md**](README_CN.md) | 中文版 |
+| [**README_CN.md**](README_CN.md) | Chinese README |
 | [**GUIDE_EN.md**](GUIDE_EN.md) | Full reference — commands, architecture, FAQ |
-| [**GUIDE_CN.md**](GUIDE_CN.md) | 完整参考手册 — 命令、架构、常见问题 |
+| [**GUIDE_CN.md**](GUIDE_CN.md) | Chinese complete reference |
 | [**CHANGELOG.md**](CHANGELOG.md) | Version history and release notes |
 | [**CONTRIBUTING.md**](CONTRIBUTING.md) | How to contribute, add providers, run tests |
 | [**SECURITY.md**](SECURITY.md) | Vulnerability reporting policy |

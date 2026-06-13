@@ -1,79 +1,80 @@
-# PawnLogic Skills — 技能包规范
+# PawnLogic Skills - Skill Pack Specification
 
-## 零配置模式（推荐）
+## Zero-Config Mode
 
-最简用法：**新建文件夹，扔一个 `skill.md` 进去，完事。**
+The simplest skill pack is a directory containing one `skill.md` file.
 
-```
+```text
 skills/
-├── my_skill/
-│   └── skill.md              ← 就这一个文件，系统自动识别
-├── demo_stack_overflow/
-│   └── guide.md              ← 也行，guide.md 同样有效
-└── heap_exploit/
-    └── skill.md
+|-- my_skill/
+|   `-- skill.md              # Automatically detected
+|-- demo_stack_overflow/
+|   `-- guide.md              # `guide.md` is also valid
+`-- heap_exploit/
+    `-- skill.md
 ```
 
-系统自动从文件夹名和 `.md` 标题提取关键词，无需任何配置。
+PawnLogic extracts keywords automatically from the directory name and Markdown
+heading. No manifest is required for basic usage.
 
-## 进阶用法（可选）
+## Advanced Mode
 
-需要更多控制时，可添加 `manifest.json` 和脚本：
+Add `manifest.json` and scripts when a skill needs more control.
 
-```
+```text
 skills/
-└── my_skill/
-    ├── skill.md              ← 主内容（Agent 读取执行）
-    ├── manifest.json         ← 可选：补充元数据
-    └── exploit.py            ← 可选：Agent 优先调用的脚本
+`-- my_skill/
+    |-- skill.md              # Primary content read by the agent
+    |-- manifest.json         # Optional metadata
+    `-- exploit.py            # Optional script preferred by the agent
 ```
 
 ### manifest.json Schema
 
 ```json
 {
-  "name": "技能包名称",
+  "name": "Skill pack name",
   "version": "1.0",
-  "description": "一句话描述该技能的用途",
-  "keywords": ["关键词1", "关键词2", "关键词3"],
-  "triggers": ["触发条件描述1", "触发条件描述2"],
+  "description": "One-sentence description of what this skill does",
+  "keywords": ["keyword1", "keyword2", "keyword3"],
+  "triggers": ["When the user asks for X", "When artifact Y is present"],
   "guide": "guide.md",
   "scripts": ["exploit.py", "helper.sh"],
-  "author": "作者名"
+  "author": "Author name"
 }
 ```
 
-| 字段 | 必须 | 说明 |
-|------|------|------|
-| `name` | | 技能包名称，默认取 .md 一级标题或文件夹名 |
-| `description` | | 一句话描述，默认自动提取 .md 首段 |
-| `keywords` | | 关键词数组，默认从标题自动提取 |
-| `triggers` | | 触发条件（中文描述），增强匹配 |
-| `scripts` | | 可执行脚本列表，Agent 优先调用 |
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | | Skill pack name. Defaults to the Markdown H1 or directory name. |
+| `description` | | One-sentence description. Defaults to the first Markdown paragraph. |
+| `keywords` | | Keyword array. Defaults to values extracted from the title. |
+| `triggers` | | Trigger descriptions that improve matching. |
+| `scripts` | | Executable scripts the agent should prefer when relevant. |
 
-## .md 文件查找优先级
+## Markdown Lookup Priority
 
-1. `skill.md` — 最高优先级
-2. `guide.md` — 次优先级
-3. 目录内第一个 `*.md` 文件
+1. `skill.md`
+2. `guide.md`
+3. The first `*.md` file in the directory
 
-## 工作流程
+## Workflow
 
-1. 用户提出任务（如 "分析这个堆漏洞"）
-2. `SkillScanner` 扫描 `./skills/*/`，自动提取元数据
-3. 按关键词匹配，返回 top 3 技能包
-4. Agent 读取 `.md` 指南，按步骤执行
-5. 若有脚本，优先运行脚本而非即兴编码
+1. The user asks for a task.
+2. `SkillScanner` scans `./skills/*/` and extracts metadata.
+3. Skills are matched by keywords and the top results are returned.
+4. The agent reads the Markdown guide and follows its steps.
+5. If scripts are available, the agent prefers them over ad hoc code.
 
-## 创建新技能包
+## Creating a Skill Pack
 
 ```bash
 mkdir -p skills/my_skill
 cat > skills/my_skill/skill.md << 'EOF'
-# My Skill 名称
+# My Skill Name
 
-## 触发条件
-当用户要求 XXX 时，按以下步骤执行。
+## Triggers
+Use this skill when the user asks for XXX.
 
 ## Step 1
 ...
@@ -83,4 +84,4 @@ cat > skills/my_skill/skill.md << 'EOF'
 EOF
 ```
 
-就这么简单。需要更多控制再加 `manifest.json`。
+Add `manifest.json` only when the default metadata extraction is not enough.
