@@ -845,3 +845,173 @@ def test_extract_calls_multiple_xml():
     calls = s._extract_calls(text)
     assert len(calls) == 2
     assert {c["name"] for c in calls} == {"read_file", "run_shell"}
+
+
+def test_tool_registry_snapshot_and_unregister():
+    import core.session as session_mod
+
+    session_mod._TOOL_REGISTRY.register(
+        "pytest_tool",
+        lambda _args: "ok",
+        {"type": "function", "function": {"name": "pytest_tool", "parameters": {"type": "object"}}},
+    )
+    try:
+        tool_map = session_mod._tool_map_snapshot()
+        schemas = session_mod._tool_schema_snapshot()
+        assert tool_map["pytest_tool"]({})
+        assert any(s.get("function", {}).get("name") == "pytest_tool" for s in schemas)
+    finally:
+        session_mod._TOOL_REGISTRY.unregister("pytest_tool")
+
+
+def test_delegate_schema_reader_uses_registry_snapshot():
+    import importlib
+    sys.modules.pop("tools.delegate_tool", None)
+    delegate_tool = importlib.import_module("tools.delegate_tool")
+    import core.session as session_mod
+
+    session_mod._TOOL_REGISTRY.register(
+        "pytest_schema_tool",
+        lambda _args: "ok",
+        {"type": "function", "function": {"name": "pytest_schema_tool", "parameters": {"type": "object"}}},
+    )
+    try:
+        assert "pytest_schema_tool" in delegate_tool._tool_map()
+        assert any(
+            s.get("function", {}).get("name") == "pytest_schema_tool"
+            for s in delegate_tool._tools_schema()
+        )
+    finally:
+        session_mod._TOOL_REGISTRY.unregister("pytest_schema_tool")
+
+
+def test_tool_registry_skips_empty_name_and_schema_only_handler():
+    import core.session as session_mod
+
+    empty_schema = {"type": "function", "function": {"name": "", "parameters": {"type": "object"}}}
+    schema_only = {
+        "type": "function",
+        "function": {"name": "pytest_schema_only_tool", "parameters": {"type": "object"}},
+    }
+
+    session_mod._TOOL_REGISTRY.register("", lambda _args: "bad", empty_schema)
+    session_mod._TOOL_REGISTRY.register("pytest_schema_only_tool", None, schema_only)
+    try:
+        tool_map = session_mod._tool_map_snapshot()
+        schemas = session_mod._tool_schema_snapshot()
+
+        assert "" not in tool_map
+        assert not any(s.get("function", {}).get("name") == "" for s in schemas)
+        assert "pytest_schema_only_tool" not in tool_map
+        assert any(s.get("function", {}).get("name") == "pytest_schema_only_tool" for s in schemas)
+    finally:
+        session_mod._TOOL_REGISTRY.unregister("pytest_schema_only_tool")
+        session_mod._refresh_legacy_tool_globals()
+
+
+def test_attach_external_mcp_tools_skips_empty_schema_and_refreshes_legacy_globals(monkeypatch):
+    import core.session as session_mod
+    import core.mcp_client_manager as mcp_mod
+    from config import AGENT_PHASES
+
+    handler = lambda _args: "mcp ok"
+
+    class FakeManager:
+        def build_pawnlogic_handlers(self):
+            return {"pytest_mcp_tool": handler}
+
+        def build_pawnlogic_schemas(self):
+            return [
+                {"type": "function", "function": {"name": "", "parameters": {"type": "object"}}},
+                {
+                    "type": "function",
+                    "function": {"name": "pytest_mcp_tool", "parameters": {"type": "object"}},
+                },
+            ]
+
+        def get_phase_mapping(self):
+            return {"pytest_mcp_tool": "GENERAL"}
+
+    monkeypatch.setattr(mcp_mod, "init_external_mcp", lambda: FakeManager())
+    before_general = list(AGENT_PHASES.get("GENERAL", []))
+    try:
+        session_mod.attach_external_mcp_tools()
+
+        assert session_mod._tool_map_snapshot()["pytest_mcp_tool"]({}) == "mcp ok"
+        assert "pytest_mcp_tool" in session_mod.TOOL_MAP
+        assert any(s.get("function", {}).get("name") == "pytest_mcp_tool" for s in session_mod.TOOLS_SCHEMA)
+        assert "" not in session_mod._tool_map_snapshot()
+        assert not any(s.get("function", {}).get("name") == "" for s in session_mod._tool_schema_snapshot())
+        assert "pytest_mcp_tool" in AGENT_PHASES["GENERAL"]
+    finally:
+        session_mod._TOOL_REGISTRY.unregister("pytest_mcp_tool")
+        session_mod._refresh_legacy_tool_globals()
+        AGENT_PHASES["GENERAL"] = before_general
+
+
+def _load_real_sandbox_module():
+    import importlib
+    import tools
+
+    sys.modules.pop("tools.sandbox", None)
+    if hasattr(tools, "sandbox"):
+        delattr(tools, "sandbox")
+    return importlib.import_module("tools.sandbox")
+
+
+def test_sandbox_timeout_kills_process_group_before_parent(monkeypatch, tmp_path):
+    sandbox = _load_real_sandbox_module()
+    calls = []
+
+    class FakeProc:
+        pid = 12345
+
+        def communicate(self, input=None, timeout=None):
+            if timeout is not None:
+                raise sandbox.subprocess.TimeoutExpired(cmd="fake", timeout=timeout)
+            calls.append("communicate_after_timeout")
+            return b"", None
+
+        def kill(self):
+            calls.append("kill")
+
+    monkeypatch.setattr(sandbox.subprocess, "Popen", lambda *args, **kwargs: FakeProc())
+    monkeypatch.setattr(sandbox.os, "killpg", lambda pid, sig: calls.append(("killpg", pid, sig)))
+
+    out, rc = sandbox._run_limited(["fake"], timeout=1, cwd=str(tmp_path))
+
+    assert out == "[execution timed out after 1s]"
+    assert rc == 1
+    assert ("killpg", 12345, sandbox.signal.SIGKILL) in calls
+    assert "kill" not in calls
+
+
+def test_sandbox_timeout_falls_back_to_parent_kill(monkeypatch, tmp_path):
+    sandbox = _load_real_sandbox_module()
+    calls = []
+
+    class FakeProc:
+        pid = 12345
+
+        def communicate(self, input=None, timeout=None):
+            if timeout is not None:
+                raise sandbox.subprocess.TimeoutExpired(cmd="fake", timeout=timeout)
+            calls.append("communicate_after_timeout")
+            return b"", None
+
+        def kill(self):
+            calls.append("kill")
+
+    def fail_killpg(_pid, _sig):
+        calls.append("killpg")
+        raise OSError
+
+    monkeypatch.setattr(sandbox.subprocess, "Popen", lambda *args, **kwargs: FakeProc())
+    monkeypatch.setattr(sandbox.os, "killpg", fail_killpg)
+
+    out, rc = sandbox._run_limited(["fake"], timeout=1, cwd=str(tmp_path))
+
+    assert out == "[execution timed out after 1s]"
+    assert rc == 1
+    assert calls.count("killpg") == 1
+    assert calls.count("kill") == 1

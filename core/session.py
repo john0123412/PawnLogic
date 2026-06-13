@@ -89,6 +89,55 @@ def _dynamic_config() -> dict:
         return DYNAMIC_CONFIG
 
 
+def _tool_schema_snapshot() -> list[dict]:
+    return _TOOL_REGISTRY.snapshot_schemas()
+
+
+def _tool_map_snapshot() -> dict[str, callable]:
+    return _TOOL_REGISTRY.snapshot_map()
+
+
+def _refresh_legacy_tool_globals() -> None:
+    global TOOL_MAP, TOOLS_SCHEMA
+    TOOL_MAP = _TOOL_REGISTRY._tool_map
+    TOOLS_SCHEMA = _TOOL_REGISTRY.snapshot_schemas()
+
+
+class ToolRegistry:
+    """Mutable tool registry with snapshot reads for session/tool consumers."""
+
+    def __init__(self) -> None:
+        self._tool_map: dict[str, callable] = {}
+        self._schemas: dict[str, dict] = {}
+
+    def register(self, name: str, handler, schema: dict | None = None) -> None:
+        if not name:
+            return
+        if handler is not None:
+            self._tool_map[name] = handler
+        if schema is not None:
+            self._schemas[name] = schema
+
+    def unregister(self, name: str) -> None:
+        self._tool_map.pop(name, None)
+        self._schemas.pop(name, None)
+
+    def get_handler(self, name: str):
+        return self._tool_map.get(name)
+
+    def snapshot_map(self) -> dict[str, callable]:
+        return dict(self._tool_map)
+
+    def snapshot_schemas(self) -> list[dict]:
+        return [self._schemas[name] for name in self._schemas]
+
+    def set_schemas(self, schemas: list[dict]) -> None:
+        for schema in schemas:
+            name = schema.get("function", {}).get("name")
+            if name:
+                self._schemas[name] = schema
+
+
 class _ThinkingSpinner:
     """Small terminal spinner shown while the model has not produced output."""
 
@@ -164,7 +213,9 @@ except ImportError:
     tool_check_service = None
     RECON_SCHEMAS      = []
 
-TOOL_MAP: dict = {
+_TOOL_REGISTRY = ToolRegistry()
+
+_BASE_TOOL_MAP: dict = {
     "read_file":           tool_read_file,
     "read_file_lines":     tool_read_file_lines,
     "write_file":          tool_write_file,
@@ -187,40 +238,46 @@ TOOL_MAP: dict = {
     "pwn_timed_debug":     tool_pwn_timed_debug,
     "analyze_local_image": analyze_local_image,
 }
+for _tool_name, _handler in _BASE_TOOL_MAP.items():
+    _TOOL_REGISTRY.register(_tool_name, _handler)
 
 # P3 + P4: optional Docker tool registration.
 if tool_run_code_docker:
-    TOOL_MAP["run_code_docker"]    = tool_run_code_docker
+    _TOOL_REGISTRY.register("run_code_docker", tool_run_code_docker)
 if tool_pwn_container:
-    TOOL_MAP["pwn_container"]      = tool_pwn_container
+    _TOOL_REGISTRY.register("pwn_container", tool_pwn_container)
 if tool_install_package:                                    # P4.2
-    TOOL_MAP["tool_install_package"] = tool_install_package
+    _TOOL_REGISTRY.register("tool_install_package", tool_install_package)
 if docker_prune_resources:                                  # P4.3
-    TOOL_MAP["docker_prune_resources"] = docker_prune_resources
+    _TOOL_REGISTRY.register("docker_prune_resources", docker_prune_resources)
 
 # P5: optional Scrapling browser tool registration.
 if tool_web_fetch:
-    TOOL_MAP["web_fetch"]      = tool_web_fetch
+    _TOOL_REGISTRY.register("web_fetch", tool_web_fetch)
 if tool_web_click:
-    TOOL_MAP["web_click"]      = tool_web_click
+    _TOOL_REGISTRY.register("web_click", tool_web_click)
 if tool_web_screenshot:
-    TOOL_MAP["web_screenshot"] = tool_web_screenshot
+    _TOOL_REGISTRY.register("web_screenshot", tool_web_screenshot)
 if tool_web_select:
-    TOOL_MAP["web_select"]     = tool_web_select
+    _TOOL_REGISTRY.register("web_select", tool_web_select)
 if tool_web_type:
-    TOOL_MAP["web_type"]       = tool_web_type
+    _TOOL_REGISTRY.register("web_type", tool_web_type)
 if tool_web_navigate:
-    TOOL_MAP["web_navigate"]   = tool_web_navigate
+    _TOOL_REGISTRY.register("web_navigate", tool_web_navigate)
 
 # P6: optional environment reconnaissance tool registration.
 if tool_check_service:
-    TOOL_MAP["check_service"]  = tool_check_service
+    _TOOL_REGISTRY.register("check_service", tool_check_service)
 
-TOOLS_SCHEMA: list = (
+_TOOL_REGISTRY.set_schemas(
     FILE_SCHEMAS + WEB_SCHEMAS + SANDBOX_SCHEMAS
     + PWN_SCHEMAS + VISION_SCHEMAS + DOCKER_SCHEMAS
     + BROWSER_SCHEMAS + RECON_SCHEMAS
 )
+# Legacy compatibility exports. New registration paths should use _TOOL_REGISTRY.
+TOOL_MAP: dict = {}
+TOOLS_SCHEMA: list = []
+_refresh_legacy_tool_globals()
 
 # switch_phase: global routing tool, always attached regardless of phase filter.
 # Actual execution is intercepted in run_turn; the TOOL_MAP entry is a fallback.
@@ -258,11 +315,10 @@ _SWITCH_PHASE_SCHEMA = {
     },
 }
 
-TOOL_MAP["switch_phase"] = lambda a: (
+_TOOL_REGISTRY.register("switch_phase", lambda a: (
     f"[switch_phase] Phase switch request received; target: {a.get('phase', '?')}. "
     "This message should not appear; run_turn should intercept it."
-)
-TOOLS_SCHEMA.append(_SWITCH_PHASE_SCHEMA)
+), _SWITCH_PHASE_SCHEMA)
 
 # bump_skill tool: GSA feedback loop.
 def tool_bump_skill(args: dict) -> str:
@@ -303,8 +359,7 @@ _BUMP_SKILL_SCHEMA = {
     },
 }
 
-TOOL_MAP["bump_skill"] = tool_bump_skill
-TOOLS_SCHEMA.append(_BUMP_SKILL_SCHEMA)
+_TOOL_REGISTRY.register("bump_skill", tool_bump_skill, _BUMP_SKILL_SCHEMA)
 
 # P0: audit_payload tool for defensive auditing.
 # Dangerous tools that require audit.
@@ -361,8 +416,7 @@ _AUDIT_PAYLOAD_SCHEMA = {
     },
 }
 
-TOOL_MAP["audit_payload"] = tool_audit_payload
-TOOLS_SCHEMA.append(_AUDIT_PAYLOAD_SCHEMA)
+_TOOL_REGISTRY.register("audit_payload", tool_audit_payload, _AUDIT_PAYLOAD_SCHEMA)
 
 # P6: search_skills tool for automated exploit-chain retrieval.
 def tool_search_skills(args: dict) -> str:
@@ -424,18 +478,17 @@ _SEARCH_SKILLS_SCHEMA = {
     },
 }
 
-TOOL_MAP["search_skills"] = tool_search_skills
-TOOLS_SCHEMA.append(_SEARCH_SKILLS_SCHEMA)
+_TOOL_REGISTRY.register("search_skills", tool_search_skills, _SEARCH_SKILLS_SCHEMA)
 
 def _try_load_delegate():
     try:
         from tools.delegate_tool import tool_delegate_task, DELEGATE_SCHEMA
-        TOOL_MAP["delegate_task"] = tool_delegate_task
-        TOOLS_SCHEMA.append(DELEGATE_SCHEMA)
+        _TOOL_REGISTRY.register("delegate_task", tool_delegate_task, DELEGATE_SCHEMA)
     except ImportError:
         pass
 
 _try_load_delegate()
+_refresh_legacy_tool_globals()
 
 # ════════════════════════════════════════════════════════
 # External MCP tool attachment point.
@@ -459,8 +512,14 @@ def attach_external_mcp_tools() -> None:
         return
 
     # 1. Tool tables: update / extend for transparent main-loop consumption.
-    TOOL_MAP.update(mgr.build_pawnlogic_handlers())
-    TOOLS_SCHEMA.extend(mgr.build_pawnlogic_schemas())
+    for name, handler in mgr.build_pawnlogic_handlers().items():
+        _TOOL_REGISTRY.register(name, handler)
+    for schema in mgr.build_pawnlogic_schemas():
+        name = schema.get("function", {}).get("name")
+        if not name:
+            continue
+        _TOOL_REGISTRY.register(name, _TOOL_REGISTRY.get_handler(name), schema)
+    _refresh_legacy_tool_globals()
 
     # 2. Phase ownership: expose external tools in configured phase lists.
     for prefixed_name, phase in mgr.get_phase_mapping().items():
@@ -481,6 +540,8 @@ def detach_external_mcp_tools() -> None:
         shutdown_external_mcp()
     except Exception:  # noqa: BLE001
         pass  # never raise from shutdown/finally paths
+    finally:
+        _refresh_legacy_tool_globals()
 
 
 # ════════════════════════════════════════════════════════
@@ -1993,7 +2054,7 @@ class AgentSession:
             # MoE dynamic tool pruning.
             phase_whitelist = set(AGENT_PHASES.get(self.current_phase, []))
             current_tools = [
-                s for s in TOOLS_SCHEMA
+                s for s in _tool_schema_snapshot()
                 if s.get("function", {}).get("name") in phase_whitelist
                 or s.get("function", {}).get("name") in ("switch_phase", "bump_skill")  # ★
             ]
@@ -2089,7 +2150,7 @@ class AgentSession:
                         # Rebuild the tool list.
                         phase_whitelist = set(AGENT_PHASES.get(self.current_phase, []))
                         current_tools = [
-                            s for s in TOOLS_SCHEMA
+                            s for s in _tool_schema_snapshot()
                             if s.get("function", {}).get("name") in phase_whitelist
                             or s.get("function", {}).get("name") in ("switch_phase", "bump_skill")
                         ]
@@ -2389,7 +2450,7 @@ class AgentSession:
                             # Rebuild the dynamic tool list for the next iteration.
                             phase_whitelist = set(AGENT_PHASES[target])
                             current_tools = [
-                                s for s in TOOLS_SCHEMA
+                                s for s in _tool_schema_snapshot()
                                 if s.get("function", {}).get("name") in phase_whitelist
                                 or s.get("function", {}).get("name") in ("switch_phase", "bump_skill")  # ★
                             ]
@@ -2443,7 +2504,8 @@ class AgentSession:
                         _t0 = time.monotonic()
                         _audit_ok = True
                         try:
-                            result = TOOL_MAP[name](fn_args) if name in TOOL_MAP else f"ERROR: Unknown tool '{name}'"
+                            _tool_handler = _TOOL_REGISTRY.get_handler(name)
+                            result = _tool_handler(fn_args) if _tool_handler else f"ERROR: Unknown tool '{name}'"
 
                             # P0.7: semantic failure detection. The tool may not raise,
                             # but result content can still indicate failure.

@@ -9,7 +9,7 @@ WSL performance optimizations:
   5. Compilation artifacts go to /tmp, which is tmpfs and faster than /home on WSL.
 """
 
-import os, sys, re, subprocess, tempfile
+import os, signal, sys, re, subprocess, tempfile
 from pathlib import Path
 from config import DYNAMIC_CONFIG, SANDBOX_LANGS
 from utils.ansi import c, YELLOW, RED
@@ -118,8 +118,10 @@ def _run_limited(
 
     # Windows does not support preexec_fn.
     preexec = None
+    start_new_session = False
     if not disable_rlimit and _IS_POSIX:
         preexec = lambda: _sandbox_preexec(timeout)
+        start_new_session = True
 
     try:
         proc = subprocess.Popen(
@@ -131,6 +133,7 @@ def _run_limited(
             cwd=cwd,
             env=env,
             preexec_fn=preexec,
+            start_new_session=start_new_session,
         )
         # communicate with timeout.
         try:
@@ -139,7 +142,13 @@ def _run_limited(
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
-            proc.kill()
+            if start_new_session and _IS_POSIX:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except OSError:
+                    proc.kill()
+            else:
+                proc.kill()
             proc.communicate()
             return f"[execution timed out after {timeout}s]", 1
 

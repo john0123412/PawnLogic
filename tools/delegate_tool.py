@@ -14,7 +14,7 @@ Dual-model routing:
 
 Import cycle avoidance:
   - This module does not import core/session.py at top level.
-  - TOOL_MAP and TOOLS_SCHEMA are lazily imported when the tool is called.
+  - Tool registry snapshots are lazily imported when the tool is called.
   - _sub_stream() uses core/api_client.stream_request directly.
 """
 
@@ -25,6 +25,7 @@ from config import (
 )
 from core.api_client import stream_request, ensure_tool_call_id
 from core.memory     import _gen_id
+from core.state import state as _runtime_state
 from tools.file_ops  import _session_cwd
 from utils.ansi      import c, YELLOW, GRAY, GREEN, MAGENTA
 
@@ -38,6 +39,10 @@ _WORKER_MODEL_CANDIDATES = [
     "claude-haiku",
     "gpt-4.1",
 ]
+
+
+def _user_mode() -> bool:
+    return bool(_runtime_state.user_mode)
 
 def _select_worker_model(current_model: str = DEFAULT_MODEL) -> str:
     """
@@ -79,13 +84,13 @@ def _select_worker_model(current_model: str = DEFAULT_MODEL) -> str:
 # ════════════════════════════════════════════════════════
 
 def _tool_map():
-    """Import session.TOOL_MAP only when called, after the import cycle is gone."""
-    from core.session import TOOL_MAP
-    return TOOL_MAP
+    """Import the session tool map snapshot only after the import cycle is gone."""
+    from core.session import _tool_map_snapshot
+    return _tool_map_snapshot()
 
 def _tools_schema():
-    from core.session import TOOLS_SCHEMA
-    return TOOLS_SCHEMA
+    from core.session import _tool_schema_snapshot
+    return _tool_schema_snapshot()
 
 # ════════════════════════════════════════════════════════
 # Sub-agent session running silently.
@@ -269,6 +274,8 @@ def tool_delegate_task(a: dict) -> str:
     print(c(MAGENTA, f"  [Sub-agent] starting delegated task..."))
     print(c(GRAY,    f"  Task: {task[:80]}{'...' if len(task)>80 else ''}"))
     print(c(GRAY,    f"  Model: {worker_model}  Depth: {current_depth+1}/{_MAX_DEPTH}  Limit: {_SubAgentSession.MAX_ITER} iterations"))
+    if _user_mode():
+        print(c(YELLOW, "  [Trust Boundary] delegate_task is not isolated; the sub-agent inherits parent tool permissions."))
 
     sub    = _SubAgentSession(task, worker_model)
 
