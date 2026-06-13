@@ -171,6 +171,11 @@ _CUSTOM_PROVIDER_ALLOWED_SCHEMES = {"http", "https"}
 _providers_initialized = False
 
 
+def _ensure_providers_initialized() -> None:
+    if not _providers_initialized:
+        init_providers()
+
+
 def is_chat_model_candidate(model_id: str) -> bool:
     """Return whether a discovered model id is suitable for chat completions."""
     ml = str(model_id).lower()
@@ -218,6 +223,7 @@ def _provider_active_from_data(name: str, prov_cfg: dict | None, data: dict) -> 
 
 def is_provider_active(name: str) -> bool:
     """Return whether a provider's models should be visible in /model."""
+    _ensure_providers_initialized()
     if name in ALWAYS_ACTIVE_PROVIDERS:
         return True
     return bool(PROVIDERS.get(name, {}).get("active", False))
@@ -372,6 +378,7 @@ _FAST_KEYWORDS = {"flash", "haiku", "mini", "turbo", "lite"}
 
 def is_fast_model(model_alias: str) -> bool:
     """Return True if the model id contains a fast-tier keyword."""
+    _ensure_providers_initialized()
     mid = MODELS.get(model_alias, {}).get("id", model_alias).lower()
     return any(k in mid for k in _FAST_KEYWORDS)
 
@@ -382,6 +389,7 @@ def find_fast_peer(model_alias: str) -> str | None:
     from the same provider that has a valid API key.
     Returns None if no fast peer is found.
     """
+    _ensure_providers_initialized()
     m = MODELS.get(model_alias)
     if not m:
         return None
@@ -399,6 +407,7 @@ def find_fast_peer(model_alias: str) -> str | None:
 
 def get_api_config(model_alias: str) -> tuple[str, str]:
     """Return (base_url, api_key). Keys are read from environment variables."""
+    _ensure_providers_initialized()
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
     prov = PROVIDERS.get(m["provider"], list(PROVIDERS.values())[0])
     key  = os.getenv(prov["api_key_env"], "")
@@ -408,6 +417,7 @@ def get_api_config(model_alias: str) -> tuple[str, str]:
 
 def get_api_format(model_alias: str) -> str:
     """Return 'openai' or 'anthropic'."""
+    _ensure_providers_initialized()
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
     prov = PROVIDERS.get(m["provider"], {})
     return prov.get("api_format", "openai")
@@ -415,6 +425,7 @@ def get_api_format(model_alias: str) -> str:
 
 def get_provider_config(model_alias: str) -> dict:
     """Return the full provider configuration dictionary."""
+    _ensure_providers_initialized()
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
     prov = PROVIDERS.get(m["provider"], list(PROVIDERS.values())[0])
     key  = os.getenv(prov["api_key_env"], "")
@@ -439,11 +450,13 @@ def validate_api_key(model_alias: str) -> tuple[bool, str]:
 
 def list_configured_models() -> list[str]:
     """Return all model aliases whose provider keys are configured."""
+    _ensure_providers_initialized()
     return [alias for alias in MODELS if validate_api_key(alias)[0]]
 
 
 def get_best_vision_model() -> tuple[str | None, str | None, str | None]:
     """Return the first configured vision model by priority."""
+    _ensure_providers_initialized()
     for alias in VISION_PRIORITY:
         m = MODELS.get(alias)
         if not m or not m.get("vision"):
@@ -456,6 +469,7 @@ def get_best_vision_model() -> tuple[str | None, str | None, str | None]:
 
 def list_vision_models() -> list[str]:
     """Return all model aliases marked with vision=True."""
+    _ensure_providers_initialized()
     return [alias for alias, m in MODELS.items() if m.get("vision")]
 
 

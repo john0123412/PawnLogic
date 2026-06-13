@@ -237,9 +237,11 @@ Select providers to configure. You can run this multiple times:
 
 def _visible_models() -> dict:
     """Return keyed models whose providers are active in the current process."""
+    provider_config.init_providers()
+    model_items = list(MODELS.items())
     return {
         alias: cfg
-        for alias, cfg in MODELS.items()
+        for alias, cfg in model_items
         if is_provider_active(cfg.get("provider", ""))
         and os.getenv(PROVIDERS.get(cfg.get("provider", ""), {}).get("api_key_env", ""), "")
     }
@@ -258,12 +260,15 @@ def _provider_list(sink=None) -> None:
     from core.commands._common import get_active_sink
     from core.output import JsonSink
     sink = sink or get_active_sink()
+    provider_config.init_providers()
+    provider_items = list(PROVIDERS.items())
+    model_items = list(MODELS.items())
     if isinstance(sink, JsonSink):
         data = []
-        for pname, pinfo in PROVIDERS.items():
+        for pname, pinfo in provider_items:
             env = pinfo.get("api_key_env", "")
             models_for_provider = [
-                alias for alias, m in MODELS.items()
+                alias for alias, m in model_items
                 if m.get("provider", "") == pname
             ]
             data.append({
@@ -280,7 +285,7 @@ def _provider_list(sink=None) -> None:
         return
 
     _print(c(BOLD, "\n  Providers:"))
-    for pname, pinfo in PROVIDERS.items():
+    for pname, pinfo in provider_items:
         fmt = pinfo.get("api_format", "openai")
         label = pinfo.get("label", pname)
         env = pinfo.get("api_key_env", "")
