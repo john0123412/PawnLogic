@@ -9,8 +9,11 @@ Covers:
 """
 
 import re
+import socket
 import sys
 from pathlib import Path
+
+from tools import browser_ops, file_ops, web_ops
 
 ROOT = str(Path(__file__).resolve().parent.parent)
 if ROOT not in sys.path:
@@ -161,3 +164,101 @@ def test_user_friendly_error_explains_provider_5xx():
 
     assert "HTTP 502" in msg
     assert "provider" in msg.lower() or "gateway" in msg.lower()
+
+
+def test_fetch_url_blocks_unsupported_scheme():
+    result = web_ops.tool_fetch_url({"url": "file:///etc/passwd"})
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "Only http:// and https://" in result
+
+
+def test_fetch_url_blocks_loopback_target():
+    result = web_ops.tool_fetch_url({"url": "http://127.0.0.1:8080"})
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "loopback target" in result
+
+
+def test_fetch_url_blocks_hostname_resolving_to_loopback(monkeypatch):
+    def fake_getaddrinfo(*args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 0))]
+
+    monkeypatch.setattr(web_ops.socket, "getaddrinfo", fake_getaddrinfo)
+
+    result = web_ops.validate_fetch_url("http://example.test")
+
+    assert result[0].startswith("SECURITY BLOCK")
+    assert "resolves to a loopback address" in result[0]
+
+
+def test_fetch_url_warns_for_private_network(monkeypatch):
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    result = web_ops.validate_fetch_url("http://192.168.1.10:8080")
+
+    assert result[0] is None
+    assert result[1]
+    assert "Private network target" in result[1][0]
+
+
+def test_browser_launch_args_default_to_sandbox():
+    assert "--no-sandbox" not in browser_ops._browser_launch_args()
+
+
+def test_browser_launch_args_allows_explicit_no_sandbox(monkeypatch):
+    monkeypatch.setitem(browser_ops.BROWSER_CONFIG, "allow_no_sandbox", True)
+    try:
+        assert "--no-sandbox" in browser_ops._browser_launch_args()
+    finally:
+        monkeypatch.setitem(browser_ops.BROWSER_CONFIG, "allow_no_sandbox", False)
+
+
+def test_list_dir_blocks_sensitive_directory(tmp_path, monkeypatch):
+    sensitive = tmp_path / ".ssh"
+    sensitive.mkdir()
+    monkeypatch.setattr(file_ops, "READ_BLACKLIST", [str(sensitive)])
+
+    result = file_ops.tool_list_dir({"path": str(sensitive)})
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "directory enumeration denied" in result
+
+
+def test_find_files_blocks_sensitive_root(tmp_path, monkeypatch):
+    sensitive = tmp_path / ".aws"
+    sensitive.mkdir()
+    monkeypatch.setattr(file_ops, "READ_BLACKLIST", [str(sensitive)])
+
+    result = file_ops.tool_find_files({"root": str(sensitive), "pattern": "config"})
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "directory enumeration denied" in result
+
+
+def test_list_dir_recursive_skips_sensitive_children(tmp_path, monkeypatch):
+    sensitive = tmp_path / ".ssh"
+    sensitive.mkdir()
+    (sensitive / "id_rsa").write_text("secret", encoding="utf-8")
+    (tmp_path / "notes.txt").write_text("visible", encoding="utf-8")
+    monkeypatch.setattr(file_ops, "READ_BLACKLIST", [str(sensitive)])
+
+    result = file_ops.tool_list_dir({"path": str(tmp_path), "recursive": True})
+
+    assert "notes.txt" in result
+    assert ".ssh" not in result
+    assert "id_rsa" not in result
+
+
+def test_find_files_skips_sensitive_children(tmp_path, monkeypatch):
+    sensitive = tmp_path / ".ssh"
+    visible = tmp_path / "public"
+    sensitive.mkdir()
+    visible.mkdir()
+    (sensitive / "id_rsa").write_text("secret", encoding="utf-8")
+    (visible / "id_rsa").write_text("visible", encoding="utf-8")
+    monkeypatch.setattr(file_ops, "READ_BLACKLIST", [str(sensitive)])
+
+    result = file_ops.tool_find_files({"root": str(tmp_path), "pattern": "id_rsa"})
+
+    assert "public/id_rsa" in result
+    assert ".ssh" not in result

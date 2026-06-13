@@ -31,6 +31,8 @@ import threading
 from datetime import datetime
 
 from config import BROWSER_CONFIG, WORKSPACE_DIR
+from core.state import state as _runtime_state
+from tools.web_ops import validate_fetch_url
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN
 
 # Constants.
@@ -53,6 +55,33 @@ _browser_error = None  # error message
 _stealthy_fetcher = None
 _fetcher_error = None
 _fetcher_lock = threading.Lock()
+_browser_warning_emitted = False
+
+
+def _user_mode() -> bool:
+    return bool(_runtime_state.user_mode)
+
+
+def _browser_launch_args() -> list[str]:
+    args = ["--disable-blink-features=AutomationControlled"]
+    allow_no_sandbox = bool(BROWSER_CONFIG.get("allow_no_sandbox", False))
+    if allow_no_sandbox:
+        args.insert(0, "--no-sandbox")
+    return args
+
+
+def _emit_browser_trust_warning() -> None:
+    global _browser_warning_emitted
+    if _browser_warning_emitted or not _user_mode():
+        return
+    _browser_warning_emitted = True
+    print(c(YELLOW, "  [Trust Boundary] Browser tools are network-capable and not a host sandbox."))
+    if BROWSER_CONFIG.get("allow_no_sandbox", False):
+        print(c(YELLOW, "  [Trust Boundary] Chromium sandbox is disabled by explicit config."))
+
+
+def _validate_browser_url(url: str) -> tuple[str | None, list[str]]:
+    return validate_fetch_url(url)
 
 
 def _get_page():
@@ -73,12 +102,10 @@ def _get_page():
 
         try:
             pw = sync_playwright().start()
+            _emit_browser_trust_warning()
             _browser = pw.chromium.launch(
                 headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-blink-features=AutomationControlled",
-                ],
+                args=_browser_launch_args(),
             )
             _context = _browser.new_context(
                 viewport={"width": 1920, "height": 1080},
@@ -96,10 +123,17 @@ def _get_page():
 def _ensure_page_url(url: str):
     """Ensure the Patchright page has navigated to the target URL."""
     global _current_url
+    err, warnings = _validate_browser_url(url)
+    if err:
+        _current_url = None
+        return
     page = _get_page()
     if not page:
         return
     try:
+        if warnings and _user_mode():
+            for warning in warnings:
+                print(c(YELLOW, f"  [Trust Boundary] {warning}"))
         current = page.url
         # Navigate when about:blank or URL mismatch is detected.
         if not current or current == "about:blank" or current != url:
@@ -185,6 +219,12 @@ def tool_web_fetch(a: dict) -> str:
     url = a["url"]
     timeout = int(a.get("timeout", BROWSER_CONFIG["timeout"]))
     print(c(CYAN, f"  🌐 [Scrapling/Fetch] {url[:80]}"))
+    err, warnings = _validate_browser_url(url)
+    if err:
+        return err
+    if warnings and _user_mode():
+        for warning in warnings:
+            print(c(YELLOW, f"  [Trust Boundary] {warning}"))
 
     try:
         fetcher = _get_stealthy_fetcher()
@@ -333,6 +373,12 @@ def tool_web_navigate(a: dict) -> str:
     global _current_url
     url = a["url"]
     print(c(CYAN, f"  🧭 [Scrapling/Navigate] {url[:80]}"))
+    err, warnings = _validate_browser_url(url)
+    if err:
+        return err
+    if warnings and _user_mode():
+        for warning in warnings:
+            print(c(YELLOW, f"  [Trust Boundary] {warning}"))
 
     page = _get_page()
     if not page:

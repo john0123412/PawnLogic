@@ -21,6 +21,7 @@ from core.api_errors import (
     retry_notice,
 )
 from core.interrupts import clear_cancel_callback, raise_if_interrupted, set_cancel_callback
+from core.provider_runtime import maybe_warn_insecure_provider
 
 
 # Custom exceptions.
@@ -990,47 +991,61 @@ def call_once(
         }
 
     proxy = _detect_proxy()
-    conn: http.client.HTTPConnection | None = None
 
-    try:
-        conn, path = _open_connection(base_url, proxy, timeout=_CONN_TIMEOUT)
+    maybe_warn_insecure_provider(base_url)
 
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        if api_fmt == "anthropic":
-            hdrs = _anthropic_build_headers(api_key, len(body))
-        else:
-            hdrs = {
-                "Authorization":  f"Bearer {api_key}",
-                "Content-Type":   "application/json",
-                "Content-Length": str(len(body)),
-            }
-        conn.request("POST", path, body=body, headers=hdrs)
-        if conn.sock:
-            conn.sock.settimeout(_NONSTREAM_TIMEOUT)
+    for attempt in range(_RETRY_MAX):
+        conn: http.client.HTTPConnection | None = None
+        try:
+            conn, path = _open_connection(base_url, proxy, timeout=_CONN_TIMEOUT)
 
-        resp = conn.getresponse()
-        raw  = resp.read()
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            if api_fmt == "anthropic":
+                hdrs = _anthropic_build_headers(api_key, len(body))
+            else:
+                hdrs = {
+                    "Authorization":  f"Bearer {api_key}",
+                    "Content-Type":   "application/json",
+                    "Content-Length": str(len(body)),
+                }
+            conn.request("POST", path, body=body, headers=hdrs)
+            if conn.sock:
+                conn.sock.settimeout(_NONSTREAM_TIMEOUT)
 
-        if resp.status != 200:
-            return "", format_http_error(resp.status, raw[:600])
+            resp = conn.getresponse()
+            raw  = resp.read()
 
-        if api_fmt == "anthropic":
-            return _anthropic_parse_response(raw)
-        else:
+            if resp.status in _RETRY_CODES and attempt < _RETRY_MAX - 1:
+                _interruptible_sleep(_retry_delay(attempt, resp.headers.get("Retry-After")))
+                continue
+            if resp.status != 200:
+                return "", format_http_error(resp.status, raw[:600])
+
+            if api_fmt == "anthropic":
+                return _anthropic_parse_response(raw)
             return _parse_openai_nonstream_text(raw)
 
-    except socket.timeout:
-        return "", (
-            f"Request timeout ({_NONSTREAM_TIMEOUT}s): provider did not finish "
-            "the non-streaming response. Check network/proxy or switch provider."
-        )
-    except ssl.SSLError as e:
-        return "", f"SSL error: {e}"
-    except (ConnectionError, OSError) as e:
-        return "", format_transport_error(e, proxy=proxy, connect_timeout=_CONN_TIMEOUT)
-    except Exception as e:
-        return "", format_transport_error(e, proxy=proxy, connect_timeout=_CONN_TIMEOUT)
-    finally:
-        if conn:
-            try: conn.close()
-            except Exception: pass
+        except socket.timeout:
+            if attempt < _RETRY_MAX - 1:
+                _interruptible_sleep(_retry_delay(attempt))
+                continue
+            return "", (
+                f"Request timeout ({_NONSTREAM_TIMEOUT}s): provider did not finish "
+                "the non-streaming response. Check network/proxy or switch provider."
+            )
+        except ssl.SSLError as e:
+            return "", f"SSL error: {e}"
+        except (ConnectionError, OSError) as e:
+            if attempt < _RETRY_MAX - 1:
+                _interruptible_sleep(_retry_delay(attempt))
+                continue
+            return "", format_transport_error(e, proxy=proxy, connect_timeout=_CONN_TIMEOUT)
+        except Exception as e:
+            return "", format_transport_error(e, proxy=proxy, connect_timeout=_CONN_TIMEOUT)
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    return "", "Request failed after retries."

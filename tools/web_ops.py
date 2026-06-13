@@ -12,21 +12,146 @@ Fetch fallback chain:
   3. Regex strip  original regex cleanup              zero-dependency fallback.
 """
 
-import os
-import re
+import ipaddress
 import json
-import shutil
-import subprocess
+import os
 import random
-import urllib.request
-import urllib.parse
+import re
+import shutil
+import socket
+import subprocess
 import urllib.error
+import urllib.parse
+import urllib.request
 from config import DYNAMIC_CONFIG, USER_AGENTS, scrub_sensitive_env
 from utils.ansi import c, BLUE, YELLOW, GRAY, GREEN
+from core.state import state as _runtime_state
 
 # Detect local tools.
 _has_pandoc = bool(shutil.which("pandoc"))
 _has_lynx   = bool(shutil.which("lynx"))
+_URL_ALLOWED_SCHEMES = {"http", "https"}
+_METADATA_HOSTS = {
+    "metadata.google.internal",
+    "metadata",
+    "metadata.aliyun.com",
+}
+_URL_POLICY_WARN_ON_PRIVATE = os.environ.get(
+    "PAWNLOGIC_WARN_PRIVATE_NETWORK",
+    "1",
+).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _user_mode() -> bool:
+    return bool(_runtime_state.user_mode)
+
+
+def _is_private_ip(host: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_private
+
+
+def _is_loopback_ip(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_link_local_ip(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_link_local
+    except ValueError:
+        return False
+
+
+def _resolved_host_ips(host: str) -> list:
+    try:
+        ipaddress.ip_address(host)
+        return []
+    except ValueError:
+        pass
+
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return []
+
+    ips = []
+    for info in infos:
+        sockaddr = info[4]
+        if not sockaddr:
+            continue
+        try:
+            ips.append(ipaddress.ip_address(sockaddr[0]))
+        except ValueError:
+            continue
+    return ips
+
+
+def validate_fetch_url(url: str) -> tuple[str | None, list[str]]:
+    """
+    Validate a URL for fetch/browser tools.
+
+    Returns (error_message_or_none, warnings).
+    """
+    parsed = urllib.parse.urlparse(str(url).strip())
+    if parsed.scheme.lower() not in _URL_ALLOWED_SCHEMES:
+        return (
+            f"SECURITY BLOCK: unsupported URL scheme '{parsed.scheme or '(missing)'}'. "
+            "Only http:// and https:// are allowed.",
+            [],
+        )
+    if not parsed.netloc:
+        return "SECURITY BLOCK: URL must include a network location.", []
+
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return "SECURITY BLOCK: URL host is missing or invalid.", []
+
+    if host == "localhost" or host.endswith(".localhost") or _is_loopback_ip(host):
+        return (
+            f"SECURITY BLOCK: loopback target '{host}' is denied for web/browser tools by default.",
+            [],
+        )
+
+    if host in _METADATA_HOSTS or host.endswith(".internal"):
+        return (
+            f"SECURITY BLOCK: metadata/internal host '{host}' is denied for web/browser tools by default.",
+            [],
+        )
+
+    if _is_link_local_ip(host):
+        return (
+            f"SECURITY BLOCK: link-local target '{host}' is denied for web/browser tools by default.",
+            [],
+        )
+
+    resolved_ips = _resolved_host_ips(host)
+    if any(ip.is_loopback for ip in resolved_ips):
+        return (
+            f"SECURITY BLOCK: target '{host}' resolves to a loopback address; denied by default.",
+            [],
+        )
+    if any(ip.is_link_local for ip in resolved_ips):
+        return (
+            f"SECURITY BLOCK: target '{host}' resolves to a link-local address; denied by default.",
+            [],
+        )
+
+    warnings: list[str] = []
+    if _URL_POLICY_WARN_ON_PRIVATE and _is_private_ip(host):
+        warnings.append(
+            f"Private network target '{host}' is allowed, but this crosses the local trust boundary."
+        )
+    if _URL_POLICY_WARN_ON_PRIVATE and any(ip.is_private for ip in resolved_ips):
+        warnings.append(
+            f"Target '{host}' resolves to a private network address; this crosses the local trust boundary."
+        )
+    return None, warnings
 
 def _ua() -> str:
     """Return a random User-Agent."""
@@ -241,6 +366,12 @@ def tool_fetch_url(a: dict) -> str:
     url       = a["url"]
     max_chars = int(a.get("max_chars", DYNAMIC_CONFIG["fetch_max_chars"]))
     strategy  = a.get("strategy", "auto")   # auto | jina | pandoc | direct
+    err, warnings = validate_fetch_url(url)
+    if err:
+        return err
+    if warnings and _user_mode():
+        for warning in warnings:
+            print(c(YELLOW, f"  [Trust Boundary] {warning}"))
 
     # 1. Jina Reader when auto or explicitly requested.
     if strategy in ("auto", "jina"):
