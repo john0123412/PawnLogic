@@ -1,4 +1,5 @@
 {
+  "debug_stderr": false,
   "mcpServers": {
     "tavily": {
       "command": "npx",

@@ -12,7 +12,7 @@ on:
   push:
     tags:
       - "v*.*.*"
-  workflow_dispatch:               # 手动触发，可选择 testpypi 做 dry-run
+  workflow_dispatch:               # Manual trigger; choose testpypi for dry-run
     inputs:
       target:
         description: "Publish target"
@@ -25,15 +25,13 @@ on:
 
 concurrency:
   group: publish-${{ github.ref }}-${{ inputs.target || 'tag' }}
-  cancel-in-progress: false        # 发布不能中断
+  cancel-in-progress: false        # Publishing must not be interrupted
 
-# FIX #5: 最小权限
 permissions:
-  contents: write   # 创建 GitHub Release
-  id-token: write   # 预留 OIDC trusted publishing 升级路径
+  contents: read
 
 jobs:
-  # ── FIX #2: 发布前先跑测试（原来完全没有）──────────────────
+  # ── FIX #2: Run tests before publishing ────────────────────────────
   test-before-publish:
     name: "✅ Test before publish"
     runs-on: ubuntu-latest
@@ -68,7 +66,7 @@ jobs:
       - name: Run tests
         run: python3 -m pytest tests/ -v --tb=short --timeout=60
 
-  # ── 动态 E2E 测试 ──────────────────────────────────────────
+  # ── Dynamic E2E tests ──────────────────────────────────────────────
   dynamic-test:
     name: "🤖 Dynamic E2E (Agent→Agent)"
     needs: test-before-publish
@@ -79,9 +77,9 @@ jobs:
       PAWNLOGIC_TEST_MODE: "true"
       MCP_ENABLED: "false"
       PAWNLOGIC_HOME: /tmp/pawnlogic-publish-e2e
-      DEEPSEEK_API_KEY: "sk-test-fake-key-for-ci"
-      PAWN_API_KEY: "test-fake-key"
-      ANTHROPIC_API_KEY: "sk-ant-test-fake"
+      DEEPSEEK_API_KEY: "ci-dummy-not-a-real-key"
+      PAWN_API_KEY: "ci-placeholder-key"
+      ANTHROPIC_API_KEY: "ci-anthropic-placeholder"
       TERM: "dumb"
       NO_COLOR: "1"
 
@@ -111,12 +109,15 @@ jobs:
             pytest-*.log
           retention-days: 7
 
-  # ── 构建并发布 ────────────────────────────────────────────
+  # ── Build and publish ─────────────────────────────────────────────
   publish:
     name: "🚀 Build & Publish"
-    needs: [test-before-publish, dynamic-test]  # 两个门禁都要通过
+    needs: [test-before-publish, dynamic-test]  # Both gates must pass
     runs-on: ubuntu-latest
     timeout-minutes: 10            # FIX #4
+    permissions:
+      contents: write
+      id-token: write
 
     steps:
       - uses: actions/checkout@v4
@@ -147,11 +148,11 @@ jobs:
       - name: Build
         run: python3 -m build
 
-      # FIX #3: 发布前验证包完整性（原来完全缺失）
+      # FIX #3: Validate package integrity before publishing.
       - name: Validate package (twine check)
         run: python3 -m twine check dist/*
 
-      # Tag push → PyPI (生产)；workflow_dispatch → 走 inputs.target 选择
+      # Tag push goes to PyPI; workflow_dispatch uses inputs.target.
       - name: Publish to TestPyPI
         if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
         env:
@@ -197,7 +198,7 @@ jobs:
           Path("release_notes.md").write_text(notes + "\n", encoding="utf-8")
           PY
 
-      # 仅 tag push 创建 GitHub Release；workflow_dispatch dry-run 不建
+      # Create GitHub Release only for tag pushes, not workflow_dispatch dry-runs.
       - name: Create GitHub Release
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2

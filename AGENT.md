@@ -100,9 +100,13 @@ The repository has one CLI runtime implementation.
   `./pawn.sh --help` must work and show the same CLI parser output.
 - Fresh-venv `pip install .` must expose a working `pawn` command.
 - Source code, comments, runtime prompts, log messages, generated templates,
-  tests, and agent-facing instructions must be written in English. Chinese is
-  allowed only in Chinese documentation files such as `README_CN.md` and
-  `GUIDE_CN.md`, where it must match the English documentation semantically.
+  tests, and agent-facing instructions must be written in English.
+- Chinese is allowed only in repository files whose filename stem ends with
+  `_CN` (for example `README_CN.md` and `GUIDE_CN.md`), where it must match
+  the English documentation semantically.
+- Do not introduce Chinese text anywhere else in the repository, including
+  Python source, shell scripts, tests, fixtures, config files, commit-facing
+  templates, or agent instructions.
 - Default `pawn` startup is user-friendly mode. It must hide raw tool-call
   internals, parser diagnostics, detailed reasoning streams, and low-level API
   errors unless the user explicitly enables debug output.

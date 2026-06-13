@@ -6,6 +6,7 @@ hard-coded in source.
 """
 import os
 import json
+from urllib.parse import urlparse
 
 from .paths import PAWNLOGIC_HOME
 
@@ -140,6 +141,8 @@ NAMING_MODEL_CHAIN: list = [
 VISION_PRIORITY = ["gpt-5.5", "gpt-4o", "claude-sonnet"]
 
 CUSTOM_PROVIDERS_PATH = PAWNLOGIC_HOME / "custom_providers.json"
+CUSTOM_MODEL_DESC = "Custom model"
+FETCHED_MODEL_DESC = "Dynamically fetched model"
 BUILTIN_PROVIDER_NAMES = set(PROVIDERS)
 BUILTIN_MODEL_ALIASES = set(MODELS)
 ALWAYS_ACTIVE_PROVIDERS = {"deepseek"}
@@ -164,6 +167,8 @@ NON_CHAT_MODEL_KEYWORDS = {
     "sora",
 }
 LEGACY_MODEL_KEYWORDS = ("instruct", "babbage", "davinci", "curie", "ada", "legacy")
+_CUSTOM_PROVIDER_ALLOWED_SCHEMES = {"http", "https"}
+_providers_initialized = False
 
 
 def is_chat_model_candidate(model_id: str) -> bool:
@@ -283,6 +288,64 @@ def _normalize_url(raw: str, api_format: str = "openai") -> str:
     if raw.endswith("/v1"):
         return raw + suffix
     return raw + "/v1" + suffix
+
+
+def _validate_base_url(raw: str) -> str:
+    parsed = urlparse(str(raw).strip())
+    if parsed.scheme not in _CUSTOM_PROVIDER_ALLOWED_SCHEMES:
+        raise ValueError(
+            f"unsupported provider base_url scheme '{parsed.scheme or '(missing)'}'; "
+            "only http:// and https:// are allowed"
+        )
+    if not parsed.netloc:
+        raise ValueError("provider base_url must include a network location")
+    return str(raw).strip()
+
+
+def _validated_custom_provider_data(data: dict) -> tuple[dict, dict]:
+    providers = data.get("providers", {})
+    models = data.get("models", {})
+    if not isinstance(providers, dict):
+        raise ValueError("custom providers file: 'providers' must be an object")
+    if not isinstance(models, dict):
+        raise ValueError("custom providers file: 'models' must be an object")
+    provider_states = data.get("provider_states", {})
+    if provider_states is not None and not isinstance(provider_states, dict):
+        raise ValueError("custom providers file: 'provider_states' must be an object")
+
+    validated_providers: dict = {}
+    for name, prov in providers.items():
+        if not isinstance(prov, dict):
+            raise ValueError(f"provider '{name}' must be an object")
+        base_url = _validate_base_url(prov.get("base_url", ""))
+        api_key_env = str(prov.get("api_key_env", "")).strip()
+        api_format = str(prov.get("api_format", "openai")).strip().lower() or "openai"
+        if api_format not in {"openai", "anthropic"}:
+            raise ValueError(f"provider '{name}' has unsupported api_format '{api_format}'")
+        if not api_key_env:
+            raise ValueError(f"provider '{name}' must declare api_key_env")
+        validated_providers[name] = {
+            **prov,
+            "base_url": base_url,
+            "api_key_env": api_key_env,
+            "api_format": api_format,
+        }
+
+    validated_models: dict = {}
+    for alias, model in models.items():
+        if not isinstance(model, dict):
+            raise ValueError(f"model '{alias}' must be an object")
+        validated_models[alias] = dict(model)
+
+    return validated_providers, validated_models
+
+
+def init_providers(force: bool = False) -> None:
+    global _providers_initialized
+    if _providers_initialized and not force:
+        return
+    load_custom_providers()
+    _providers_initialized = True
 
 
 def models_url_from_base_url(raw: str) -> str:
@@ -418,10 +481,9 @@ def load_custom_providers() -> None:
         return
     try:
         data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
+        custom_providers, custom_models = _validated_custom_provider_data(data)
     except Exception:
         return
-    custom_providers = data.get("providers", {})
-    custom_models = data.get("models", {})
     for name, prov in PROVIDERS.items():
         prov["active"] = _provider_active_from_data(name, prov, data)
     for name in list(PROVIDERS):
@@ -452,6 +514,7 @@ def load_custom_providers() -> None:
     for alias, model in normalised_models.items():
         if alias in BUILTIN_MODEL_ALIASES:
             continue
+        model.setdefault("desc", CUSTOM_MODEL_DESC)
         model.setdefault("color", "\033[37m")
         model.setdefault("vision", False)
         MODELS[alias] = model
@@ -476,6 +539,7 @@ def save_custom_provider(
     data.setdefault("models", {})
     data.setdefault("provider_states", {})
     prov_cfg = dict(prov_cfg)
+    prov_cfg["base_url"] = _validate_base_url(prov_cfg.get("base_url", ""))
     prov_cfg["active"] = _provider_active_from_data(name, prov_cfg, data)
     data["providers"][name] = prov_cfg
     if replace_models:
@@ -512,7 +576,3 @@ def remove_custom_provider(name: str) -> bool:
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return True
-
-
-# Load custom providers when the module is imported.
-load_custom_providers()

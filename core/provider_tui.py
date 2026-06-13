@@ -19,7 +19,7 @@ from prompt_toolkit.formatted_text import StyleAndTextTuples
 
 from config.providers import (
     PROVIDERS, MODELS, CUSTOM_PROVIDERS_PATH,
-    save_custom_provider, load_custom_providers, remove_custom_provider,
+    init_providers, save_custom_provider, remove_custom_provider,
     is_provider_active,
 )
 from core.provider_runtime import (
@@ -66,6 +66,7 @@ __all__ = [
 _BUILTIN = {"deepseek", "openai", "anthropic"}
 _ALWAYS_ACTIVE = {"deepseek"}
 _PAGE = 20  # rows per page in model selector
+load_custom_providers = init_providers
 
 TUI_STYLE = Style.from_dict({
     "title":        "#00afff bold",
@@ -950,7 +951,7 @@ class ProviderTUI:
                     "active": False}
         save_custom_provider(name, prov_cfg, {})
         PROVIDERS[name] = prov_cfg
-        load_custom_providers()
+        init_providers(force=True)
         self._panel = "main"
         if self._app:
             self._app.layout = self._build_layout()
@@ -1076,7 +1077,7 @@ class ProviderTUI:
                     "active": False}
         save_custom_provider(name, prov_cfg, {})
         PROVIDERS[name] = prov_cfg
-        load_custom_providers()
+        init_providers(force=True)
         self._wiz_status = "✅ Saved inactive. Activate it from the detail panel to show models in /model."
         self._wiz_status_style = "class:success"
         self._panel = "main"

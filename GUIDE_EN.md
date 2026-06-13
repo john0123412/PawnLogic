@@ -121,7 +121,7 @@
 
 ### Model Visibility
 
-`/model` and Tab completion only show DeepSeek plus providers that are active and have a configured API key. Custom providers are inactive by default; run `/provider activate <name>` after fetching the models you want.
+`/model` and Tab completion only show DeepSeek plus providers that are active and have a configured API key. Custom providers are inactive by default; run `/provider activate <name>` after fetching the models you want. Custom model descriptions are loaded from `~/.pawnlogic/custom_providers.json`; fetched models receive an English fallback description when the provider does not supply one.
 
 ---
 
@@ -215,6 +215,12 @@ cp mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
 The example keeps the external `fetch` MCP disabled by default because
 `uvx mcp-server-fetch` may contact PyPI during startup. Use PawnLogic's built-in
 `fetch_url` unless you explicitly enable that MCP server and allow network installation.
+
+MCP subprocess stderr is written to `~/.pawnlogic/logs/mcp/<server>.stderr.log`
+by default so server startup banners do not appear in the main terminal. Set
+top-level `"debug_stderr": true` in `mcp_configs.json` to show raw MCP stderr
+while troubleshooting. PawnLogic advertises MCP roots for the current working
+directory and `~/.pawnlogic/workspace`.
 
 ---
 

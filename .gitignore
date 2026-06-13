@@ -2,7 +2,7 @@
 # NousAgent Project - Git Ignore Configuration
 # =================================================================
 
-# --- 敏感数据 (核心保护) ---
+# --- Sensitive data (core protection) ---
 .env
 .env.*
 *.Key
@@ -20,7 +20,7 @@ secrets.json
 secrets.yaml
 *.secret
 
-# --- Python 环境与缓存 ---
+# --- Python environments and caches ---
 .venv/
 venv/
 ENV/
@@ -30,14 +30,14 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
-# --- AI 工具缓存与配置 ---
+# --- AI tool caches and config ---
 .aider*
 .aiderignore
 .cline/
 .thought
 .pawnlogic_index/
 
-# --- 编辑器与 IDE (JetBrains/VS Code) ---
+# --- Editors and IDEs (JetBrains/VS Code) ---
 .idea/
 .vscode/
 *.swp
@@ -45,22 +45,22 @@ __pycache__/
 *.user
 *.code-workspace
 
-# --- 构建产物与分发 ---
+# --- Build artifacts and distributions ---
 build/
 dist/
 *.egg-info/
 *.spec
 
-# --- 操作系统临时文件 ---
+# --- Operating system temporary files ---
 .DS_Store
 Thumbs.db
 
-# --- CI 缓存 ---
+# --- CI caches ---
 .ruff_cache/
 htmlcov/
 .coverage
 
-# --- 历史与备份（防 filter-repo / 手动 backup 误提）---
+# --- History and backups (avoid committing filter-repo or manual backups) ---
 *.gitbackup-*
 *.git-backup-*
 .git-rewrite/
@@ -68,7 +68,7 @@ htmlcov/
 *.orig
 *.rej
 
-# --- 项目特定排除 (如日志或临时数据) ---
+# --- Project-specific excludes (logs and temporary data) ---
 logs/
 *.log
 temp/

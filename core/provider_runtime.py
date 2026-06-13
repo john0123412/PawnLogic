@@ -13,14 +13,16 @@ from config.paths import PAWNLOGIC_HOME
 from config import providers as provider_config
 from config.providers import (
     CUSTOM_PROVIDERS_PATH,
+    FETCHED_MODEL_DESC,
     MODELS,
     PROVIDERS,
     custom_model_alias,
+    init_providers,
     is_chat_model_candidate,
-    load_custom_providers,
     models_url_from_base_url,
 )
 from core.api_errors import format_http_error, format_transport_error
+from core.state import state as _runtime_state
 
 PAWNLOGIC_DIR = PAWNLOGIC_HOME
 ENV_PATH = PAWNLOGIC_DIR / ".env"
@@ -30,6 +32,23 @@ UNSUPPORTED_MODEL_MARKERS = (
     "does not exist", "unknown model", "invalid model", "not available",
 )
 REASONING_KEYWORDS = ("mimo", "deepseek", "qwq")
+_WARNED_HTTP_PROVIDER_URLS: set[str] = set()
+load_custom_providers = init_providers
+
+
+def _user_mode() -> bool:
+    return bool(_runtime_state.user_mode)
+
+
+def maybe_warn_insecure_provider(base_url: str, *, emit=print) -> None:
+    url = str(base_url or "").strip()
+    if not url.startswith("http://") or url in _WARNED_HTTP_PROVIDER_URLS:
+        return
+    _WARNED_HTTP_PROVIDER_URLS.add(url)
+    if _user_mode():
+        emit(
+            "  [Trust Boundary] Provider uses plain HTTP. Requests and API keys are not protected by TLS."
+        )
 
 
 def save_key(env_var: str, key: str) -> None:
@@ -57,7 +76,7 @@ def record_sync_time(provider_name: str) -> None:
 
 def sync_models_to_runtime() -> None:
     """Merge custom_providers.json into in-memory provider/model config."""
-    load_custom_providers()
+    init_providers(force=True)
 
 
 def set_active(provider_name: str, active: bool) -> tuple[bool, str]:
@@ -68,7 +87,7 @@ def set_active(provider_name: str, active: bool) -> tuple[bool, str]:
         return False, "DeepSeek is always active."
     if not provider_config.set_provider_active(provider_name, active):
         return False, f"Failed to update provider active state: {provider_name}"
-    load_custom_providers()
+    init_providers(force=True)
     state = "active" if active else "inactive"
     return True, f"Provider is now {state}."
 
@@ -227,6 +246,7 @@ async def test_connection(
     if not model_id:
         return False, "No chat models loaded. Use Fetch / Sync Models first.", 0
     endpoint = normalize_base_url(base_url, api_format)
+    maybe_warn_insecure_provider(endpoint)
     payload = {
         "model": model_id,
         "max_tokens": 1,
@@ -265,6 +285,7 @@ async def fetch_models(
     import httpx
 
     models_url = models_url_from_base_url(base_url)
+    maybe_warn_insecure_provider(models_url)
     all_data: list = []
     stats = {"returned": 0, "hidden_by_name": 0, "hidden_by_probe": 0, "selectable": 0}
     url = f"{models_url}?limit=200"
@@ -304,7 +325,7 @@ async def fetch_models(
             {
                 "id": model_id,
                 "provider": "",
-                "desc": "fetched",
+                "desc": FETCHED_MODEL_DESC,
                 "color": "\033[37m",
                 "vision": vision,
                 "reasoning": reasoning,
@@ -316,5 +337,5 @@ async def fetch_models(
     stats["selectable"] = len(filtered)
     if removed:
         for _model_id, cfg in filtered:
-            cfg["desc"] = f"fetched; {removed} unsupported hidden"
+            cfg["desc"] = f"{FETCHED_MODEL_DESC}; {removed} unsupported hidden"
     return filtered, "", stats

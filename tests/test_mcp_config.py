@@ -1,5 +1,6 @@
 """Tests for external MCP startup configuration."""
 
+import asyncio
 from pathlib import Path
 
 from core import mcp_client_manager
@@ -94,3 +95,25 @@ def test_mcp_server_startup_timeout_defaults_and_clamps():
     assert mcp_client_manager._server_startup_timeout({}) == 15
     assert mcp_client_manager._server_startup_timeout({"startup_timeout": 0}) == 1
     assert mcp_client_manager._server_startup_timeout({"startup_timeout": "2.5"}) == 2.5
+
+
+def test_mcp_stderr_log_path_sanitizes_server_name(monkeypatch, tmp_path):
+    monkeypatch.setattr(mcp_client_manager, "MCP_STDERR_LOG_DIR", tmp_path)
+
+    path = mcp_client_manager._mcp_stderr_log_path("../bad name")
+
+    assert path == tmp_path / "bad_name.stderr.log"
+
+
+def test_mcp_roots_callback_returns_cwd_and_workspace(monkeypatch, tmp_path):
+    cwd = tmp_path / "project"
+    home = tmp_path / "home"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    monkeypatch.setattr(mcp_client_manager, "PAWNLOGIC_HOME", home)
+
+    result = asyncio.run(mcp_client_manager._roots_cb(object()))
+    uris = {str(root.uri) for root in result.roots}
+
+    assert cwd.resolve().as_uri() in uris
+    assert (home / "workspace").resolve().as_uri() in uris
