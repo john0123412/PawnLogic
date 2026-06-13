@@ -39,7 +39,11 @@ from config import (
 from core.api_client import stream_request
 from core.memory import list_failures, clear_failures
 from core.session import _ctx_chars, STATE_FILENAME
-from core.state import state as _runtime_state
+from core.state import (
+    state as _runtime_state,
+    set_dynamic_config_value,
+    update_dynamic_config,
+)
 from utils.ansi import (
     c, BOLD, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA,
 )
@@ -190,7 +194,7 @@ async def cmd_time(ctx: CommandContext) -> None:
     budget = DYNAMIC_CONFIG.get("time_budget_sec", 0)
     if arg and arg.strip().isdigit():
         new_budget = max(0, int(arg.strip()))
-        DYNAMIC_CONFIG["time_budget_sec"] = new_budget
+        set_dynamic_config_value("time_budget_sec", new_budget)
         session._time_budget_sec = new_budget
         session._reset_system_prompt()
         if new_budget > 0:
@@ -259,7 +263,7 @@ def _tier_confirmation(label: str, tier: dict) -> str:
 
 @register("/low")
 async def cmd_low(ctx: CommandContext) -> None:
-    DYNAMIC_CONFIG.update(TIER_LOW)
+    update_dynamic_config(TIER_LOW)
     ctx.session._reset_system_prompt()
     _print(c(GREEN, _tier_confirmation("/low light mode", TIER_LOW)))
     _print(fmt_config())
@@ -267,7 +271,7 @@ async def cmd_low(ctx: CommandContext) -> None:
 
 @register("/mid")
 async def cmd_mid(ctx: CommandContext) -> None:
-    DYNAMIC_CONFIG.update(TIER_MID)
+    update_dynamic_config(TIER_MID)
     ctx.session._reset_system_prompt()
     _print(c(YELLOW, _tier_confirmation("/mid development mode", TIER_MID)))
     _print(fmt_config())
@@ -275,7 +279,7 @@ async def cmd_mid(ctx: CommandContext) -> None:
 
 @register("/deep")
 async def cmd_deep(ctx: CommandContext) -> None:
-    DYNAMIC_CONFIG.update(TIER_DEEP)
+    update_dynamic_config(TIER_DEEP)
     ctx.session._reset_system_prompt()
     _print(c(BOLD + MAGENTA, _tier_confirmation("/deep full-power mode", TIER_DEEP)))
     _print(fmt_config())
@@ -283,7 +287,7 @@ async def cmd_deep(ctx: CommandContext) -> None:
 
 @register("/max")
 async def cmd_max(ctx: CommandContext) -> None:
-    DYNAMIC_CONFIG.update(TIER_MAX)
+    update_dynamic_config(TIER_MAX)
     ctx.session._reset_system_prompt()
     _print(c(BOLD + RED, _tier_confirmation("/max maximum mode", TIER_MAX)))
     _print(fmt_config())
@@ -291,7 +295,7 @@ async def cmd_max(ctx: CommandContext) -> None:
 
 @register("/normal")
 async def cmd_normal(ctx: CommandContext) -> None:
-    DYNAMIC_CONFIG.update(NORMAL_CONFIG)
+    update_dynamic_config(NORMAL_CONFIG)
     ctx.session._reset_system_prompt()
     _print(c(GREEN, "  ✓ Reset to /mid"))
     _print(fmt_config())
@@ -316,7 +320,7 @@ async def cmd_tokens(ctx: CommandContext) -> None:
         return
     try:
         n = max(256, min(65536, int(arg)))
-        DYNAMIC_CONFIG["max_tokens"] = n
+        set_dynamic_config_value("max_tokens", n)
         ctx.session._reset_system_prompt()
         _print(c(GREEN, f"  ✓ max_tokens={n}"))
     except ValueError:
@@ -331,8 +335,8 @@ async def cmd_ctx(ctx: CommandContext) -> None:
         return
     try:
         n = max(10_000, int(arg))
-        DYNAMIC_CONFIG["ctx_max_chars"] = n
-        DYNAMIC_CONFIG["ctx_trim_to"] = int(n * .75)
+        set_dynamic_config_value("ctx_max_chars", n)
+        set_dynamic_config_value("ctx_trim_to", int(n * .75))
         ctx.session._reset_system_prompt()
         _print(c(GREEN, f"  ✓ ctx_max_chars={n}"))
     except ValueError:
@@ -347,7 +351,7 @@ async def cmd_iter(ctx: CommandContext) -> None:
         return
     try:
         n = max(1, int(arg))
-        DYNAMIC_CONFIG["max_iter"] = n
+        set_dynamic_config_value("max_iter", n)
         _print(c(GREEN, f"  ✓ max_iter={n}"))
     except ValueError:
         _print(c(RED, "  ✗ Invalid number"))
@@ -360,7 +364,7 @@ async def cmd_toolsize(ctx: CommandContext) -> None:
         _print(c(GRAY, f"  Current: {DYNAMIC_CONFIG['tool_max_chars']}"))
         return
     try:
-        DYNAMIC_CONFIG["tool_max_chars"] = max(1000, int(arg))
+        set_dynamic_config_value("tool_max_chars", max(1000, int(arg)))
         _print(c(GREEN, f"  ✓ tool_max_chars={DYNAMIC_CONFIG['tool_max_chars']}"))
     except ValueError:
         _print(c(RED, "  ✗ Invalid number"))
@@ -373,7 +377,7 @@ async def cmd_fetchsize(ctx: CommandContext) -> None:
         _print(c(GRAY, f"  Current: {DYNAMIC_CONFIG['fetch_max_chars']}"))
         return
     try:
-        DYNAMIC_CONFIG["fetch_max_chars"] = max(1000, int(arg))
+        set_dynamic_config_value("fetch_max_chars", max(1000, int(arg)))
         _print(c(GREEN, f"  ✓ fetch_max_chars={DYNAMIC_CONFIG['fetch_max_chars']}"))
     except ValueError:
         _print(c(RED, "  ✗ Invalid number"))

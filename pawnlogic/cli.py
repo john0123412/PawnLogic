@@ -277,7 +277,7 @@ PROXY_STATUS = _install_proxy()
 
 try:
     import config  # kept for backward-compat attribute access
-    from core.state import state as _runtime_state
+    from core.state import state as _runtime_state, set_output_mode
     from config import (
         VERSION, DYNAMIC_CONFIG,
         MODELS, DB_PATH, PROVIDERS,
@@ -884,11 +884,7 @@ async def main():
         help="Resume a specific session by ID (use with --eval).",
     )
     args = parser.parse_args()
-    _runtime_state.debug_mode = bool(args.debug)
-    _runtime_state.user_mode = not _runtime_state.debug_mode
-    _runtime_state.quiet_mode = False
-    config.QUIET_MODE = False
-    config.USER_MODE = _runtime_state.user_mode
+    set_output_mode(debug_mode=bool(args.debug), quiet_mode=False)
 
     # Output sink stage-2 integration point. Select human or JSON output and
     # register the process-level singleton for dispatch() fallback injection.

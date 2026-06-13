@@ -51,6 +51,11 @@ __all__ = [
 # Keep them here for existing `from config import DYNAMIC_CONFIG` imports.
 DYNAMIC_CONFIG: dict = dict(TIER_MID)
 NORMAL_CONFIG:  dict = dict(TIER_MID)
+try:
+    from core.state import bind_dynamic_config
+    bind_dynamic_config(DYNAMIC_CONFIG)
+except Exception:
+    pass
 
 # Backward compatibility: WEB_STRATEGY.
 WEB_STRATEGY = {

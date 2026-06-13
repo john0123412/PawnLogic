@@ -17,6 +17,7 @@ from core.memory import (
 )
 from core.naming import stable_workspace_dir
 from core.runtime_context import RuntimeContext
+from core.state import runtime_config, update_dynamic_config
 from tools.file_ops import sync_runtime_context
 from utils.ansi import c, CYAN, GRAY, YELLOW, DIM
 
@@ -127,7 +128,7 @@ def session_load(session, query: str) -> str:
         )
     try:
         cfg = json.loads(full["config"])
-        DYNAMIC_CONFIG.update(cfg)
+        update_dynamic_config(cfg)
     except Exception:
         pass
 
@@ -143,7 +144,7 @@ def session_load(session, query: str) -> str:
             session.runtime_context = ctx
         else:
             ctx.update_paths(cwd=session.cwd, workspace_dir=session.workspace_dir)
-            ctx.dynamic_config = DYNAMIC_CONFIG
+            ctx.dynamic_config = runtime_config()
             ctx.sync_state_flags()
         sync_runtime_context(ctx)
     session._reset_system_prompt()

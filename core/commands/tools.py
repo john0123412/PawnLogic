@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from config import DYNAMIC_CONFIG, MODELS, validate_api_key
 from core.memory import list_knowledge, search_knowledge
-from core.state import state as _runtime_state
+from core.state import state as _runtime_state, set_dynamic_config_value
 from tools.pwn_chain import tool_pwn_env
 from tools.web_ops import web_tool_status
 from utils.ansi import (
@@ -187,7 +187,7 @@ async def cmd_worker(ctx: CommandContext) -> None:
         return
 
     if target == "auto":
-        DYNAMIC_CONFIG["preferred_worker"] = "auto"
+        set_dynamic_config_value("preferred_worker", "auto")
         session._reset_system_prompt()
         _print(c(GREEN, "  ✓ Worker restored to automatic routing mode"))
         return
@@ -196,7 +196,7 @@ async def cmd_worker(ctx: CommandContext) -> None:
         ok, env = validate_api_key(target)
         if not ok:
             _print(c(YELLOW, f"  ⚠ Switched to {target}, but {env} is not set. Configure it with /setkey."))
-        DYNAMIC_CONFIG["preferred_worker"] = target
+        set_dynamic_config_value("preferred_worker", target)
         session._reset_system_prompt()
         _print(c(GREEN, f"  ✓ Worker locked to {c(CYAN, target)}; subtasks will force this model."))
         return
@@ -206,7 +206,7 @@ async def cmd_worker(ctx: CommandContext) -> None:
         idx = int(target) - 1
         if 0 <= idx < len(_WORKER_MODEL_CANDIDATES):
             alias = _WORKER_MODEL_CANDIDATES[idx]
-            DYNAMIC_CONFIG["preferred_worker"] = alias
+            set_dynamic_config_value("preferred_worker", alias)
             session._reset_system_prompt()
             _print(c(GREEN, f"  ✓ Worker locked to {c(CYAN, alias)}"))
         else:
