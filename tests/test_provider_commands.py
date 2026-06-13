@@ -214,6 +214,56 @@ def test_load_custom_providers_defaults_missing_model_desc(tmp_path, monkeypatch
     assert provider_config.MODELS["relay-pro"]["desc"] == "Existing description"
 
 
+def test_get_provider_config_lazily_initializes_custom_providers(tmp_path, monkeypatch):
+    path = tmp_path / "custom_providers.json"
+    monkeypatch.setattr(provider_config, "CUSTOM_PROVIDERS_PATH", path)
+    monkeypatch.setattr(provider_config, "_providers_initialized", False)
+    monkeypatch.setattr(
+        provider_config,
+        "PROVIDERS",
+        {
+            "deepseek": {
+                "base_url": "https://api.deepseek.com/v1/chat/completions",
+                "api_key_env": "DEEPSEEK_API_KEY",
+                "api_format": "openai",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        provider_config,
+        "MODELS",
+        {
+            "ds-v4-flash": {"id": "deepseek-v4-flash", "provider": "deepseek"},
+        },
+    )
+    monkeypatch.setenv("RELAY_API_KEY", "relay-secret")
+    path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "relay": {
+                        "base_url": "https://relay.example/v1",
+                        "api_key_env": "RELAY_API_KEY",
+                        "label": "Relay",
+                        "api_format": "openai",
+                    }
+                },
+                "models": {
+                    "relay-chat": {"id": "relay-chat", "provider": "relay"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = provider_config.get_provider_config("relay-chat")
+
+    assert provider_config._providers_initialized is True
+    assert cfg["base_url"] == "https://relay.example/v1/chat/completions"
+    assert cfg["api_key"] == "relay-secret"
+    assert provider_config.MODELS["relay-chat"]["desc"] == "Custom model"
+
+
 def test_provider_set_active_persists_and_deepseek_cannot_deactivate(tmp_path, monkeypatch):
     path = tmp_path / "custom_providers.json"
     monkeypatch.setattr(provider_config, "CUSTOM_PROVIDERS_PATH", path)

@@ -363,6 +363,163 @@ def test_api_client_stream_request_yields_retry_notice_for_retryable_http(monkey
     assert events[1]["choices"][0]["delta"]["content"] == "ok"
 
 
+def test_api_client_call_once_retries_retryable_http(monkeypatch):
+    _drop_project_modules("config")
+    _drop_project_modules("core.api_client", force=True)
+    from core import api_client
+
+    class FakeSocket:
+        def settimeout(self, _timeout):
+            pass
+
+    class FakeResponse:
+        def __init__(self, status, body):
+            self.status = status
+            self._body = body
+            self.headers = {}
+
+        def read(self):
+            return self._body
+
+    class FakeConn:
+        def __init__(self, response):
+            self.response = response
+            self.sock = FakeSocket()
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return self.response
+
+        def close(self):
+            pass
+
+    responses = [
+        FakeResponse(502, b'{"error":{"message":"upstream unavailable"}}'),
+        FakeResponse(200, b'{"choices":[{"message":{"content":" recovered "}}]}'),
+    ]
+    sleeps = []
+
+    monkeypatch.setattr(
+        api_client,
+        "_open_connection",
+        lambda *_args, **_kwargs: (FakeConn(responses.pop(0)), "/v1/chat/completions"),
+    )
+    monkeypatch.setattr(api_client, "_interruptible_sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(api_client, "_retry_delay", lambda *_args, **_kwargs: 0.01)
+
+    text, err = api_client.call_once([{"role": "user", "content": "hi"}], "ds-v4-flash")
+
+    assert text == "recovered"
+    assert err is None
+    assert sleeps == [0.01]
+
+
+def test_api_client_call_once_retries_timeout(monkeypatch):
+    _drop_project_modules("config")
+    _drop_project_modules("core.api_client", force=True)
+    from core import api_client
+
+    class FakeSocket:
+        def settimeout(self, _timeout):
+            pass
+
+    class TimeoutConn:
+        sock = FakeSocket()
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            raise api_client.socket.timeout
+
+        def close(self):
+            pass
+
+    class SuccessResponse:
+        status = 200
+
+        def __init__(self):
+            self.headers = {}
+
+        def read(self):
+            return b'{"choices":[{"message":{"content":"ok"}}]}'
+
+    class SuccessConn:
+        sock = FakeSocket()
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return SuccessResponse()
+
+        def close(self):
+            pass
+
+    conns = [TimeoutConn(), SuccessConn()]
+    monkeypatch.setattr(
+        api_client,
+        "_open_connection",
+        lambda *_args, **_kwargs: (conns.pop(0), "/v1/chat/completions"),
+    )
+    monkeypatch.setattr(api_client, "_interruptible_sleep", lambda _seconds: None)
+
+    text, err = api_client.call_once([{"role": "user", "content": "hi"}], "ds-v4-flash")
+
+    assert text == "ok"
+    assert err is None
+
+
+def test_api_client_call_once_retries_transport_error(monkeypatch):
+    _drop_project_modules("config")
+    _drop_project_modules("core.api_client", force=True)
+    from core import api_client
+
+    class FakeSocket:
+        def settimeout(self, _timeout):
+            pass
+
+    class SuccessResponse:
+        status = 200
+
+        def __init__(self):
+            self.headers = {}
+
+        def read(self):
+            return b'{"choices":[{"message":{"content":"ok"}}]}'
+
+    class SuccessConn:
+        sock = FakeSocket()
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return SuccessResponse()
+
+        def close(self):
+            pass
+
+    calls = {"count": 0}
+
+    def open_connection(*_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OSError("temporary network failure")
+        return SuccessConn(), "/v1/chat/completions"
+
+    monkeypatch.setattr(api_client, "_open_connection", open_connection)
+    monkeypatch.setattr(api_client, "_interruptible_sleep", lambda _seconds: None)
+
+    text, err = api_client.call_once([{"role": "user", "content": "hi"}], "ds-v4-flash")
+
+    assert text == "ok"
+    assert err is None
+    assert calls["count"] == 2
+
+
 def test_interrupt_state_is_thread_local(monkeypatch):
     _drop_project_modules("core.interrupts", force=True)
     from core import interrupts
