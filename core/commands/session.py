@@ -63,7 +63,7 @@ from core.persistence import (
     session_save,
 )
 from core.session import _ctx_chars
-from core.state import state as _runtime_state
+from core.state import state as _runtime_state, set_output_mode
 from utils.ansi import (
     c, cp, BOLD, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA,
 )
@@ -653,11 +653,7 @@ async def cmd_think(ctx: CommandContext) -> None:
 # ── /mode ───────────────────────────────────────────────────
 @register("/mode")
 async def cmd_mode(ctx: CommandContext) -> None:
-    import config
-
-    _runtime_state.debug_mode = not _runtime_state.debug_mode
-    _runtime_state.user_mode = not _runtime_state.debug_mode
-    config.USER_MODE = _runtime_state.user_mode
+    set_output_mode(debug_mode=not _runtime_state.debug_mode)
     if _runtime_state.user_mode:
         _print(c(GREEN, "  ✓ User-friendly mode enabled (tool details hidden)"))
     else:

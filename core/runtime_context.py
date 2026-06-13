@@ -29,13 +29,13 @@ class RuntimeContext:
         dynamic_config: MutableMapping[str, Any] | None = None,
     ) -> RuntimeContext:
         """Build a context from the process' current runtime modules."""
-        from config import DYNAMIC_CONFIG, WORKSPACE_DIR
-        from core.state import state
+        from config import WORKSPACE_DIR
+        from core.state import runtime_config, state
 
         if sink is None:
             sink = _default_sink()
         if dynamic_config is None:
-            dynamic_config = DYNAMIC_CONFIG
+            dynamic_config = runtime_config()
 
         return cls(
             cwd=str(Path(cwd).expanduser()) if cwd is not None else str(Path.cwd()),
