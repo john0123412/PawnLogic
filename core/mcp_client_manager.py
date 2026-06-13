@@ -473,7 +473,7 @@ class MCPClientManager:
             else:
                 MCP_STDERR_LOG_DIR.mkdir(parents=True, exist_ok=True)
                 errlog = sub.enter_context(
-                    open(_mcp_stderr_log_path(name), "a", encoding="utf-8")
+                    _mcp_stderr_log_path(name).open("a", encoding="utf-8")
                 )
             read, write = await sub.enter_async_context(stdio_client(params, errlog=errlog))
             session = await sub.enter_async_context(
