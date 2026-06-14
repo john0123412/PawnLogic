@@ -54,6 +54,8 @@ from core.tool_executor import (
     ToolExecutionContext,
     execute_phase_switch,
     execute_tool_handler,
+    precheck_tool_failures,
+    record_tool_failure,
 )
 from core.tool_routing import select_phase_tools
 from core.turn_api import TurnApiResult, consume_model_stream
@@ -1955,20 +1957,19 @@ class AgentSession:
                             "inspect_binary", "web_search", "fetch_url", "find_refs",
                         }
 
-                        # P0.6: pre-flight failure audit for dangerous tools.
-                        _failure_warning = ""
-                        if name in _AUDITED_TOOLS:
-                            try:
-                                _fail_rows = check_failure(name, args_keywords=preview[:200], limit=3)
-                                if _fail_rows:
-                                    _failure_warning = format_failures_for_prompt(_fail_rows)
-                                    if _debug_mode():
-                                        print(c(YELLOW,
-                                            f"  ⚠ [Anti-Pattern] {name} has "
-                                            f"{len(_fail_rows)} historical failure records"
-                                        ))
-                            except Exception:
-                                pass
+                        precheck = precheck_tool_failures(
+                            tool_name=name,
+                            args_preview=preview[:200],
+                            is_audited=name in _AUDITED_TOOLS,
+                            check_failure_func=check_failure,
+                            format_failures_func=format_failures_for_prompt,
+                        )
+                        _failure_warning = precheck.warning
+                        if precheck.failure_count and _debug_mode():
+                            print(c(YELLOW,
+                                f"  ⚠ [Anti-Pattern] {name} has "
+                                f"{precheck.failure_count} historical failure records"
+                            ))
 
                         execution = execute_tool_handler(
                             tool_call_id=tc["id"],
@@ -1990,63 +1991,19 @@ class AgentSession:
                         _audit_ok = execution.audit_ok
                         _elapsed_ms = execution.elapsed_ms
 
-                        # P0.7: automatic failure recording.
-                        if not _audit_ok and name in _AUDITED_TOOLS:
-                            try:
-                                _error_type = ""
-                                _r = str(result)
-                                _rl = _r.lower()
-                                if "timeoutexpired" in _rl or "timeout" in _rl:
-                                    _error_type = "Timeout"
-                                elif "segmentation fault" in _rl or "sigsegv" in _rl or "core dumped" in _rl:
-                                    _error_type = "Segfault"
-                                elif "compile failed" in _rl or "compilation failed" in _rl or "compileerror" in _rl:
-                                    _error_type = "CompileError"
-                                elif "memoryerror" in _rl or "memory limit" in _rl:
-                                    _error_type = "MemoryError"
-                                elif "syntaxerror" in _rl or "indentationerror" in _rl:
-                                    _error_type = "SyntaxError"
-                                elif "nameerror" in _rl or "attributeerror" in _rl or "typeerror" in _rl:
-                                    _error_type = "LogicError"
-                                elif "importerror" in _rl or "modulenotfounderror" in _rl:
-                                    _error_type = "MissingModule"
-                                elif "filenotfounderror" in _rl or "command not found" in _rl:
-                                    _error_type = "NotFound"
-                                elif "permissionerror" in _rl:
-                                    _error_type = "Permission"
-                                elif "panic" in _rl or "fatal" in _rl:
-                                    _error_type = "Panic"
-                                elif "exit 139" in _r or "aborted" in _rl:
-                                    _error_type = "Crash"
-                                elif "traceback" in _rl:
-                                    _error_type = "PythonError"
-                                elif "ERROR" in _r:
-                                    _error_type = "RuntimeError"
-                                else:
-                                    _error_type = "UnknownFailure"
-
-                                _fid = write_failure(
-                                    tool_name    = name,
-                                    args_summary = preview[:200],
-                                    error_msg    = result[:500],
-                                    error_type   = _error_type,
-                                    session_id   = self.session_id,
-                                )
-
-                                # P0.9: sink repeated same-class failures to GSA.
-                                if _error_type:
-                                    _fail_count = count_failure(name, _error_type)
-                                    if _fail_count >= 3:
-                                        _ok, _msg = sink_failure_to_gsa(
-                                            tool_name   = name,
-                                            error_type  = _error_type,
-                                            error_msg   = result[:300],
-                                            args_preview= preview[:200],
-                                        )
-                                        if _ok and _debug_mode():
-                                            print(c(YELLOW, f"  📝 [GSA Sink] {_msg}"))
-                            except Exception:
-                                pass  # Failure recording must not block the main flow.
+                        record_result = record_tool_failure(
+                            tool_name=name,
+                            args_preview=preview[:200],
+                            content=result,
+                            audit_ok=_audit_ok,
+                            is_audited=name in _AUDITED_TOOLS,
+                            session_id=self.session_id,
+                            write_failure_func=write_failure,
+                            count_failure_func=count_failure,
+                            sink_failure_func=sink_failure_to_gsa,
+                        )
+                        if record_result.gsa_sunk and _debug_mode():
+                            print(c(YELLOW, f"  📝 [GSA Sink] {record_result.gsa_message}"))
 
                         # Append pre-flight audit warnings to the tool result.
                         if _failure_warning:

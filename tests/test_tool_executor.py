@@ -5,8 +5,11 @@ import pytest
 from core.tool_executor import (
     ToolExecutionContext,
     ToolExecutionResult,
+    classify_tool_failure,
     execute_phase_switch,
     execute_tool_handler,
+    precheck_tool_failures,
+    record_tool_failure,
     result_has_semantic_failure,
 )
 
@@ -72,6 +75,75 @@ def test_result_has_semantic_failure_matches_existing_signals():
     assert result_has_semantic_failure("ERROR: failed") is True
     assert result_has_semantic_failure("command not found") is True
     assert result_has_semantic_failure("all good") is False
+
+
+def test_classify_tool_failure_uses_existing_heuristic_order():
+    assert classify_tool_failure("TimeoutExpired after 10s") == "Timeout"
+    assert classify_tool_failure("Segmentation fault") == "Segfault"
+    assert classify_tool_failure("Compile failed") == "CompileError"
+    assert classify_tool_failure("MemoryError") == "MemoryError"
+    assert classify_tool_failure("SyntaxError") == "SyntaxError"
+    assert classify_tool_failure("NameError") == "LogicError"
+    assert classify_tool_failure("ModuleNotFoundError") == "MissingModule"
+    assert classify_tool_failure("command not found") == "NotFound"
+    assert classify_tool_failure("PermissionError") == "Permission"
+    assert classify_tool_failure("panic") == "Panic"
+    assert classify_tool_failure("exit 139") == "Crash"
+    assert classify_tool_failure("Traceback") == "PythonError"
+    assert classify_tool_failure("ERROR: bad") == "RuntimeError"
+    assert classify_tool_failure("failed") == "UnknownFailure"
+
+
+def test_precheck_tool_failures_skips_non_audited_tool():
+    called = False
+
+    def check_failure_func(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return []
+
+    result = precheck_tool_failures(
+        tool_name="read_file",
+        args_preview="path='x'",
+        is_audited=False,
+        check_failure_func=check_failure_func,
+        format_failures_func=lambda rows: str(rows),
+    )
+
+    assert result.warning == ""
+    assert result.failure_count == 0
+    assert called is False
+
+
+def test_precheck_tool_failures_formats_history_rows():
+    rows = [{"error_type": "Timeout"}, {"error_type": "Timeout"}]
+
+    result = precheck_tool_failures(
+        tool_name="run_shell",
+        args_preview="command='./target'",
+        is_audited=True,
+        check_failure_func=lambda *args, **kwargs: rows,
+        format_failures_func=lambda found: f"warning: {len(found)}",
+    )
+
+    assert result.warning == "warning: 2"
+    assert result.failure_count == 2
+
+
+def test_precheck_tool_failures_swallows_lookup_errors():
+    def broken_lookup(*_args, **_kwargs):
+        raise RuntimeError("db unavailable")
+
+    result = precheck_tool_failures(
+        tool_name="run_shell",
+        args_preview="command='./target'",
+        is_audited=True,
+        check_failure_func=broken_lookup,
+        format_failures_func=lambda rows: str(rows),
+    )
+
+    assert result.warning == ""
+    assert result.failure_count == 0
 
 
 def test_execute_tool_handler_calls_handler_and_records_elapsed_time():
@@ -180,6 +252,98 @@ def test_execute_tool_handler_does_not_catch_keyboard_interrupt():
             handler=interrupted,
             context=context,
         )
+
+
+def test_record_tool_failure_skips_successful_or_non_audited_results():
+    calls = []
+
+    result = record_tool_failure(
+        tool_name="read_file",
+        args_preview="path='x'",
+        content="ERROR: ignored",
+        audit_ok=True,
+        is_audited=True,
+        session_id="session123",
+        write_failure_func=lambda **kwargs: calls.append(kwargs),
+        count_failure_func=lambda _tool, _error: 0,
+        sink_failure_func=lambda **_kwargs: (False, ""),
+    )
+
+    assert result.recorded is False
+    assert calls == []
+
+    result = record_tool_failure(
+        tool_name="read_file",
+        args_preview="path='x'",
+        content="ERROR: ignored",
+        audit_ok=False,
+        is_audited=False,
+        session_id="session123",
+        write_failure_func=lambda **kwargs: calls.append(kwargs),
+        count_failure_func=lambda _tool, _error: 0,
+        sink_failure_func=lambda **_kwargs: (False, ""),
+    )
+
+    assert result.recorded is False
+    assert calls == []
+
+
+def test_record_tool_failure_writes_failure_and_sinks_repeated_error():
+    writes = []
+    sinks = []
+
+    result = record_tool_failure(
+        tool_name="run_shell",
+        args_preview="command='./target'",
+        content="Segmentation fault with long detail",
+        audit_ok=False,
+        is_audited=True,
+        session_id="session123",
+        write_failure_func=lambda **kwargs: writes.append(kwargs) or "fid-1",
+        count_failure_func=lambda tool_name, error_type: 3,
+        sink_failure_func=lambda **kwargs: sinks.append(kwargs) or (True, "sunk"),
+    )
+
+    assert result.recorded is True
+    assert result.failure_id == "fid-1"
+    assert result.error_type == "Segfault"
+    assert result.gsa_sunk is True
+    assert result.gsa_message == "sunk"
+    assert writes == [
+        {
+            "tool_name": "run_shell",
+            "args_summary": "command='./target'",
+            "error_msg": "Segmentation fault with long detail",
+            "error_type": "Segfault",
+            "session_id": "session123",
+        }
+    ]
+    assert sinks == [
+        {
+            "tool_name": "run_shell",
+            "error_type": "Segfault",
+            "error_msg": "Segmentation fault with long detail",
+            "args_preview": "command='./target'",
+        }
+    ]
+
+
+def test_record_tool_failure_preserves_error_type_when_write_fails():
+    result = record_tool_failure(
+        tool_name="run_shell",
+        args_preview="command='./target'",
+        content="ERROR: bad",
+        audit_ok=False,
+        is_audited=True,
+        session_id="session123",
+        write_failure_func=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("db")),
+        count_failure_func=lambda _tool, _error: 3,
+        sink_failure_func=lambda **_kwargs: (True, "sunk"),
+    )
+
+    assert result.error_type == "RuntimeError"
+    assert result.recorded is False
+    assert result.gsa_sunk is False
 
 
 def _schema(name: str) -> dict:
