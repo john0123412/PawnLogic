@@ -63,6 +63,25 @@ class PhaseSwitchResult:
     available_tool_names: set[str] = field(default_factory=set)
 
 
+@dataclass(slots=True)
+class ToolFailurePrecheckResult:
+    """Historical failure precheck result for a tool call."""
+
+    warning: str = ""
+    failure_count: int = 0
+
+
+@dataclass(slots=True)
+class ToolFailureRecordResult:
+    """Persistence result for a failed tool call."""
+
+    error_type: str = ""
+    recorded: bool = False
+    failure_id: Any = None
+    gsa_sunk: bool = False
+    gsa_message: str = ""
+
+
 SEMANTIC_FAILURE_SIGNALS = (
     "ERROR:",
     "Traceback",
@@ -100,6 +119,64 @@ def result_has_semantic_failure(content: object) -> bool:
     return any(signal in text for signal in SEMANTIC_FAILURE_SIGNALS)
 
 
+def classify_tool_failure(content: object) -> str:
+    """Classify a failed tool result using the existing heuristic order."""
+    text = str(content)
+    lowered = text.lower()
+    if "timeoutexpired" in lowered or "timeout" in lowered:
+        return "Timeout"
+    if "segmentation fault" in lowered or "sigsegv" in lowered or "core dumped" in lowered:
+        return "Segfault"
+    if "compile failed" in lowered or "compilation failed" in lowered or "compileerror" in lowered:
+        return "CompileError"
+    if "memoryerror" in lowered or "memory limit" in lowered:
+        return "MemoryError"
+    if "syntaxerror" in lowered or "indentationerror" in lowered:
+        return "SyntaxError"
+    if "nameerror" in lowered or "attributeerror" in lowered or "typeerror" in lowered:
+        return "LogicError"
+    if "importerror" in lowered or "modulenotfounderror" in lowered:
+        return "MissingModule"
+    if "filenotfounderror" in lowered or "command not found" in lowered:
+        return "NotFound"
+    if "permissionerror" in lowered:
+        return "Permission"
+    if "panic" in lowered or "fatal" in lowered:
+        return "Panic"
+    if "exit 139" in text or "aborted" in lowered:
+        return "Crash"
+    if "traceback" in lowered:
+        return "PythonError"
+    if "ERROR" in text:
+        return "RuntimeError"
+    return "UnknownFailure"
+
+
+def precheck_tool_failures(
+    *,
+    tool_name: str,
+    args_preview: str,
+    is_audited: bool,
+    check_failure_func: Callable[..., Sequence[object]],
+    format_failures_func: Callable[[Sequence[object]], str],
+    limit: int = 3,
+) -> ToolFailurePrecheckResult:
+    """Look up historical failures for audited tools."""
+    if not is_audited:
+        return ToolFailurePrecheckResult()
+
+    try:
+        rows = check_failure_func(tool_name, args_keywords=args_preview[:200], limit=limit)
+        if not rows:
+            return ToolFailurePrecheckResult()
+        return ToolFailurePrecheckResult(
+            warning=format_failures_func(rows),
+            failure_count=len(rows),
+        )
+    except Exception:
+        return ToolFailurePrecheckResult()
+
+
 def execute_tool_handler(
     *,
     tool_call_id: str,
@@ -135,6 +212,55 @@ def execute_tool_handler(
         elapsed_ms=elapsed_ms,
         args_preview=args_preview,
     )
+
+
+def record_tool_failure(
+    *,
+    tool_name: str,
+    args_preview: str,
+    content: object,
+    audit_ok: bool,
+    is_audited: bool,
+    session_id: str,
+    write_failure_func: Callable[..., Any],
+    count_failure_func: Callable[[str, str], int],
+    sink_failure_func: Callable[..., tuple[bool, str]],
+) -> ToolFailureRecordResult:
+    """Persist semantic failures and sink repeated failures to GSA."""
+    if audit_ok or not is_audited:
+        return ToolFailureRecordResult()
+
+    content_text = str(content)
+    error_type = classify_tool_failure(content_text)
+    record = ToolFailureRecordResult(error_type=error_type)
+
+    try:
+        record.failure_id = write_failure_func(
+            tool_name=tool_name,
+            args_summary=args_preview[:200],
+            error_msg=content_text[:500],
+            error_type=error_type,
+            session_id=session_id,
+        )
+        record.recorded = True
+    except Exception:
+        return record
+
+    try:
+        fail_count = count_failure_func(tool_name, error_type)
+        if fail_count >= 3:
+            ok, message = sink_failure_func(
+                tool_name=tool_name,
+                error_type=error_type,
+                error_msg=content_text[:300],
+                args_preview=args_preview[:200],
+            )
+            record.gsa_sunk = bool(ok)
+            record.gsa_message = message if ok else ""
+    except Exception:
+        pass
+
+    return record
 
 
 def execute_phase_switch(
@@ -184,7 +310,12 @@ __all__ = [
     "PhaseSwitchResult",
     "ToolExecutionContext",
     "ToolExecutionResult",
+    "ToolFailurePrecheckResult",
+    "ToolFailureRecordResult",
+    "classify_tool_failure",
     "execute_phase_switch",
     "execute_tool_handler",
+    "precheck_tool_failures",
+    "record_tool_failure",
     "result_has_semantic_failure",
 ]
