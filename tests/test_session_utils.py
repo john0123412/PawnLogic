@@ -124,6 +124,15 @@ from core.session import (  # noqa: E402
     _PlanRenderer,
 )
 
+# core.session is now imported with its dependency stubs bound. Drop the
+# core.mcp_client_manager stub from sys.modules so a test module collected after
+# this one (e.g. test_mcp_config) imports the real implementation rather than
+# inheriting a MagicMock. session.py only imports it lazily, so core.session's
+# existing bindings are unaffected, and this module's own MCP test monkeypatches
+# the real module.
+if isinstance(sys.modules.get("core.mcp_client_manager"), _StubModule):
+    del sys.modules["core.mcp_client_manager"]
+
 
 # ── helpers ───────────────────────────────────────────────
 
