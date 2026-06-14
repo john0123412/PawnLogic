@@ -59,6 +59,7 @@ from core.tool_result import (
     ToolResultProcessor,
     compact_redundant_tool_error_messages,
 )
+from core.tool_registry import ToolRegistry
 from core.tool_routing import select_phase_tools
 from core.turn_api import TurnApiResult, consume_model_stream
 from core.turn_guards import (
@@ -122,43 +123,8 @@ def _tool_map_snapshot() -> dict[str, callable]:
 
 def _refresh_legacy_tool_globals() -> None:
     global TOOL_MAP, TOOLS_SCHEMA
-    TOOL_MAP = _TOOL_REGISTRY._tool_map
+    TOOL_MAP = _TOOL_REGISTRY.live_map()
     TOOLS_SCHEMA = _TOOL_REGISTRY.snapshot_schemas()
-
-
-class ToolRegistry:
-    """Mutable tool registry with snapshot reads for session/tool consumers."""
-
-    def __init__(self) -> None:
-        self._tool_map: dict[str, callable] = {}
-        self._schemas: dict[str, dict] = {}
-
-    def register(self, name: str, handler, schema: dict | None = None) -> None:
-        if not name:
-            return
-        if handler is not None:
-            self._tool_map[name] = handler
-        if schema is not None:
-            self._schemas[name] = schema
-
-    def unregister(self, name: str) -> None:
-        self._tool_map.pop(name, None)
-        self._schemas.pop(name, None)
-
-    def get_handler(self, name: str):
-        return self._tool_map.get(name)
-
-    def snapshot_map(self) -> dict[str, callable]:
-        return dict(self._tool_map)
-
-    def snapshot_schemas(self) -> list[dict]:
-        return [self._schemas[name] for name in self._schemas]
-
-    def set_schemas(self, schemas: list[dict]) -> None:
-        for schema in schemas:
-            name = schema.get("function", {}).get("name")
-            if name:
-                self._schemas[name] = schema
 
 
 class _ThinkingSpinner:
