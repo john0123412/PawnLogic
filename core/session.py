@@ -33,7 +33,6 @@ from pathlib import Path
 from config import (
     DYNAMIC_CONFIG, MODELS, DEFAULT_MODEL,
     validate_api_key, VERSION, GLOBAL_SKILLS_PATH,
-    smart_truncate,
     AGENT_PHASES,
     user_friendly_error,
     is_fast_model, find_fast_peer,
@@ -55,6 +54,13 @@ from core.tool_executor import (
     ToolExecutionContext,
     preview_tool_arguments,
     resolve_tool_arguments,
+)
+from core.tool_result import (
+    build_directory_intuition_hint,
+    compact_redundant_tool_error_messages,
+    detect_shell_error_signal,
+    output_signature,
+    truncate_tool_output,
 )
 from core.tool_routing import select_phase_tools
 from core.turn_api import TurnApiResult, consume_model_stream
@@ -1691,36 +1697,7 @@ class AgentSession:
                         )
 
                 # 2. Redundant data cleanup: merge repeated ls/cat-style errors.
-                _REDUNDANT_PATTERNS = (
-                    "No such file or directory",
-                    "Permission denied",
-                    "command not found",
-                    "is a directory",
-                    "Not a directory",
-                )
-                _seen_errors: dict[str, int] = {}
-                _msgs_to_compact = []
-                for _mi, _m in enumerate(self.messages[1:], 1):  # skip system
-                    if _m.get("role") != "tool":
-                        continue
-                    _content = _m.get("content") or ""
-                    for _rp in _REDUNDANT_PATTERNS:
-                        if _rp in _content and len(_content) < 300:
-                            _key = _rp
-                            _seen_errors[_key] = _seen_errors.get(_key, 0) + 1
-                            if _seen_errors[_key] > 3:
-                                _msgs_to_compact.append(_mi)
-                            break
-                # Compact repeated errors into one-line placeholders.
-                for _mi in reversed(_msgs_to_compact):
-                    _old = self.messages[_mi]
-                    _old_content = _old.get("content") or ""
-                    # Only compact short errors; preserve long output.
-                    if len(_old_content) < 300:
-                        self.messages[_mi]["content"] = (
-                            f"(compacted: {_old_content[:60]}...) — similar errors have appeared "
-                            f"{_seen_errors.get(_REDUNDANT_PATTERNS[0], '?')} times"
-                        )
+                compact_redundant_tool_error_messages(self.messages)
 
                 # 3. Repeated error detection: identical command and error 3 times.
                 if _repeat_error_count >= _REPEAT_ERROR_THRESHOLD:
@@ -1958,13 +1935,6 @@ class AgentSession:
                             self._reset_system_prompt()
 
                     else:
-                        _VERBOSE_TOOLS = {
-                            "read_file", "read_file_lines",
-                            "run_shell", "run_code",
-                            "pwn_debug", "pwn_rop", "pwn_disasm", "pwn_cyclic", "pwn_libc",
-                            "inspect_binary", "web_search", "fetch_url", "find_refs",
-                        }
-
                         precheck = tool_executor.precheck_failures(
                             tool_name=name,
                             args_preview=preview[:200],
@@ -2018,12 +1988,12 @@ class AgentSession:
                         except Exception:
                             pass  # Audit logging must not block the main flow.
 
-                        if _user_mode() or name in _VERBOSE_TOOLS:
-                            result = smart_truncate(result, head=30, tail=30)
-                        else:
-                            limit = _dynamic_config()["tool_max_chars"]
-                            if len(result) > limit:
-                                result = result[:limit//2] + f"\n...[truncated to {limit} chars]...\n" + result[-limit//4:]
+                        result = truncate_tool_output(
+                            result,
+                            tool_name=name,
+                            user_mode=_user_mode(),
+                            max_chars=_dynamic_config()["tool_max_chars"],
+                        )
 
                     # Audit counter
                     self._turn_tool_calls  += 1
@@ -2043,12 +2013,9 @@ class AgentSession:
                                     f"searching history for: '{search_query}'"
                                 ))
                                 auto_result = self._auto_intuitive_search(search_query)
-                            hint = (
-                                f"\n[System hint — directory search has run {_dir_search_count} consecutive times] "
-                                "Switch strategy: use /chat find <keyword> to search history, "
-                                "or tell the user the file path is unknown."
+                            result = result + build_directory_intuition_hint(
+                                _dir_search_count, auto_result
                             )
-                            result = result + hint + auto_result
                     else:
                         _dir_search_count = 0
 
@@ -2059,13 +2026,7 @@ class AgentSession:
                     # Logic Refresh: repeated error tracking.
                     if name == "run_shell" and not _audit_ok:
                         _cmd_key = fn_args.get("command", "") or preview[:80]
-                        _err_sig = ""
-                        for _sig in ("ERROR:", "Permission denied", "No such file",
-                                     "command not found", "Segmentation fault",
-                                     "timeout"):
-                            if _sig in str(result):
-                                _err_sig = _sig
-                                break
+                        _err_sig = detect_shell_error_signal(result)
                         if _err_sig:
                             _pair = (_cmd_key[:60], _err_sig)
                             if _recent_cmd_errors and _recent_cmd_errors[-1] == _pair:
@@ -2079,10 +2040,7 @@ class AgentSession:
 
                     # Repeated identical code-output detection to prevent loops.
                     if name in ("run_shell", "run_code", "write_file", "patch_file"):
-                        import hashlib
-                        _result_hash = hashlib.md5(
-                            str(result)[:500].encode("utf-8", errors="ignore")
-                        ).hexdigest()[:12]
+                        _result_hash = output_signature(result)
                         if _recent_code_outputs and _recent_code_outputs[-1] == _result_hash:
                             _repeat_code_count += 1
                         else:
