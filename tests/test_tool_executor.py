@@ -10,8 +10,10 @@ from core.tool_executor import (
     execute_phase_switch,
     execute_tool_handler,
     precheck_tool_failures,
+    preview_tool_arguments,
     record_tool_failure,
     result_has_semantic_failure,
+    resolve_tool_arguments,
 )
 
 
@@ -76,6 +78,34 @@ def test_result_has_semantic_failure_matches_existing_signals():
     assert result_has_semantic_failure("ERROR: failed") is True
     assert result_has_semantic_failure("command not found") is True
     assert result_has_semantic_failure("all good") is False
+
+
+def test_resolve_tool_arguments_prefers_preparsed_hybrid_args():
+    args = {"path": "x.py"}
+
+    assert resolve_tool_arguments({"args": "{}", "_args_parsed": args}) is args
+
+
+def test_resolve_tool_arguments_loads_json_args():
+    assert resolve_tool_arguments({"args": '{"path": "/tmp"}'}) == {"path": "/tmp"}
+
+
+def test_resolve_tool_arguments_retries_after_bom_prefix():
+    assert resolve_tool_arguments({"args": "\ufeff{\"path\": \"/tmp\"}"}) == {
+        "path": "/tmp"
+    }
+
+
+def test_resolve_tool_arguments_preserves_raw_invalid_json():
+    assert resolve_tool_arguments({"args": "{bad"}) == {"_raw_args": "{bad"}
+
+
+def test_preview_tool_arguments_matches_session_preview_format():
+    preview = preview_tool_arguments(
+        {"command": "echo hello", "long": "x" * 80}
+    )
+
+    assert preview == "command='echo hello', long='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 
 def test_classify_tool_failure_uses_existing_heuristic_order():
