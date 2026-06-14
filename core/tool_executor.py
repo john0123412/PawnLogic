@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+import json
 import time
 from typing import Any
 
@@ -117,6 +118,29 @@ def result_has_semantic_failure(content: object) -> bool:
     """Return whether tool output text indicates a failed execution."""
     text = str(content)
     return any(signal in text for signal in SEMANTIC_FAILURE_SIGNALS)
+
+
+def resolve_tool_arguments(tool_call: Mapping[str, Any]) -> dict:
+    """Resolve provider or hybrid-parser tool arguments into a dict."""
+    if "_args_parsed" in tool_call:
+        return tool_call["_args_parsed"]
+
+    fn_args: dict = {}
+    raw_args = tool_call["args"]
+    if raw_args.strip():
+        try:
+            fn_args = json.loads(raw_args)
+        except json.JSONDecodeError:
+            try:
+                fn_args = json.loads(raw_args.strip().lstrip("\ufeff"))
+            except Exception:
+                fn_args = {"_raw_args": raw_args}
+    return fn_args
+
+
+def preview_tool_arguments(fn_args: Mapping[str, Any]) -> str:
+    """Return the compact argument preview used in tool logs and audit records."""
+    return ", ".join(f"{key}={repr(value)[:40]}" for key, value in fn_args.items())
 
 
 def classify_tool_failure(content: object) -> str:
@@ -401,6 +425,8 @@ __all__ = [
     "execute_phase_switch",
     "execute_tool_handler",
     "precheck_tool_failures",
+    "preview_tool_arguments",
     "record_tool_failure",
+    "resolve_tool_arguments",
     "result_has_semantic_failure",
 ]

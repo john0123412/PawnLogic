@@ -53,6 +53,8 @@ from core.tool_calls import extract_tool_calls
 from core.tool_executor import (
     ToolExecutor,
     ToolExecutionContext,
+    preview_tool_arguments,
+    resolve_tool_arguments,
 )
 from core.tool_routing import select_phase_tools
 from core.turn_api import TurnApiResult, consume_model_stream
@@ -1324,6 +1326,29 @@ class AgentSession:
             on_json_error=on_json_error,
         )
 
+    def _make_tool_executor(self) -> ToolExecutor:
+        return ToolExecutor(
+            get_handler=_TOOL_REGISTRY.get_handler,
+            agent_phases=AGENT_PHASES,
+            schema_snapshot=_tool_schema_snapshot,
+            check_failure_func=check_failure,
+            format_failures_func=format_failures_for_prompt,
+            write_failure_func=write_failure,
+            count_failure_func=count_failure,
+            sink_failure_func=sink_failure_to_gsa,
+            user_error_formatter=user_friendly_error,
+        )
+
+    def _tool_execution_context(self, iteration: int) -> ToolExecutionContext:
+        return ToolExecutionContext(
+            session_id=self.session_id,
+            model_alias=self.model_alias,
+            iteration=iteration,
+            current_phase=self.current_phase,
+            user_mode=_user_mode(),
+            debug_mode=_debug_mode(),
+        )
+
     def _record_turn_usage(self, usage: dict[str, int]) -> None:
         pt = usage.get("prompt_tokens", 0)
         ct = usage.get("completion_tokens", 0)
@@ -1550,17 +1575,7 @@ class AgentSession:
         _plan_rejected    = 0
         _dir_search_count = 0
         _DIR_THRESHOLD    = 3
-        tool_executor = ToolExecutor(
-            get_handler=_TOOL_REGISTRY.get_handler,
-            agent_phases=AGENT_PHASES,
-            schema_snapshot=_tool_schema_snapshot,
-            check_failure_func=check_failure,
-            format_failures_func=format_failures_for_prompt,
-            write_failure_func=write_failure,
-            count_failure_func=count_failure,
-            sink_failure_func=sink_failure_to_gsa,
-            user_error_formatter=user_friendly_error,
-        )
+        tool_executor = self._make_tool_executor()
 
         # Logic Refresh module state.
         _LOGIC_REFRESH_INTERVAL = 20   # Trigger a phase summary every 20 iterations.
@@ -1892,21 +1907,8 @@ class AgentSession:
                     tc = tc_buf[i];
                     name = tc["name"]
 
-                    # Prefer the zero-escape dict passed through by XML/Hybrid Parser.
-                    if "_args_parsed" in tc:
-                        fn_args = tc["_args_parsed"]
-                    else:
-                        fn_args = {}
-                        if tc["args"].strip():
-                            try:
-                                fn_args = json.loads(tc["args"])
-                            except json.JSONDecodeError:
-                                try:
-                                    fn_args = json.loads(tc["args"].strip().lstrip("\ufeff"))
-                                except Exception:
-                                    fn_args = {"_raw_args": tc["args"]}
-
-                    preview  = ", ".join(f"{k}={repr(v)[:40]}" for k, v in fn_args.items())
+                    fn_args = resolve_tool_arguments(tc)
+                    preview  = preview_tool_arguments(fn_args)
                     iter_tag = c(GRAY, f"[{iteration+1}/{max_iter}]")
 
                     # In user mode, detect skill-pack script calls and simplify output.
@@ -1979,14 +1981,7 @@ class AgentSession:
                             tool_call_id=tc["id"],
                             tool_name=name,
                             fn_args=fn_args,
-                            context=ToolExecutionContext(
-                                session_id=self.session_id,
-                                model_alias=self.model_alias,
-                                iteration=iteration,
-                                current_phase=self.current_phase,
-                                user_mode=_user_mode(),
-                                debug_mode=_debug_mode(),
-                            ),
+                            context=self._tool_execution_context(iteration),
                             args_preview=preview[:200],
                         )
                         result = execution.content
