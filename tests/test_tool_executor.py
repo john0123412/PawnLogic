@@ -5,6 +5,7 @@ import pytest
 from core.tool_executor import (
     ToolExecutionContext,
     ToolExecutionResult,
+    execute_phase_switch,
     execute_tool_handler,
     result_has_semantic_failure,
 )
@@ -179,3 +180,50 @@ def test_execute_tool_handler_does_not_catch_keyboard_interrupt():
             handler=interrupted,
             context=context,
         )
+
+
+def _schema(name: str) -> dict:
+    return {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}
+
+
+def test_execute_phase_switch_returns_next_phase_tools():
+    phases = {"RECON": ["read_file"], "EXPLOIT": ["run_shell"]}
+    schemas = [_schema("read_file"), _schema("run_shell"), _schema("switch_phase")]
+
+    result = execute_phase_switch(
+        fn_args={"phase": "exploit", "reason": "need shell"},
+        current_phase="RECON",
+        agent_phases=phases,
+        schemas=schemas,
+    )
+
+    assert result.switched is True
+    assert result.old_phase == "RECON"
+    assert result.target_phase == "EXPLOIT"
+    assert result.reason == "need shell"
+    assert [schema["function"]["name"] for schema in result.active_tools] == [
+        "run_shell",
+        "switch_phase",
+    ]
+    assert result.available_tool_names == {"run_shell"}
+    assert "[Phase Switch] RECON → EXPLOIT" in result.content
+    assert "Reason: need shell" in result.content
+    assert "Reload: 2 tools active." in result.content
+
+
+def test_execute_phase_switch_reports_unknown_phase_without_active_tools():
+    phases = {"RECON": ["read_file"]}
+
+    result = execute_phase_switch(
+        fn_args={"phase": "missing"},
+        current_phase="RECON",
+        agent_phases=phases,
+        schemas=[_schema("read_file")],
+    )
+
+    assert result.switched is False
+    assert result.old_phase == "RECON"
+    assert result.target_phase == "MISSING"
+    assert result.reason == "(no reason provided)"
+    assert result.active_tools == []
+    assert result.content == "ERROR: Unknown phase 'MISSING'. Available: RECON"

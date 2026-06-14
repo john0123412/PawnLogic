@@ -50,8 +50,12 @@ from core.state import state as _runtime_state
 from core.runtime_context import RuntimeContext
 from core.prompt_builder import build_session_prompt
 from core.tool_calls import extract_tool_calls
-from core.tool_executor import ToolExecutionContext, execute_tool_handler
-from core.tool_routing import phase_tool_names, select_phase_tools
+from core.tool_executor import (
+    ToolExecutionContext,
+    execute_phase_switch,
+    execute_tool_handler,
+)
+from core.tool_routing import select_phase_tools
 from core.turn_api import TurnApiResult, consume_model_stream
 from core.memory import (
     init_db, _gen_id, search_knowledge, format_knowledge_for_prompt,
@@ -1918,38 +1922,30 @@ class AgentSession:
 
                     # switch_phase intercept; mutate instance state directly.
                     if name == "switch_phase":
-                        target = fn_args.get("phase", "").upper()
-                        reason = fn_args.get("reason", "(no reason provided)")
-                        if target in AGENT_PHASES:
-                            old_phase = self.current_phase
-                            self.current_phase = target
+                        phase_result = execute_phase_switch(
+                            fn_args=fn_args,
+                            current_phase=self.current_phase,
+                            agent_phases=AGENT_PHASES,
+                            schemas=_tool_schema_snapshot(),
+                        )
+                        result = phase_result.content
+                        if phase_result.switched:
+                            self.current_phase = phase_result.target_phase
                             # Rebuild the dynamic tool list for the next iteration.
-                            phase_whitelist = phase_tool_names(AGENT_PHASES, target)
-                            current_tools = select_phase_tools(
-                                _tool_schema_snapshot(), AGENT_PHASES, target
-                            )
-                            result = (
-                                f"[Phase Switch] {old_phase} → {target}\n"
-                                f"Reason: {reason}\n"
-                                f"Now available: {', '.join(phase_whitelist)}\n"
-                                f"switch_phase is always available.\n"
-                                f"Reload: {len(current_tools)} tools active."
-                            )
+                            current_tools = phase_result.active_tools
                             print(c(MAGENTA,
-                                f"  🔀 [Phase Switch] {old_phase} → {target}  ({reason[:60]})"
+                                f"  🔀 [Phase Switch] {phase_result.old_phase} → "
+                                f"{phase_result.target_phase}  ({phase_result.reason[:60]})"
                             ))
                             logger.info(
                                 "Phase switch | model={} session={} {} → {} reason={}",
                                 self.model_alias, self.session_id[:8],
-                                old_phase, target, reason,
+                                phase_result.old_phase,
+                                phase_result.target_phase,
+                                phase_result.reason,
                             )
                             # Refresh the phase-awareness block in the system prompt.
                             self._reset_system_prompt()
-                        else:
-                            result = (
-                                f"ERROR: Unknown phase '{target}'. "
-                                f"Available: {', '.join(AGENT_PHASES.keys())}"
-                            )
 
                     else:
                         _VERBOSE_TOOLS = {
