@@ -56,11 +56,8 @@ from core.tool_executor import (
     resolve_tool_arguments,
 )
 from core.tool_result import (
-    build_directory_intuition_hint,
+    ToolResultProcessor,
     compact_redundant_tool_error_messages,
-    detect_shell_error_signal,
-    output_signature,
-    truncate_tool_output,
 )
 from core.tool_routing import select_phase_tools
 from core.turn_api import TurnApiResult, consume_model_stream
@@ -1345,6 +1342,12 @@ class AgentSession:
             user_error_formatter=user_friendly_error,
         )
 
+    def _make_result_processor(self) -> ToolResultProcessor:
+        return ToolResultProcessor(
+            auto_intuitive_search=self._auto_intuitive_search,
+            session_label=self.session_id[:8],
+        )
+
     def _tool_execution_context(self, iteration: int) -> ToolExecutionContext:
         return ToolExecutionContext(
             session_id=self.session_id,
@@ -1579,20 +1582,13 @@ class AgentSession:
                 ))
 
         _plan_rejected    = 0
-        _dir_search_count = 0
-        _DIR_THRESHOLD    = 3
         tool_executor = self._make_tool_executor()
+        # Per-turn tool result processing: owns directory/anti-loop/anti-code-loop
+        # counters previously kept as locals here.
+        result_processor = self._make_result_processor()
 
         # Logic Refresh module state.
         _LOGIC_REFRESH_INTERVAL = 20   # Trigger a phase summary every 20 iterations.
-        _REPEAT_ERROR_THRESHOLD = 3    # Threshold for consecutive identical errors.
-        _recent_cmd_errors: list[tuple[str, str]] = []  # (cmd, error) history.
-        _repeat_error_count   = 0      # Current consecutive identical error count.
-
-        # Repeated identical code-output detection.
-        _REPEAT_CODE_THRESHOLD = 3     # Threshold for consecutive identical outputs.
-        _recent_code_outputs: list[str] = []   # Recent tool-output hashes.
-        _repeat_code_count    = 0      # Current consecutive identical output count.
 
         for iteration in range(max_iter):
             try:
@@ -1700,28 +1696,15 @@ class AgentSession:
                 compact_redundant_tool_error_messages(self.messages)
 
                 # 3. Repeated error detection: identical command and error 3 times.
-                if _repeat_error_count >= _REPEAT_ERROR_THRESHOLD:
-                    _anti_loop_msg = (
-                        "[System] The current path appears blocked: detected "
-                        f"{_repeat_error_count} consecutive identical command errors. "
-                        "Re-evaluate the exploit logic and consider these bypass directions:\n"
-                        "  1. Symlink bypass (ln -s)\n"
-                        "  2. open_basedir bypass (php -d open_basedir=/)\n"
-                        "  3. Path encoding bypass (../ ./ ..%2f)\n"
-                        "  4. Switch tool or attack vector\n"
-                        "  5. Ask the user to confirm target environment details"
-                    )
-                    self.messages.append({"role": "user", "content": _anti_loop_msg})
-                    if _debug_mode():
-                        print(c(YELLOW,
-                            f"  🔁 [Anti-Loop] Detected {_repeat_error_count} repeated errors; injected bypass hint"
-                        ))
-                    logger.warning(
-                        "Anti-Loop: repeated error detected | "
-                        "session={} iteration={} count={}",
-                        self.session_id[:8], iteration, _repeat_error_count,
-                    )
-                    _repeat_error_count = 0  # Reset to avoid repeated injection.
+                _anti_loop = result_processor.maybe_anti_loop_injection(iteration)
+                if _anti_loop is not None:
+                    self.messages.append({"role": "user", "content": _anti_loop.injection})
+                    for _notice in _anti_loop.notices:
+                        if _notice.level == "debug" and not _debug_mode():
+                            continue
+                        if _notice.level == "user" and not _user_mode():
+                            continue
+                        print(c(_notice.color, _notice.message))
 
                 # API call with empty-response retry and exponential backoff.
                 _api_retry = 0
@@ -1934,6 +1917,15 @@ class AgentSession:
                             # Refresh the phase-awareness block in the system prompt.
                             self._reset_system_prompt()
 
+                        # Phase results are not audited or truncated. A non-directory
+                        # tool ran, so reset the directory counter, then record.
+                        result_processor.reset_directory_counter()
+                        self._turn_tool_calls += 1
+                        self.total_tool_calls += 1
+                        self.messages.append({
+                            "role": "tool", "tool_call_id": tc["id"], "content": result,
+                        })
+
                     else:
                         precheck = tool_executor.precheck_failures(
                             tool_name=name,
@@ -1969,105 +1961,51 @@ class AgentSession:
                         if record_result.gsa_sunk and _debug_mode():
                             print(c(YELLOW, f"  📝 [GSA Sink] {record_result.gsa_message}"))
 
-                        # Append pre-flight audit warnings to the tool result.
-                        if _failure_warning:
-                            result = result + "\n\n" + _failure_warning
-
-                        # Write audit log.
-                        try:
-                            audit_tool_call(
-                                tool_name    = name,
-                                args_summary = preview[:200],
-                                result_len   = len(result),
-                                elapsed_ms   = _elapsed_ms,
-                                session_id   = self.session_id,
-                                model_alias  = self.model_alias,
-                                iteration    = iteration,
-                                success      = _audit_ok,
-                            )
-                        except Exception:
-                            pass  # Audit logging must not block the main flow.
-
-                        result = truncate_tool_output(
-                            result,
+                        processed = result_processor.process(
+                            result=result,
                             tool_name=name,
+                            fn_args=fn_args,
+                            args_preview=preview[:200],
+                            audit_ok=_audit_ok,
+                            elapsed_ms=_elapsed_ms,
+                            failure_warning=_failure_warning,
+                            iteration=iteration,
                             user_mode=_user_mode(),
                             max_chars=_dynamic_config()["tool_max_chars"],
                         )
 
-                    # Audit counter
-                    self._turn_tool_calls  += 1
-                    self.total_tool_calls  += 1
+                        # Print processor notices, gated by display level.
+                        for _notice in processed.notices:
+                            if _notice.level == "debug" and not _debug_mode():
+                                continue
+                            if _notice.level == "user" and not _user_mode():
+                                continue
+                            print(c(_notice.color, _notice.message))
 
-                    # Directory-search count and auto-intuition retrieval.
-                    if name in ("list_dir", "find_files"):
-                        _dir_search_count += 1
-                        if _dir_search_count >= _DIR_THRESHOLD:
-                            search_query = (
-                                fn_args.get("pattern") or fn_args.get("path") or ""
-                            ).strip().strip("*./")
-                            auto_result = ""
-                            if search_query:
-                                print(c(GRAY,
-                                    f"  🧠 [Auto-Intuition] Directory search count {_dir_search_count}; "
-                                    f"searching history for: '{search_query}'"
-                                ))
-                                auto_result = self._auto_intuitive_search(search_query)
-                            result = result + build_directory_intuition_hint(
-                                _dir_search_count, auto_result
-                            )
-                    else:
-                        _dir_search_count = 0
+                        # Write audit log (side effect kept in the caller).
+                        _audit_event = processed.audit_event
+                        if _audit_event is not None:
+                            try:
+                                audit_tool_call(
+                                    tool_name    = _audit_event.tool_name,
+                                    args_summary = _audit_event.args_summary,
+                                    result_len   = _audit_event.result_len,
+                                    elapsed_ms   = _audit_event.elapsed_ms,
+                                    session_id   = self.session_id,
+                                    model_alias  = self.model_alias,
+                                    iteration    = _audit_event.iteration,
+                                    success      = _audit_event.success,
+                                )
+                            except Exception:
+                                pass  # Audit logging must not block the main flow.
 
-                    self.messages.append({
-                        "role": "tool", "tool_call_id": tc["id"], "content": result,
-                    })
-
-                    # Logic Refresh: repeated error tracking.
-                    if name == "run_shell" and not _audit_ok:
-                        _cmd_key = fn_args.get("command", "") or preview[:80]
-                        _err_sig = detect_shell_error_signal(result)
-                        if _err_sig:
-                            _pair = (_cmd_key[:60], _err_sig)
-                            if _recent_cmd_errors and _recent_cmd_errors[-1] == _pair:
-                                _repeat_error_count += 1
-                            else:
-                                _repeat_error_count = 1
-                            _recent_cmd_errors.append(_pair)
-                            # Keep the latest 20 entries.
-                            if len(_recent_cmd_errors) > 20:
-                                _recent_cmd_errors = _recent_cmd_errors[-20:]
-
-                    # Repeated identical code-output detection to prevent loops.
-                    if name in ("run_shell", "run_code", "write_file", "patch_file"):
-                        _result_hash = output_signature(result)
-                        if _recent_code_outputs and _recent_code_outputs[-1] == _result_hash:
-                            _repeat_code_count += 1
-                        else:
-                            _repeat_code_count = 1
-                        _recent_code_outputs.append(_result_hash)
-                        if len(_recent_code_outputs) > 10:
-                            _recent_code_outputs = _recent_code_outputs[-10:]
-
-                        if _repeat_code_count >= _REPEAT_CODE_THRESHOLD:
-                            _anti_code_loop = (
-                                f"[System] Detected {_repeat_code_count} consecutive nearly identical tool outputs. "
-                                "The current path may be looping; stop and re-evaluate immediately:\n"
-                                "  1. Are you repeating commands already known to fail?\n"
-                                "  2. Do you need a different attack vector or tool?\n"
-                                "  3. Should you ask the user to confirm the target environment?\n"
-                                "Explain the new approach in <plan> before continuing."
-                            )
-                            self.messages.append({"role": "user", "content": _anti_code_loop})
-                            print(c(YELLOW,
-                                f"  🔁 [Anti-Code-Loop] {_repeat_code_count} identical outputs detected; injected re-evaluation hint"
-                            ))
-                            logger.warning(
-                                "Anti-Code-Loop: repeated output | "
-                                "session={} iteration={} count={} tool={}",
-                                self.session_id[:8], iteration, _repeat_code_count, name,
-                            )
-                            _repeat_code_count = 0
+                        self._turn_tool_calls += 1
+                        self.total_tool_calls += 1
+                        self.messages.append({
+                            "role": "tool", "tool_call_id": tc["id"], "content": processed.content,
+                        })
+                        for _injection in processed.injections:
+                            self.messages.append({"role": "user", "content": _injection})
 
                 # ════════════════════════════════════════════════
                 # After all tool results are appended, inject PLAN_MISSING if a
