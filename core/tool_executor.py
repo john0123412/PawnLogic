@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 import time
 from typing import Any
+
+from core.tool_routing import phase_tool_names, select_phase_tools
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +48,19 @@ class ToolExecutionResult:
             "tool_call_id": self.tool_call_id,
             "content": self.content,
         }
+
+
+@dataclass(slots=True)
+class PhaseSwitchResult:
+    """Result envelope for a switch_phase tool call."""
+
+    switched: bool
+    old_phase: str
+    target_phase: str
+    reason: str
+    content: str
+    active_tools: list[dict] = field(default_factory=list)
+    available_tool_names: set[str] = field(default_factory=set)
 
 
 SEMANTIC_FAILURE_SIGNALS = (
@@ -122,10 +137,54 @@ def execute_tool_handler(
     )
 
 
+def execute_phase_switch(
+    *,
+    fn_args: dict,
+    current_phase: str,
+    agent_phases: Mapping[str, Sequence[str]],
+    schemas: Sequence[dict],
+) -> PhaseSwitchResult:
+    """Resolve a switch_phase request without mutating session state."""
+    target = fn_args.get("phase", "").upper()
+    reason = fn_args.get("reason", "(no reason provided)")
+
+    if target not in agent_phases:
+        return PhaseSwitchResult(
+            switched=False,
+            old_phase=current_phase,
+            target_phase=target,
+            reason=reason,
+            content=(
+                f"ERROR: Unknown phase '{target}'. "
+                f"Available: {', '.join(agent_phases.keys())}"
+            ),
+        )
+
+    available_tool_names = phase_tool_names(agent_phases, target)
+    active_tools = select_phase_tools(schemas, agent_phases, target)
+    return PhaseSwitchResult(
+        switched=True,
+        old_phase=current_phase,
+        target_phase=target,
+        reason=reason,
+        content=(
+            f"[Phase Switch] {current_phase} → {target}\n"
+            f"Reason: {reason}\n"
+            f"Now available: {', '.join(available_tool_names)}\n"
+            f"switch_phase is always available.\n"
+            f"Reload: {len(active_tools)} tools active."
+        ),
+        active_tools=active_tools,
+        available_tool_names=available_tool_names,
+    )
+
+
 __all__ = [
     "SEMANTIC_FAILURE_SIGNALS",
+    "PhaseSwitchResult",
     "ToolExecutionContext",
     "ToolExecutionResult",
+    "execute_phase_switch",
     "execute_tool_handler",
     "result_has_semantic_failure",
 ]
