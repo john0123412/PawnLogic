@@ -9,8 +9,9 @@ through the API and stores it in the knowledge table.
 import os
 import sys
 import json
-from config import DYNAMIC_CONFIG, DEFAULT_MODEL, MODELS, PROVIDERS
+from config import DEFAULT_MODEL, MODELS, PROVIDERS
 from core.api_client import call_once
+from core.state import dynamic_config_snapshot
 from core.memory import (
     init_db, upsert_session, list_sessions, get_session, delete_session,
     rename_session, save_messages, load_messages, add_knowledge,
@@ -58,7 +59,7 @@ def session_save(session, name: str = "") -> str:
         name        = manual_name,
         model       = session.model_alias,
         cwd         = session.cwd,
-        config_dict = dict(DYNAMIC_CONFIG),
+        config_dict = dynamic_config_snapshot(),
         workspace_dir = getattr(session, "workspace_dir", ""),
         name_source = "manual" if manual_name else "",
     )
@@ -123,7 +124,7 @@ def session_load(session, query: str) -> str:
             name="",
             model=session.model_alias,
             cwd=session.cwd,
-            config_dict=dict(DYNAMIC_CONFIG),
+            config_dict=dynamic_config_snapshot(),
             workspace_dir=session.workspace_dir,
         )
     try:

@@ -11,7 +11,8 @@ WSL performance optimizations:
 
 import os, signal, sys, re, subprocess, tempfile
 from pathlib import Path
-from config import DYNAMIC_CONFIG, SANDBOX_LANGS
+from config import SANDBOX_LANGS
+from core.state import runtime_config
 from utils.ansi import c, YELLOW, RED
 
 # Resource limits are available only on POSIX systems: Linux / WSL2 / macOS.
@@ -291,7 +292,7 @@ def tool_run_code(a: dict) -> str:
             output.append(f"[exit {rc}]")
 
     result = "\n".join(x for x in output if x)
-    limit  = DYNAMIC_CONFIG["tool_max_chars"]
+    limit  = runtime_config()["tool_max_chars"]
     if len(result) > limit:
         result = result[:limit // 2] + "\n...[truncated]...\n" + result[-limit // 4:]
     return result or "(no output)"

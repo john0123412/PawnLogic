@@ -3,7 +3,13 @@ from __future__ import annotations
 import asyncio
 import importlib
 
-from core.state import runtime_config, set_dynamic_config_value, state
+from core.state import (
+    dynamic_config_snapshot,
+    get_dynamic_config_value,
+    runtime_config,
+    set_dynamic_config_value,
+    state,
+)
 from core.runtime_context import RuntimeContext
 from tools import file_ops
 
@@ -184,6 +190,30 @@ def test_worker_command_updates_runtime_state(monkeypatch):
             state.current_worker = "auto"
         else:
             set_dynamic_config_value("preferred_worker", original_worker)
+
+
+def test_get_dynamic_config_value_reads_live_value():
+    original = runtime_config().get("max_iter")
+    try:
+        set_dynamic_config_value("max_iter", 4321)
+        assert get_dynamic_config_value("max_iter") == 4321
+    finally:
+        if original is None:
+            runtime_config().pop("max_iter", None)
+        else:
+            set_dynamic_config_value("max_iter", original)
+
+
+def test_get_dynamic_config_value_returns_default_for_missing_key():
+    assert get_dynamic_config_value("definitely_absent_key", "fallback") == "fallback"
+
+
+def test_dynamic_config_snapshot_is_a_detached_copy():
+    snapshot = dynamic_config_snapshot()
+    assert snapshot == dict(runtime_config())
+    snapshot["max_iter"] = -999
+    # Mutating the snapshot does not touch the live config.
+    assert runtime_config().get("max_iter") != -999
 
 
 def test_mode_command_updates_state_and_legacy_flags():

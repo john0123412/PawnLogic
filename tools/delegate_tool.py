@@ -28,12 +28,14 @@ Import cycle avoidance:
 import io, contextlib, threading
 from datetime import datetime
 from config import (
-    DYNAMIC_CONFIG, DEFAULT_MODEL, MODELS, validate_api_key, is_fast_model, find_fast_peer,
+    DEFAULT_MODEL, MODELS, validate_api_key, is_fast_model, find_fast_peer,
     user_friendly_error,
 )
 from core.api_client import stream_request, ensure_tool_call_id
 from core.memory     import _gen_id
-from core.state import state as _runtime_state
+from core.state import (
+    state as _runtime_state, runtime_config, get_dynamic_config_value,
+)
 from core.tool_executor import (
     ToolExecutor, ToolExecutionContext, resolve_tool_arguments,
 )
@@ -64,7 +66,7 @@ def _select_worker_model(current_model: str = DEFAULT_MODEL) -> str:
     - If current model is pro-tier, find a fast peer in the same provider.
     - Fallback: first available model in _WORKER_MODEL_CANDIDATES, then DEFAULT_MODEL
     """
-    preferred = DYNAMIC_CONFIG.get("preferred_worker", "auto")
+    preferred = get_dynamic_config_value("preferred_worker", "auto")
     if preferred and preferred != "auto":
         if preferred in MODELS:
             ok, _ = validate_api_key(preferred)
@@ -249,7 +251,7 @@ class _SubAgentSession:
                     stream_request(
                         self.messages, self.model_alias,
                         tools_schema=tools_sch,
-                        max_tokens=min(DYNAMIC_CONFIG["max_tokens"], 8192),
+                        max_tokens=min(runtime_config()["max_tokens"], 8192),
                     ),
                     ensure_tool_call_id=ensure_tool_call_id,
                     iteration=iteration,
@@ -302,7 +304,7 @@ class _SubAgentSession:
                     context=ctx,
                 ).content
 
-                limit = min(DYNAMIC_CONFIG["tool_max_chars"], 6000)
+                limit = min(runtime_config()["tool_max_chars"], 6000)
                 if len(result) > limit:
                     result = result[:limit//2] + "\n...[truncated]...\n" + result[-500:]
 
@@ -339,7 +341,7 @@ def tool_delegate_task(a: dict) -> str:
 
     # Dual-model routing: pro -> fast peer, fast -> itself.
     worker_model = _select_worker_model(caller_model)
-    _preferred = DYNAMIC_CONFIG.get("preferred_worker", "auto")
+    _preferred = get_dynamic_config_value("preferred_worker", "auto")
     if _preferred and _preferred != "auto":
         print(c(MAGENTA,
             f"  [Delegate] preferred worker forced: [{worker_model}]"

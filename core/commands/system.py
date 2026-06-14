@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 
 from config import (
-    DYNAMIC_CONFIG, NORMAL_CONFIG,
+    NORMAL_CONFIG,
     TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX,
 )
 from core.api_client import stream_request
@@ -41,6 +41,8 @@ from core.memory import list_failures, clear_failures
 from core.session import _ctx_chars, STATE_FILENAME
 from core.state import (
     state as _runtime_state,
+    get_dynamic_config_value,
+    runtime_config,
     set_dynamic_config_value,
     update_dynamic_config,
 )
@@ -90,7 +92,7 @@ async def cmd_context(ctx: CommandContext) -> None:
     session = ctx.session
     msgs = session.messages
     chars = _ctx_chars(msgs)
-    pct = chars / DYNAMIC_CONFIG["ctx_max_chars"] * 100
+    pct = chars / runtime_config()["ctx_max_chars"] * 100
     tok = chars // 4
     pinned = sum(1 for m in msgs if m.get("_pinned"))
     filled = int(min(pct, 100) / 100 * 30)
@@ -191,7 +193,7 @@ async def cmd_stats(ctx: CommandContext) -> None:
 async def cmd_time(ctx: CommandContext) -> None:
     session = ctx.session
     arg = ctx.arg
-    budget = DYNAMIC_CONFIG.get("time_budget_sec", 0)
+    budget = get_dynamic_config_value("time_budget_sec", 0)
     if arg and arg.strip().isdigit():
         new_budget = max(0, int(arg.strip()))
         set_dynamic_config_value("time_budget_sec", new_budget)
@@ -316,7 +318,7 @@ async def cmd_limits(ctx: CommandContext) -> None:
 async def cmd_tokens(ctx: CommandContext) -> None:
     arg = ctx.arg
     if not arg:
-        _print(c(GRAY, f"  Current: {DYNAMIC_CONFIG['max_tokens']}  /tokens <n>"))
+        _print(c(GRAY, f"  Current: {runtime_config()['max_tokens']}  /tokens <n>"))
         return
     try:
         n = max(256, min(65536, int(arg)))
@@ -331,7 +333,7 @@ async def cmd_tokens(ctx: CommandContext) -> None:
 async def cmd_ctx(ctx: CommandContext) -> None:
     arg = ctx.arg
     if not arg:
-        _print(c(GRAY, f"  Current: {DYNAMIC_CONFIG['ctx_max_chars']}  /ctx <n>"))
+        _print(c(GRAY, f"  Current: {runtime_config()['ctx_max_chars']}  /ctx <n>"))
         return
     try:
         n = max(10_000, int(arg))
@@ -347,7 +349,7 @@ async def cmd_ctx(ctx: CommandContext) -> None:
 async def cmd_iter(ctx: CommandContext) -> None:
     arg = ctx.arg
     if not arg:
-        _print(c(GRAY, f"  Current: {DYNAMIC_CONFIG['max_iter']}  /iter <n>"))
+        _print(c(GRAY, f"  Current: {runtime_config()['max_iter']}  /iter <n>"))
         return
     try:
         n = max(1, int(arg))
@@ -361,11 +363,11 @@ async def cmd_iter(ctx: CommandContext) -> None:
 async def cmd_toolsize(ctx: CommandContext) -> None:
     arg = ctx.arg
     if not arg:
-        _print(c(GRAY, f"  Current: {DYNAMIC_CONFIG['tool_max_chars']}"))
+        _print(c(GRAY, f"  Current: {runtime_config()['tool_max_chars']}"))
         return
     try:
         set_dynamic_config_value("tool_max_chars", max(1000, int(arg)))
-        _print(c(GREEN, f"  ✓ tool_max_chars={DYNAMIC_CONFIG['tool_max_chars']}"))
+        _print(c(GREEN, f"  ✓ tool_max_chars={runtime_config()['tool_max_chars']}"))
     except ValueError:
         _print(c(RED, "  ✗ Invalid number"))
 
@@ -374,10 +376,10 @@ async def cmd_toolsize(ctx: CommandContext) -> None:
 async def cmd_fetchsize(ctx: CommandContext) -> None:
     arg = ctx.arg
     if not arg:
-        _print(c(GRAY, f"  Current: {DYNAMIC_CONFIG['fetch_max_chars']}"))
+        _print(c(GRAY, f"  Current: {runtime_config()['fetch_max_chars']}"))
         return
     try:
         set_dynamic_config_value("fetch_max_chars", max(1000, int(arg)))
-        _print(c(GREEN, f"  ✓ fetch_max_chars={DYNAMIC_CONFIG['fetch_max_chars']}"))
+        _print(c(GREEN, f"  ✓ fetch_max_chars={runtime_config()['fetch_max_chars']}"))
     except ValueError:
         _print(c(RED, "  ✗ Invalid number"))

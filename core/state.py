@@ -72,6 +72,16 @@ def set_dynamic_config_value(key: str, value: Any) -> MutableMapping[str, Any]:
     return cfg
 
 
+def get_dynamic_config_value(key: str, default: Any = None) -> Any:
+    """Read one dynamic config value through the runtime-state read path."""
+    return runtime_config().get(key, default)
+
+
+def dynamic_config_snapshot() -> dict:
+    """Return a shallow copy of the dynamic config for a consistent read view."""
+    return dict(runtime_config())
+
+
 def set_output_mode(*, debug_mode: bool, user_mode: bool | None = None, quiet_mode: bool | None = None) -> None:
     """Set process output mode and refresh legacy config flags."""
     state.debug_mode = bool(debug_mode)

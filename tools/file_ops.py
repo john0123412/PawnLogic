@@ -11,13 +11,13 @@ Patch support:
 import fnmatch, os, re, difflib, subprocess
 from pathlib import Path
 from config import (
-    DYNAMIC_CONFIG,
     READ_BLACKLIST,
     WRITE_BLACKLIST,
     DANGEROUS_PATTERNS,
     WORKSPACE_DIR,
     scrub_sensitive_env,
 )
+from core.state import runtime_config
 from utils.ansi import c, YELLOW, BLUE, GRAY
 from core.logger import logger
 
@@ -208,7 +208,7 @@ def _run(cmd: str, timeout: int = 15, cwd: str = None, env=None) -> str:
         stdout, stderr = proc.communicate(timeout=timeout)
         out = stdout.decode("utf-8", errors="ignore") + stderr.decode("utf-8", errors="ignore")
 
-        limit = DYNAMIC_CONFIG["tool_max_chars"]
+        limit = runtime_config()["tool_max_chars"]
         if len(out) > limit:
             half = limit // 2
             out = out[:half] + f"\n...[{len(out)} chars total, truncated to {limit}]...\n" + out[-half // 4:]
@@ -849,7 +849,7 @@ def tool_run_interactive(a: dict) -> str:
         except Exception: pass
 
     full  = "".join(output_chunks)
-    limit = DYNAMIC_CONFIG["tool_max_chars"]
+    limit = runtime_config()["tool_max_chars"]
     if len(full) > limit:
         full = full[:limit // 2] + "\n...[truncated]...\n" + full[-limit // 4:]
     return full or "(no output)"

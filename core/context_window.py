@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import importlib
-
 from config import DYNAMIC_CONFIG
+from core.state import runtime_config
 
 
 def _dynamic_config() -> dict:
     try:
-        return importlib.import_module("config").DYNAMIC_CONFIG
+        return runtime_config()
     except Exception:
         return DYNAMIC_CONFIG
 
