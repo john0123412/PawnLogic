@@ -49,6 +49,7 @@ from core.context_window import (
 from core.state import state as _runtime_state
 from core.runtime_context import RuntimeContext
 from core.prompt_builder import build_session_prompt
+from core.tool_calls import extract_tool_calls
 from core.tool_routing import phase_tool_names, select_phase_tools
 from core.turn_api import TurnApiResult, consume_model_stream
 from core.memory import (
@@ -1286,130 +1287,38 @@ class AgentSession:
           · If XML misses </call>, parse through the end of the string.
           · JSON uses strict=False to allow real newline characters in arguments.
         """
-        import re
-        results = []
+        def on_partial_xml() -> None:
+            print(
+                c(
+                    GRAY,
+                    "  ⚙ [XML Parser] Unclosed </call> detected; tolerant completion enabled",
+                )
+            )
 
-        # 1. XML path: prefer complete <call>...</call> matches.
-        _XML_FULL = re.compile(
-            r'<call\s+name="(?P<name>[^"]+)">(?P<args_block>.*?)</call>',
-            re.DOTALL,
+        def on_dirty_json_rescued() -> None:
+            print(c(YELLOW, "  ⚠ [Hybrid Parser] Dirty JSON detected and rescued with regex"))
+
+        def on_json_error(exc: json.JSONDecodeError, json_str: str) -> None:
+            logger.error(
+                "Hybrid Parser: JSON fallback corrupted | "
+                "model={} session={} exc={!r}\n"
+                "--- RAW (truncated 4096) ---\n{}\n--- END ---",
+                self.model_alias,
+                self.session_id[:8],
+                exc,
+                json_str[:4096],
+            )
+            if _user_mode():
+                print(c(RED, "  ❌ System is busy. Please try again later."))
+            else:
+                print(c(RED, f"  ✗ [Hybrid Parser] JSON fallback parse failed: {exc}"))
+
+        return extract_tool_calls(
+            text_buf,
+            on_partial_xml=on_partial_xml,
+            on_dirty_json_rescued=on_dirty_json_rescued,
+            on_json_error=on_json_error,
         )
-        # Tolerance: parse to string end when the model omits </call>.
-        _XML_PARTIAL = re.compile(
-            r'<call\s+name="(?P<name>[^"]+)">(?P<args_block>.*)',
-            re.DOTALL,
-        )
-        # Match child tags inside XML argument blocks.
-        _XML_PARAM = re.compile(
-            r'<(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)>(?P<val>.*?)</(?P=key)>',
-            re.DOTALL,
-        )
-
-        xml_matches = list(_XML_FULL.finditer(text_buf))
-        _used_partial = False
-        if not xml_matches:
-            xml_matches = list(_XML_PARTIAL.finditer(text_buf))
-            _used_partial = bool(xml_matches)
-
-        if xml_matches:
-            for m in xml_matches:
-                name = m.group("name").strip()
-                args_block = m.group("args_block")
-                if _used_partial:
-                    print(c(GRAY, "  ⚙ [XML Parser] Unclosed </call> detected; tolerant completion enabled"))
-
-                args: dict = {}
-                for pm in _XML_PARAM.finditer(args_block):
-                    key = pm.group("key").strip()
-                    # No escaping: only strip surrounding whitespace.
-                    val_raw = pm.group("val").strip()
-
-                    # Basic type coercion.
-                    if val_raw.lstrip("-").isdigit():
-                        val: object = int(val_raw)
-                    elif val_raw.lower() == "true":
-                        val = True
-                    elif val_raw.lower() == "false":
-                        val = False
-                    else:
-                        val = val_raw   # Preserve raw strings, including newlines.
-
-                    args[key] = val
-
-                if name and args:
-                    results.append({"name": name, "args": args, "_source": "xml"})
-
-            if results:
-                return results
-
-        # 2. JSON fallback: tolerate hallucinated <tool_call>{...}</tool_call>.
-        if "<tool_call>" in text_buf:
-            match = re.search(r"<tool_call>\s*(\{.*)", text_buf, re.DOTALL)
-            if match:
-                json_str = match.group(1)
-                json_str = re.sub(
-                    r"</tool_call>.*$", "", json_str, flags=re.DOTALL
-                ).strip()
-                try:
-                    # strict=False allows real newlines inside argument strings.
-                    parsed_tc = json.loads(json_str, strict=False)
-                    if "name" in parsed_tc and "arguments" in parsed_tc:
-                        raw_args = parsed_tc["arguments"]
-                        args_dict = (
-                            raw_args
-                            if isinstance(raw_args, dict)
-                            else {"_raw_args": str(raw_args)}
-                        )
-                        results.append({
-                            "name":    parsed_tc["name"],
-                            "args":    args_dict,
-                            "_source": "json",
-                        })
-                except json.JSONDecodeError as e:
-                        # Dirty JSON rescue: try escaping unescaped inner quotes.
-                        rescued = False
-                        try:
-                            import re as _re
-                            # Greedily match the whole content field.
-                            content_match = _re.search(r'"content"\s*:\s*"(.*)"\s*\}', json_str, _re.DOTALL)
-                            if content_match:
-                                bad_content = content_match.group(1)
-                                # Escape inner quotes without double-escaping existing ones.
-                                fixed_content = _re.sub(r'(?<!\\)"', r'\"', bad_content)
-                                fixed_j_str = json_str.replace(bad_content, fixed_content)
-
-                                parsed_tc = json.loads(fixed_j_str, strict=False)
-                                if "name" in parsed_tc and "arguments" in parsed_tc:
-                                    raw_args = parsed_tc["arguments"]
-                                    args_dict = (
-                                        raw_args
-                                        if isinstance(raw_args, dict)
-                                        else {"_raw_args": str(raw_args)}
-                                    )
-                                    results.append({
-                                        "name": parsed_tc["name"],
-                                        "args": args_dict,
-                                        "_source": "json_rescued",
-                                    })
-                                    rescued = True
-                        except Exception:
-                            pass
-
-                        if not rescued:
-                            logger.error(
-                                "Hybrid Parser: JSON fallback corrupted | "
-                                "model={} session={} exc={!r}\n"
-                                "--- RAW (truncated 4096) ---\n{}\n--- END ---",
-                                self.model_alias, self.session_id[:8], e, json_str[:4096],
-                            )
-                            if _user_mode():
-                                print(c(RED, "  ❌ System is busy. Please try again later."))
-                            else:
-                                print(c(RED, f"  ✗ [Hybrid Parser] JSON fallback parse failed: {e}"))
-                        else:
-                            print(c(YELLOW, "  ⚠ [Hybrid Parser] Dirty JSON detected and rescued with regex"))
-
-        return results
 
     def _record_turn_usage(self, usage: dict[str, int]) -> None:
         pt = usage.get("prompt_tokens", 0)
