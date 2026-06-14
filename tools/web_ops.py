@@ -23,9 +23,9 @@ import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
-from config import DYNAMIC_CONFIG, USER_AGENTS, scrub_sensitive_env
+from config import USER_AGENTS, scrub_sensitive_env
 from utils.ansi import c, BLUE, YELLOW, GRAY, GREEN
-from core.state import state as _runtime_state
+from core.state import state as _runtime_state, runtime_config
 
 # Detect local tools.
 _has_pandoc = bool(shutil.which("pandoc"))
@@ -364,7 +364,7 @@ def _fetch_regex(raw_html: str, max_chars: int) -> str:
 
 def tool_fetch_url(a: dict) -> str:
     url       = a["url"]
-    max_chars = int(a.get("max_chars", DYNAMIC_CONFIG["fetch_max_chars"]))
+    max_chars = int(a.get("max_chars", runtime_config()["fetch_max_chars"]))
     strategy  = a.get("strategy", "auto")   # auto | jina | pandoc | direct
     err, warnings = validate_fetch_url(url)
     if err:

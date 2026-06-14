@@ -27,7 +27,6 @@ auto-intuition features are preserved.
 """
 
 import itertools
-import importlib
 import os, json, sys, threading, time
 from pathlib import Path
 from config import (
@@ -45,7 +44,7 @@ from core.context_window import (
     _drop_dangling_tool_call_messages as _drop_dangling_tool_call_messages,
     _trim_and_compact_context as _trim_and_compact_context,
 )
-from core.state import state as _runtime_state
+from core.state import state as _runtime_state, runtime_config
 from core.runtime_context import RuntimeContext
 from core.prompt_builder import build_session_prompt
 from core.tool_calls import extract_tool_calls
@@ -106,9 +105,9 @@ def _debug_mode() -> bool:
 
 
 def _dynamic_config() -> dict:
-    """Return the currently loaded mutable runtime config."""
+    """Return the currently loaded mutable runtime config via the runtime interface."""
     try:
-        return importlib.import_module("config").DYNAMIC_CONFIG
+        return runtime_config()
     except Exception:
         return DYNAMIC_CONFIG
 

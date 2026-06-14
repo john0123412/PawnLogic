@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from config import DYNAMIC_CONFIG
+from core.state import runtime_config
 from utils.ansi import c, CYAN
 
 # ────────────────────────────────────────────────────────
@@ -26,12 +26,12 @@ EXIT_SENTINEL: str = "__PAWN_EXIT__"
 # Pretty-print of dynamic runtime configuration
 # ────────────────────────────────────────────────────────
 def fmt_config() -> str:
-    """Render the current DYNAMIC_CONFIG block as a multi-line string.
+    """Render the current dynamic runtime config block as a multi-line string.
 
     Used by /low, /mid, /deep, /max, /normal, /limits to display the
     effective runtime tunables after a tier change.
     """
-    cfg = DYNAMIC_CONFIG
+    cfg = runtime_config()
     return (
         f"  max_tokens      : {c(CYAN, str(cfg['max_tokens']))}  (per-API output limit)\n"
         f"  ctx_max_chars   : {c(CYAN, str(cfg['ctx_max_chars']))}  (~{cfg['ctx_max_chars']//4:,} tokens)\n"

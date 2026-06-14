@@ -20,9 +20,13 @@ main.py is gone, dispatch() consults only the registry.
 
 from __future__ import annotations
 
-from config import DYNAMIC_CONFIG, MODELS, validate_api_key
+from config import MODELS, validate_api_key
 from core.memory import list_knowledge, search_knowledge
-from core.state import state as _runtime_state, set_dynamic_config_value
+from core.state import (
+    state as _runtime_state,
+    get_dynamic_config_value,
+    set_dynamic_config_value,
+)
 from tools.pwn_chain import tool_pwn_env
 from tools.web_ops import web_tool_status
 from utils.ansi import (
@@ -162,7 +166,7 @@ async def cmd_worker(ctx: CommandContext) -> None:
 
     if not target:
         # No argument: show an interactive-style menu.
-        current = DYNAMIC_CONFIG.get("preferred_worker", "auto")
+        current = get_dynamic_config_value("preferred_worker", "auto")
         _print(c(BOLD, "\n  Subtask worker models (used by delegate_task):"))
         for i, alias in enumerate(_WORKER_MODEL_CANDIDATES):
             if alias not in MODELS:

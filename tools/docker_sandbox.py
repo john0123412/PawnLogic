@@ -18,8 +18,8 @@ Dependencies:
 
 import os, re, tempfile
 
-from config import DYNAMIC_CONFIG, DANGEROUS_PATTERNS, WORKSPACE_DIR
-from core.state import state as _runtime_state
+from config import DANGEROUS_PATTERNS, WORKSPACE_DIR
+from core.state import state as _runtime_state, runtime_config
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN, MAGENTA, BOLD
 
 # ════════════════════════════════════════════════════════
@@ -377,7 +377,7 @@ def tool_run_code_docker(a: dict) -> str:
                     pass
 
         # Format output.
-        limit = DYNAMIC_CONFIG["tool_max_chars"]
+        limit = runtime_config()["tool_max_chars"]
         if len(output) > limit:
             half = limit // 2
             output = output[:half] + f"\n...[truncated to {limit} chars]...\n" + output[-half // 4:]
@@ -550,7 +550,7 @@ def tool_pwn_container(a: dict) -> str:
         except Exception as e:
             return f"ERROR: exec failed: {type(e).__name__}: {e}"
 
-        limit = DYNAMIC_CONFIG["tool_max_chars"]
+        limit = runtime_config()["tool_max_chars"]
         if len(result) > limit:
             half = limit // 2
             result = result[:half] + f"\n...[truncated to {limit} chars]...\n" + result[-half // 4:]

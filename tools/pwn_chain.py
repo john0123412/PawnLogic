@@ -806,8 +806,8 @@ def tool_pwn_timed_debug(a: dict) -> str:
     # Format output.
     full = "".join(output_chunks)
 
-    from config import DYNAMIC_CONFIG
-    limit = DYNAMIC_CONFIG["tool_max_chars"]
+    from core.state import runtime_config
+    limit = runtime_config()["tool_max_chars"]
     if len(full) > limit:
         half = limit // 2
         full = full[:half] + f"\n...[truncated to {limit} chars]...\n" + full[-half // 4:]
