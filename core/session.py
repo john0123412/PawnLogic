@@ -50,6 +50,7 @@ from core.state import state as _runtime_state
 from core.runtime_context import RuntimeContext
 from core.prompt_builder import build_session_prompt
 from core.tool_calls import extract_tool_calls
+from core.tool_executor import ToolExecutionContext, execute_tool_handler
 from core.tool_routing import phase_tool_names, select_phase_tools
 from core.turn_api import TurnApiResult, consume_model_stream
 from core.memory import (
@@ -1973,32 +1974,25 @@ class AgentSession:
                             except Exception:
                                 pass
 
-                        # Audit timing.
-                        _t0 = time.monotonic()
-                        _audit_ok = True
-                        try:
-                            _tool_handler = _TOOL_REGISTRY.get_handler(name)
-                            result = _tool_handler(fn_args) if _tool_handler else f"ERROR: Unknown tool '{name}'"
-
-                            # P0.7: semantic failure detection. The tool may not raise,
-                            # but result content can still indicate failure.
-                            _SEMANTIC_FAILURE_SIGNALS = (
-                                "ERROR:", "Traceback", "Segmentation fault", "SIGSEGV",
-                                "NameError", "SyntaxError", "TypeError", "AttributeError",
-                                "ImportError", "ModuleNotFoundError", "FileNotFoundError",
-                                "PermissionError", "RuntimeError", "ValueError",
-                                "panic", "FATAL", "core dumped", "Aborted",
-                                "Compile failed", "Compilation failed", "exit 1", "exit 2", "exit 126", "exit 127",
-                                "exit 134", "exit 139", "command not found",
-                            )
-                            if any(sig in str(result) for sig in _SEMANTIC_FAILURE_SIGNALS):
-                                _audit_ok = False
-
-                        except Exception as _tool_exc:
-                            _raw_err = f"ERROR: {type(_tool_exc).__name__}: {_tool_exc}"
-                            result = user_friendly_error(_raw_err) if _user_mode() else _raw_err
-                            _audit_ok = False
-                        _elapsed_ms = int((time.monotonic() - _t0) * 1000)
+                        execution = execute_tool_handler(
+                            tool_call_id=tc["id"],
+                            tool_name=name,
+                            fn_args=fn_args,
+                            handler=_TOOL_REGISTRY.get_handler(name),
+                            context=ToolExecutionContext(
+                                session_id=self.session_id,
+                                model_alias=self.model_alias,
+                                iteration=iteration,
+                                current_phase=self.current_phase,
+                                user_mode=_user_mode(),
+                                debug_mode=_debug_mode(),
+                            ),
+                            args_preview=preview[:200],
+                            user_error_formatter=user_friendly_error,
+                        )
+                        result = execution.content
+                        _audit_ok = execution.audit_ok
+                        _elapsed_ms = execution.elapsed_ms
 
                         # P0.7: automatic failure recording.
                         if not _audit_ok and name in _AUDITED_TOOLS:
