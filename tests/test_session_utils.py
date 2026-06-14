@@ -508,6 +508,195 @@ def test_run_turn_injects_plan_missing_for_non_exempt_tool(monkeypatch):
     )
 
 
+def _tool_call_response(name, args=None, *, call_id="call_tool", include_plan=True):
+    import json
+
+    events = []
+    if include_plan:
+        events.append({"choices": [{"delta": {"content": "<plan><intent>run tool</intent></plan>"}}]})
+    events.append({
+        "choices": [{
+            "delta": {
+                "tool_calls": [{
+                    "index": 0,
+                    "id": call_id,
+                    "function": {
+                        "name": name,
+                        "arguments": json.dumps(args or {}),
+                    },
+                }],
+            },
+        }],
+    })
+    return tuple(events)
+
+
+def _assistant_done_response(text="done"):
+    return ({"choices": [{"delta": {"content": text}}]},)
+
+
+def test_run_turn_unknown_tool_appends_error_tool_result(monkeypatch):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    audit_tool_call = MagicMock()
+    monkeypatch.setattr(session_mod, "audit_tool_call", audit_tool_call)
+
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_sequence(
+            _tool_call_response("pytest_unknown_tool", {"value": 1}, call_id="call_unknown"),
+            _assistant_done_response(),
+        ),
+    )
+
+    s.run_turn("use unknown tool")
+
+    tool_msg = next(m for m in s.messages if m.get("role") == "tool")
+    assert tool_msg["tool_call_id"] == "call_unknown"
+    assert tool_msg["content"] == "ERROR: Unknown tool 'pytest_unknown_tool'"
+    audit_tool_call.assert_called()
+    assert audit_tool_call.call_args.kwargs["tool_name"] == "pytest_unknown_tool"
+    assert audit_tool_call.call_args.kwargs["success"] is False
+
+
+def test_run_turn_tool_exception_appends_error_result(monkeypatch):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    monkeypatch.setattr(session_mod._runtime_state, "user_mode", False)
+
+    def broken_tool(_args):
+        raise ValueError("bad tool args")
+
+    session_mod._TOOL_REGISTRY.register("pytest_broken_tool", broken_tool)
+    try:
+        monkeypatch.setattr(
+            session_mod,
+            "stream_request",
+            fake_stream_sequence(
+                _tool_call_response("pytest_broken_tool", {"x": 1}, call_id="call_broken"),
+                _assistant_done_response(),
+            ),
+        )
+
+        s.run_turn("run broken tool")
+    finally:
+        session_mod._TOOL_REGISTRY.unregister("pytest_broken_tool")
+
+    tool_msg = next(m for m in s.messages if m.get("role") == "tool")
+    assert tool_msg["tool_call_id"] == "call_broken"
+    assert tool_msg["content"] == "ERROR: ValueError: bad tool args"
+
+
+def test_run_turn_switch_phase_updates_phase_and_refreshes_prompt(monkeypatch):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    assert "EXPLOIT" in session_mod.AGENT_PHASES
+
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_sequence(
+            _tool_call_response(
+                "switch_phase",
+                {"phase": "EXPLOIT", "reason": "need exploit tools"},
+                call_id="call_switch",
+            ),
+            _assistant_done_response(),
+        ),
+    )
+
+    s.run_turn("switch phase")
+
+    assert s.current_phase == "EXPLOIT"
+    s._reset_system_prompt.assert_called()
+    tool_msg = next(m for m in s.messages if m.get("role") == "tool")
+    assert "[Phase Switch] RECON" in tool_msg["content"]
+    assert "EXPLOIT" in tool_msg["content"]
+    assert "need exploit tools" in tool_msg["content"]
+
+
+def test_run_turn_audited_tool_prefaces_failure_warning(monkeypatch):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    check_failure = MagicMock(return_value=[{"id": 1, "error_type": "Timeout"}])
+    format_failures_for_prompt = MagicMock(return_value="PREVIOUS FAILURE WARNING")
+    monkeypatch.setattr(session_mod, "check_failure", check_failure)
+    monkeypatch.setattr(session_mod, "format_failures_for_prompt", format_failures_for_prompt)
+    monkeypatch.setitem(session_mod.TOOL_MAP, "run_shell", lambda _args: "OK: shell")
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_sequence(
+            _tool_call_response("run_shell", {"command": "echo ok"}, call_id="call_shell"),
+            _assistant_done_response(),
+        ),
+    )
+
+    s.run_turn("run shell with audit warning")
+
+    tool_msg = next(m for m in s.messages if m.get("role") == "tool")
+    assert "OK: shell" in tool_msg["content"]
+    assert "PREVIOUS FAILURE WARNING" in tool_msg["content"]
+    check_failure.assert_called_once()
+    assert check_failure.call_args.args[0] == "run_shell"
+
+
+def test_run_turn_audited_tool_failure_records_failure(monkeypatch):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    write_failure = MagicMock(return_value=123)
+    audit_tool_call = MagicMock()
+    monkeypatch.setattr(session_mod, "check_failure", MagicMock(return_value=[]))
+    monkeypatch.setattr(session_mod, "write_failure", write_failure)
+    monkeypatch.setattr(session_mod, "count_failure", MagicMock(return_value=1))
+    monkeypatch.setattr(session_mod, "audit_tool_call", audit_tool_call)
+    monkeypatch.setitem(
+        session_mod.TOOL_MAP,
+        "run_shell",
+        lambda _args: "ERROR: PermissionError: denied",
+    )
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_sequence(
+            _tool_call_response("run_shell", {"command": "./target"}, call_id="call_fail"),
+            _assistant_done_response(),
+        ),
+    )
+
+    s.run_turn("run failing shell")
+
+    write_failure.assert_called_once()
+    assert write_failure.call_args.kwargs["tool_name"] == "run_shell"
+    assert write_failure.call_args.kwargs["error_type"] == "Permission"
+    assert audit_tool_call.call_args.kwargs["success"] is False
+
+
+def test_run_turn_tool_keyboard_interrupt_raises_for_cli_rollback(monkeypatch):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+
+    def interrupted_tool(_args):
+        raise KeyboardInterrupt
+
+    session_mod._TOOL_REGISTRY.register("pytest_interrupt_tool", interrupted_tool)
+    try:
+        monkeypatch.setattr(
+            session_mod,
+            "stream_request",
+            fake_stream_request(*_tool_call_response("pytest_interrupt_tool", call_id="call_interrupt")),
+        )
+
+        with pytest.raises(TurnInterrupted):
+            s.run_turn("interrupt during tool")
+    finally:
+        session_mod._TOOL_REGISTRY.unregister("pytest_interrupt_tool")
+
+    s._autosave.assert_called()
+    assert any(
+        m.get("role") == "assistant"
+        and m.get("tool_calls")
+        and m["tool_calls"][0]["id"] == "call_interrupt"
+        for m in s.messages
+    )
+    assert not any(m.get("role") == "tool" and m.get("tool_call_id") == "call_interrupt" for m in s.messages)
+
+
 def test_history_summary_skips_empty_stream_choices(monkeypatch):
     from config import DYNAMIC_CONFIG
     import core.session as session_mod
