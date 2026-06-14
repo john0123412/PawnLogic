@@ -3,6 +3,7 @@
 import pytest
 
 from core.tool_executor import (
+    ToolExecutor,
     ToolExecutionContext,
     ToolExecutionResult,
     classify_tool_failure,
@@ -344,6 +345,87 @@ def test_record_tool_failure_preserves_error_type_when_write_fails():
     assert result.error_type == "RuntimeError"
     assert result.recorded is False
     assert result.gsa_sunk is False
+
+
+def _make_tool_executor(**overrides) -> ToolExecutor:
+    defaults = {
+        "get_handler": lambda _name: None,
+        "agent_phases": {"RECON": ["read_file"], "EXPLOIT": ["run_shell"]},
+        "schema_snapshot": lambda: [_schema("read_file"), _schema("run_shell")],
+        "check_failure_func": lambda *_args, **_kwargs: [],
+        "format_failures_func": lambda rows: f"warning: {len(rows)}",
+        "write_failure_func": lambda **_kwargs: "fid-1",
+        "count_failure_func": lambda _tool, _error: 0,
+        "sink_failure_func": lambda **_kwargs: (False, ""),
+        "user_error_formatter": None,
+    }
+    defaults.update(overrides)
+    return ToolExecutor(**defaults)
+
+
+def test_tool_executor_execute_handler_looks_up_registered_handler():
+    executor = _make_tool_executor(
+        get_handler=lambda name: (lambda args: f"{name}:{args['value']}"),
+    )
+
+    result = executor.execute_handler(
+        tool_call_id="call_1",
+        tool_name="custom_tool",
+        fn_args={"value": "ok"},
+        context=ToolExecutionContext("session123", "model", 0, "RECON"),
+    )
+
+    assert result.content == "custom_tool:ok"
+    assert result.audit_ok is True
+
+
+def test_tool_executor_execute_phase_switch_uses_schema_snapshot():
+    executor = _make_tool_executor(
+        schema_snapshot=lambda: [
+            _schema("run_shell"),
+            _schema("switch_phase"),
+        ],
+    )
+
+    result = executor.execute_phase_switch(
+        fn_args={"phase": "exploit", "reason": "next"},
+        current_phase="RECON",
+    )
+
+    assert result.switched is True
+    assert [schema["function"]["name"] for schema in result.active_tools] == [
+        "run_shell",
+        "switch_phase",
+    ]
+
+
+def test_tool_executor_precheck_and_record_failure_delegate_dependencies():
+    rows = [{"error_type": "Timeout"}]
+    writes = []
+    executor = _make_tool_executor(
+        check_failure_func=lambda *_args, **_kwargs: rows,
+        write_failure_func=lambda **kwargs: writes.append(kwargs) or "fid-2",
+    )
+
+    precheck = executor.precheck_failures(
+        tool_name="run_shell",
+        args_preview="command='./target'",
+        is_audited=True,
+    )
+    record = executor.record_failure(
+        tool_name="run_shell",
+        args_preview="command='./target'",
+        content="ERROR: failed",
+        audit_ok=False,
+        is_audited=True,
+        session_id="session123",
+    )
+
+    assert precheck.warning == "warning: 1"
+    assert precheck.failure_count == 1
+    assert record.recorded is True
+    assert record.failure_id == "fid-2"
+    assert writes[0]["error_type"] == "RuntimeError"
 
 
 def _schema(name: str) -> dict:

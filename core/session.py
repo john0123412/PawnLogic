@@ -51,11 +51,8 @@ from core.runtime_context import RuntimeContext
 from core.prompt_builder import build_session_prompt
 from core.tool_calls import extract_tool_calls
 from core.tool_executor import (
+    ToolExecutor,
     ToolExecutionContext,
-    execute_phase_switch,
-    execute_tool_handler,
-    precheck_tool_failures,
-    record_tool_failure,
 )
 from core.tool_routing import select_phase_tools
 from core.turn_api import TurnApiResult, consume_model_stream
@@ -1553,6 +1550,17 @@ class AgentSession:
         _plan_rejected    = 0
         _dir_search_count = 0
         _DIR_THRESHOLD    = 3
+        tool_executor = ToolExecutor(
+            get_handler=_TOOL_REGISTRY.get_handler,
+            agent_phases=AGENT_PHASES,
+            schema_snapshot=_tool_schema_snapshot,
+            check_failure_func=check_failure,
+            format_failures_func=format_failures_for_prompt,
+            write_failure_func=write_failure,
+            count_failure_func=count_failure,
+            sink_failure_func=sink_failure_to_gsa,
+            user_error_formatter=user_friendly_error,
+        )
 
         # Logic Refresh module state.
         _LOGIC_REFRESH_INTERVAL = 20   # Trigger a phase summary every 20 iterations.
@@ -1924,11 +1932,9 @@ class AgentSession:
 
                     # switch_phase intercept; mutate instance state directly.
                     if name == "switch_phase":
-                        phase_result = execute_phase_switch(
+                        phase_result = tool_executor.execute_phase_switch(
                             fn_args=fn_args,
                             current_phase=self.current_phase,
-                            agent_phases=AGENT_PHASES,
-                            schemas=_tool_schema_snapshot(),
                         )
                         result = phase_result.content
                         if phase_result.switched:
@@ -1957,12 +1963,10 @@ class AgentSession:
                             "inspect_binary", "web_search", "fetch_url", "find_refs",
                         }
 
-                        precheck = precheck_tool_failures(
+                        precheck = tool_executor.precheck_failures(
                             tool_name=name,
                             args_preview=preview[:200],
                             is_audited=name in _AUDITED_TOOLS,
-                            check_failure_func=check_failure,
-                            format_failures_func=format_failures_for_prompt,
                         )
                         _failure_warning = precheck.warning
                         if precheck.failure_count and _debug_mode():
@@ -1971,11 +1975,10 @@ class AgentSession:
                                 f"{precheck.failure_count} historical failure records"
                             ))
 
-                        execution = execute_tool_handler(
+                        execution = tool_executor.execute_handler(
                             tool_call_id=tc["id"],
                             tool_name=name,
                             fn_args=fn_args,
-                            handler=_TOOL_REGISTRY.get_handler(name),
                             context=ToolExecutionContext(
                                 session_id=self.session_id,
                                 model_alias=self.model_alias,
@@ -1985,22 +1988,18 @@ class AgentSession:
                                 debug_mode=_debug_mode(),
                             ),
                             args_preview=preview[:200],
-                            user_error_formatter=user_friendly_error,
                         )
                         result = execution.content
                         _audit_ok = execution.audit_ok
                         _elapsed_ms = execution.elapsed_ms
 
-                        record_result = record_tool_failure(
+                        record_result = tool_executor.record_failure(
                             tool_name=name,
                             args_preview=preview[:200],
                             content=result,
                             audit_ok=_audit_ok,
                             is_audited=name in _AUDITED_TOOLS,
                             session_id=self.session_id,
-                            write_failure_func=write_failure,
-                            count_failure_func=count_failure,
-                            sink_failure_func=sink_failure_to_gsa,
                         )
                         if record_result.gsa_sunk and _debug_mode():
                             print(c(YELLOW, f"  📝 [GSA Sink] {record_result.gsa_message}"))
