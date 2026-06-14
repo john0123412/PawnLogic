@@ -361,6 +361,58 @@ def test_count_turns_two_turns():
     assert len(turns) == 2
 
 
+def test_reset_system_prompt_delegates_to_prompt_builder(monkeypatch):
+    import core.session as session_mod
+    from core.prompt_builder import PromptBuildResult
+
+    s = _make_session()
+    s.messages = []
+    s._loaded_skill_packs = [{"name": "old"}]
+
+    captured = {}
+
+    def fake_build_session_prompt(**kwargs):
+        captured.update(kwargs)
+        return PromptBuildResult(prompt="NEW PROMPT", loaded_skill_packs=[{"name": "new"}])
+
+    monkeypatch.setattr(session_mod, "build_session_prompt", fake_build_session_prompt)
+
+    s._reset_system_prompt("heap overflow")
+
+    assert s.messages == [{"role": "system", "content": "NEW PROMPT"}]
+    assert s._loaded_skill_packs == [{"name": "new"}]
+    assert captured["cwd"] == s.cwd
+    assert captured["current_phase"] == s.current_phase
+    assert captured["model_alias"] == s.model_alias
+    assert captured["model"] == s.model
+    assert captured["urgent_mode"] is False
+    assert captured["knowledge_query"] == "heap overflow"
+    assert captured["agent_phases"] is session_mod.AGENT_PHASES
+    assert captured["load_state_md"] is session_mod._load_state_md
+    assert captured["load_skills_toc"] is session_mod._load_skills_toc
+    assert captured["skill_scanner"] is session_mod._skill_scanner
+
+
+def test_reset_system_prompt_keeps_loaded_packs_when_builder_does_not_update(monkeypatch):
+    import core.session as session_mod
+    from core.prompt_builder import PromptBuildResult
+
+    s = _make_session()
+    s.messages = [{"role": "system", "content": "OLD PROMPT"}]
+    s._loaded_skill_packs = [{"name": "old"}]
+
+    monkeypatch.setattr(
+        session_mod,
+        "build_session_prompt",
+        lambda **_kwargs: PromptBuildResult(prompt="UPDATED PROMPT", loaded_skill_packs=None),
+    )
+
+    s._reset_system_prompt()
+
+    assert s.messages == [{"role": "system", "content": "UPDATED PROMPT"}]
+    assert s._loaded_skill_packs == [{"name": "old"}]
+
+
 def test_count_turns_with_tool_messages():
     s = _make_session()
     s.messages = [
