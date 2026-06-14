@@ -61,6 +61,13 @@ from core.tool_result import (
 )
 from core.tool_routing import select_phase_tools
 from core.turn_api import TurnApiResult, consume_model_stream
+from core.turn_guards import (
+    decide_concurrency_truncation,
+    decide_empty_response_retry,
+    decide_plan_guard,
+    decide_urgent_mode,
+    is_empty_response,
+)
 from core.memory import (
     init_db, _gen_id, search_knowledge, format_knowledge_for_prompt,
     update_session_naming,
@@ -1621,7 +1628,18 @@ class AgentSession:
                     )
                     break
 
-                if not self._urgent_mode and _remaining < _URGENT_THRESHOLD_SEC:
+                _urgent_decision = decide_urgent_mode(
+                    remaining=_remaining,
+                    already_urgent=self._urgent_mode,
+                    threshold=_URGENT_THRESHOLD_SEC,
+                    model_alias=self.model_alias,
+                    is_fast_model=is_fast_model,
+                    find_fast_peer=find_fast_peer,
+                    candidates=_URGENT_MODEL_CANDIDATES,
+                    available_models=MODELS,
+                    validate_api_key=validate_api_key,
+                )
+                if _urgent_decision.activate:
                     # Activate URGENT_MODE.
                     self._urgent_mode = True
                     print(c(RED,
@@ -1640,22 +1658,12 @@ class AgentSession:
                     })
 
                     # Auto-switch to a fast model, preferring the same provider.
-                    _urgent_target = None
-                    if not is_fast_model(self.model_alias):
-                        _urgent_target = find_fast_peer(self.model_alias)
-                    if _urgent_target is None:
-                        for _u_alias in _URGENT_MODEL_CANDIDATES:
-                            if _u_alias in MODELS and _u_alias != self.model_alias:
-                                _u_ok, _ = validate_api_key(_u_alias)
-                                if _u_ok:
-                                    _urgent_target = _u_alias
-                                    break
-                    if _urgent_target:
+                    if _urgent_decision.target_model:
                         old_model = self.model_alias
-                        self.model_alias = _urgent_target
+                        self.model_alias = _urgent_decision.target_model
                         print(c(MAGENTA,
                             f"  🚨 [URGENT] Model switched: "
-                            f"{old_model} -> {_urgent_target} (fast response)"
+                            f"{old_model} -> {_urgent_decision.target_model} (fast response)"
                         ))
                         # Rebuild the tool list.
                         current_tools = select_phase_tools(
@@ -1728,13 +1736,16 @@ class AgentSession:
                     # Empty-response detection with exponential-backoff retry.
                     # Usage-only and hidden reasoning-only deltas are not user-visible
                     # answers, even when the provider reports completion tokens.
-                    _empty_response = not text_buf.strip() and not tc_buf
+                    _empty_response = is_empty_response(text_buf, tc_buf)
 
                     if not _empty_response:
                         break   # Valid response; exit retry loop.
 
                     _api_retry += 1
-                    if _api_retry >= _API_RETRY_MAX:
+                    _retry_decision = decide_empty_response_retry(
+                        api_retry=_api_retry, max_retries=_API_RETRY_MAX
+                    )
+                    if _retry_decision.action == "giveup":
                         if _debug_mode():
                             print(c(YELLOW,
                                 f"\n  ⚠ [API Recovery] Received {_api_retry} consecutive empty responses; "
@@ -1755,7 +1766,7 @@ class AgentSession:
                         })
                         break   # Exit retry loop and proceed to the next iteration.
 
-                    _wait = min(2 ** _api_retry, 8)
+                    _wait = _retry_decision.wait_seconds
                     if _debug_mode():
                         print(c(YELLOW,
                             f"\n  ⚠ [API Recovery] Invalid response received; attempting recovery... "
@@ -1796,14 +1807,14 @@ class AgentSession:
                 #   · Appends the signal as a "user" role after tool results.
                 # ════════════════════════════════════════════════
                 _plan_signal_injected = False
-                _missing_required_plan = _tool_call_missing_plan(text_buf, tc_buf)
+                _plan_decision = decide_plan_guard(
+                    missing_required_plan=_tool_call_missing_plan(text_buf, tc_buf),
+                    plan_rejected=_plan_rejected,
+                    max_soft=_MAX_SOFT_CORRECTIONS,
+                )
+                _plan_rejected = _plan_decision.plan_rejected
 
-                if _missing_required_plan:
-                    _plan_rejected += 1
-                else:
-                    _plan_rejected = 0
-
-                if _plan_rejected > _MAX_SOFT_CORRECTIONS:
+                if _plan_decision.action == "hard":
                     # Hard stop after soft intercepts are exhausted.
                     print(c(RED,
                             f"  ⛔ [CoT Guard] Missing <plan> for {_plan_rejected} consecutive attempts; task stopped."
@@ -1821,7 +1832,7 @@ class AgentSession:
                         self.messages.pop()  # Remove the latest user message to keep context clean.
                     return
 
-                elif _plan_rejected > 0:
+                elif _plan_decision.action == "soft":
                     # Soft intercept: tools still run; inject correction signal after results.
                     if _debug_mode():
                         print(c(YELLOW,
@@ -1835,10 +1846,12 @@ class AgentSession:
                     _plan_signal_injected = True
 
                 # Module 1B: concurrent call truncation.
-                if len(tc_buf) > _MAX_CONCURRENT_TOOLS:
-                    orig = len(tc_buf)
-                    kept = sorted(tc_buf.keys())[:_MAX_CONCURRENT_TOOLS]
-                    tc_buf = {k: tc_buf[k] for k in kept}
+                _concurrency = decide_concurrency_truncation(
+                    tc_buf.keys(), _MAX_CONCURRENT_TOOLS
+                )
+                if _concurrency.truncated:
+                    orig = _concurrency.original_count
+                    tc_buf = {k: tc_buf[k] for k in _concurrency.kept_keys}
                     if _debug_mode():
                         print(c(YELLOW, f"  ✂ [Concurrency Limit] Truncated {orig} tool calls to the first {_MAX_CONCURRENT_TOOLS}."))
                     logger.warning(
