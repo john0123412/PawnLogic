@@ -49,6 +49,7 @@ from core.context_window import (
 from core.state import state as _runtime_state
 from core.runtime_context import RuntimeContext
 from core.prompt_builder import build_session_prompt
+from core.tool_routing import phase_tool_names, select_phase_tools
 from core.turn_api import TurnApiResult, consume_model_stream
 from core.memory import (
     init_db, _gen_id, search_knowledge, format_knowledge_for_prompt,
@@ -1623,12 +1624,9 @@ class AgentSession:
             current_tools = None
         else:
             # MoE dynamic tool pruning.
-            phase_whitelist = set(AGENT_PHASES.get(self.current_phase, []))
-            current_tools = [
-                s for s in _tool_schema_snapshot()
-                if s.get("function", {}).get("name") in phase_whitelist
-                or s.get("function", {}).get("name") in ("switch_phase", "bump_skill")  # ★
-            ]
+            current_tools = select_phase_tools(
+                _tool_schema_snapshot(), AGENT_PHASES, self.current_phase
+            )
             if _debug_mode():
                 print(c(GRAY,
                     f"  📡 [Phase:{self.current_phase}] "
@@ -1719,12 +1717,9 @@ class AgentSession:
                             f"{old_model} -> {_urgent_target} (fast response)"
                         ))
                         # Rebuild the tool list.
-                        phase_whitelist = set(AGENT_PHASES.get(self.current_phase, []))
-                        current_tools = [
-                            s for s in _tool_schema_snapshot()
-                            if s.get("function", {}).get("name") in phase_whitelist
-                            or s.get("function", {}).get("name") in ("switch_phase", "bump_skill")
-                        ]
+                        current_tools = select_phase_tools(
+                            _tool_schema_snapshot(), AGENT_PHASES, self.current_phase
+                        )
                         current_max_tokens = min(current_max_tokens, 4096)
 
                 # ════════════════════════════════════════════════
@@ -2019,12 +2014,10 @@ class AgentSession:
                             old_phase = self.current_phase
                             self.current_phase = target
                             # Rebuild the dynamic tool list for the next iteration.
-                            phase_whitelist = set(AGENT_PHASES[target])
-                            current_tools = [
-                                s for s in _tool_schema_snapshot()
-                                if s.get("function", {}).get("name") in phase_whitelist
-                                or s.get("function", {}).get("name") in ("switch_phase", "bump_skill")  # ★
-                            ]
+                            phase_whitelist = phase_tool_names(AGENT_PHASES, target)
+                            current_tools = select_phase_tools(
+                                _tool_schema_snapshot(), AGENT_PHASES, target
+                            )
                             result = (
                                 f"[Phase Switch] {old_phase} → {target}\n"
                                 f"Reason: {reason}\n"
