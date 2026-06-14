@@ -305,11 +305,96 @@ def execute_phase_switch(
     )
 
 
+@dataclass(slots=True)
+class ToolExecutor:
+    """Thin orchestration layer over extracted tool execution helpers."""
+
+    get_handler: Callable[[str], Callable[[dict], object] | None]
+    agent_phases: Mapping[str, Sequence[str]]
+    schema_snapshot: Callable[[], Sequence[dict]]
+    check_failure_func: Callable[..., Sequence[object]]
+    format_failures_func: Callable[[Sequence[object]], str]
+    write_failure_func: Callable[..., Any]
+    count_failure_func: Callable[[str, str], int]
+    sink_failure_func: Callable[..., tuple[bool, str]]
+    user_error_formatter: Callable[[str], str] | None = None
+
+    def execute_phase_switch(
+        self,
+        *,
+        fn_args: dict,
+        current_phase: str,
+    ) -> PhaseSwitchResult:
+        return execute_phase_switch(
+            fn_args=fn_args,
+            current_phase=current_phase,
+            agent_phases=self.agent_phases,
+            schemas=self.schema_snapshot(),
+        )
+
+    def precheck_failures(
+        self,
+        *,
+        tool_name: str,
+        args_preview: str,
+        is_audited: bool,
+    ) -> ToolFailurePrecheckResult:
+        return precheck_tool_failures(
+            tool_name=tool_name,
+            args_preview=args_preview,
+            is_audited=is_audited,
+            check_failure_func=self.check_failure_func,
+            format_failures_func=self.format_failures_func,
+        )
+
+    def execute_handler(
+        self,
+        *,
+        tool_call_id: str,
+        tool_name: str,
+        fn_args: dict,
+        context: ToolExecutionContext,
+        args_preview: str = "",
+    ) -> ToolExecutionResult:
+        return execute_tool_handler(
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            fn_args=fn_args,
+            handler=self.get_handler(tool_name),
+            context=context,
+            args_preview=args_preview,
+            user_error_formatter=self.user_error_formatter,
+        )
+
+    def record_failure(
+        self,
+        *,
+        tool_name: str,
+        args_preview: str,
+        content: object,
+        audit_ok: bool,
+        is_audited: bool,
+        session_id: str,
+    ) -> ToolFailureRecordResult:
+        return record_tool_failure(
+            tool_name=tool_name,
+            args_preview=args_preview,
+            content=content,
+            audit_ok=audit_ok,
+            is_audited=is_audited,
+            session_id=session_id,
+            write_failure_func=self.write_failure_func,
+            count_failure_func=self.count_failure_func,
+            sink_failure_func=self.sink_failure_func,
+        )
+
+
 __all__ = [
     "SEMANTIC_FAILURE_SIGNALS",
     "PhaseSwitchResult",
     "ToolExecutionContext",
     "ToolExecutionResult",
+    "ToolExecutor",
     "ToolFailurePrecheckResult",
     "ToolFailureRecordResult",
     "classify_tool_failure",
