@@ -12,20 +12,32 @@ Dual-model routing:
   - Candidate order: ds-v4-flash -> claude-haiku -> gpt-4.1.
   - The code selects the first available worker model; the main model does not choose it.
 
+Shared execution path:
+  - Streaming uses core.turn_api.consume_model_stream (same as the main loop).
+  - Tool args are resolved with core.tool_executor.resolve_tool_arguments.
+  - Tools run through a core.tool_executor.ToolExecutor, so unknown-tool and
+    exception handling match the main loop.
+  - The capability profile (inherited / read_only / no_shell / custom) narrows
+    which registry tools the non-isolated sub-agent may see and execute.
+
 Import cycle avoidance:
   - This module does not import core/session.py at top level.
   - Tool registry snapshots are lazily imported when the tool is called.
-  - _sub_stream() uses core/api_client.stream_request directly.
 """
 
-import io, json, contextlib, threading
+import io, contextlib, threading
 from datetime import datetime
 from config import (
     DYNAMIC_CONFIG, DEFAULT_MODEL, MODELS, validate_api_key, is_fast_model, find_fast_peer,
+    user_friendly_error,
 )
 from core.api_client import stream_request, ensure_tool_call_id
 from core.memory     import _gen_id
 from core.state import state as _runtime_state
+from core.tool_executor import (
+    ToolExecutor, ToolExecutionContext, resolve_tool_arguments,
+)
+from core.turn_api import consume_model_stream
 from tools.file_ops  import _session_cwd
 from utils.ansi      import c, YELLOW, GRAY, GREEN, MAGENTA
 
@@ -80,6 +92,47 @@ def _select_worker_model(current_model: str = DEFAULT_MODEL) -> str:
     return DEFAULT_MODEL
 
 # ════════════════════════════════════════════════════════
+# Capability profiles.
+#
+# delegate_task is a NON-ISOLATED sub-agent: tool side effects are real and run
+# with the parent process's permissions. The capability profile narrows which
+# tools the sub-agent may see and execute. delegate_task is never available to a
+# sub-agent regardless of profile (no nested delegation).
+# ════════════════════════════════════════════════════════
+
+# Tools that execute code / shell / containers.
+_SHELL_TOOLS = frozenset({
+    "run_shell", "run_code", "run_interactive",
+    "run_code_docker", "pwn_container",
+    "tool_install_package", "docker_prune_resources",
+})
+# Tools that mutate the filesystem or repository.
+_MUTATING_TOOLS = frozenset({
+    "write_file", "patch_file", "git_op",
+})
+
+CAPABILITY_PROFILES = ("inherited", "read_only", "no_shell", "custom")
+
+
+def tool_allowed(name: str, profile: str, allowlist=None) -> bool:
+    """Return whether a sub-agent under ``profile`` may use tool ``name``."""
+    if name == "delegate_task":
+        return False  # never allow nested delegation
+    if profile == "read_only":
+        return name not in _SHELL_TOOLS and name not in _MUTATING_TOOLS
+    if profile == "no_shell":
+        return name not in _SHELL_TOOLS
+    if profile == "custom":
+        return name in set(allowlist or ())
+    return True  # inherited (default)
+
+
+def resolve_allowed_tools(profile: str, all_tool_names, allowlist=None) -> set[str]:
+    """Return the subset of ``all_tool_names`` permitted under ``profile``."""
+    return {n for n in all_tool_names if tool_allowed(n, profile, allowlist)}
+
+
+# ════════════════════════════════════════════════════════
 # Lazy imports to avoid a cycle with session.py.
 # ════════════════════════════════════════════════════════
 
@@ -91,6 +144,26 @@ def _tool_map():
 def _tools_schema():
     from core.session import _tool_schema_snapshot
     return _tool_schema_snapshot()
+
+
+def _make_sub_executor(handler_lookup):
+    """Build a ToolExecutor that dispatches through the sub-agent's allowed map.
+
+    Failure-tracking hooks are no-ops: a non-isolated sub-agent does not record
+    GSA failures or anti-pattern history. Only execute_handler is used, which
+    reuses the main loop's unknown-tool and exception envelopes.
+    """
+    return ToolExecutor(
+        get_handler=handler_lookup,
+        agent_phases={},
+        schema_snapshot=lambda: [],
+        check_failure_func=lambda *a, **k: [],
+        format_failures_func=lambda rows: "",
+        write_failure_func=lambda **k: None,
+        count_failure_func=lambda *a, **k: 0,
+        sink_failure_func=lambda **k: (False, ""),
+        user_error_formatter=user_friendly_error,
+    )
 
 # ════════════════════════════════════════════════════════
 # Sub-agent session running silently.
@@ -105,9 +178,17 @@ class _SubAgentSession:
 
     MAX_ITER = 15   # Hard cap to prevent infinite loops.
 
-    def __init__(self, task: str, model_alias: str = DEFAULT_MODEL):
+    def __init__(
+        self,
+        task: str,
+        model_alias: str = DEFAULT_MODEL,
+        capability: str = "inherited",
+        allowlist=None,
+    ):
         self.session_id  = "sub_" + _gen_id()
         self.model_alias = model_alias
+        self.capability  = capability if capability in CAPABILITY_PROFILES else "inherited"
+        self.allowlist   = allowlist
 
         # Inherit important facts from the parent agent.
         inherited_ctx = ""
@@ -150,50 +231,42 @@ class _SubAgentSession:
         stdout is redirected while tool calls still execute normally.
         Returns the final text response from the sub-agent.
         """
-        tool_map    = _tool_map()
-        # Prevent nested delegation by removing delegate_task from the schema.
-        tools_sch   = [s for s in _tools_schema()
-                       if s.get("function", {}).get("name") != "delegate_task"]
-        cap         = io.StringIO()
+        # Snapshot the registry once for a consistent view, then apply the
+        # capability profile to both the advertised schema and the executable map.
+        snapshot_map = _tool_map()
+        allowed      = resolve_allowed_tools(self.capability, snapshot_map, self.allowlist)
+        tools_sch    = [s for s in _tools_schema()
+                        if s.get("function", {}).get("name") in allowed]
+        handler_map  = {n: h for n, h in snapshot_map.items() if n in allowed}
+        executor     = _make_sub_executor(handler_map.get)
+        cap          = io.StringIO()
 
         for iteration in range(self.MAX_ITER):
-            text_buf = ""; tc_buf: dict = {}
-
-            # Redirect stdout to hide tool-call prints.
+            # Reuse the main loop's stream consumer. Redirect stdout to hide
+            # streaming prints; tool side effects below still print normally.
             with contextlib.redirect_stdout(cap):
-                for delta in stream_request(
-                    self.messages, self.model_alias,
-                    tools_schema=tools_sch,
-                    max_tokens=min(DYNAMIC_CONFIG["max_tokens"], 8192),
-                ):
-                    if "_error" in delta:
-                        return f"[Sub-agent error] {delta['_error']}"
-                    choices = delta.get("choices", [])
-                    if not choices:
-                        continue
-                    d     = choices[0].get("delta", {})
-                    chunk = d.get("content") or ""
-                    text_buf += chunk
-                    for tcd in d.get("tool_calls", []):
-                        idx = tcd.get("index", 0)
-                        if idx not in tc_buf:
-                            tc_buf[idx] = {
-                                "id":   ensure_tool_call_id(tcd, iteration, idx),
-                                "name": "",
-                                "args": "",
-                            }
-                        fn = tcd.get("function", {})
-                        tc_buf[idx]["name"] += fn.get("name", "")
-                        tc_buf[idx]["args"] += fn.get("arguments", "")
+                api = consume_model_stream(
+                    stream_request(
+                        self.messages, self.model_alias,
+                        tools_schema=tools_sch,
+                        max_tokens=min(DYNAMIC_CONFIG["max_tokens"], 8192),
+                    ),
+                    ensure_tool_call_id=ensure_tool_call_id,
+                    iteration=iteration,
+                )
 
+            if api.error:
+                return f"[Sub-agent error] {api.error}"
+
+            tc_buf = api.tool_calls
             # No tool call means the subtask is done.
             if not tc_buf:
-                return text_buf.strip() or "(sub-agent returned no output)"
+                return api.text.strip() or "(sub-agent returned no output)"
 
             # Append assistant message.
             self.messages.append({
                 "role":    "assistant",
-                "content": text_buf or None,
+                "content": api.text or None,
                 "tool_calls": [
                     {
                         "id":       tc_buf[i]["id"],
@@ -207,18 +280,27 @@ class _SubAgentSession:
                 ],
             })
 
-            # Execute tools.
+            # Execute tools through the shared ToolExecutor (unknown-tool and
+            # exception handling match the main loop).
+            ctx = ToolExecutionContext(
+                session_id=self.session_id,
+                model_alias=self.model_alias,
+                iteration=iteration,
+                current_phase="GENERAL",
+                user_mode=_user_mode(),
+            )
             for i in sorted(tc_buf):
                 tc   = tc_buf[i]; name = tc["name"]
-                try:    fn_args = json.loads(tc["args"]) if tc["args"].strip() else {}
-                except Exception: fn_args = {}
+                fn_args = resolve_tool_arguments(tc)
 
                 self._tool_log.append(f"  [{iteration+1}] {name}({list(fn_args.keys())})")
 
-                if name in tool_map:
-                    result = tool_map[name](fn_args)
-                else:
-                    result = f"ERROR: unknown tool '{name}'"
+                result = executor.execute_handler(
+                    tool_call_id=tc["id"],
+                    tool_name=name,
+                    fn_args=fn_args,
+                    context=ctx,
+                ).content
 
                 limit = min(DYNAMIC_CONFIG["tool_max_chars"], 6000)
                 if len(result) > limit:
@@ -247,6 +329,10 @@ def tool_delegate_task(a: dict) -> str:
     task        = a.get("task_description", "").strip()
     caller_model = a.get("model_alias", DEFAULT_MODEL)
     verbose     = bool(a.get("verbose", False))
+    capability  = a.get("capability", "inherited")
+    if capability not in CAPABILITY_PROFILES:
+        capability = "inherited"
+    allowlist   = a.get("allowlist")
 
     if not task:
         return "ERROR: task_description is required"
@@ -273,11 +359,14 @@ def tool_delegate_task(a: dict) -> str:
 
     print(c(MAGENTA, f"  [Sub-agent] starting delegated task..."))
     print(c(GRAY,    f"  Task: {task[:80]}{'...' if len(task)>80 else ''}"))
-    print(c(GRAY,    f"  Model: {worker_model}  Depth: {current_depth+1}/{_MAX_DEPTH}  Limit: {_SubAgentSession.MAX_ITER} iterations"))
+    print(c(GRAY,    f"  Model: {worker_model}  Depth: {current_depth+1}/{_MAX_DEPTH}  Limit: {_SubAgentSession.MAX_ITER} iterations  Capability: {capability}"))
     if _user_mode():
-        print(c(YELLOW, "  [Trust Boundary] delegate_task is not isolated; the sub-agent inherits parent tool permissions."))
+        print(c(YELLOW,
+            "  [Trust Boundary] delegate_task is a non-isolated sub-agent; tool side effects are real "
+            f"and run with parent permissions (capability={capability})."
+        ))
 
-    sub    = _SubAgentSession(task, worker_model)
+    sub    = _SubAgentSession(task, worker_model, capability=capability, allowlist=allowlist)
 
     _delegate_ctx.depth = current_depth + 1
     try:
@@ -327,6 +416,16 @@ DELEGATE_SCHEMA = {
                     "description": "Detailed subtask description; be as specific as possible.",
                 },
                 # model_alias was removed; worker selection is controlled by code.
+                "capability": {
+                    "type":        "string",
+                    "enum":        ["inherited", "read_only", "no_shell"],
+                    "description": (
+                        "Tool permission profile for the non-isolated sub-agent. "
+                        "'inherited' (default) grants all parent tools; 'read_only' "
+                        "removes shell/code execution and filesystem writes; "
+                        "'no_shell' removes only shell/code execution."
+                    ),
+                },
                 "verbose": {
                     "type":        "boolean",
                     "description": "Include the full tool-call log in the result when true (default false).",
