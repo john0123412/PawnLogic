@@ -5,6 +5,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.0.10] - 2026-06-14
+
+### Added
+- Added a repository language policy test that fails when tracked non-`*_CN`
+  files contain Chinese text, keeping source, workflows, config, prompts, and
+  agent instructions English-only by default.
+- Added MCP Roots support for the stdio filesystem server and a configurable
+  MCP stderr debug path so startup diagnostics stay controlled.
+- Added ToolRegistry snapshot access and a `ToolExecutor` extraction path for
+  tool-call parsing, phase routing, handler execution, audited failure
+  prechecks, semantic failure recording, and argument normalization.
+- Added focused tests for tool routing, tool-call parsing, ToolExecutor data
+  contracts, phase switching, audit failure handling, prompt building, context
+  window trimming, and run-turn regression behavior.
+- Added a local code index tool for source-checkout development workflows.
+
+### Fixed
+- Hardened execution-surface defaults: Docker `install_deps` now validates
+  package names, URL fetch/browser tools reject unsafe schemes and blocked local
+  addresses, browser startup no longer hardcodes `--no-sandbox`, and recursive
+  file enumeration filters sensitive paths.
+- Fixed streamed-interrupt cleanup so CLI interrupts cancel in-flight streaming
+  I/O without leaking interrupt state into later turns.
+- Fixed provider runtime initialization by making custom providers load lazily
+  through runtime access paths, stabilizing provider/model listing and custom
+  provider visibility.
+- Fixed sandbox timeout cleanup by starting POSIX subprocesses in a new session
+  and killing the process group before falling back to parent-process kill.
+- Fixed MCP/provider startup presentation issues by normalizing default custom
+  model descriptions and avoiding filesystem server roots warnings.
+
+### Changed
+- `AgentSession` now delegates system prompt construction to
+  `core/prompt_builder.py`, context-window trimming to
+  `core/context_window.py`, tool-call parsing to `core/tool_calls.py`, and
+  tool execution helpers to `core/tool_executor.py`.
+- Runtime mode and dynamic configuration writes now converge through
+  `core.state`, reducing split-brain state between `config` globals and runtime
+  session state.
+- Tool registration now uses registry snapshots while preserving legacy
+  `TOOL_MAP` and `TOOLS_SCHEMA` compatibility for existing callers.
+- Delegate sub-agents now read tool schemas and handlers through registry
+  snapshots, preserving compatibility while making tool visibility less
+  dependent on mutable globals.
+- Release automation and project guidance now require changelog-backed GitHub
+  release notes and stricter release cleanup checks.
+
+### Tests
+- 432 tests passing.
+- `ruff check .` passing.
+- `python -m compileall -q config core pawnlogic tests` passing.
+- Package build, `twine check`, and wheel skill-pack exclusion checks passing.
+
 ## [0.0.9] - 2026-06-12
 
 ### Added
