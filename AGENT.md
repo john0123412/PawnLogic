@@ -294,6 +294,14 @@ git commit -m "<type>: <summary>"
   version.
 - Publish to PyPI only after the package has passed local verification and
   remote Actions on the test branch.
+- Production PyPI publishing must use Trusted Publishing / OIDC from the
+  GitHub Actions release workflow. Do not reintroduce long-lived production
+  PyPI API tokens unless the user explicitly approves a temporary incident
+  workaround.
+- Publishing jobs must use GitHub environments (`pypi` and `testpypi`) that
+  match the Trusted Publisher configuration on PyPI/TestPyPI. Keep
+  `id-token: write` scoped to the smallest publish jobs; build, test, and
+  release-note jobs must not request it.
 - Create or update the GitHub Release only after the PyPI upload succeeds.
   Release notes must not be treated as complete before the package exists on
   PyPI.

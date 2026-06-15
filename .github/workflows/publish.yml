@@ -1,13 +1,13 @@
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PawnLogic — Publish to PyPI
 # Triggered by tag push matching v*.*.*
-# Runs full test gate + dynamic E2E before twine upload
+# Runs full test gate + dynamic E2E before OIDC publishing
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 name: Publish to PyPI
 
 # Use a simple GitHub glob for tag dispatch, then validate the exact package
-# version inside the publish job before upload.
+# version inside the build job before upload.
 on:
   push:
     tags:
@@ -109,15 +109,14 @@ jobs:
             pytest-*.log
           retention-days: 7
 
-  # ── Build and publish ─────────────────────────────────────────────
-  publish:
-    name: "🚀 Build & Publish"
+  # ── Build distributions ──────────────────────────────────────────
+  build-distributions:
+    name: "📦 Build distributions"
     needs: [test-before-publish, dynamic-test]  # Both gates must pass
     runs-on: ubuntu-latest
     timeout-minutes: 10            # FIX #4
     permissions:
-      contents: write
-      id-token: write
+      contents: read
 
     steps:
       - uses: actions/checkout@v6
@@ -152,20 +151,13 @@ jobs:
       - name: Validate package (twine check)
         run: python3 -m twine check dist/*
 
-      # Tag push goes to PyPI; workflow_dispatch uses inputs.target.
-      - name: Publish to TestPyPI
-        if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_TOKEN }}
-        run: python3 -m twine upload --repository-url https://test.pypi.org/legacy/ --skip-existing dist/*
-
-      - name: Publish to PyPI
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
-        run: python3 -m twine upload dist/*
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Extract GitHub Release notes from CHANGELOG
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
@@ -198,9 +190,90 @@ jobs:
           Path("release_notes.md").write_text(notes + "\n", encoding="utf-8")
           PY
 
+      - name: Upload GitHub Release notes
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v7
+        with:
+          name: github-release-notes
+          path: release_notes.md
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── Publish with PyPI Trusted Publishing / OIDC ───────────────────
+  publish-testpypi:
+    name: "🚀 Publish to TestPyPI"
+    needs: build-distributions
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/pawnlogic/
+    permissions:
+      actions: read
+      id-token: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v7
+        with:
+          name: python-distributions
+          path: dist
+
+      - name: Publish package distributions to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  publish-pypi:
+    name: "🚀 Publish to PyPI"
+    needs: build-distributions
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pawnlogic/
+    permissions:
+      actions: read
+      id-token: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v7
+        with:
+          name: python-distributions
+          path: dist
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: "🏷️ Create GitHub Release"
+    needs: publish-pypi
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v7
+        with:
+          name: python-distributions
+          path: dist
+
+      - name: Download GitHub Release notes
+        uses: actions/download-artifact@v7
+        with:
+          name: github-release-notes
+          path: .
+
       # Create GitHub Release only for tag pushes, not workflow_dispatch dry-runs.
       - name: Create GitHub Release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
           name: ${{ github.ref_name }}
