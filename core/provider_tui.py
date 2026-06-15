@@ -21,6 +21,7 @@ from config.providers import (
     PROVIDERS, MODELS, CUSTOM_PROVIDERS_PATH,
     init_providers, save_custom_provider, remove_custom_provider,
     is_provider_active,
+    register_provider, remove_provider, remove_model, remove_models_for_provider,
 )
 from core.provider_runtime import (
     candidate_save_alias as _candidate_save_alias,
@@ -658,7 +659,7 @@ class ProviderTUI:
             if not self._mm_models: return
             alias = self._mm_models[self._mm_cursor]
             # Remove from MODELS and custom_providers.json
-            MODELS.pop(alias, None)
+            remove_model(alias)
             import json as _j
             if CUSTOM_PROVIDERS_PATH.exists():
                 try:
@@ -870,9 +871,8 @@ class ProviderTUI:
         if pname in _BUILTIN:
             return
         remove_custom_provider(pname)
-        PROVIDERS.pop(pname, None)
-        for a in [k for k, m in list(MODELS.items()) if m.get("provider") == pname]:
-            MODELS.pop(a, None)
+        remove_provider(pname)
+        remove_models_for_provider(pname)
         rows = self._provider_rows()
         self._main_cursor = min(self._main_cursor, max(0, len(rows) - 1))
         self._panel = "main"
@@ -950,7 +950,7 @@ class ProviderTUI:
                     "label": f"Custom ({name})", "api_format": fmt,
                     "active": False}
         save_custom_provider(name, prov_cfg, {})
-        PROVIDERS[name] = prov_cfg
+        register_provider(name, prov_cfg)
         init_providers(force=True)
         self._panel = "main"
         if self._app:
@@ -1076,7 +1076,7 @@ class ProviderTUI:
                     "label": f"Custom ({name})", "api_format": fmt,
                     "active": False}
         save_custom_provider(name, prov_cfg, {})
-        PROVIDERS[name] = prov_cfg
+        register_provider(name, prov_cfg)
         init_providers(force=True)
         self._wiz_status = "✅ Saved inactive. Activate it from the detail panel to show models in /model."
         self._wiz_status_style = "class:success"

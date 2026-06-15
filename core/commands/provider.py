@@ -379,7 +379,7 @@ def _provider_add() -> None:
     }
 
     save_custom_provider(name, prov_cfg, {})
-    PROVIDERS[name] = prov_cfg
+    provider_config.register_provider(name, prov_cfg)
 
     _print(c(GREEN, f"\n  ✓ Provider '{name}' added."))
     _print(c(GRAY,  f"    Format: {api_format}"))
@@ -421,11 +421,8 @@ def _provider_remove(name: str = "") -> None:
             return
 
     if remove_custom_provider(name):
-        if name in PROVIDERS:
-            del PROVIDERS[name]
-        to_remove = [a for a, m in MODELS.items() if m.get("provider") == name]
-        for a in to_remove:
-            del MODELS[a]
+        provider_config.remove_provider(name)
+        provider_config.remove_models_for_provider(name)
         _print(c(GREEN, f"  ✓ Removed provider '{name}'"))
     else:
         _print(c(RED, f"  ✗ Custom provider not found: {name}"))
@@ -478,7 +475,7 @@ def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str =
         "active":      False,
     }
     provider_config.save_custom_provider(alias, prov_cfg, {})
-    PROVIDERS[alias] = prov_cfg
+    provider_config.register_provider(alias, prov_cfg)
     provider_config.init_providers(force=True)
     _print(c(GREEN, f"  ✓ Provider registered. Make sure {env_key} is configured in .env."))
     _print(c(CYAN, f"  To show it in /model, run /provider activate {alias}."))

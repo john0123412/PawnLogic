@@ -29,7 +29,11 @@ from config.providers import (  # noqa: E402
     PROVIDERS, MODELS, DEFAULT_MODEL,
     _normalize_url, validate_api_key, get_api_format,
     list_vision_models, is_fast_model,
+    register_provider, remove_provider,
+    register_model, remove_model, remove_models_for_provider,
+    provider_snapshot, model_snapshot,
 )
+import config.providers as _provider_config
 
 
 # ── _normalize_url ────────────────────────────────────────
@@ -172,3 +176,67 @@ def test_models_provider_exists():
 
 def test_default_model_exists():
     assert DEFAULT_MODEL in MODELS
+
+
+# ── provider store interface ──────────────────────────────
+
+def test_register_and_remove_provider_roundtrip():
+    register_provider("pytest_store_prov", {"api_key_env": "X", "active": False})
+    try:
+        assert "pytest_store_prov" in provider_snapshot()
+    finally:
+        removed = remove_provider("pytest_store_prov")
+    assert removed == {"api_key_env": "X", "active": False}
+    assert "pytest_store_prov" not in provider_snapshot()
+
+
+def test_register_provider_ignores_empty_name():
+    before = set(provider_snapshot())
+    register_provider("", {"api_key_env": "X"})
+    assert set(provider_snapshot()) == before
+
+
+def test_register_and_remove_model_roundtrip():
+    register_model("pytest:store_model", {"id": "m", "provider": "pytest_store_prov"})
+    try:
+        assert "pytest:store_model" in model_snapshot()
+    finally:
+        remove_model("pytest:store_model")
+    assert "pytest:store_model" not in model_snapshot()
+
+
+def test_remove_models_for_provider_removes_only_owned():
+    register_model("pytest:a", {"id": "a", "provider": "pytest_owner"})
+    register_model("pytest:b", {"id": "b", "provider": "pytest_owner"})
+    register_model("pytest:c", {"id": "c", "provider": "other"})
+    try:
+        removed = sorted(remove_models_for_provider("pytest_owner"))
+        assert removed == ["pytest:a", "pytest:b"]
+        assert "pytest:c" in model_snapshot()
+    finally:
+        remove_model("pytest:c")
+
+
+def test_snapshot_is_detached_copy():
+    snap = model_snapshot()
+    snap["pytest:ghost"] = {"id": "ghost"}
+    assert "pytest:ghost" not in model_snapshot()
+
+
+def test_load_custom_providers_logs_on_malformed_json(tmp_path, monkeypatch):
+    bad = tmp_path / "custom_providers.json"
+    bad.write_text("{ this is not valid json ", encoding="utf-8")
+    monkeypatch.setattr(_provider_config, "CUSTOM_PROVIDERS_PATH", bad)
+
+    logged = {}
+
+    class _FakeLogger:
+        def warning(self, msg, *args):
+            logged["msg"] = msg
+
+    import core.logger as _core_logger
+    monkeypatch.setattr(_core_logger, "logger", _FakeLogger())
+
+    # Must not raise, and must surface the failure to the logger (not silent).
+    _provider_config.load_custom_providers()
+    assert "Failed to load custom_providers.json" in logged.get("msg", "")

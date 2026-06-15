@@ -255,6 +255,59 @@ def set_provider_active(name: str, active: bool) -> bool:
     return True
 
 
+# ════════════════════════════════════════════════════════════════════
+# Provider store interface.
+#
+# Single mutation/read surface over the PROVIDERS / MODELS global tables.
+# Provider commands, the provider TUI, and runtime code register/remove and
+# read through these helpers rather than mutating the globals directly. The
+# globals remain the backing store for backward-compatible imports.
+# ════════════════════════════════════════════════════════════════════
+
+def register_provider(name: str, cfg: dict) -> None:
+    """Register or replace a provider config in the live provider table."""
+    if not name:
+        return
+    PROVIDERS[name] = cfg
+
+
+def remove_provider(name: str) -> dict | None:
+    """Remove a provider from the live table, returning its config if present."""
+    return PROVIDERS.pop(name, None)
+
+
+def register_model(alias: str, cfg: dict) -> None:
+    """Register or replace a model config in the live model table."""
+    if not alias:
+        return
+    MODELS[alias] = cfg
+
+
+def remove_model(alias: str) -> dict | None:
+    """Remove a model from the live table, returning its config if present."""
+    return MODELS.pop(alias, None)
+
+
+def remove_models_for_provider(provider_name: str) -> list[str]:
+    """Remove all models owned by a provider. Return the removed aliases."""
+    removed = [a for a, m in list(MODELS.items()) if m.get("provider") == provider_name]
+    for alias in removed:
+        MODELS.pop(alias, None)
+    return removed
+
+
+def provider_snapshot() -> dict[str, dict]:
+    """Return a detached copy of the provider table for consistent reads."""
+    _ensure_providers_initialized()
+    return {name: dict(cfg) for name, cfg in PROVIDERS.items()}
+
+
+def model_snapshot() -> dict[str, dict]:
+    """Return a detached copy of the model table for consistent reads."""
+    _ensure_providers_initialized()
+    return {alias: dict(cfg) for alias, cfg in MODELS.items()}
+
+
 def _normalise_custom_model_entries(
     provider_name: str,
     models_cfg: dict,
@@ -450,8 +503,7 @@ def validate_api_key(model_alias: str) -> tuple[bool, str]:
 
 def list_configured_models() -> list[str]:
     """Return all model aliases whose provider keys are configured."""
-    _ensure_providers_initialized()
-    return [alias for alias in MODELS if validate_api_key(alias)[0]]
+    return [alias for alias in model_snapshot() if validate_api_key(alias)[0]]
 
 
 def get_best_vision_model() -> tuple[str | None, str | None, str | None]:
@@ -469,8 +521,7 @@ def get_best_vision_model() -> tuple[str | None, str | None, str | None]:
 
 def list_vision_models() -> list[str]:
     """Return all model aliases marked with vision=True."""
-    _ensure_providers_initialized()
-    return [alias for alias, m in MODELS.items() if m.get("vision")]
+    return [alias for alias, m in model_snapshot().items() if m.get("vision")]
 
 
 def load_custom_providers() -> None:
@@ -496,7 +547,17 @@ def load_custom_providers() -> None:
     try:
         data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
         custom_providers, custom_models = _validated_custom_provider_data(data)
-    except Exception:
+    except Exception as exc:
+        # Make the failure debug-visible instead of silently swallowing it; a
+        # malformed custom_providers.json otherwise vanishes without a trace.
+        try:
+            from core.logger import logger
+            logger.warning(
+                "Failed to load custom_providers.json ({}): {!r}",
+                CUSTOM_PROVIDERS_PATH, exc,
+            )
+        except Exception:
+            pass
         return
     for name, prov in PROVIDERS.items():
         prov["active"] = _provider_active_from_data(name, prov, data)
