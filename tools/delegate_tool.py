@@ -39,6 +39,7 @@ from core.state import (
 from core.tool_executor import (
     ToolExecutor, ToolExecutionContext, resolve_tool_arguments,
 )
+from core.trust import subagent_notice
 from core.turn_api import consume_model_stream
 from tools.file_ops  import _session_cwd
 from utils.ansi      import c, YELLOW, GRAY, GREEN, MAGENTA
@@ -363,10 +364,7 @@ def tool_delegate_task(a: dict) -> str:
     print(c(GRAY,    f"  Task: {task[:80]}{'...' if len(task)>80 else ''}"))
     print(c(GRAY,    f"  Model: {worker_model}  Depth: {current_depth+1}/{_MAX_DEPTH}  Limit: {_SubAgentSession.MAX_ITER} iterations  Capability: {capability}"))
     if _user_mode():
-        print(c(YELLOW,
-            "  [Trust Boundary] delegate_task is a non-isolated sub-agent; tool side effects are real "
-            f"and run with parent permissions (capability={capability})."
-        ))
+        print(c(YELLOW, subagent_notice(capability)))
 
     sub    = _SubAgentSession(task, worker_model, capability=capability, allowlist=allowlist)
 

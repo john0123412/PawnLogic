@@ -18,6 +18,7 @@ from config import (
     scrub_sensitive_env,
 )
 from core.state import runtime_config
+from core.trust import TrustLevel, trust_notice_for
 from utils.ansi import c, YELLOW, BLUE, GRAY
 from core.logger import logger
 
@@ -81,7 +82,7 @@ def _emit_run_shell_warning() -> None:
     if not _runtime_state.user_mode:
         return
     _run_shell_warning_emitted = True
-    print(c(YELLOW, "  [Trust Boundary] run_shell executes on the host shell. Pattern filters are limited and not a sandbox."))
+    print(c(YELLOW, trust_notice_for(TrustLevel.HOST_SHELL)))
 
 # ════════════════════════════════════════════════════════
 # Security checks.

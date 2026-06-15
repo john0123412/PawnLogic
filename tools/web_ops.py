@@ -26,6 +26,7 @@ import urllib.request
 from config import USER_AGENTS, scrub_sensitive_env
 from utils.ansi import c, BLUE, YELLOW, GRAY, GREEN
 from core.state import state as _runtime_state, runtime_config
+from core.trust import trust_notice
 
 # Detect local tools.
 _has_pandoc = bool(shutil.which("pandoc"))
@@ -371,7 +372,7 @@ def tool_fetch_url(a: dict) -> str:
         return err
     if warnings and _user_mode():
         for warning in warnings:
-            print(c(YELLOW, f"  [Trust Boundary] {warning}"))
+            print(c(YELLOW, trust_notice(warning)))
 
     # 1. Jina Reader when auto or explicitly requested.
     if strategy in ("auto", "jina"):
