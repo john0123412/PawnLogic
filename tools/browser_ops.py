@@ -32,6 +32,12 @@ from datetime import datetime
 
 from config import BROWSER_CONFIG, WORKSPACE_DIR
 from core.state import state as _runtime_state
+from core.trust import (
+    BROWSER_SANDBOX_DISABLED,
+    TrustLevel,
+    trust_notice,
+    trust_notice_for,
+)
 from tools.web_ops import validate_fetch_url
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN
 
@@ -75,9 +81,9 @@ def _emit_browser_trust_warning() -> None:
     if _browser_warning_emitted or not _user_mode():
         return
     _browser_warning_emitted = True
-    print(c(YELLOW, "  [Trust Boundary] Browser tools are network-capable and not a host sandbox."))
+    print(c(YELLOW, trust_notice_for(TrustLevel.NETWORK)))
     if BROWSER_CONFIG.get("allow_no_sandbox", False):
-        print(c(YELLOW, "  [Trust Boundary] Chromium sandbox is disabled by explicit config."))
+        print(c(YELLOW, trust_notice(BROWSER_SANDBOX_DISABLED)))
 
 
 def _validate_browser_url(url: str) -> tuple[str | None, list[str]]:
@@ -133,7 +139,7 @@ def _ensure_page_url(url: str):
     try:
         if warnings and _user_mode():
             for warning in warnings:
-                print(c(YELLOW, f"  [Trust Boundary] {warning}"))
+                print(c(YELLOW, trust_notice(warning)))
         current = page.url
         # Navigate when about:blank or URL mismatch is detected.
         if not current or current == "about:blank" or current != url:
@@ -224,7 +230,7 @@ def tool_web_fetch(a: dict) -> str:
         return err
     if warnings and _user_mode():
         for warning in warnings:
-            print(c(YELLOW, f"  [Trust Boundary] {warning}"))
+            print(c(YELLOW, trust_notice(warning)))
 
     try:
         fetcher = _get_stealthy_fetcher()
@@ -378,7 +384,7 @@ def tool_web_navigate(a: dict) -> str:
         return err
     if warnings and _user_mode():
         for warning in warnings:
-            print(c(YELLOW, f"  [Trust Boundary] {warning}"))
+            print(c(YELLOW, trust_notice(warning)))
 
     page = _get_page()
     if not page:

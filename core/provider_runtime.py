@@ -23,6 +23,7 @@ from config.providers import (
 )
 from core.api_errors import format_http_error, format_transport_error
 from core.state import state as _runtime_state
+from core.trust import TrustLevel, trust_notice_for
 
 PAWNLOGIC_DIR = PAWNLOGIC_HOME
 ENV_PATH = PAWNLOGIC_DIR / ".env"
@@ -46,9 +47,7 @@ def maybe_warn_insecure_provider(base_url: str, *, emit=print) -> None:
         return
     _WARNED_HTTP_PROVIDER_URLS.add(url)
     if _user_mode():
-        emit(
-            "  [Trust Boundary] Provider uses plain HTTP. Requests and API keys are not protected by TLS."
-        )
+        emit(trust_notice_for(TrustLevel.INSECURE_TRANSPORT))
 
 
 def save_key(env_var: str, key: str) -> None:

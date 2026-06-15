@@ -20,6 +20,7 @@ import os, re, tempfile
 
 from config import DANGEROUS_PATTERNS, WORKSPACE_DIR
 from core.state import state as _runtime_state, runtime_config
+from core.trust import TrustLevel, trust_notice_for
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN, MAGENTA, BOLD
 
 # ════════════════════════════════════════════════════════
@@ -537,7 +538,7 @@ def tool_pwn_container(a: dict) -> str:
 
         print(c(MAGENTA, f"  [exec] {name} $ {command[:80]}"))
         if _user_mode():
-            print(c(YELLOW, "  [Trust Boundary] Container exec runs arbitrary shell inside the target container."))
+            print(c(YELLOW, trust_notice_for(TrustLevel.CONTAINER_EXEC)))
 
         try:
             exit_code, output = container.exec_run(
