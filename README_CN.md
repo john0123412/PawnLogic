@@ -1,6 +1,6 @@
 [English](README.md) | **[中文](README_CN.md)**
 
-# 🤖 PawnLogic
+# PawnLogic
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/pypi/v/pawnlogic.svg?label=version)](https://pypi.org/project/pawnlogic/)
@@ -9,69 +9,85 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-> **完全自主的终端 AI Agent** — 多模型路由、持久化记忆、真实工具执行、会话管理。专为开发者与安全研究者打造。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开版本是 **0.1.0**，已于 2026-06-15 发布到 PyPI 和 GitHub Releases。
 
 ## 系统要求
 
 - Linux 或 WSL2
 - Python 3.10+
 - `pip`
-- 只有源码 checkout 或开发时才需要 `git`
-- 如需全局 `pawn` 命令，`~/.local/bin` 需要在 `PATH` 中
+- 只有源码 checkout、开发或 git-backed skill pack 才需要 `git`
+- 使用全局 `pawn` 启动器时，`~/.local/bin` 需要在 `PATH` 中
+- 可选：Docker 用于容器工具；浏览器依赖用于 Patchright / Scrapling；CTF 包用于 pwn 工作流
 
-## ⚡ 快速开始
+## 快速开始
 
-**方式一 — pip 安装（推荐）**
+**方式一：从 PyPI 安装**
+
 ```bash
 pip install pawnlogic
-pawn   # 首次运行自动进入 API 配置向导
+pawn
 ```
 
-**方式二 — 一行安装脚本**
+首次运行会进入 API Key 配置流程。运行时文件会创建在 `~/.pawnlogic/` 下，不会写入项目目录。
+
+**方式二：一行安装脚本**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/john0123412/PawnLogic/main/install.sh | bash
 pawn
 ```
 
-安装脚本会在 `~/.local/share/pawnlogic` 下创建独立 venv，通过 pip 安装正式
-`pawnlogic` 包，并写入 `~/.local/bin/pawn` 启动器。它不会复制源码目录，也不会把运行时数据存到项目目录。
+安装脚本会在 `~/.local/share/pawnlogic` 下创建独立 venv，安装官方 PyPI 包，并写入 `~/.local/bin/pawn`。
 
-**方式三 — 从源码开发安装**
+**方式三：源码 checkout 开发安装**
+
 ```bash
-git clone https://github.com/john0123412/PawnLogic.git && cd PawnLogic
-python3 -m venv venv && source venv/bin/activate
+git clone https://github.com/john0123412/PawnLogic.git
+cd PawnLogic
+python3 -m venv venv
+source venv/bin/activate
 pip install -e ".[dev]"
-pawn             # 首次运行自动进入 API 配置向导
+pawn
 ```
 
-**可选 CTF 工具链**（pwntools / ROPgadget / ropper）：
+可选 extras：
+
 ```bash
-pip install "pawnlogic[ctf]"       # 包安装
-pip install -e ".[ctf]"            # 源码 checkout
+pip install "pawnlogic[docker]"    # Docker SDK 集成
+pip install "pawnlogic[browser]"   # Scrapling + Patchright 浏览器工具
+pip install "pawnlogic[ctf]"       # pwntools、ROPgadget、ropper
+pip install -e ".[dev,ctf]"        # 源码 checkout + 测试 + CTF 工具
 ```
-PyPI 和 curl 安装版不包含本地 `skills/` 包。如需仓库型技能包，请使用源码
-checkout，或在运行时执行 `/sp install <repo_url>` 安装。
 
 源码 checkout 启动器备用方式：
+
 ```bash
 ./pawn.sh
 ```
-如果包安装或安装脚本执行后仍提示 `pawn: command not found`，运行
-`export PATH="$HOME/.local/bin:$PATH"`，并把这行加入你的 shell 配置文件。
 
-**CLI 用法：**
+CLI 入口：
+
 ```bash
-pawn                              # 用户友好的交互模式
-pawn --debug                      # 显示详细诊断信息的交互模式
-pawn --eval "your prompt"         # 单次执行后退出
-pawn --eval "prompt" --json       # JSON 输出（供脚本调用）
+pawn
+pawn --debug
+pawn --eval "summarize this repository"
+pawn --eval "summarize this repository" --json
+python -m pawnlogic --help
 ```
 
-默认 `pawn` 会隐藏原始工具参数、解析器诊断和 reasoning 流。需要查看详细终端日志、
-工具调用、API 错误细节和解析器诊断时，使用 `pawn --debug`。在交互会话中，
-`/mode` 会在同样的用户友好输出和 debug 输出之间切换。
+默认 `pawn` 使用用户友好的输出，会隐藏原始工具调用细节、解析器诊断、详细 reasoning 流和底层 API 错误。需要详细诊断时，使用 `pawn --debug` 或 `/mode`。
 
 ## 新特性
+
+0.1.0 是 runtime 和发布安全收敛后的第一个版本：
+
+- `AgentSession.run_turn` 更小，工具结果处理、turn guard、工具执行和 registry snapshot 都被移动到专门模块。
+- 工具执行增加了 unknown tool、审计失败、重复错误、中断和 delegate 行为的回归覆盖。
+- shell、browser、fetch、Docker、delegate 和明文 HTTP Provider 的 trust-boundary 提示已集中管理。
+- Provider 和 model 变更通过 store helper 与 detached snapshot 处理，使 `/provider` 和 `/model` 行为更稳定。
+- 发布流程改用 PyPI Trusted Publishing / GitHub OIDC，生产路径不再依赖长期 PyPI 上传 token。
+- 英文文档现在使用默认文件名，例如 `README.md` 和 `GUIDE.md`；中文翻译文档使用 `_CN` 文件名。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -79,63 +95,77 @@ pawn --eval "prompt" --json       # JSON 输出（供脚本调用）
 
 | 能力 | 描述 |
 |------|------|
-| 🔀 **动态 Provider 系统** | 内置 DeepSeek / OpenAI / Anthropic + 通过 `/provider` 添加任意 OpenAI 兼容 API |
-| 🧠 **持久化记忆** | SQLite 会话历史、RAG 知识库、跨会话全文搜索 |
-| 🛠️ **真实工具执行** | Shell、代码沙箱（8 种语言）、网页抓取、文件操作、Docker 容器 |
-| 👁️ **视觉多模态** | 将截图传给 `gpt-4o` 或 `claude-sonnet` 进行分析 |
-| 📋 **规格驱动规划** | Agent 在每次工具调用前必须输出 `<plan>` XML — 无盲目执行 |
-| 💬 **会话管理** | 通过 `/chat` 命令标签、搜索、关联、导出对话 |
-| 🔐 **CTF / Pwn 工具链** | GDB 自动化、ROP 链构建、libc 泄漏解析、Docker 隔离 |
+| 多 Provider 模型 | 内置 DeepSeek、OpenAI、Anthropic 别名，并可通过 `/provider` 添加自定义 OpenAI-compatible 或 Anthropic-style Provider。 |
+| 持久化工作区 | 基于 SQLite 的会话、可搜索历史、memory 命令、知识库、每会话 workspace 和 `~/.pawnlogic/` 下的审计日志。 |
+| 真实工具执行 | Host shell、代码沙箱、文件操作、URL fetch、浏览器自动化、Docker 容器和 CTF helper。 |
+| Trust-boundary UX | 用户模式会明确提示工具何时跨越本地主机、容器、浏览器、网络、delegate 或明文 HTTP 边界。 |
+| MCP 集成 | stdio MCP server 可通过 `~/.pawnlogic/mcp_configs.json` 配置，PawnLogic 会处理 roots 和 stderr 日志。 |
+| CTF / pwn 工作流 | 可选 pwn 工具、Docker 容器 helper、GDB 自动化、ROP 链支持、libc leak 工作流和本地 skill pack。 |
+| 发布卫生 | CI 覆盖 ruff、Python 3.10/3.11/3.12、Dynamic E2E、文档结构、语言策略、包构建和 Trusted Publishing 护栏。 |
 
 ## 支持模型
 
-| 服务商 | 别名 | 适用场景 |
-|--------|------|----------|
-| DeepSeek | `ds-v4-flash` `ds-v4-pro` | 快速默认、旗舰推理 |
-| OpenAI | `gpt-5.5` `gpt-5.4` `gpt-5.4-mini` `gpt-5.4-nano` `gpt-4o` `gpt-4.1` `o3` | 旗舰、编程、视觉、推理 |
-| Anthropic | `claude-opus` `claude-sonnet` `claude-haiku` | 前沿推理、均衡、快速 |
+PawnLogic 自带预配置模型别名。只有 active 且已配置 API Key 的 Provider 会显示在 `/model` 和 Tab 补全中。
 
-DeepSeek 默认 active。自定义 Provider 只有在 Key 已配置、模型已拉取并手动 active 后，才会出现在 `/model` 和 Tab 补全中。
+| Provider | Aliases | 说明 |
+|----------|---------|------|
+| DeepSeek | `ds-v4-flash`, `ds-v4-pro` | 默认 Provider；快速主模型和旗舰推理模型。 |
+| OpenAI | `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-4o`, `gpt-4.1`, `o3` | 编程、视觉、多模态、低延迟和推理别名。 |
+| Anthropic | `claude-opus`, `claude-sonnet`, `claude-haiku` | Anthropic Messages API 路径下的 Opus、Sonnet、Haiku 别名。 |
+
+自定义 Provider 的模型描述来自 `~/.pawnlogic/custom_providers.json`。重新运行 `/provider update <name>` 会刷新已选模型；当 Provider 没有提供可用描述时，会写入英文 fallback 描述。
 
 ## Provider 管理
 
 ```bash
-/provider              # 打开交互式 TUI 面板
+/provider                         # 打开 Provider TUI
 /provider add <name> <base_url> <ENV_KEY> [anthropic]
-/provider fetch <name> # 拉取可用模型并交互选择
-/provider update <name>
-/provider activate <name>
-/provider deactivate <name>
-/provider list         # 显示所有 Provider 及 Key 状态
-/provider test <model> # 测试连通性
+/provider fetch <name>            # 拉取可用模型并选择别名
+/provider update <name>           # 重新拉取 Provider 模型
+/provider activate <name>         # 显示已选择的 Provider 模型
+/provider deactivate <name>       # 隐藏 Provider 模型
+/provider list                    # 显示 Provider 和 Key 状态
+/provider test <model>            # 测试某个模型别名的连通性
+/setkey                           # 重新运行 Key 配置
+/keys                             # 显示已配置 Key 状态
 ```
 
-所有 Key 存储在 `~/.pawnlogic/.env`，Provider 配置（不含 Key）存储在 `~/.pawnlogic/custom_providers.json`。
+API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述存储在 `~/.pawnlogic/custom_providers.json`，不包含 secret value。
+
+本地 relay 和实验环境可以使用明文 `http://` Provider endpoint，但用户友好模式会显示 trust-boundary 提示，因为请求和 API Key 没有 TLS 保护。
 
 ## 快速命令参考
 
 ```bash
-/model [alias]          # 切换模型，只显示 active 且已配置 Key 的 Provider
-/mode                   # 切换用户友好 / debug 输出
-/chat find <keyword>    # 跨所有会话全文搜索
-/think <prompt>         # 单次深度推理
-/compact                # 压缩上下文
-/undo [n]               # 撤回最近 n 轮
-/deep                   # 切换深度模式（32k tokens, 50 iter）
-/init_project           # 初始化 GSD 工程流水线
-/pwnenv                 # 检查 CTF 工具链完整性
-/keys                   # 显示所有 Provider 的 Key 配置状态
+/model [alias]                    # 切换模型
+/mode                             # 切换用户友好/debug 输出
+/chat find <keyword>              # 搜索所有会话
+/think <prompt>                   # 执行一次更深推理
+/compact                          # 总结并压缩上下文
+/undo [n]                         # 回滚最近轮次
+/deep                             # full-power 模式
+/init_project [desc]              # 初始化项目状态
+/pwnenv                           # 检查 CTF 工具链完整性
+/sp install <repo_url>            # 安装 git-backed skill pack
 ```
+
+在 PawnLogic 内运行 `/help` 可查看完整命令列表。
+
+## Trust Boundary
+
+PawnLogic 是 agent 执行工具，不是安全沙箱。它会在你要求时，用当前用户权限执行真实工具。Pattern filter、Docker 边界和 capability profile 能减少误操作，但不能阻止有意攻击者。
+
+用户友好模式会针对 host shell 执行、Docker container exec、browser/network-capable 工具、private network URL 访问、delegated sub-agent 和 plaintext HTTP Provider 显示明确的 trust-boundary notice。需要更底层的工具参数和诊断信息时，使用 `pawn --debug`。
 
 ## MCP 工具集成
 
-pip 或一行安装脚本用户，PawnLogic 启动时会在 `~/.pawnlogic/` 下生成可编辑模板：
+pip 或一行安装脚本用户，PawnLogic 启动时会在 `~/.pawnlogic/` 下创建可编辑模板：
 
 ```bash
-pawn   # 生成 ~/.pawnlogic/env.example 和 ~/.pawnlogic/mcp_configs.example.json
+pawn
 cp ~/.pawnlogic/mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
-# 编辑 ~/.pawnlogic/mcp_configs.json，并通过 /setkey 或 ~/.pawnlogic/.env 填入 TAVILY_API_KEY= 等
-pawn   # mcp_configs.json 存在时，MCP 服务器会自动加载
+# 编辑 ~/.pawnlogic/mcp_configs.json，并通过 /setkey 或 ~/.pawnlogic/.env 添加 key
+pawn
 ```
 
 源码 checkout 用户也可以直接复制仓库模板：
@@ -144,40 +174,41 @@ pawn   # mcp_configs.json 存在时，MCP 服务器会自动加载
 cp mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
 ```
 
-支持的 MCP 服务器：**Tavily**（搜索）、**Playwright**（浏览器自动化）、**Filesystem**（文件系统桥接）。
-示例配置默认禁用外部 `fetch` MCP，因为 `uvx mcp-server-fetch` 可能在启动时访问 PyPI。
-请优先使用 PawnLogic 内置的 `fetch_url`；只有明确需要时，再手动启用该 MCP 并允许网络安装。
+示例支持的 MCP server 包括 Tavily search、Playwright browser automation 和 filesystem bridge。示例中默认禁用外部 `fetch` MCP，因为 `uvx mcp-server-fetch` 可能在启动时访问 PyPI；除非明确需要，请优先使用 PawnLogic 内置的 `fetch_url`。
+
+MCP 子进程 stderr 默认写入 `~/.pawnlogic/logs/mcp/<server>.stderr.log`。如果需要在终端看到原始 MCP stderr，可在 `mcp_configs.json` 顶层设置 `"debug_stderr": true`。PawnLogic 会为当前工作目录和 `~/.pawnlogic/workspace` 声明 MCP roots。
 
 ## 数据目录结构
 
-所有运行时数据和 API Key 存储在 `~/.pawnlogic/` — **永远不在项目目录中**。
+所有运行时数据和 API Key 都存储在 `~/.pawnlogic/`。
 
-```
+```text
 ~/.pawnlogic/
-├── .env                    # 所有 API Key（LLM Provider + MCP 工具）
-├── custom_providers.json   # 用户添加的 Provider 配置（不含 Key）
-├── mcp_configs.json        # MCP 服务器声明
+├── .env                    # API Key
+├── custom_providers.json   # 用户 Provider 配置，不含 Key
+├── mcp_configs.json        # MCP server 声明
 ├── pawn.db                 # 会话、消息、知识库
 ├── global_skills.md        # GSA 技能存档
-├── workspace/              # 每个会话的独立工作目录
+├── skills/                 # 可选用户安装 skill pack
+├── workspace/              # 每会话工作目录
 └── logs/                   # 审计日志
 ```
 
-项目目录不包含任何密钥，可以安全提交或分享。
+项目目录不包含 secret，可以安全提交或分享。
 
 ## 文档
 
 | 文档 | 描述 |
 |------|------|
-| [**README.md**](README.md) | 英文版 |
+| [**README.md**](README.md) | 英文 README |
 | [**README_CN.md**](README_CN.md) | 本页 |
-| [**GUIDE_EN.md**](GUIDE_EN.md) | 完整参考手册 — 命令、架构、常见问题 |
-| [**GUIDE_CN.md**](GUIDE_CN.md) | 完整参考手册 — 命令、架构、常见问题 |
+| [**GUIDE.md**](GUIDE.md) | 完整参考：命令、架构和 FAQ |
+| [**GUIDE_CN.md**](GUIDE_CN.md) | 中文完整参考 |
 | [**CHANGELOG.md**](CHANGELOG.md) | 版本历史和发布说明 |
-| [**CONTRIBUTING.md**](CONTRIBUTING.md) | 如何贡献、添加 Provider、运行测试 |
+| [**CONTRIBUTING.md**](CONTRIBUTING.md) | 贡献、Provider 和测试工作流 |
 | [**SECURITY.md**](SECURITY.md) | 漏洞报告策略 |
 
 ## 支持
 
-- **GitHub**: [github.com/john0123412/PawnLogic](https://github.com/john0123412/PawnLogic)
-- **Issues**: GitHub Issues 提交 Bug 或功能请求
+- GitHub: [github.com/john0123412/PawnLogic](https://github.com/john0123412/PawnLogic)
+- Issues: 请使用 GitHub Issues 提交 bug 或功能请求。

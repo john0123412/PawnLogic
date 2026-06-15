@@ -1,6 +1,6 @@
 **[English](README.md)** | [Chinese](README_CN.md)
 
-# 🤖 PawnLogic
+# PawnLogic
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/pypi/v/pawnlogic.svg?label=version)](https://pypi.org/project/pawnlogic/)
@@ -9,129 +9,182 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-> **A fully autonomous terminal AI agent** — multi-model routing, persistent memory, real tool execution, and session management. Built for developers and security researchers.
+PawnLogic is a terminal-first autonomous AI agent with multi-provider model
+routing, persistent memory, real local tool execution, MCP integration, and a
+CTF-oriented toolchain. The current public release is **0.1.0**, published on
+PyPI and GitHub Releases on 2026-06-15.
 
 ## System Requirements
 
 - Linux or WSL2
 - Python 3.10+
 - `pip`
-- `git` only for source checkout or development
-- `~/.local/bin` in `PATH` if you want the global `pawn` command
+- `git` only for source checkouts, development, or git-backed skill packs
+- `~/.local/bin` in `PATH` when using the global `pawn` launcher
+- Optional: Docker for container tools, browser dependencies for Patchright /
+  Scrapling, and CTF packages for pwn workflows
 
-## ⚡ Quick Start
+## Quick Start
 
-**Option A — pip install (recommended)**
+**Option A: install from PyPI**
+
 ```bash
 pip install pawnlogic
-pawn   # first run launches the API configuration wizard
+pawn
 ```
 
-**Option B — one-line installer**
+The first run opens the API key configuration flow. Runtime files are created
+under `~/.pawnlogic/`, not inside the project directory.
+
+**Option B: one-line installer**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/john0123412/PawnLogic/main/install.sh | bash
 pawn
 ```
 
-The installer creates an isolated venv under `~/.local/share/pawnlogic`, installs
-the official `pawnlogic` package with pip, and writes a `~/.local/bin/pawn`
-launcher. It does not copy the source tree or store runtime data in the project.
+The installer creates an isolated venv under `~/.local/share/pawnlogic`,
+installs the official PyPI package, and writes `~/.local/bin/pawn`.
 
-**Option C — from source for development**
+**Option C: source checkout for development**
+
 ```bash
-git clone https://github.com/john0123412/PawnLogic.git && cd PawnLogic
-python3 -m venv venv && source venv/bin/activate
+git clone https://github.com/john0123412/PawnLogic.git
+cd PawnLogic
+python3 -m venv venv
+source venv/bin/activate
 pip install -e ".[dev]"
-pawn             # first run launches the API configuration wizard
+pawn
 ```
 
-**Optional CTF tooling** (pwntools / ROPgadget / ropper):
+Optional extras:
+
 ```bash
-pip install "pawnlogic[ctf]"       # package install
-pip install -e ".[ctf]"            # source checkout
+pip install "pawnlogic[docker]"    # Docker SDK integration
+pip install "pawnlogic[browser]"   # Scrapling + Patchright browser tools
+pip install "pawnlogic[ctf]"       # pwntools, ROPgadget, ropper
+pip install -e ".[dev,ctf]"        # source checkout with tests and CTF tools
 ```
-PyPI and curl installations do not include local `skills/` packs. Use a source
-checkout or `/sp install <repo_url>` when you want repository-backed skill packs.
 
 Source-checkout launcher fallback:
+
 ```bash
 ./pawn.sh
 ```
-If `pawn` is not found after package or installer setup, run
-`export PATH="$HOME/.local/bin:$PATH"` and add that line to your shell profile.
 
-**CLI usage:**
+CLI entry points:
+
 ```bash
-pawn                              # interactive user-friendly mode
-pawn --debug                      # interactive mode with detailed diagnostics
-pawn --eval "your prompt"         # single execution then exit
-pawn --eval "prompt" --json       # JSON output (for scripting)
+pawn
+pawn --debug
+pawn --eval "summarize this repository"
+pawn --eval "summarize this repository" --json
+python -m pawnlogic --help
 ```
 
-Default `pawn` hides raw tool-call arguments, parser diagnostics, and reasoning
-streams. Use `pawn --debug` when you need detailed terminal logs, tool-call
-visibility, API error details, and parser diagnostics. In an interactive
-session, `/mode` toggles between the same user-friendly and debug output modes.
+Default `pawn` uses user-friendly output and hides raw tool-call internals,
+parser diagnostics, detailed reasoning streams, and low-level API errors.
+Use `pawn --debug` or `/mode` when you need detailed diagnostics.
 
 ## What's New
 
-See [CHANGELOG.md](CHANGELOG.md) for the full version history.
+Version 0.1.0 is the first release after the runtime and release-safety
+convergence work:
+
+- `AgentSession.run_turn` is smaller and delegates tool-result handling,
+  turn guards, tool execution, and registry snapshots to focused modules.
+- Tool execution now has stronger regression coverage around unknown tools,
+  audited failures, repeated errors, interrupts, and delegate behavior.
+- Trust-boundary warnings are centralized for shell, browser, fetch, Docker,
+  delegate, and plain-HTTP provider paths.
+- Provider and model mutations now go through store helpers with detached
+  snapshots, making `/provider` and `/model` behavior more deterministic.
+- Publishing now uses PyPI Trusted Publishing / GitHub OIDC; long-lived PyPI
+  upload tokens are no longer part of the production path.
+- English documentation now uses default filenames such as `README.md` and
+  `GUIDE.md`; translated Chinese documentation uses `_CN` filenames.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
 ## Key Capabilities
 
 | Capability | Description |
 |-----------|-------------|
-| 🔀 **Dynamic Provider System** | Built-in DeepSeek / OpenAI / Anthropic + add any OpenAI-compatible API via `/provider` |
-| 🧠 **Persistent Memory** | SQLite session history, RAG knowledge base, cross-session full-text search |
-| 🛠️ **Real Tool Execution** | Shell, code sandbox (8 languages), web fetch, file ops, Docker containers |
-| 👁️ **Vision** | Feed screenshots to `gpt-4o` or `claude-sonnet` for analysis |
-| 📋 **Spec-Driven Planning** | Agent outputs `<plan>` XML before every action — no blind execution |
-| 💬 **Session Management** | Tag, search, link, and export conversations with `/chat` commands |
-| 🔐 **CTF / Pwn Toolchain** | GDB automation, ROP chain building, libc leak resolution, Docker isolation |
+| Multi-provider models | Built-in DeepSeek, OpenAI, and Anthropic aliases plus custom OpenAI-compatible or Anthropic-style providers through `/provider`. |
+| Persistent workspace | SQLite-backed sessions, searchable history, memory commands, knowledge base, per-session workspaces, and audit logs under `~/.pawnlogic/`. |
+| Real tool execution | Host shell, code sandbox, file operations, URL fetch, browser automation, Docker containers, and CTF helpers. |
+| Trust-boundary UX | User-mode warnings make it explicit when a tool crosses local host, container, browser, network, delegate, or plaintext HTTP boundaries. |
+| MCP integration | Stdio MCP servers can be configured from `~/.pawnlogic/mcp_configs.json`, with roots and stderr logging handled by PawnLogic. |
+| CTF / pwn workflows | Optional pwn tooling, Docker container helpers, GDB automation, ROP chain support, libc leak workflows, and local skill packs. |
+| Release hygiene | CI covers ruff, Python 3.10/3.11/3.12, dynamic E2E, docs structure, language policy, package build, and Trusted Publishing guardrails. |
 
 ## Supported Models
 
-| Provider | Aliases | Best For |
-|----------|---------|----------|
-| DeepSeek | `ds-v4-flash` `ds-v4-pro` | Fast default, flagship reasoning |
-| OpenAI | `gpt-5.5` `gpt-5.4` `gpt-5.4-mini` `gpt-5.4-nano` `gpt-4o` `gpt-4.1` `o3` | Flagship, coding, vision, reasoning |
-| Anthropic | `claude-opus` `claude-sonnet` `claude-haiku` | Frontier reasoning, balanced, fast |
+PawnLogic ships with preconfigured model aliases. Only active providers with a
+configured API key are shown in `/model` and Tab completion.
 
-DeepSeek is active by default. Custom providers appear in `/model` and Tab completion only after their key is configured, models are fetched, and the provider is activated.
-Descriptions shown by `/model` come from `~/.pawnlogic/custom_providers.json`
-for custom providers. Re-running `/provider update <name>` refreshes selected
-models from the provider and writes English fallback descriptions for fetched
-models.
+| Provider | Aliases | Notes |
+|----------|---------|-------|
+| DeepSeek | `ds-v4-flash`, `ds-v4-pro` | Default provider; fast primary model plus flagship reasoning model. |
+| OpenAI | `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-4o`, `gpt-4.1`, `o3` | Coding, vision, multimodal, low-latency, and reasoning aliases. |
+| Anthropic | `claude-opus`, `claude-sonnet`, `claude-haiku` | Opus, Sonnet, and Haiku aliases for Anthropic's Messages API path. |
+
+Custom provider model descriptions come from
+`~/.pawnlogic/custom_providers.json`. Re-running `/provider update <name>`
+refreshes selected models and writes English fallback descriptions for fetched
+models when the provider does not supply a useful description.
 
 ## Provider Management
 
 ```bash
-/provider              # open interactive TUI panel
+/provider                         # open the provider TUI
 /provider add <name> <base_url> <ENV_KEY> [anthropic]
-/provider fetch <name> # fetch available models and select interactively
-/provider update <name>
-/provider activate <name>
-/provider deactivate <name>
-/provider list         # show all providers and key status
-/provider test <model> # test connectivity
+/provider fetch <name>            # fetch available models and select aliases
+/provider update <name>           # re-fetch provider models
+/provider activate <name>         # show selected provider models
+/provider deactivate <name>       # hide provider models
+/provider list                    # show provider and key status
+/provider test <model>            # test connectivity for a model alias
+/setkey                           # run key setup again
+/keys                             # show configured key status
 ```
 
-All keys are stored in `~/.pawnlogic/.env`. Provider configs (no keys) go to `~/.pawnlogic/custom_providers.json`.
+API keys are stored in `~/.pawnlogic/.env`. Provider configs, model aliases,
+and descriptions are stored in `~/.pawnlogic/custom_providers.json` without
+secret values.
+
+Plain `http://` provider endpoints are allowed for local relays and lab
+setups, but user-friendly mode prints a trust-boundary warning because requests
+and API keys are not protected by TLS.
 
 ## Quick Command Reference
 
 ```bash
-/model [alias]          # switch model, showing active configured providers
-/mode                   # toggle user-friendly/debug output
-/chat find <keyword>    # full-text search across all sessions
-/think <prompt>         # single deep-reasoning turn
-/compact                # summarize + clear context
-/undo [n]               # roll back last n turns
-/deep                   # switch to deep mode (32k tokens, 50 iter)
-/init_project           # initialize GSD engineering pipeline
-/pwnenv                 # check CTF toolchain integrity
-/keys                   # show API key status for all providers
+/model [alias]                    # switch model
+/mode                             # toggle user-friendly/debug output
+/chat find <keyword>              # search all sessions
+/think <prompt>                   # run one deeper reasoning turn
+/compact                          # summarize and compact context
+/undo [n]                         # roll back recent turns
+/deep                             # full-power mode
+/init_project [desc]              # initialize project state
+/pwnenv                           # check CTF toolchain integrity
+/sp install <repo_url>            # install a git-backed skill pack
 ```
+
+Run `/help` inside PawnLogic for the full command list.
+
+## Trust Boundary
+
+PawnLogic is an agent execution tool, not a security sandbox. It intentionally
+executes real tools with the current user's permissions when you ask it to do
+so. Pattern filters, Docker boundaries, and capability profiles reduce
+accidents; they do not contain a determined attacker.
+
+User-friendly mode prints explicit trust-boundary notices for host shell
+execution, Docker container exec, browser/network-capable tools, private
+network URL access, delegated sub-agents, and plaintext HTTP providers. Use
+`pawn --debug` when you need lower-level tool arguments and diagnostics.
 
 ## MCP Tool Integration
 
@@ -139,10 +192,10 @@ For pip or one-line installer users, PawnLogic creates editable templates in
 `~/.pawnlogic/` on startup:
 
 ```bash
-pawn   # creates ~/.pawnlogic/env.example and ~/.pawnlogic/mcp_configs.example.json
+pawn
 cp ~/.pawnlogic/mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
-# edit ~/.pawnlogic/mcp_configs.json, add TAVILY_API_KEY= etc. with /setkey or ~/.pawnlogic/.env
-pawn   # MCP servers load automatically when mcp_configs.json exists
+# edit ~/.pawnlogic/mcp_configs.json and add keys with /setkey or ~/.pawnlogic/.env
+pawn
 ```
 
 For source checkout users, the repository template can also be copied directly:
@@ -151,25 +204,25 @@ For source checkout users, the repository template can also be copied directly:
 cp mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
 ```
 
-Supported MCP servers: **Tavily** (search), **Playwright** (browser automation), **Filesystem** (file bridge).
-The example keeps the external `fetch` MCP disabled by default because `uvx mcp-server-fetch`
-may contact PyPI during startup. Use PawnLogic's built-in `fetch_url` unless you explicitly
-enable that MCP server and allow network installation.
+Supported example MCP servers include Tavily search, Playwright browser
+automation, and a filesystem bridge. External `fetch` MCP is disabled in the
+example because `uvx mcp-server-fetch` may contact PyPI during startup; use
+PawnLogic's built-in `fetch_url` unless you explicitly enable that MCP server.
 
-MCP subprocess stderr is written to `~/.pawnlogic/logs/mcp/<server>.stderr.log`
-by default so server startup banners do not pollute the main terminal. Set
-top-level `"debug_stderr": true` in `mcp_configs.json` when you want raw MCP
-stderr on the console for troubleshooting. PawnLogic also advertises MCP roots
-for the current working directory and `~/.pawnlogic/workspace`.
+MCP subprocess stderr is written to
+`~/.pawnlogic/logs/mcp/<server>.stderr.log` by default. Set top-level
+`"debug_stderr": true` in `mcp_configs.json` when you want raw MCP stderr on
+the console. PawnLogic advertises MCP roots for the current working directory
+and `~/.pawnlogic/workspace`.
 
 ## Data Layout
 
-All runtime data and API keys are stored in `~/.pawnlogic/` — **never in the project directory**.
+All runtime data and API keys are stored in `~/.pawnlogic/`.
 
-```
+```text
 ~/.pawnlogic/
-├── .env                    # ALL API keys (LLM providers + MCP tools)
-├── custom_providers.json   # user-added provider configs (no keys)
+├── .env                    # API keys
+├── custom_providers.json   # user provider configs, no keys
 ├── mcp_configs.json        # MCP server declarations
 ├── pawn.db                 # sessions, messages, knowledge base
 ├── global_skills.md        # GSA skill archive
@@ -186,13 +239,13 @@ The project directory contains no secrets and is safe to commit or share.
 |----------|-------------|
 | [**README.md**](README.md) | This page |
 | [**README_CN.md**](README_CN.md) | Chinese README |
-| [**GUIDE_EN.md**](GUIDE_EN.md) | Full reference — commands, architecture, FAQ |
-| [**GUIDE_CN.md**](GUIDE_CN.md) | Chinese complete reference |
+| [**GUIDE.md**](GUIDE.md) | Full reference: commands, architecture, and FAQ |
+| [**GUIDE_CN.md**](GUIDE_CN.md) | Chinese full reference |
 | [**CHANGELOG.md**](CHANGELOG.md) | Version history and release notes |
-| [**CONTRIBUTING.md**](CONTRIBUTING.md) | How to contribute, add providers, run tests |
+| [**CONTRIBUTING.md**](CONTRIBUTING.md) | Contribution, provider, and test workflow |
 | [**SECURITY.md**](SECURITY.md) | Vulnerability reporting policy |
 
 ## Support
 
-- **GitHub**: [github.com/john0123412/PawnLogic](https://github.com/john0123412/PawnLogic)
-- **Issues**: GitHub Issues for bugs and feature requests
+- GitHub: [github.com/john0123412/PawnLogic](https://github.com/john0123412/PawnLogic)
+- Issues: use GitHub Issues for bugs and feature requests.

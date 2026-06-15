@@ -101,6 +101,8 @@ The repository has one CLI runtime implementation.
 - Fresh-venv `pip install .` must expose a working `pawn` command.
 - Source code, comments, runtime prompts, log messages, generated templates,
   tests, and agent-facing instructions must be written in English.
+- English is the repository default. Do not add `_EN` suffixes for default
+  English files; use names such as `README.md` and `GUIDE.md`.
 - Chinese is allowed only in repository files whose filename stem ends with
   `_CN` (for example `README_CN.md` and `GUIDE_CN.md`), where it must match
   the English documentation semantically.
@@ -124,7 +126,7 @@ Documentation drift is considered a bug.
 
 - `README.md` and `README_CN.md` must stay structurally and semantically
   equivalent.
-- `GUIDE_EN.md` and `GUIDE_CN.md` must stay structurally and semantically
+- `GUIDE.md` and `GUIDE_CN.md` must stay structurally and semantically
   equivalent.
 - `tools/check_doc_structure.py` and the Docs workflow must enforce matching
   heading level/order for the English and Chinese documentation pairs.
@@ -137,7 +139,7 @@ Documentation drift is considered a bug.
 - When provider/model behavior changes, update all of these together:
   - `README.md`
   - `README_CN.md`
-  - `GUIDE_EN.md`
+  - `GUIDE.md`
   - `GUIDE_CN.md`
   - `CONTRIBUTING.md` if contributor workflow is affected
   - `pawnlogic/cli.py` help text
@@ -151,10 +153,10 @@ Useful drift scans:
 
 ```bash
 rg -n "appear automatically|only shows configured|ds-chat|ds-r1|gpt-3\.5-turbo|myrelay/gpt-4o" \
-  README.md README_CN.md GUIDE_EN.md GUIDE_CN.md CONTRIBUTING.md pawnlogic/cli.py core tests
+  README.md README_CN.md GUIDE.md GUIDE_CN.md CONTRIBUTING.md pawnlogic/cli.py core tests
 
 rg -n "<name>|/provider activate|/provider deactivate|active provider" \
-  README.md README_CN.md GUIDE_EN.md GUIDE_CN.md pawnlogic/cli.py core/commands/provider.py
+  README.md README_CN.md GUIDE.md GUIDE_CN.md pawnlogic/cli.py core/commands/provider.py
 ```
 
 ## Configuration And Database Cleanliness

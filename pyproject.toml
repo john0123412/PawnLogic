@@ -61,7 +61,7 @@ Homepage = "https://github.com/john0123412/PawnLogic"
 Repository = "https://github.com/john0123412/PawnLogic"
 Issues = "https://github.com/john0123412/PawnLogic/issues"
 Changelog = "https://github.com/john0123412/PawnLogic/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/john0123412/PawnLogic/blob/main/GUIDE_EN.md"
+Documentation = "https://github.com/john0123412/PawnLogic/blob/main/GUIDE.md"
 
 [project.scripts]
 pawn = "pawnlogic.cli:run"
