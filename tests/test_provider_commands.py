@@ -148,6 +148,10 @@ def test_provider_active_state_defaults_deepseek_only_for_model_visibility(monke
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     monkeypatch.setenv("RELAY_API_KEY", "test-key")
     monkeypatch.setenv("XIAOMI_API_KEY", "test-key")
+    # Treat providers as already initialized so the lazy init_providers() call
+    # inside _visible_models does not reload and clobber the patched PROVIDERS
+    # table (keeps this test order-independent).
+    monkeypatch.setattr(provider_config, "_providers_initialized", True)
 
     visible = provider_cmd._visible_models()
 
