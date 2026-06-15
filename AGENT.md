@@ -124,6 +124,16 @@ The repository has one CLI runtime implementation.
 
 Documentation drift is considered a bug.
 
+- Every completed repository change must include a README review before the
+  final report. If the change affects user-facing behavior, installation,
+  commands, providers/models, MCP/tool behavior, trust boundaries, security
+  posture, docs navigation, packaging, CI, or release flow, update both
+  `README.md` and `README_CN.md` in the same change.
+- If a change does not require a README edit, say so explicitly in the final
+  report as `README reviewed: no change needed`, with the reason.
+- README updates must be completed before release PR merge, release tag
+  creation, package build, or PyPI upload. Do not treat a post-release README
+  cleanup as fixing the already published PyPI project page.
 - `README.md` and `README_CN.md` must stay structurally and semantically
   equivalent.
 - `GUIDE.md` and `GUIDE_CN.md` must stay structurally and semantically
@@ -292,6 +302,14 @@ git commit -m "<type>: <summary>"
 
 - Version release work must start on a new remote test branch such as
   `test/release-<version>` or `fix/<issue>-<version>`.
+- Before tagging or publishing a version, verify that `README.md`,
+  `README_CN.md`, `GUIDE.md`, `GUIDE_CN.md`, `CHANGELOG.md`, `SECURITY.md`,
+  and package metadata all describe the release consistently.
+- PyPI renders the long description embedded in the built distribution at
+  upload time. PyPI does not update an existing version's project description
+  when `README.md` changes later on GitHub. If README or guide links are fixed
+  after a version has already been uploaded, record that the PyPI page will only
+  be corrected by the next release.
 - The remote test branch Actions must pass before publishing a new PyPI
   version.
 - Publish to PyPI only after the package has passed local verification and
@@ -324,6 +342,12 @@ git commit -m "<type>: <summary>"
   kept intentionally for incident investigation.
 - After every release workflow change or published release, re-check that
   `CLAUDE.md` remains a thin wrapper that imports `AGENT.md`.
+- After every published release, verify and report:
+  - GitHub raw `README.md` from `main`.
+  - The PyPI latest version and PyPI long description metadata.
+  - The package docs URL in PyPI metadata.
+  - The public version badge rendered by the README.
+  - The GitHub Release URL and visible release notes.
 - Record the PyPI publish result and release URL in the final report for any
   release task.
 
