@@ -202,7 +202,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `main.py` is now a thin source-checkout compatibility wrapper. The single
   CLI runtime implementation lives in `pawnlogic/cli.py`, and `pawn.sh` now
   launches `python -m pawnlogic`.
-- README, README_CN, GUIDE_EN, GUIDE_CN, AGENT, CLAUDE, and CONTRIBUTING now
+- README, README_CN, GUIDE, GUIDE_CN, AGENT, CLAUDE, and CONTRIBUTING now
   document pip as the official install path and `install.sh` as a pip-based
   installer wrapper.
 
@@ -235,7 +235,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `pawnlogic[ctf]` optional extra (`pwntools`, `ROPgadget`, `ropper`) for
   users who want the CTF skill markdown and tooling.
 - `Development Status :: 4 - Beta` classifier on PyPI; `Documentation` URL
-  in `[project.urls]` pointing at `GUIDE_EN.md`.
+  in `[project.urls]` pointing at `GUIDE.md`.
 - `docker-compose.test.yml` + `Dockerfile.test` + `.dockerignore` for
   isolated smoke testing (`docker compose -f docker-compose.test.yml run
   --rm smoketest`); the smoke harness hits a real provider API and asserts a
@@ -246,7 +246,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   excluded from the default wheel via `[tool.setuptools.packages.find]
   exclude`; install with `pip install pawnlogic[ctf]` to opt in.
 - `requirements.txt` removed; `pip install -e .` is the single source of
-  truth. README, README_CN, GUIDE_EN, GUIDE_CN, and `pawn.sh` all updated.
+  truth. README, README_CN, GUIDE, GUIDE_CN, and `pawn.sh` all updated.
 - README "What's New" sections now link to `CHANGELOG.md` instead of being
   re-edited each release.
 - `.env.example` clarifies that `XIAOMI_API_KEY` is for a custom provider

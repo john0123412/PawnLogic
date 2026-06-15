@@ -553,7 +553,7 @@ def test_latest_documented_model_aliases_are_registered():
     ]:
         assert alias in MODELS
 
-    for doc in ["README.md", "README_CN.md", "GUIDE_EN.md", "GUIDE_CN.md"]:
+    for doc in ["README.md", "README_CN.md", "GUIDE.md", "GUIDE_CN.md"]:
         assert "claude-opus-4-8" not in (ROOT / doc).read_text(encoding="utf-8")
 
 

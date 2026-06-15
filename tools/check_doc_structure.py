@@ -10,7 +10,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 PAIRS = (
     ("README.md", "README_CN.md"),
-    ("GUIDE_EN.md", "GUIDE_CN.md"),
+    ("GUIDE.md", "GUIDE_CN.md"),
 )
 CLAUDE_WRAPPER_MAX_LINES = 20
 
