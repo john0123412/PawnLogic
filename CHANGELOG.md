@@ -5,6 +5,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.1.0] - 2026-06-15
+
+### Added
+- Added `core/tool_result.py` with stateless tool-result helpers and a
+  per-turn `ToolResultProcessor` for truncation, audit logging, directory
+  search hints, repeat-error detection, and anti-loop injections.
+- Added `core/turn_guards.py` to concentrate urgent-mode handling,
+  empty-response retries, chain-of-thought guard decisions, and concurrent
+  truncation cleanup outside the main turn loop.
+- Added `core/tool_registry.py` as the canonical ToolRegistry module, with
+  snapshot APIs and compatibility refresh paths for legacy `TOOL_MAP` and
+  `TOOLS_SCHEMA` callers.
+- Added centralized trust-boundary notice helpers in `core/trust.py` so shell,
+  browser, fetch, Docker, delegate, and insecure-provider warnings share the
+  same permission taxonomy and wording.
+- Added static release-workflow guardrails that prevent reintroducing
+  long-lived PyPI tokens or `twine upload` publishing paths.
+
+### Changed
+- Reduced `AgentSession.run_turn` by moving tool-result processing and guard
+  decisions behind dedicated modules while preserving public session behavior.
+- Delegate sub-agents now share the main ToolExecutor path and registry
+  snapshots, reducing drift between parent and delegated tool execution.
+- Dynamic runtime configuration reads and writes now flow through a unified
+  runtime interface, reducing split state between command handlers, sessions,
+  and configuration globals.
+- Provider and model mutation paths now go through a store interface with
+  detached snapshots, making provider listing and model visibility more
+  deterministic.
+- GitHub Actions dependencies now use Node 24 runtime-compatible versions.
+- PyPI/TestPyPI publishing now uses PyPI Trusted Publishing / GitHub OIDC with
+  split build, publish, and GitHub Release jobs.
+
+### Fixed
+- Fixed sandbox timeout cleanup to kill POSIX process groups before falling
+  back to the parent process.
+- Fixed provider command test isolation around lazy provider initialization.
+- Fixed TestPyPI/PyPI release flow so production GitHub Releases are created
+  only after a successful PyPI publish.
+- Kept trust-boundary warnings visible in user mode while avoiding duplicated
+  inline message text across tool modules.
+
+### Tests
+- 526 tests passing.
+- Added focused coverage for tool-result processing, turn guards,
+  ToolRegistry snapshots, delegate execution parity, runtime config access,
+  provider store mutation APIs, trust-boundary notices, and publish workflow
+  invariants.
+- `ruff check .` passing.
+- `python -m compileall -q config core pawnlogic tests tools` passing.
+- Package build and `twine check` passing.
+
 ## [0.0.10] - 2026-06-14
 
 ### Added
