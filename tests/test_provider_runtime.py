@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+import stat
 
 from core import provider_runtime
 
@@ -113,3 +114,36 @@ def test_provider_runtime_set_active_delegates_to_provider_config(monkeypatch):
     assert ok is True
     assert message == "Provider is now active."
     assert seen == {"name": "relay", "active": True}
+
+
+def test_provider_runtime_save_key_writes_env_atomically_with_private_mode(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(provider_runtime, "PAWNLOGIC_DIR", tmp_path)
+    monkeypatch.setattr(provider_runtime, "ENV_PATH", env_path)
+    monkeypatch.delenv("RELAY_API_KEY", raising=False)
+
+    provider_runtime.save_key("RELAY_API_KEY", "secret-value")
+
+    assert env_path.read_text(encoding="utf-8") == "RELAY_API_KEY=secret-value\n"
+    assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
+
+
+def test_provider_runtime_record_sync_time_logs_and_preserves_malformed_json(
+    tmp_path,
+    monkeypatch,
+):
+    path = tmp_path / "custom_providers.json"
+    path.write_text("{bad json", encoding="utf-8")
+    logged: list[str] = []
+
+    class FakeLogger:
+        def warning(self, msg, *args):
+            logged.append(msg.format(*args))
+
+    monkeypatch.setattr(provider_runtime, "CUSTOM_PROVIDERS_PATH", path)
+    monkeypatch.setattr(provider_runtime, "logger", FakeLogger())
+
+    provider_runtime.record_sync_time("relay")
+
+    assert path.read_text(encoding="utf-8") == "{bad json"
+    assert "Failed to update provider sync time" in logged[0]

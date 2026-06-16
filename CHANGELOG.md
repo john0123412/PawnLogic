@@ -5,6 +5,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.1.1] - 2026-06-15
+
+### Changed
+- Rebuilt release documentation and package metadata so the next PyPI long
+  description, documentation URL, changelog, README, and supported versions are
+  aligned before publishing.
+- Provider and model runtime state now uses a re-entrant store lock around
+  mutation helpers and snapshot reads, while preserving the legacy
+  `PROVIDERS` and `MODELS` compatibility dictionaries.
+- Provider commands now read provider/model tables through detached snapshots,
+  and the provider TUI uses local stable snapshots for repeated model/provider
+  rendering paths.
+
+### Fixed
+- Updated the generated runtime environment template to use the current default
+  model alias, `ds-v4-flash`, instead of the obsolete `ds-chat` example.
+- Updated the security support table so the current public release line is
+  visible before publishing.
+- Replaced direct runtime config writes with same-directory temporary writes,
+  flush/fsync, and `os.replace()` for `custom_providers.json`, sync metadata,
+  provider TUI model deletion, and `.env` key persistence.
+- Preserved private `0o600` permissions for persisted `.env` keys.
+- Quoted first-run shell `export` lines with shell-safe quoting while keeping
+  the exact key value in the current process environment.
+- Made startup session resume failures, malformed provider JSON, provider TUI
+  model deletion failures, and unexpected provider completer refresh failures
+  visible through warnings or concise user-facing status messages.
+
+### Tests
+- Added coverage for atomic runtime writes, `.env` permissions, shell export
+  quoting, malformed provider JSON handling, startup resume failure handling,
+  provider TUI model deletion errors, completer refresh warnings, and provider
+  store lock re-entrancy.
+
 ## [0.1.0] - 2026-06-15
 
 ### Added

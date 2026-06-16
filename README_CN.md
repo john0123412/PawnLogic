@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开版本是 **0.1.0**，已于 2026-06-15 发布到 PyPI 和 GitHub Releases。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开版本是 **0.1.1**，已于 2026-06-15 发布到 PyPI 和 GitHub Releases。
 
 ## 系统要求
 
@@ -80,14 +80,14 @@ python -m pawnlogic --help
 
 ## 新特性
 
-0.1.0 是 runtime 和发布安全收敛后的第一个版本：
+0.1.1 是 0.1 系列的稳定性补丁：
 
-- `AgentSession.run_turn` 更小，工具结果处理、turn guard、工具执行和 registry snapshot 都被移动到专门模块。
-- 工具执行增加了 unknown tool、审计失败、重复错误、中断和 delegate 行为的回归覆盖。
-- shell、browser、fetch、Docker、delegate 和明文 HTTP Provider 的 trust-boundary 提示已集中管理。
-- Provider 和 model 变更通过 store helper 与 detached snapshot 处理，使 `/provider` 和 `/model` 行为更稳定。
-- 发布流程改用 PyPI Trusted Publishing / GitHub OIDC，生产路径不再依赖长期 PyPI 上传 token。
-- 英文文档现在使用默认文件名，例如 `README.md` 和 `GUIDE.md`；中文翻译文档使用 `_CN` 文件名。
+- runtime Provider 配置写入现在使用同目录临时文件和 `os.replace()` 原子替换，降低中断时截断 `custom_providers.json` 或 `.env` 的风险。
+- 持久化 `.env` Key 会保持私有的 `0o600` 权限。
+- first-run shell `export` 行会安全转义包含引号、美元符、反引号、空格或其他 metacharacter 的 Key。
+- startup session resume 失败和 Provider 配置解析失败会通过 warning 或简短用户可见状态报告，不再静默吞掉。
+- Provider/model store helper 现在使用带锁 snapshot，使 `/provider`、`/model` 和 Provider TUI 行为更一致。
+- 发布元数据、README 内容、支持版本、changelog 和 PyPI 文档 URL 会在发布前保持一致。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 

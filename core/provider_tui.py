@@ -43,6 +43,8 @@ from core.provider_runtime import (
     sync_models_to_runtime as _sync_models_to_runtime,
     test_connection as _test_connection,
 )
+from core.file_store import atomic_write_text
+from core.logger import logger
 
 __all__ = [
     "ProviderTUI",
@@ -99,12 +101,23 @@ def _mask_key(key: str) -> str:
         return "— Not Configured"
     return f"{key[:4]}{'•' * 8}{key[-4:]}" if len(key) > 8 else "••••••••"
 
+
+def _provider_snapshot() -> dict[str, dict]:
+    return {name: dict(cfg) for name, cfg in PROVIDERS.items()}
+
+
+def _model_items_snapshot() -> list[tuple[str, dict]]:
+    return [(alias, dict(cfg)) for alias, cfg in MODELS.items()]
+
+
 def _provider_key(pname: str) -> str:
-    env_var = PROVIDERS.get(pname, {}).get("api_key_env", "")
+    env_var = _provider_snapshot().get(pname, {}).get("api_key_env", "")
     return os.getenv(env_var, "") if env_var else ""
 
+
 def _model_count(pname: str) -> int:
-    return sum(1 for m in MODELS.values() if m.get("provider") == pname)
+    return sum(1 for _a, m in _model_items_snapshot() if m.get("provider") == pname)
+
 
 def _last_synced(pname: str) -> str:
     if not CUSTOM_PROVIDERS_PATH.exists():
@@ -168,11 +181,13 @@ class ProviderTUI:
         self._mm_models: list[str] = []   # alias list for current provider
         self._mm_cursor: int = 0
         self._mm_provider: str = ""
+        self._mm_status: str = ""
+        self._mm_status_style: str = ""
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
     def _provider_rows(self) -> list[str]:
-        return list(PROVIDERS.keys())
+        return list(_provider_snapshot())
 
     def _ms_filtered(self) -> list[tuple[str, dict]]:
         """Return entries filtered by search string. Result cached per search query."""
@@ -256,7 +271,7 @@ class ProviderTUI:
 
     def _render_detail(self) -> StyleAndTextTuples:
         pname = self._detail_provider
-        pinfo = PROVIDERS.get(pname, {})
+        pinfo = _provider_snapshot().get(pname, {})
         key = _provider_key(pname)
         n = _model_count(pname)
         fmt = pinfo.get("api_format", "openai")
@@ -276,7 +291,7 @@ class ProviderTUI:
             f += [("class:subtitle", f"  {'API Key':<12}│ "),
                   ("class:key-missing", "— Not Configured\n")]
         f.append(("class:subtitle", f"  {'Models':<12}│ {n} loaded  (Last synced: {_last_synced(pname)})\n"))
-        names = [a for a, m in MODELS.items() if m.get("provider") == pname]
+        names = [a for a, m in _model_items_snapshot() if m.get("provider") == pname]
         if names:
             preview = ", ".join(names[:5])
             more = f"  ... and {len(names)-5} more" if len(names) > 5 else ""
@@ -433,6 +448,8 @@ class ProviderTUI:
             mid = MODELS.get(alias, {}).get("id", alias)
             f.append((cs, f"  {cur} {alias}  "))
             f.append(("class:subtitle", f"({mid})\n"))
+        if self._mm_status:
+            f.append((self._mm_status_style, f"\n  {self._mm_status}\n"))
         f.append(("", "\n"))
         return f
 
@@ -665,11 +682,22 @@ class ProviderTUI:
                 try:
                     data = _j.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
                     data.get("models", {}).pop(alias, None)
-                    CUSTOM_PROVIDERS_PATH.write_text(
-                        _j.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-                except Exception:
-                    pass
-            self._mm_models = [a for a, m in MODELS.items()
+                    atomic_write_text(
+                        CUSTOM_PROVIDERS_PATH,
+                        _j.dumps(data, ensure_ascii=False, indent=2),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to remove model from custom_providers.json ({}): {!r}",
+                        CUSTOM_PROVIDERS_PATH, exc,
+                    )
+                    self._mm_status = "Failed to update custom_providers.json."
+                    self._mm_status_style = "class:error"
+                    inv()
+                    return
+            self._mm_status = f"Deleted model: {alias}"
+            self._mm_status_style = "class:success"
+            self._mm_models = [a for a, m in _model_items_snapshot()
                                if m.get("provider") == self._mm_provider]
             self._mm_cursor = min(self._mm_cursor, max(0, len(self._mm_models) - 1))
             inv()
@@ -958,7 +986,7 @@ class ProviderTUI:
             self._app.invalidate()
 
     async def _run_test_detail(self, pname: str):
-        pinfo = PROVIDERS.get(pname, {})
+        pinfo = _provider_snapshot().get(pname, {})
         key = _provider_key(pname)
         model_id = _first_provider_chat_model(pname)
         if not model_id:
@@ -975,7 +1003,7 @@ class ProviderTUI:
             self._app.invalidate()
 
     async def _open_model_selector(self, pname: str, caller: str):
-        pinfo = PROVIDERS.get(pname, {})
+        pinfo = _provider_snapshot().get(pname, {})
         key = _provider_key(pname)
         self._detail_status = "⟳ Fetching model list..."
         self._detail_status_style = "class:spinner"
@@ -997,7 +1025,7 @@ class ProviderTUI:
         # Bug 4: start all unchecked; pre-check only previously saved models
         existing = {
             str(m.get("id") or a)
-            for a, m in MODELS.items()
+            for a, m in _model_items_snapshot()
             if m.get("provider") == pname
         }
         self._ms_all = candidates
@@ -1038,8 +1066,12 @@ class ProviderTUI:
             if self._app: self._app.invalidate()
         elif cur == 3:  # Manage Models
             self._mm_provider = pname
-            self._mm_models = [a for a, m in MODELS.items() if m.get("provider") == pname]
+            self._mm_models = [
+                a for a, m in _model_items_snapshot() if m.get("provider") == pname
+            ]
             self._mm_cursor = 0
+            self._mm_status = ""
+            self._mm_status_style = ""
             self._panel = "manage"
             if self._app:
                 self._app.layout = self._build_layout()

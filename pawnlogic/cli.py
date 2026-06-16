@@ -213,7 +213,7 @@ BROWSERBASE_PROJECT_ID=
 # LOCAL_API_URL=http://localhost:11434/v1/chat/completions
 
 # Optional runtime settings.
-# PAWNLOGIC_DEFAULT_MODEL=ds-chat
+# PAWNLOGIC_DEFAULT_MODEL=ds-v4-flash
 # PAWNLOGIC_LOG_LEVEL=INFO
 """
 
@@ -754,6 +754,48 @@ def first_run_wizard() -> str | None:
     return alias
 
 
+def _prompt_startup_resume(session: AgentSession) -> bool:
+    """Prompt for recent-session resume during interactive startup."""
+    try:
+        from core.memory import list_sessions as _list_sessions_startup
+        recent_sessions = _list_sessions_startup(5)
+        if not recent_sessions:
+            return False
+        print(c(BOLD, "\n  Recent sessions:"))
+        for idx, row in enumerate(recent_sessions):
+            name = row["name"] or "(untitled)"
+            ts = str(row["updated_at"])[:16] if row["updated_at"] else ""
+            msgs = row["msg_count"] if row["msg_count"] else 0
+            model = row["model"] if row["model"] else ""
+            print(
+                c(GRAY, f"  [{idx+1}] ") +
+                c(CYAN, name) +
+                c(GRAY, f"  {ts}  {msgs} msgs  model={model}")
+            )
+        print(c(GRAY, "  [Enter] Start a new session"))
+        try:
+            resume_choice = input(cp(BOLD, "  Resume session [1-5/Enter]: ")).strip()
+            if resume_choice.isdigit():
+                idx = int(resume_choice) - 1
+                if 0 <= idx < len(recent_sessions):
+                    result = session_load(session, str(idx + 1))
+                    if result.startswith("OK"):
+                        print(c(GREEN, f"  ✓ {result}"))
+                        set_deferred_history(session.messages)
+                        return True
+                    print(c(RED, f"  ✗ {result}"))
+                else:
+                    print(c(YELLOW, "  Selection out of range; starting a new session."))
+            # Enter or any other input starts a new session.
+        except (EOFError, KeyboardInterrupt):
+            return False
+    except Exception as exc:
+        logger.warning("Startup session resume failed: {!r}", exc)
+        if _runtime_state.user_mode:
+            print(c(YELLOW, "  Could not load recent sessions; starting a new session."))
+    return False
+
+
 def _ensure_runtime_dir_writable(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     probe = path / ".write_test"
@@ -1057,43 +1099,7 @@ async def main():
     # ════════════════════════════════════════════════════════
     # Startup session resume prompt.
     # ════════════════════════════════════════════════════════
-    _startup_resume_done = False
-    try:
-        from core.memory import list_sessions as _list_sessions_startup
-        _recent_sessions = _list_sessions_startup(5)
-        if _recent_sessions:
-            print(c(BOLD, "\n  Recent sessions:"))
-            for _i, _r in enumerate(_recent_sessions):
-                _name = _r["name"] or "(untitled)"
-                _ts   = str(_r["updated_at"])[:16] if _r["updated_at"] else ""
-                _msgs = _r["msg_count"] if _r["msg_count"] else 0
-                _model = _r["model"] if _r["model"] else ""
-                print(
-                    c(GRAY, f"  [{_i+1}] ") +
-                    c(CYAN, _name) +
-                    c(GRAY, f"  {_ts}  {_msgs} msgs  model={_model}")
-                )
-            print(c(GRAY, "  [Enter] Start a new session"))
-            try:
-                _resume_choice = input(cp(BOLD, "  Resume session [1-5/Enter]: ")).strip()
-                if _resume_choice.isdigit():
-                    _idx = int(_resume_choice) - 1
-                    if 0 <= _idx < len(_recent_sessions):
-                        _sid = _recent_sessions[_idx]["id"]
-                        _result = session_load(session, str(_idx + 1))
-                        if _result.startswith("OK"):
-                            print(c(GREEN, f"  ✓ {_result}"))
-                            set_deferred_history(session.messages)
-                            _startup_resume_done = True
-                        else:
-                            print(c(RED, f"  ✗ {_result}"))
-                    else:
-                        print(c(YELLOW, "  Selection out of range; starting a new session."))
-                # Enter or any other input starts a new session.
-            except (EOFError, KeyboardInterrupt):
-                pass
-    except Exception:
-        pass
+    _startup_resume_done = _prompt_startup_resume(session)
 
     # ════════════════════════════════════════════════════════
     # P2: CLI UX — FuzzyCompleter + WordCompleter + Bottom Toolbar

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shlex
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -17,6 +19,39 @@ from config import providers as provider_config
 from core.api_errors import format_http_error
 from core import provider_runtime, provider_tui
 from core.commands import provider as provider_cmd
+
+
+def test_write_key_to_shell_quotes_shell_metacharacters(tmp_path, monkeypatch):
+    bashrc = tmp_path / ".bashrc"
+    bashrc.write_text("# shell config\n", encoding="utf-8")
+    key = "sk value\"with$dollar`tick'quote"
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    monkeypatch.setattr(provider_cmd.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.delenv("WEIRD_API_KEY", raising=False)
+
+    written_to = provider_cmd._write_key_to_shell("WEIRD_API_KEY", key)
+
+    assert written_to == str(bashrc)
+    line = bashrc.read_text(encoding="utf-8").splitlines()[-1]
+    assert line == f"export WEIRD_API_KEY={shlex.quote(key)}"
+    assert shlex.split(line) == ["export", f"WEIRD_API_KEY={key}"]
+    assert os.environ["WEIRD_API_KEY"] == key
+    os.environ.pop("WEIRD_API_KEY", None)
+
+
+def test_write_key_to_shell_does_not_duplicate_existing_export(tmp_path, monkeypatch):
+    bashrc = tmp_path / ".bashrc"
+    bashrc.write_text("export EXISTING_API_KEY='old value'\n", encoding="utf-8")
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    monkeypatch.setattr(provider_cmd.Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.delenv("EXISTING_API_KEY", raising=False)
+
+    provider_cmd._write_key_to_shell("EXISTING_API_KEY", "new value")
+
+    text = bashrc.read_text(encoding="utf-8")
+    assert text.count("export EXISTING_API_KEY=") == 1
+    assert os.environ["EXISTING_API_KEY"] == "new value"
+    os.environ.pop("EXISTING_API_KEY", None)
 
 
 def test_provider_tui_add_wizard_api_key_field_accepts_pasted_text():
@@ -135,9 +170,8 @@ def test_provider_active_state_defaults_deepseek_only_for_model_visibility(monke
             "xiaomi": {"api_key_env": "XIAOMI_API_KEY", "active": True},
         },
     )
-    monkeypatch.setattr(provider_cmd, "PROVIDERS", provider_config.PROVIDERS)
     monkeypatch.setattr(
-        provider_cmd,
+        provider_config,
         "MODELS",
         {
             "ds-v4-flash": {"id": "deepseek-v4-flash", "provider": "deepseek"},
@@ -145,6 +179,8 @@ def test_provider_active_state_defaults_deepseek_only_for_model_visibility(monke
             "mimo": {"id": "mimo", "provider": "xiaomi"},
         },
     )
+    monkeypatch.setattr(provider_cmd, "PROVIDERS", provider_config.PROVIDERS)
+    monkeypatch.setattr(provider_cmd, "MODELS", provider_config.MODELS)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     monkeypatch.setenv("RELAY_API_KEY", "test-key")
     monkeypatch.setenv("XIAOMI_API_KEY", "test-key")
@@ -484,6 +520,81 @@ def test_provider_tui_model_selector_cancel_button_returns_to_caller():
 
     assert tui._panel == "detail"
     assert tui._detail_status == "Model sync cancelled."
+
+
+def test_provider_tui_manage_model_delete_reports_json_failure(tmp_path, monkeypatch):
+    path = tmp_path / "custom_providers.json"
+    path.write_text("{bad json", encoding="utf-8")
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "manage"
+    tui._mm_provider = "relay"
+    tui._mm_models = ["relay-chat"]
+    monkeypatch.setattr(provider_tui, "CUSTOM_PROVIDERS_PATH", path)
+    monkeypatch.setattr(
+        provider_tui,
+        "MODELS",
+        {"relay-chat": {"id": "relay-chat", "provider": "relay"}},
+    )
+    monkeypatch.setattr(provider_tui, "remove_model", lambda _alias: None)
+
+    logged: list[str] = []
+
+    class FakeLogger:
+        def warning(self, msg, *args):
+            logged.append(msg.format(*args))
+
+    monkeypatch.setattr(provider_tui, "logger", FakeLogger())
+    kb = tui._build_kb()
+    app = Application(
+        layout=tui._build_layout(),
+        key_bindings=kb,
+        style=provider_tui.TUI_STYLE,
+        full_screen=False,
+    )
+    tui._app = app
+    delete_handler = next(binding.handler for binding in kb.bindings if binding.handler.__name__ == "_mm_del")
+
+    delete_handler(SimpleNamespace(app=app))
+
+    assert path.read_text(encoding="utf-8") == "{bad json"
+    assert tui._mm_status == "Failed to update custom_providers.json."
+    assert tui._mm_status_style == "class:error"
+    assert "Failed to remove model from custom_providers.json" in logged[0]
+
+
+def test_provider_tui_completer_refresh_logs_unexpected_failure(monkeypatch):
+    async def fake_run_provider_tui():
+        return None
+
+    class BadCompleter:
+        @property
+        def words(self):
+            return []
+
+        @words.setter
+        def words(self, _value):
+            raise RuntimeError("refresh failed")
+
+    logged: list[str] = []
+
+    class FakeLogger:
+        def warning(self, msg, *args):
+            logged.append(msg.format(*args))
+
+        def error(self, *_args, **_kwargs):
+            raise AssertionError("TUI should not crash")
+
+    monkeypatch.setattr(provider_tui, "run_provider_tui", fake_run_provider_tui)
+    monkeypatch.setattr(provider_cmd, "_HAS_PROMPT_TOOLKIT", True)
+    monkeypatch.setattr(provider_cmd, "_all_cmd_words", [], raising=False)
+    monkeypatch.setattr(provider_cmd, "_cmd_meta", {}, raising=False)
+    monkeypatch.setattr(provider_cmd, "_pawn_completer", BadCompleter(), raising=False)
+    monkeypatch.setattr(provider_cmd, "_visible_models", lambda: {}, raising=False)
+    monkeypatch.setattr(provider_cmd, "logger", FakeLogger())
+
+    asyncio.run(provider_cmd._handle_provider_cmd("", "", session=None))
+
+    assert "[provider] completer refresh failed" in logged[0]
 
 
 def test_provider_tui_model_selector_renders_prefixed_alias_hint():
@@ -1020,12 +1131,13 @@ def test_model_command_rejects_inactive_provider_model(monkeypatch, capsys):
         "PROVIDERS",
         {provider_name: {"api_key_env": "INACTIVE_PROVIDER_API_KEY", "active": False}},
     )
-    monkeypatch.setattr(provider_cmd, "PROVIDERS", provider_config.PROVIDERS)
     monkeypatch.setattr(
-        provider_cmd,
+        provider_config,
         "MODELS",
         {alias: {"id": alias, "provider": provider_name, "color": "\033[37m"}},
     )
+    monkeypatch.setattr(provider_cmd, "PROVIDERS", provider_config.PROVIDERS)
+    monkeypatch.setattr(provider_cmd, "MODELS", provider_config.MODELS)
 
     asyncio.run(
         provider_cmd.cmd_model(

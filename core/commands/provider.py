@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import os
 import inspect
+import shlex
 import sys
 from pathlib import Path
 
@@ -113,7 +114,7 @@ def _detect_shell_config() -> Path | None:
 def _write_key_to_shell(env_var: str, key: str) -> str:
     """Append an export line to the shell config and inject os.environ."""
     cfg_file = _detect_shell_config()
-    export_line = f'\nexport {env_var}="{key}"\n'
+    export_line = f"\nexport {env_var}={shlex.quote(key)}\n"
 
     existing = ""
     if cfg_file and cfg_file.exists():
@@ -238,12 +239,13 @@ Select providers to configure. You can run this multiple times:
 def _visible_models() -> dict:
     """Return keyed models whose providers are active in the current process."""
     provider_config.init_providers()
-    model_items = list(MODELS.items())
+    providers = provider_config.provider_snapshot()
+    model_items = list(provider_config.model_snapshot().items())
     return {
         alias: cfg
         for alias, cfg in model_items
         if is_provider_active(cfg.get("provider", ""))
-        and os.getenv(PROVIDERS.get(cfg.get("provider", ""), {}).get("api_key_env", ""), "")
+        and os.getenv(providers.get(cfg.get("provider", ""), {}).get("api_key_env", ""), "")
     }
 
 
@@ -261,8 +263,10 @@ def _provider_list(sink=None) -> None:
     from core.output import JsonSink
     sink = sink or get_active_sink()
     provider_config.init_providers()
-    provider_items = list(PROVIDERS.items())
-    model_items = list(MODELS.items())
+    providers = provider_config.provider_snapshot()
+    models = provider_config.model_snapshot()
+    provider_items = list(providers.items())
+    model_items = list(models.items())
     if isinstance(sink, JsonSink):
         data = []
         for pname, pinfo in provider_items:
@@ -669,9 +673,8 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session, sink=None) -> No
                 traceback.print_exc()
                 _provider_list(sink)
                 return
-            # Refresh completer if main.py exposed one. Names are
-            # function-local in main(), so this swallows a NameError if
-            # called outside that scope (existing behavior preserved).
+            # Refresh completer if main.py exposed one. Names are function-local
+            # in main(), so a NameError keeps the legacy no-op path.
             try:
                 _new_words = list(_all_cmd_words)  # noqa: F821
                 _new_meta: dict = dict(_cmd_meta)  # noqa: F821
@@ -681,8 +684,10 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session, sink=None) -> No
                     _new_meta[_w] = _m.get("desc", "")
                 _pawn_completer.words = _new_words      # noqa: F821
                 _pawn_completer.meta_dict = _new_meta   # noqa: F821
-            except Exception:
+            except NameError:
                 pass
+            except Exception as exc:
+                logger.warning("[provider] completer refresh failed: {!r}", exc)
         else:
             _provider_list(sink)
         return
@@ -849,9 +854,10 @@ async def cmd_setkey(ctx: CommandContext) -> None:
 @register("/keys")
 async def cmd_keys(ctx: CommandContext) -> None:
     from core.output import JsonSink
+    providers = provider_config.provider_snapshot()
     if isinstance(ctx.sink, JsonSink):
         data = {}
-        for pinfo in PROVIDERS.values():
+        for pinfo in providers.values():
             env = pinfo.get("api_key_env")
             if not env:
                 continue
@@ -859,7 +865,7 @@ async def cmd_keys(ctx: CommandContext) -> None:
         ctx.sink.print_json(data)
         return
     _print(c(BOLD, "\n  API Key status:"))
-    for pname, pinfo in PROVIDERS.items():
+    for pname, pinfo in providers.items():
         env = pinfo.get("api_key_env")
         if not env:
             continue
@@ -889,8 +895,9 @@ async def cmd_model(ctx: CommandContext) -> None:
         elif _HAS_PROMPT_TOOLKIT:
             from collections import defaultdict
             _groups: dict[str, list] = defaultdict(list)
+            providers = provider_config.provider_snapshot()
             for _alias, _cfg_m in _vm.items():
-                _prov_label = PROVIDERS.get(_cfg_m.get("provider", ""), {}).get("label", _cfg_m.get("provider", ""))
+                _prov_label = providers.get(_cfg_m.get("provider", ""), {}).get("label", _cfg_m.get("provider", ""))
                 _groups[_prov_label].append((_alias, _cfg_m))
 
             _print(c(BOLD, "\n  Available models (active providers with configured keys):"))
@@ -911,8 +918,9 @@ async def cmd_model(ctx: CommandContext) -> None:
             # readline fallback: plain grouped list for active providers with keys.
             from collections import defaultdict
             _groups: dict[str, list] = defaultdict(list)
+            providers = provider_config.provider_snapshot()
             for _alias, _cfg_m in _vm.items():
-                _prov_label = PROVIDERS.get(_cfg_m.get("provider", ""), {}).get("label", _cfg_m.get("provider", ""))
+                _prov_label = providers.get(_cfg_m.get("provider", ""), {}).get("label", _cfg_m.get("provider", ""))
                 _groups[_prov_label].append((_alias, _cfg_m))
 
             _print(c(BOLD, "\n  Available models:"))
@@ -920,15 +928,16 @@ async def cmd_model(ctx: CommandContext) -> None:
                 _print(c(CYAN, f"\n  ── {_prov_label} ──"))
                 for _alias, _cfg_m in _entries:
                     tick = c(GREEN, " ◀ current") if _alias == session.model_alias else ""
-                    _env_var = PROVIDERS.get(_cfg_m.get("provider", ""), {}).get("api_key_env", "")
+                    _env_var = providers.get(_cfg_m.get("provider", ""), {}).get("api_key_env", "")
                     _raw_key = os.getenv(_env_var, "")
                     ktag = c(GREEN, f"[{mask_key(_raw_key)}]")
                     vtag = c(CYAN, " 📷") if _cfg_m.get("vision") else ""
                     ftag = c(MAGENTA, " [A]") if get_api_format(_alias) == "anthropic" else ""
                     _print(f"    {c(_cfg_m['color'], f'{_alias:14}')}{_cfg_m['desc']:30} {ktag}{vtag}{ftag}{tick}")
             _print(c(GRAY, "\n  Usage: /model <alias>  📷=vision capable  [A]=Anthropic format"))
-    elif arg in MODELS:
-        provider_name = MODELS[arg].get("provider", "")
+    elif arg in provider_config.model_snapshot():
+        models = provider_config.model_snapshot()
+        provider_name = models[arg].get("provider", "")
         if not is_provider_active(provider_name):
             _print(c(YELLOW, f"  ⚠ Provider '{provider_name}' is not active. Run /provider activate {provider_name} first."))
             return
@@ -937,6 +946,6 @@ async def cmd_model(ctx: CommandContext) -> None:
         if not ok:
             _print(c(YELLOW, f"  ⚠ Switched to {arg}, but {env} is not set. Configure it with /setkey."))
         else:
-            _print(c(GREEN, f"  ✓ Switched to {c(MODELS[arg]['color'], arg)}"))
+            _print(c(GREEN, f"  ✓ Switched to {c(models[arg]['color'], arg)}"))
     else:
         _print(c(RED, f"  ✗ Unknown model '{arg}'"))
