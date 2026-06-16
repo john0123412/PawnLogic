@@ -4,7 +4,9 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.0.10  | ✅ Yes     |
+| 0.1.1   | ✅ Yes     |
+| 0.1.0   | ⚠️ Upgrade recommended |
+| 0.0.10  | ⚠️ Upgrade recommended |
 | 0.0.1 – 0.0.9 | ⚠️ Upgrade recommended |
 | < 0.0.1 | ❌ No      |
 

@@ -22,6 +22,8 @@ from config.providers import (
     models_url_from_base_url,
 )
 from core.api_errors import format_http_error, format_transport_error
+from core.file_store import atomic_write_text
+from core.logger import logger
 from core.state import state as _runtime_state
 from core.trust import TrustLevel, trust_notice_for
 
@@ -56,8 +58,7 @@ def save_key(env_var: str, key: str) -> None:
     existing = ENV_PATH.read_text(encoding="utf-8") if ENV_PATH.exists() else ""
     lines = [line for line in existing.splitlines() if not line.startswith(f"{env_var}=")]
     lines.append(f"{env_var}={key}")
-    ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.chmod(ENV_PATH, 0o600)
+    atomic_write_text(ENV_PATH, "\n".join(lines) + "\n", mode=0o600)
     os.environ[env_var] = key
 
 
@@ -67,10 +68,14 @@ def record_sync_time(provider_name: str) -> None:
     if CUSTOM_PROVIDERS_PATH.exists():
         try:
             data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Failed to update provider sync time in custom_providers.json ({}): {!r}",
+                CUSTOM_PROVIDERS_PATH, exc,
+            )
+            return
     data.setdefault("sync_times", {})[provider_name] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    CUSTOM_PROVIDERS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(CUSTOM_PROVIDERS_PATH, json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def sync_models_to_runtime() -> None:

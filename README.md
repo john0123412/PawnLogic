@@ -11,7 +11,7 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.1.0**, published on
+CTF-oriented toolchain. The current public release is **0.1.1**, published on
 PyPI and GitHub Releases on 2026-06-15.
 
 ## System Requirements
@@ -88,21 +88,21 @@ Use `pawn --debug` or `/mode` when you need detailed diagnostics.
 
 ## What's New
 
-Version 0.1.0 is the first release after the runtime and release-safety
-convergence work:
+Version 0.1.1 is a stabilization patch for the 0.1 line:
 
-- `AgentSession.run_turn` is smaller and delegates tool-result handling,
-  turn guards, tool execution, and registry snapshots to focused modules.
-- Tool execution now has stronger regression coverage around unknown tools,
-  audited failures, repeated errors, interrupts, and delegate behavior.
-- Trust-boundary warnings are centralized for shell, browser, fetch, Docker,
-  delegate, and plain-HTTP provider paths.
-- Provider and model mutations now go through store helpers with detached
-  snapshots, making `/provider` and `/model` behavior more deterministic.
-- Publishing now uses PyPI Trusted Publishing / GitHub OIDC; long-lived PyPI
-  upload tokens are no longer part of the production path.
-- English documentation now uses default filenames such as `README.md` and
-  `GUIDE.md`; translated Chinese documentation uses `_CN` filenames.
+- Runtime provider configuration writes now use atomic same-directory temp
+  files and `os.replace()`, reducing the chance of truncated
+  `custom_providers.json` or `.env` files during interruption.
+- Persisted `.env` keys keep private `0o600` permissions.
+- First-run shell `export` lines are shell-quoted safely for keys containing
+  quotes, dollar signs, backticks, spaces, or other metacharacters.
+- Startup session resume failures and provider configuration parse failures are
+  reported through warnings or concise user-facing status instead of being
+  silently swallowed.
+- Provider/model store helpers now use locked snapshots for more consistent
+  `/provider`, `/model`, and provider TUI behavior.
+- Release metadata, README content, supported versions, changelog, and PyPI
+  documentation URLs are aligned before publishing.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 

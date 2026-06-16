@@ -6,7 +6,10 @@ hard-coded in source.
 """
 import os
 import json
+from threading import RLock
 from urllib.parse import urlparse
+
+from core.file_store import atomic_write_text
 
 from .paths import PAWNLOGIC_HOME
 
@@ -169,6 +172,36 @@ NON_CHAT_MODEL_KEYWORDS = {
 LEGACY_MODEL_KEYWORDS = ("instruct", "babbage", "davinci", "curie", "ada", "legacy")
 _CUSTOM_PROVIDER_ALLOWED_SCHEMES = {"http", "https"}
 _providers_initialized = False
+_PROVIDER_STORE_LOCK = RLock()
+
+
+def _warn_custom_provider_json(action: str, exc: Exception) -> None:
+    try:
+        from core.logger import logger
+        logger.warning(
+            f"Failed to {action} custom_providers.json ({{}}): {{!r}}",
+            CUSTOM_PROVIDERS_PATH,
+            exc,
+        )
+    except Exception:
+        pass
+
+
+def _read_custom_provider_json(
+    default: dict,
+    *,
+    action: str,
+    allow_replacement: bool,
+) -> dict | None:
+    if not CUSTOM_PROVIDERS_PATH.exists():
+        return default
+    try:
+        return json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        _warn_custom_provider_json(action, exc)
+        if allow_replacement:
+            return default
+        return None
 
 
 def _ensure_providers_initialized() -> None:
@@ -226,32 +259,36 @@ def is_provider_active(name: str) -> bool:
     _ensure_providers_initialized()
     if name in ALWAYS_ACTIVE_PROVIDERS:
         return True
-    return bool(PROVIDERS.get(name, {}).get("active", False))
+    with _PROVIDER_STORE_LOCK:
+        return bool(PROVIDERS.get(name, {}).get("active", False))
 
 
 def set_provider_active(name: str, active: bool) -> bool:
     """Persist a provider's active flag. DeepSeek stays active by design."""
-    if name not in PROVIDERS:
-        return False
-    if name in ALWAYS_ACTIVE_PROVIDERS and not active:
-        PROVIDERS[name]["active"] = True
-        return False
+    with _PROVIDER_STORE_LOCK:
+        if name not in PROVIDERS:
+            return False
+        if name in ALWAYS_ACTIVE_PROVIDERS and not active:
+            PROVIDERS[name]["active"] = True
+            return False
 
     CUSTOM_PROVIDERS_PATH.parent.mkdir(parents=True, exist_ok=True)
     data: dict = {"providers": {}, "models": {}, "provider_states": {}}
-    if CUSTOM_PROVIDERS_PATH.exists():
-        try:
-            data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    loaded = _read_custom_provider_json(
+        data,
+        action="update provider state in",
+        allow_replacement=False,
+    )
+    if loaded is None:
+        return False
+    data = loaded
     data.setdefault("providers", {})
     data.setdefault("models", {})
     data.setdefault("provider_states", {})
     data["provider_states"][name] = {"active": bool(active)}
-    CUSTOM_PROVIDERS_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    PROVIDERS[name]["active"] = bool(active) or name in ALWAYS_ACTIVE_PROVIDERS
+    atomic_write_text(CUSTOM_PROVIDERS_PATH, json.dumps(data, ensure_ascii=False, indent=2))
+    with _PROVIDER_STORE_LOCK:
+        PROVIDERS[name]["active"] = bool(active) or name in ALWAYS_ACTIVE_PROVIDERS
     return True
 
 
@@ -268,44 +305,51 @@ def register_provider(name: str, cfg: dict) -> None:
     """Register or replace a provider config in the live provider table."""
     if not name:
         return
-    PROVIDERS[name] = cfg
+    with _PROVIDER_STORE_LOCK:
+        PROVIDERS[name] = cfg
 
 
 def remove_provider(name: str) -> dict | None:
     """Remove a provider from the live table, returning its config if present."""
-    return PROVIDERS.pop(name, None)
+    with _PROVIDER_STORE_LOCK:
+        return PROVIDERS.pop(name, None)
 
 
 def register_model(alias: str, cfg: dict) -> None:
     """Register or replace a model config in the live model table."""
     if not alias:
         return
-    MODELS[alias] = cfg
+    with _PROVIDER_STORE_LOCK:
+        MODELS[alias] = cfg
 
 
 def remove_model(alias: str) -> dict | None:
     """Remove a model from the live table, returning its config if present."""
-    return MODELS.pop(alias, None)
+    with _PROVIDER_STORE_LOCK:
+        return MODELS.pop(alias, None)
 
 
 def remove_models_for_provider(provider_name: str) -> list[str]:
     """Remove all models owned by a provider. Return the removed aliases."""
-    removed = [a for a, m in list(MODELS.items()) if m.get("provider") == provider_name]
-    for alias in removed:
-        MODELS.pop(alias, None)
+    with _PROVIDER_STORE_LOCK:
+        removed = [a for a, m in list(MODELS.items()) if m.get("provider") == provider_name]
+        for alias in removed:
+            MODELS.pop(alias, None)
     return removed
 
 
 def provider_snapshot() -> dict[str, dict]:
     """Return a detached copy of the provider table for consistent reads."""
     _ensure_providers_initialized()
-    return {name: dict(cfg) for name, cfg in PROVIDERS.items()}
+    with _PROVIDER_STORE_LOCK:
+        return {name: dict(cfg) for name, cfg in PROVIDERS.items()}
 
 
 def model_snapshot() -> dict[str, dict]:
     """Return a detached copy of the model table for consistent reads."""
     _ensure_providers_initialized()
-    return {alias: dict(cfg) for alias, cfg in MODELS.items()}
+    with _PROVIDER_STORE_LOCK:
+        return {alias: dict(cfg) for alias, cfg in MODELS.items()}
 
 
 def _normalise_custom_model_entries(
@@ -535,64 +579,57 @@ def load_custom_providers() -> None:
     except ImportError:
         pass
     if not CUSTOM_PROVIDERS_PATH.exists():
-        for name, prov in PROVIDERS.items():
-            prov["active"] = name in ALWAYS_ACTIVE_PROVIDERS
-        for name in list(PROVIDERS):
-            if name not in BUILTIN_PROVIDER_NAMES:
-                del PROVIDERS[name]
-        for alias in list(MODELS):
-            if alias not in BUILTIN_MODEL_ALIASES:
-                del MODELS[alias]
+        with _PROVIDER_STORE_LOCK:
+            for name, prov in PROVIDERS.items():
+                prov["active"] = name in ALWAYS_ACTIVE_PROVIDERS
+            for name in list(PROVIDERS):
+                if name not in BUILTIN_PROVIDER_NAMES:
+                    del PROVIDERS[name]
+            for alias in list(MODELS):
+                if alias not in BUILTIN_MODEL_ALIASES:
+                    del MODELS[alias]
         return
     try:
         data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
         custom_providers, custom_models = _validated_custom_provider_data(data)
     except Exception as exc:
-        # Make the failure debug-visible instead of silently swallowing it; a
-        # malformed custom_providers.json otherwise vanishes without a trace.
-        try:
-            from core.logger import logger
-            logger.warning(
-                "Failed to load custom_providers.json ({}): {!r}",
-                CUSTOM_PROVIDERS_PATH, exc,
-            )
-        except Exception:
-            pass
+        _warn_custom_provider_json("load", exc)
         return
-    for name, prov in PROVIDERS.items():
-        prov["active"] = _provider_active_from_data(name, prov, data)
-    for name in list(PROVIDERS):
-        if name not in BUILTIN_PROVIDER_NAMES and name not in custom_providers:
-            del PROVIDERS[name]
-    for alias in list(MODELS):
-        if alias not in BUILTIN_MODEL_ALIASES:
-            del MODELS[alias]
-    for name, prov in custom_providers.items():
-        if name in BUILTIN_PROVIDER_NAMES:
-            continue
-        prov.setdefault("api_format", "openai")
-        prov["active"] = _provider_active_from_data(name, prov, data)
-        PROVIDERS[name] = prov
-    normalised_models: dict = {}
-    for name in custom_providers:
-        normalised_models.update(
-            _normalise_custom_model_entries(
-                name,
-                {
-                    alias: model
-                    for alias, model in custom_models.items()
-                    if isinstance(model, dict) and model.get("provider") == name
-                },
-                normalised_models,
+    with _PROVIDER_STORE_LOCK:
+        for name, prov in PROVIDERS.items():
+            prov["active"] = _provider_active_from_data(name, prov, data)
+        for name in list(PROVIDERS):
+            if name not in BUILTIN_PROVIDER_NAMES and name not in custom_providers:
+                del PROVIDERS[name]
+        for alias in list(MODELS):
+            if alias not in BUILTIN_MODEL_ALIASES:
+                del MODELS[alias]
+        for name, prov in custom_providers.items():
+            if name in BUILTIN_PROVIDER_NAMES:
+                continue
+            prov.setdefault("api_format", "openai")
+            prov["active"] = _provider_active_from_data(name, prov, data)
+            PROVIDERS[name] = prov
+        normalised_models: dict = {}
+        for name in custom_providers:
+            normalised_models.update(
+                _normalise_custom_model_entries(
+                    name,
+                    {
+                        alias: model
+                        for alias, model in custom_models.items()
+                        if isinstance(model, dict) and model.get("provider") == name
+                    },
+                    normalised_models,
+                )
             )
-        )
-    for alias, model in normalised_models.items():
-        if alias in BUILTIN_MODEL_ALIASES:
-            continue
-        model.setdefault("desc", CUSTOM_MODEL_DESC)
-        model.setdefault("color", "\033[37m")
-        model.setdefault("vision", False)
-        MODELS[alias] = model
+        for alias, model in normalised_models.items():
+            if alias in BUILTIN_MODEL_ALIASES:
+                continue
+            model.setdefault("desc", CUSTOM_MODEL_DESC)
+            model.setdefault("color", "\033[37m")
+            model.setdefault("vision", False)
+            MODELS[alias] = model
 
 
 def save_custom_provider(
@@ -605,11 +642,11 @@ def save_custom_provider(
     """Persist a custom provider to custom_providers.json without storing keys."""
     CUSTOM_PROVIDERS_PATH.parent.mkdir(parents=True, exist_ok=True)
     data: dict = {"providers": {}, "models": {}}
-    if CUSTOM_PROVIDERS_PATH.exists():
-        try:
-            data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    data = _read_custom_provider_json(
+        data,
+        action="read before saving",
+        allow_replacement=True,
+    ) or data
     data.setdefault("providers", {})
     data.setdefault("models", {})
     data.setdefault("provider_states", {})
@@ -626,18 +663,19 @@ def save_custom_provider(
     data["models"].update(
         _normalise_custom_model_entries(name, models_cfg, data.get("models", {}))
     )
-    CUSTOM_PROVIDERS_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    atomic_write_text(CUSTOM_PROVIDERS_PATH, json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def remove_custom_provider(name: str) -> bool:
     """Remove a custom provider from the JSON file. Return whether it changed."""
     if not CUSTOM_PROVIDERS_PATH.exists():
         return False
-    try:
-        data = json.loads(CUSTOM_PROVIDERS_PATH.read_text(encoding="utf-8"))
-    except Exception:
+    data = _read_custom_provider_json(
+        {},
+        action="read before removing from",
+        allow_replacement=False,
+    )
+    if data is None:
         return False
     if name not in data.get("providers", {}):
         return False
@@ -647,7 +685,5 @@ def remove_custom_provider(name: str) -> bool:
                  if m.get("provider") == name]
     for a in to_remove:
         del data["models"][a]
-    CUSTOM_PROVIDERS_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    atomic_write_text(CUSTOM_PROVIDERS_PATH, json.dumps(data, ensure_ascii=False, indent=2))
     return True

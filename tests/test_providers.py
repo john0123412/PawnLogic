@@ -223,6 +223,15 @@ def test_snapshot_is_detached_copy():
     assert "pytest:ghost" not in model_snapshot()
 
 
+def test_provider_store_lock_is_reentrant_for_snapshot_reads():
+    with _provider_config._PROVIDER_STORE_LOCK:
+        register_model("pytest:locked", {"id": "locked", "provider": "pytest"})
+        try:
+            assert "pytest:locked" in model_snapshot()
+        finally:
+            remove_model("pytest:locked")
+
+
 def test_load_custom_providers_logs_on_malformed_json(tmp_path, monkeypatch):
     bad = tmp_path / "custom_providers.json"
     bad.write_text("{ this is not valid json ", encoding="utf-8")
@@ -240,3 +249,27 @@ def test_load_custom_providers_logs_on_malformed_json(tmp_path, monkeypatch):
     # Must not raise, and must surface the failure to the logger (not silent).
     _provider_config.load_custom_providers()
     assert "Failed to load custom_providers.json" in logged.get("msg", "")
+
+
+def test_set_provider_active_logs_and_preserves_malformed_json(tmp_path, monkeypatch):
+    bad = tmp_path / "custom_providers.json"
+    bad.write_text("{ this is not valid json ", encoding="utf-8")
+    monkeypatch.setattr(_provider_config, "CUSTOM_PROVIDERS_PATH", bad)
+    monkeypatch.setattr(
+        _provider_config,
+        "PROVIDERS",
+        {"relay": {"api_key_env": "RELAY_API_KEY", "active": False}},
+    )
+
+    logged = {}
+
+    class _FakeLogger:
+        def warning(self, msg, *args):
+            logged["msg"] = msg.format(*args)
+
+    import core.logger as _core_logger
+    monkeypatch.setattr(_core_logger, "logger", _FakeLogger())
+
+    assert _provider_config.set_provider_active("relay", True) is False
+    assert bad.read_text(encoding="utf-8") == "{ this is not valid json "
+    assert "Failed to update provider state in custom_providers.json" in logged.get("msg", "")
