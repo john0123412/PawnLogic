@@ -9,6 +9,8 @@ import os
 import sys
 import pytest
 
+pytestmark = pytest.mark.e2e
+
 try:
     import pexpect
 except ImportError:

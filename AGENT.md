@@ -169,6 +169,37 @@ rg -n "<name>|/provider activate|/provider deactivate|active provider" \
   README.md README_CN.md GUIDE.md GUIDE_CN.md pawnlogic/cli.py core/commands/provider.py
 ```
 
+## Third-Party Skill Pack Policy
+
+Third-party skill packs are optional extension assets, not mandatory runtime
+package contents.
+
+- `pawnlogic[ctf]` installs CTF tooling dependencies only. Do not describe it
+  as installing third-party skill Markdown, support files, or an original
+  PawnLogic CTF knowledge base.
+- PyPI extras cannot conditionally add or remove files from the same built
+  wheel. If a file is in the wheel, every installation receives it regardless
+  of which extra the user selected.
+- Keep third-party CTF skill packs external by default. Users may install them
+  explicitly into `~/.pawnlogic/skills` with `/sp install <repo_url>` or copy a
+  local skill-pack directory.
+- Do not redistribute third-party skill content in PyPI artifacts, generated
+  release source archives, Docker images, or generated bundled-skill
+  directories until `THIRD_PARTY_NOTICES.md` records the upstream URL, commit
+  or release, license, copyright notice, copied/adapted files, and
+  redistribution decision.
+- Use `.gitattributes export-ignore` for tracked source-checkout skill assets
+  that must stay out of generated release archives while license review is
+  incomplete.
+- If upstream license status is unclear, treat the content as install-guidance
+  only. Do not package it.
+- Public docs may say PawnLogic integrates with or adapts curated upstream CTF
+  resources after attribution is recorded. Do not claim third-party CTF skill
+  content is fully self-developed or original to PawnLogic.
+- When changing skill-pack packaging or installation behavior, update
+  `README.md`, `README_CN.md`, `GUIDE.md`, `GUIDE_CN.md`,
+  `THIRD_PARTY_NOTICES.md`, `CHANGELOG.md`, and the packaging tests together.
+
 ## Configuration And Database Cleanliness
 
 The repository must remain clean of local runtime state.
@@ -244,6 +275,27 @@ PAWNLOGIC_HOME="$tmp_home" PAWNLOGIC_TEST_MODE=true \
   python -m pytest tests/ -q --timeout=60
 ```
 
+Fast CI equivalent for normal PRs:
+
+```bash
+tmp_home="$(mktemp -d)"
+trap 'rm -rf "$tmp_home"' EXIT
+PAWNLOGIC_HOME="$tmp_home" PAWNLOGIC_TEST_MODE=true MCP_ENABLED=false \
+  python -m pytest tests/ -v --tb=short --timeout=60 \
+  --ignore=tests/test_e2e.py -m "not slow and not e2e and not packaging"
+```
+
+Release validation split:
+
+```bash
+tmp_home="$(mktemp -d)"
+trap 'rm -rf "$tmp_home"' EXIT
+PAWNLOGIC_HOME="$tmp_home" PAWNLOGIC_TEST_MODE=true MCP_ENABLED=false \
+  python -m pytest tests/ -v --tb=short --timeout=60 --ignore=tests/test_e2e.py
+PAWNLOGIC_HOME="$tmp_home" PAWNLOGIC_TEST_MODE=true MCP_ENABLED=false \
+  python -m pytest tests/test_e2e.py -v --tb=short --timeout=30
+```
+
 Lint:
 
 ```bash
@@ -295,6 +347,9 @@ git commit -m "<type>: <summary>"
   create and push a remote test branch first. Do not push directly to `main`
   until the remote branch Actions are green or the user explicitly instructs a
   main-branch hotfix.
+- Normal PR CI should stay fast: ruff first, then Python 3.11 tests excluding
+  only tests marked `slow`, `e2e`, or `packaging`. Release/manual CI must keep
+  the Python 3.10/3.11/3.12 matrix and dynamic E2E coverage.
 - If the task requires remote delivery after branch validation, push the target
   branch and confirm the new remote HEAD in the final report.
 

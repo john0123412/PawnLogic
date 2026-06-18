@@ -191,6 +191,25 @@ pawn --eval "prompt" --json       # 机器可读 JSON 输出
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+### 可选 CTF Skill Pack
+
+安装 CTF 工具依赖：
+
+```bash
+pip install "pawnlogic[ctf]"
+```
+
+这个 extra 会安装 `pwntools`、`ROPgadget`、`ropper` 等工具依赖；它不会把第三方
+skill-pack Markdown 安装进 PyPI 包。CTF skill pack 是可选扩展资产，需要显式安装到
+`~/.pawnlogic/skills`，例如：
+
+```bash
+/sp install <repo_url>
+```
+
+只有在 `THIRD_PARTY_NOTICES.md` 中记录了上游许可证、来源 URL、commit 和必要 notice
+之后，才可以从本仓库再分发第三方 CTF skill 内容。
+
 ### MCP 工具接入
 
 pip 或一行安装脚本用户，PawnLogic 启动时会在 `~/.pawnlogic/` 下生成可编辑模板：
@@ -306,6 +325,18 @@ MYRELAY_API_KEY=...
 | `/pwnenv` | CTF 工具链完整性检查 |
 | `/docker` | Docker 容器管理 |
 | `/stats` | 本次会话 Token 用量统计 |
+
+### CTF 工作流
+
+| 命令 | 说明 |
+|------|------|
+| `/ctf init <name>` | 在当前 workspace 初始化 CTF metadata |
+| `/ctf status` | 查看当前 CTF metadata |
+| `/ctf artifact <path-or-note>` | 记录 challenge artifact |
+| `/ctf remote <host:port-or-url>` | 记录远程目标 |
+| `/ctf flag <candidate>` | 记录 flag candidate |
+| `/ctf solved [confirmed-flag]` | 确认 flag 后将题目标记为 solved |
+| `/ctf writeup` | 导出 Markdown writeup 草稿 |
 
 ---
 

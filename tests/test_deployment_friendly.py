@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import importlib.util
 import json
 import os
@@ -11,10 +12,13 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import zipfile
 from pathlib import Path
 from importlib.metadata import PathDistribution
 from unittest.mock import patch
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -91,6 +95,8 @@ def test_install_sh_is_executable_in_checkout():
     assert mode & stat.S_IXUSR
 
 
+@pytest.mark.slow
+@pytest.mark.packaging
 def test_install_sh_installs_package_launcher_with_venv(tmp_path):
     install_dir = tmp_path / "app"
     bin_dir = tmp_path / "bin"
@@ -180,6 +186,8 @@ def test_default_cli_suppresses_internal_terminal_logs():
     assert '"INFO"' in source
 
 
+@pytest.mark.slow
+@pytest.mark.packaging
 def test_fresh_venv_pip_install_exposes_pawn_command(tmp_path):
     install_venv = tmp_path / "install-venv"
     subprocess.run(
@@ -216,6 +224,8 @@ def test_fresh_venv_pip_install_exposes_pawn_command(tmp_path):
     assert "PawnLogic" in result.stdout
 
 
+@pytest.mark.slow
+@pytest.mark.packaging
 def test_fresh_install_generates_runtime_config_templates(tmp_path):
     install_venv = tmp_path / "install-venv"
     runtime_home = tmp_path / "home" / ".pawnlogic"
@@ -292,6 +302,7 @@ def test_pawn_symlink_launcher_executes_checkout_script(tmp_path):
     assert "-m pawnlogic --help" in result.stdout
 
 
+@pytest.mark.packaging
 def test_packaging_entry_point_uses_package_cli():
     dist = PathDistribution.at(ROOT / "pawnlogic.egg-info")
     scripts = [ep for ep in dist.entry_points if ep.group == "console_scripts"]
@@ -302,6 +313,8 @@ def test_packaging_entry_point_uses_package_cli():
     )
 
 
+@pytest.mark.slow
+@pytest.mark.packaging
 def test_built_wheel_does_not_ship_top_level_main_module(tmp_path):
     subprocess.run(
         [sys.executable, "-m", "build", "--wheel", "--outdir", str(tmp_path)],
@@ -321,6 +334,63 @@ def test_built_wheel_does_not_ship_top_level_main_module(tmp_path):
     assert "main.py" not in names
     assert "pawnlogic/cli.py" in names
     assert "pawnlogic/__main__.py" in names
+    assert not any(name.startswith("skills/") for name in names)
+
+
+@pytest.mark.slow
+@pytest.mark.packaging
+def test_built_sdist_does_not_ship_top_level_skills(tmp_path):
+    subprocess.run(
+        [sys.executable, "-m", "build", "--sdist", "--outdir", str(tmp_path)],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+        timeout=120,
+    )
+    sdists = sorted(tmp_path.glob("pawnlogic-*.tar.gz"))
+    assert sdists
+
+    with tarfile.open(sdists[-1], "r:gz") as archive:
+        names = set(archive.getnames())
+
+    assert not any("/skills/" in name or name.endswith("/skills") for name in names)
+
+
+@pytest.mark.packaging
+def test_release_archive_excludes_unreviewed_ctf_skill_packs():
+    result = subprocess.run(
+        ["git", "archive", "--format=tar", "--worktree-attributes", "HEAD"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+        timeout=120,
+    )
+
+    with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:") as archive:
+        names = set(archive.getnames())
+
+    blocked_prefixes = [
+        "skills/ctf_app_system/",
+        "skills/ctf_automation/",
+        "skills/ctf_crypto/",
+        "skills/ctf_forensics/",
+        "skills/ctf_malware/",
+        "skills/ctf_misc/",
+        "skills/ctf_osint/",
+        "skills/ctf_pwn/",
+        "skills/ctf_reverse/",
+        "skills/ctf_web/",
+        "skills/solve_challenge/",
+        "skills/heap_exploit/",
+    ]
+    assert not any(
+        name.startswith(prefix)
+        for name in names
+        for prefix in blocked_prefixes
+    )
 
 
 def test_json_first_run_exits_with_clean_json_error(tmp_path):

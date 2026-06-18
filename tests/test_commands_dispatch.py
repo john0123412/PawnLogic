@@ -3,9 +3,9 @@ Tests for core.commands dispatch registry, routing, and CommandContext.
 
 Three test groups, mirroring the migration-completion checklist:
 
-1. Registry completeness  — pure static assertion that all 56 known
+1. Registry completeness  — pure static assertion that all 57 known
    slash command verbs are present in `COMMANDS`, and that every theme
-   submodule (system/session/provider/workspace/tools) imports cleanly.
+   submodule (system/session/provider/workspace/tools/ctf) imports cleanly.
 
 2. Dispatch routing       — mocks `COMMANDS[verb]` with an `AsyncMock`
    for 1-2 representative verbs from each module, then asserts that
@@ -66,7 +66,7 @@ def _ctx(cmd_pkg, verb: str, arg: str = "", arg2: str = "", session=None):
 # 1. Registry completeness
 # ════════════════════════════════════════════════════════
 
-# The full set of 56 verbs that must be registered after stage-1 migration.
+# The full set of 57 verbs that must be registered after stage-1 migration.
 # Grouped by source module for readability.
 EXPECTED_VERBS_BY_MODULE: dict[str, set[str]] = {
     "system": {
@@ -91,15 +91,18 @@ EXPECTED_VERBS_BY_MODULE: dict[str, set[str]] = {
         "/docker", "/pwnenv", "/webstatus", "/browserstatus", "/worker",
         "/knowledge", "/skills", "/skillpack", "/sp",
     },
+    "ctf": {
+        "/ctf",
+    },
 }
 
 EXPECTED_ALL: set[str] = {v for verbs in EXPECTED_VERBS_BY_MODULE.values() for v in verbs}
 
 
 def test_registry_has_expected_verb_count(cmd_pkg):
-    assert len(EXPECTED_ALL) == 56, "Test harness expects 56 distinct verbs"
-    assert len(cmd_pkg.COMMANDS) >= 56, (
-        f"Expected at least 56 registered commands, got {len(cmd_pkg.COMMANDS)}"
+    assert len(EXPECTED_ALL) == 57, "Test harness expects 57 distinct verbs"
+    assert len(cmd_pkg.COMMANDS) >= 57, (
+        f"Expected at least 57 registered commands, got {len(cmd_pkg.COMMANDS)}"
     )
 
 

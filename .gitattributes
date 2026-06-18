@@ -1,0 +1,9 @@
+# Keep unclear-license CTF skill packs out of generated release archives.
+# They may remain in source checkouts for local development until their
+# upstream license and redistribution notices are verified.
+skills/ctf_* export-ignore
+skills/ctf_*/** export-ignore
+skills/solve_challenge export-ignore
+skills/solve_challenge/** export-ignore
+skills/heap_exploit export-ignore
+skills/heap_exploit/** export-ignore

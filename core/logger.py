@@ -61,6 +61,7 @@ def audit_tool_call(
     model_alias: str = "",
     iteration: int = 0,
     success: bool = True,
+    metadata: dict | None = None,
 ) -> None:
     """
     Record a tool-call audit log entry in JSON format.
@@ -82,6 +83,8 @@ def audit_tool_call(
         "model":    model_alias,
         "iter":     iteration,
     }
+    if metadata:
+        record["metadata"] = metadata
     try:
         _audit_logger.info(json.dumps(record, ensure_ascii=False))
     except Exception:

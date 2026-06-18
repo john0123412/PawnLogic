@@ -11,8 +11,8 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.1.1**, published on
-PyPI and GitHub Releases on 2026-06-15.
+CTF-oriented toolchain. The current source release is **0.1.2**; publication
+to PyPI and GitHub Releases should happen only after release approval.
 
 ## System Requirements
 
@@ -66,6 +66,12 @@ pip install "pawnlogic[ctf]"       # pwntools, ROPgadget, ropper
 pip install -e ".[dev,ctf]"        # source checkout with tests and CTF tools
 ```
 
+`pawnlogic[ctf]` installs CTF tooling dependencies only. CTF skill packs are
+optional extension assets that users install explicitly, for example with
+`/sp install <repo_url>` into `~/.pawnlogic/skills`. Third-party skill packs are
+not bundled into PyPI distributions unless their upstream license and notices
+have been reviewed for redistribution.
+
 Source-checkout launcher fallback:
 
 ```bash
@@ -88,21 +94,21 @@ Use `pawn --debug` or `/mode` when you need detailed diagnostics.
 
 ## What's New
 
-Version 0.1.1 is a stabilization patch for the 0.1 line:
+Version 0.1.2 polishes the existing CTF workflow:
 
-- Runtime provider configuration writes now use atomic same-directory temp
-  files and `os.replace()`, reducing the chance of truncated
-  `custom_providers.json` or `.env` files during interruption.
-- Persisted `.env` keys keep private `0o600` permissions.
-- First-run shell `export` lines are shell-quoted safely for keys containing
-  quotes, dollar signs, backticks, spaces, or other metacharacters.
-- Startup session resume failures and provider configuration parse failures are
-  reported through warnings or concise user-facing status instead of being
-  silently swallowed.
-- Provider/model store helpers now use locked snapshots for more consistent
-  `/provider`, `/model`, and provider TUI behavior.
-- Release metadata, README content, supported versions, changelog, and PyPI
-  documentation URLs are aligned before publishing.
+- `pawnlogic[ctf]` is documented as CTF tooling dependencies only; CTF skill
+  packs remain user-installed extension assets unless redistribution is
+  license-reviewed.
+- `/ctf init`, `/ctf status`, `/ctf artifact`, `/ctf remote`, `/ctf flag`, and
+  `/ctf writeup` manage lightweight challenge metadata in the active workspace.
+  Flag candidates remain unconfirmed until marked with `/ctf solved`.
+- CTF writeup drafts export to Markdown from workspace metadata and session
+  evidence.
+- Existing JSONL tool audit records can include optional CTF metadata without
+  changing the base audit format.
+- Third-party CTF skill-pack candidates are tracked in
+  `THIRD_PARTY_NOTICES.md` and excluded from PyPI distributions and generated
+  release source archives until license review is complete.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
@@ -115,8 +121,8 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 | Real tool execution | Host shell, code sandbox, file operations, URL fetch, browser automation, Docker containers, and CTF helpers. |
 | Trust-boundary UX | User-mode warnings make it explicit when a tool crosses local host, container, browser, network, delegate, or plaintext HTTP boundaries. |
 | MCP integration | Stdio MCP servers can be configured from `~/.pawnlogic/mcp_configs.json`, with roots and stderr logging handled by PawnLogic. |
-| CTF / pwn workflows | Optional pwn tooling, Docker container helpers, GDB automation, ROP chain support, libc leak workflows, and local skill packs. |
-| Release hygiene | CI covers ruff, Python 3.10/3.11/3.12, dynamic E2E, docs structure, language policy, package build, and Trusted Publishing guardrails. |
+| CTF / pwn workflows | Optional pwn tooling, Docker container helpers, GDB automation, ROP chain support, libc leak workflows, and user-installed local skill packs. |
+| Release hygiene | CI runs fast Python 3.11 PR checks first, then release/manual validation covers Python 3.10/3.11/3.12, packaging, dynamic E2E, docs structure, language policy, package build, and Trusted Publishing guardrails. |
 
 ## Supported Models
 
@@ -169,6 +175,9 @@ and API keys are not protected by TLS.
 /deep                             # full-power mode
 /init_project [desc]              # initialize project state
 /pwnenv                           # check CTF toolchain integrity
+/ctf init <name>                  # start CTF workspace metadata
+/ctf solved [flag]                # mark a confirmed CTF flag as solved
+/ctf writeup                      # export a CTF writeup draft
 /sp install <repo_url>            # install a git-backed skill pack
 ```
 
@@ -244,6 +253,7 @@ The project directory contains no secrets and is safe to commit or share.
 | [**CHANGELOG.md**](CHANGELOG.md) | Version history and release notes |
 | [**CONTRIBUTING.md**](CONTRIBUTING.md) | Contribution, provider, and test workflow |
 | [**SECURITY.md**](SECURITY.md) | Vulnerability reporting policy |
+| [**THIRD_PARTY_NOTICES.md**](THIRD_PARTY_NOTICES.md) | Third-party attribution and redistribution notes |
 
 ## Support
 

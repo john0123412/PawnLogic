@@ -1964,6 +1964,14 @@ class AgentSession:
                         _audit_event = processed.audit_event
                         if _audit_event is not None:
                             try:
+                                _audit_metadata = None
+                                try:
+                                    from core.ctf_workspace import ctf_audit_metadata
+                                    _ctf_meta = ctf_audit_metadata(self.workspace_dir)
+                                    if _ctf_meta:
+                                        _audit_metadata = {"ctf": _ctf_meta}
+                                except Exception:
+                                    _audit_metadata = None
                                 audit_tool_call(
                                     tool_name    = _audit_event.tool_name,
                                     args_summary = _audit_event.args_summary,
@@ -1973,6 +1981,7 @@ class AgentSession:
                                     model_alias  = self.model_alias,
                                     iteration    = _audit_event.iteration,
                                     success      = _audit_event.success,
+                                    metadata     = _audit_metadata,
                                 )
                             except Exception:
                                 pass  # Audit logging must not block the main flow.

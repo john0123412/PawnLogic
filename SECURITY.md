@@ -4,6 +4,7 @@
 
 | Version | Supported |
 |---------|-----------|
+| 0.1.2   | ✅ Yes     |
 | 0.1.1   | ✅ Yes     |
 | 0.1.0   | ⚠️ Upgrade recommended |
 | 0.0.10  | ⚠️ Upgrade recommended |
@@ -32,3 +33,4 @@ Areas of particular concern for this project:
 - **Shell injection** — `DANGEROUS_PATTERNS` blocklist in `config/security.py`
 - **Path traversal** — RW mounts restricted to `~/.pawnlogic/workspace` in `docker_sandbox.py`
 - **Docker escape** — containers run with `network_mode=none`, memory/CPU/PID limits
+- **CTF workflow boundaries** — CTF tools and skill packs are intended for legal CTFs, authorized labs, and systems you own or have permission to test

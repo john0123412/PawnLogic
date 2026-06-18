@@ -50,6 +50,8 @@ dev = [
 ]
 docker = ["docker>=6.0"]
 browser = ["scrapling>=0.2", "patchright>=1.40"]
+# Dependency extra only. Skill packs are user-installed assets, not conditional
+# wheel contents.
 ctf = [
     "pwntools>=4.11",
     "ROPgadget>=7.4",
@@ -137,3 +139,8 @@ select = ["E9", "F821", "F401", "F841", "E722", "B", "SIM", "UP", "RUF"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "slow: tests that create virtualenvs, install packages, spawn long-running subprocesses, or perform expensive filesystem operations",
+    "e2e: real CLI or process-level end-to-end tests",
+    "packaging: tests that build, install, or validate package distribution behavior",
+]

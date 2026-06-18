@@ -355,6 +355,8 @@ HELP_TEXT = f"""
 {c(BOLD, "Projects & History")}
   {c(YELLOW, "/init_project [desc]")} Create .pawn_state.md
   {c(YELLOW, "/state")}               Show .pawn_state.md
+  {c(YELLOW, "/ctf status")}           Show CTF workspace metadata
+  {c(YELLOW, "/ctf writeup")}          Export CTF writeup draft
   {c(CYAN, "/chat list [n]")}         List recent sessions
   {c(CYAN, "/chat find <keyword>")}   Search all sessions
   {c(CYAN, "/workspace status")}      Show workspace status
@@ -1114,7 +1116,7 @@ async def main():
         "/low", "/mid", "/deep", "/max", "/normal", "/limits",
         "/tokens", "/ctx", "/iter", "/toolsize", "/fetchsize",
         "/webstatus", "/browserstatus", "/pwnenv", "/stats", "/time", "/docker",
-        "/worker", "/failures", "/memo", "/skills", "/skillpack", "/sp",
+        "/worker", "/failures", "/memo", "/skills", "/skillpack", "/sp", "/ctf",
         "/chat", "/help", "/exit",
     ]
 
@@ -1167,6 +1169,7 @@ async def main():
         "/skills":        "Show global skill archive directory",
         "/skillpack":     "Manage local skill packs (list/rescan/detail)",
         "/sp":            "Alias for /skillpack",
+        "/ctf":           "Track CTF metadata and export writeup drafts",
         "/chat":          "Session browser (list/view/find/tag/link)",
         "/workspace":     "Workspace maintenance tools (status/cleanup)",
         "/help":          "Show help",
@@ -1190,6 +1193,8 @@ async def main():
     _all_words.extend(["/worker auto", "/skills view", "/skills path", "/skills packs",
                        "/skillpack list", "/skillpack rescan", "/sp list", "/sp rescan",
                        "/sp sync", "/sp install",
+                       "/ctf init", "/ctf status", "/ctf artifact", "/ctf remote",
+                       "/ctf flag", "/ctf solved", "/ctf confirm", "/ctf writeup",
                        "/workspace status", "/workspace cleanup",
                        "/workspace cleanup plan", "/workspace cleanup execute",
                        "/workspace cleanup restore"])
@@ -1203,6 +1208,14 @@ async def main():
     _all_meta["/sp rescan"] = "Rescan skills/"
     _all_meta["/sp sync"] = "Sync all git-backed skill packs"
     _all_meta["/sp install"] = "Install a new skill pack from a remote repository"
+    _all_meta["/ctf init"] = "Initialize CTF workspace metadata"
+    _all_meta["/ctf status"] = "Show CTF workspace metadata"
+    _all_meta["/ctf artifact"] = "Record a CTF artifact"
+    _all_meta["/ctf remote"] = "Record a CTF remote target"
+    _all_meta["/ctf flag"] = "Record a CTF flag candidate"
+    _all_meta["/ctf solved"] = "Mark a confirmed CTF flag as solved"
+    _all_meta["/ctf confirm"] = "Alias for /ctf solved"
+    _all_meta["/ctf writeup"] = "Export a CTF writeup draft"
     _all_meta["/workspace status"]            = "Show workspace overview"
     _all_meta["/workspace cleanup"]           = "Generate a cleanup plan"
     _all_meta["/workspace cleanup plan"]      = "Phase 0+1: backup and scan, then output a plan"

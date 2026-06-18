@@ -194,6 +194,27 @@ If `pawn` is not found, run:
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+### Optional CTF Skill Packs
+
+Install CTF tool dependencies with:
+
+```bash
+pip install "pawnlogic[ctf]"
+```
+
+This extra installs tooling dependencies such as `pwntools`, `ROPgadget`, and
+`ropper`; it does not install third-party skill-pack Markdown into the PyPI
+package. CTF skill packs are optional extension assets. Install them explicitly
+into `~/.pawnlogic/skills`, for example:
+
+```bash
+/sp install <repo_url>
+```
+
+Only redistribute third-party CTF skill content from this repository after the
+upstream license, source URL, commit, and required notices have been recorded in
+`THIRD_PARTY_NOTICES.md`.
+
 ### MCP Tools
 
 For pip or one-line installer users, PawnLogic creates editable templates in
@@ -318,6 +339,18 @@ Check key status at runtime: `/keys`
 | `/pwnenv` | CTF toolchain integrity check |
 | `/docker` | Docker container management |
 | `/stats` | Session token usage |
+
+### CTF Workflow
+
+| Command | Description |
+|---------|-------------|
+| `/ctf init <name>` | Initialize CTF metadata in the active workspace |
+| `/ctf status` | Show active CTF metadata |
+| `/ctf artifact <path-or-note>` | Record a challenge artifact |
+| `/ctf remote <host:port-or-url>` | Record a remote target |
+| `/ctf flag <candidate>` | Record a flag candidate |
+| `/ctf solved [confirmed-flag]` | Mark the challenge solved after confirming a flag |
+| `/ctf writeup` | Export a Markdown writeup draft |
 
 ---
 

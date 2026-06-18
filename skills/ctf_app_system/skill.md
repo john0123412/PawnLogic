@@ -1384,14 +1384,14 @@ Voir les fichiers spécialisés pour les techniques par architecture.
 
 ```bash
 # Format de connexion Root-Me app-system
-ssh -p 2222 app-systeme-ch0@challenge01.root-me.org
-# Le mot de passe est souvent "app-systeme-ch0" (même que le user)
+ssh -p 2222 <challenge-user>@<challenge-host>
+# Utiliser les identifiants publics affichés sur la page du challenge.
 
 # Ou avec clé SSH (profil Root-Me → SSH Keys)
-ssh -i ~/.ssh/rootme_key -p 2222 app-systeme-ch12@challenge01.root-me.org
+ssh -i ~/.ssh/rootme_key -p 2222 <challenge-user>@<challenge-host>
 
 # Challenges récents : port peut varier
-ssh -p 2223 user@ctf.root-me.org
+ssh -p 2223 <challenge-user>@<challenge-host>
 ```
 
 ## Identifier la libc du serveur
@@ -1448,9 +1448,10 @@ python3 -c "import sys; sys.stdout.buffer.write(b'A'*100 + b'\xef\xbe\xad\xde')"
   | ssh -p 2222 user@host "./challenge"
 
 # Méthode 3 : pwntools SSH (recommandé pour interactif)
+# Utiliser les identifiants publics affichés sur la page du challenge.
 from pwn import *
-shell = ssh('app-systeme-ch12', 'challenge01.root-me.org', port=2222, 
-            password='app-systeme-ch12')
+shell = ssh('<challenge-user>', '<challenge-host>', port=2222,
+            password='<public-challenge-password>')
 io = shell.process('./challenge')
 # ... exploit ...
 io.interactive()
@@ -1517,8 +1518,8 @@ import paramiko, time
 
 ssh = paramiko.SSHClient()
 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-ssh.connect('challenge03.root-me.org', port=2223, username='app-systeme-ch21',
-            password='app-systeme-ch21', timeout=30)
+ssh.connect('<challenge-host>', port=2223, username='<challenge-user>',
+            password='<public-challenge-password>', timeout=30)
 ssh.get_transport().set_keepalive(20)  # évite timeout inactif
 
 # Uploader le script bash exploit

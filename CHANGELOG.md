@@ -5,6 +5,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.1.2] - 2026-06-18
+
+### Added
+- Added `/ctf` workspace commands for CTF challenge metadata:
+  `init`, `status`, `artifact`, `remote`, `flag`, `solved`, and `writeup`.
+- Added `core/ctf_workspace.py` for local `ctf.json` metadata, optional CTF
+  audit metadata, and deterministic Markdown writeup draft export.
+- Added `THIRD_PARTY_NOTICES.md` with license-gated redistribution decisions
+  for tracked CTF skill-pack candidates.
+
+### Changed
+- Clarified that `pawnlogic[ctf]` installs CTF tooling dependencies only.
+  Third-party CTF skill packs remain source-checkout or user-installed
+  extension assets unless their upstream redistribution license and notices
+  are reviewed.
+- Archived the completed `0.1.1` release plan and added a `0.1.2` CTF workflow
+  polish plan focused on attribution, optional skill-pack installation, solve
+  trace metadata, and writeup export.
+- Extended the existing JSONL tool audit format with an optional `metadata`
+  object. When a workspace has `ctf.json`, audit records include a `ctf`
+  sub-object with challenge context.
+- Documented CTF skill packs as optional user-installed extension assets in
+  README, GUIDE, skills documentation, and agent instructions.
+- Excluded unclear-license CTF skill-pack directories from generated release
+  source archives with `.gitattributes export-ignore`, while keeping them as
+  source-checkout development assets until license review is complete.
+- Replaced concrete public CTF SSH credential examples in tracked skill content
+  with placeholders.
+- Split CI into fast Python 3.11 PR feedback and release/manual validation.
+  Release validation keeps the Python 3.10/3.11/3.12 matrix, packaging tests,
+  and dynamic E2E coverage without running E2E twice on the same path.
+
+### Tests
+- Added tests for CTF metadata persistence, atomic `ctf.json` writes, `/ctf`
+  command behavior, audit metadata compatibility, writeup export, explicit
+  solved confirmation, Markdown table escaping, third-party notice coverage,
+  changelog structure, and wheel/sdist skill-pack exclusion.
+- Marked real CLI/process E2E tests as `e2e` and package build/install/archive
+  tests as `slow` and/or `packaging` so normal PR CI excludes only expensive
+  integration paths.
+- Final local 0.1.2 verification reached 565 passed tests before publishing:
+  557 non-E2E tests plus 8 dynamic E2E tests.
+
 ## [0.1.1] - 2026-06-15
 
 ### Changed
@@ -267,7 +310,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `first_run` gate (process-env-only key; custom-provider-only key). The
   tests fail when reverted against the pre-0.0.6 code.
 - `pawnlogic[ctf]` optional extra (`pwntools`, `ROPgadget`, `ropper`) for
-  users who want the CTF skill markdown and tooling.
+  users who want CTF tooling dependencies.
 - `Development Status :: 4 - Beta` classifier on PyPI; `Documentation` URL
   in `[project.urls]` pointing at `GUIDE.md`.
 - `docker-compose.test.yml` + `Dockerfile.test` + `.dockerignore` for
@@ -278,7 +321,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - **Default wheel is now ~254 KB** (was ~1.7 MB) — `skills/ctf_*/` are
   excluded from the default wheel via `[tool.setuptools.packages.find]
-  exclude`; install with `pip install pawnlogic[ctf]` to opt in.
+  exclude`; install with `pip install pawnlogic[ctf]` for CTF tooling
+  dependencies and install skill packs explicitly when needed.
 - `requirements.txt` removed; `pip install -e .` is the single source of
   truth. README, README_CN, GUIDE, GUIDE_CN, and `pawn.sh` all updated.
 - README "What's New" sections now link to `CHANGELOG.md` instead of being

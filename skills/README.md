@@ -85,3 +85,14 @@ EOF
 ```
 
 Add `manifest.json` only when the default metadata extraction is not enough.
+
+## Third-Party Skill Packs
+
+Third-party skill packs are optional extension assets. They may be installed by
+users into `~/.pawnlogic/skills` with `/sp install <repo_url>` or copied into a
+source checkout for development.
+
+Do not package third-party skill content into PyPI artifacts unless
+`THIRD_PARTY_NOTICES.md` records the upstream source URL, commit or release,
+license, copyright notice, adapted files, and redistribution decision. If the
+upstream license is unclear, keep the skill as install guidance only.
