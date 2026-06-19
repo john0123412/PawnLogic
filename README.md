@@ -11,7 +11,7 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current source release is **0.1.3**; publication
+CTF-oriented toolchain. The current source release is **0.1.4**; publication
 to PyPI and GitHub Releases should happen only after release approval.
 
 ## System Requirements
@@ -96,19 +96,18 @@ Use `pawn --debug` or `/mode` when you need detailed diagnostics.
 
 ## What's New
 
-Version 0.1.3 hardens the existing runtime and release surface:
+Version 0.1.4 adds host shell operation policy coverage:
 
-- Git-backed skill-pack installs and `git_op clone` accept only `https://`,
-  `ssh://`, or `git@host:owner/repo.git` remotes, with dangerous git
-  transports disabled explicitly.
-- Docker file mounts are workspace-bound by default, including read-only
-  mounts. External read-only challenge files require explicit opt-in.
-- Provider setup stores API keys only in PawnLogic's private `.env` path and no
-  longer writes keys into shell startup files.
-- Provider auto-routing respects inactive providers, and runtime database/log
-  files use restrictive local permissions where supported.
-- User-facing internal/parser failure messages now point to debug/log
-  diagnostics instead of reporting a generic busy state.
+- `run_shell` evaluates allow, confirm, and deny decisions before subprocess
+  startup.
+- Critical operations are denied by default, and high-risk operations require
+  explicit interactive confirmation.
+- Non-interactive execution, including `pawn --eval`, fails closed when a
+  high-risk command would require confirmation.
+- Audit records include redacted commands, risk levels, matched rules, and
+  policy decisions.
+- `DANGEROUS_PATTERNS` is documented as a misuse/risk classifier, not a
+  sandbox boundary.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 

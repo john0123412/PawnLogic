@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前源码版本是 **0.1.3**；发布到 PyPI 和 GitHub Releases 需要在 release approval 后进行。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前源码版本是 **0.1.4**；发布到 PyPI 和 GitHub Releases 需要在 release approval 后进行。
 
 ## 系统要求
 
@@ -85,16 +85,13 @@ python -m pawnlogic --help
 
 ## 新特性
 
-0.1.3 加固现有运行时和发布面：
+0.1.4 增加 host shell operation policy 覆盖：
 
-- git-backed skill pack 安装和 `git_op clone` 只接受 `https://`、`ssh://`
-  或 `git@host:owner/repo.git` remote，并显式禁用危险 git transport。
-- Docker 文件挂载默认限制在 workspace 内，包括 read-only 挂载。外部只读
-  challenge 文件需要显式 opt-in。
-- Provider 配置只把 API Key 存储到 PawnLogic 私有 `.env` 路径，不再写入
-  shell 启动文件。
-- Provider 自动路由会尊重 inactive provider；运行时数据库和日志文件会在系统支持时使用更严格的本地权限。
-- 面向用户的内部错误和 parser 失败信息会指向 debug/log 诊断，不再显示泛化的 busy 状态。
+- `run_shell` 会在启动子进程前评估 allow、confirm 和 deny 决策。
+- Critical 操作默认拒绝，高风险操作需要明确的交互确认。
+- 非交互执行，包括 `pawn --eval`，在高风险命令需要确认时会 fail closed。
+- 审计记录包含已脱敏命令、风险级别、匹配规则和 policy 决策。
+- `DANGEROUS_PATTERNS` 被记录为误操作/风险分类器，不是 sandbox 边界。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
