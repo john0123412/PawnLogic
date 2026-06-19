@@ -25,6 +25,11 @@ import urllib.parse
 import urllib.request
 from config import USER_AGENTS, scrub_sensitive_env
 from utils.ansi import c, BLUE, YELLOW, GRAY, GREEN
+from core.git_security import (
+    git_remote_error,
+    git_with_safe_protocol_config,
+    is_allowed_git_remote,
+)
 from core.state import state as _runtime_state, runtime_config
 from core.trust import trust_notice
 
@@ -433,7 +438,9 @@ def tool_git_op(a: dict) -> str:
     elif action == "clone":
         url = a.get("url", "")
         if not url: return "ERROR: clone requires a 'url' parameter"
-        argv = ["git", "clone", url]
+        if not is_allowed_git_remote(url):
+            return "SECURITY BLOCK: " + git_remote_error(url)
+        argv = git_with_safe_protocol_config("clone", url)
     elif action == "branch":
         br = a.get("branch", "")
         argv = ["git", "branch"] + (br.split() if br else ["-a"])

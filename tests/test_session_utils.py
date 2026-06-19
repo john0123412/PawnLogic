@@ -1083,6 +1083,17 @@ def test_extract_calls_json_fallback():
     assert calls[0]["_source"] == "json"
 
 
+def test_extract_calls_json_error_message_does_not_mask_as_busy(capsys):
+    s = _make_session()
+
+    assert s._extract_calls('<tool_call>{"name": "list_dir", "arguments": }</tool_call>') == []
+
+    out = capsys.readouterr().out
+    assert "could not be parsed" in out
+    assert "debug" in out
+    assert "System is busy" not in out
+
+
 def test_extract_calls_empty():
     s = _make_session()
     assert s._extract_calls("plain text no calls") == []

@@ -1,10 +1,11 @@
 # =================================================================
-# NousAgent Project - Git Ignore Configuration
+# PawnLogic Project - Git Ignore Configuration
 # =================================================================
 
 # --- Sensitive data (core protection) ---
 .env
 .env.*
+!.env.example
 *.Key
 *.key
 *.token

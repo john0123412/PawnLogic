@@ -11,7 +11,7 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current source release is **0.1.2**; publication
+CTF-oriented toolchain. The current source release is **0.1.3**; publication
 to PyPI and GitHub Releases should happen only after release approval.
 
 ## System Requirements
@@ -71,6 +71,8 @@ optional extension assets that users install explicitly, for example with
 `/sp install <repo_url>` into `~/.pawnlogic/skills`. Third-party skill packs are
 not bundled into PyPI distributions unless their upstream license and notices
 have been reviewed for redistribution.
+Git-backed skill-pack installs accept only `https://`, `ssh://`, or
+`git@host:owner/repo.git` remotes.
 
 Source-checkout launcher fallback:
 
@@ -94,21 +96,19 @@ Use `pawn --debug` or `/mode` when you need detailed diagnostics.
 
 ## What's New
 
-Version 0.1.2 polishes the existing CTF workflow:
+Version 0.1.3 hardens the existing runtime and release surface:
 
-- `pawnlogic[ctf]` is documented as CTF tooling dependencies only; CTF skill
-  packs remain user-installed extension assets unless redistribution is
-  license-reviewed.
-- `/ctf init`, `/ctf status`, `/ctf artifact`, `/ctf remote`, `/ctf flag`, and
-  `/ctf writeup` manage lightweight challenge metadata in the active workspace.
-  Flag candidates remain unconfirmed until marked with `/ctf solved`.
-- CTF writeup drafts export to Markdown from workspace metadata and session
-  evidence.
-- Existing JSONL tool audit records can include optional CTF metadata without
-  changing the base audit format.
-- Third-party CTF skill-pack candidates are tracked in
-  `THIRD_PARTY_NOTICES.md` and excluded from PyPI distributions and generated
-  release source archives until license review is complete.
+- Git-backed skill-pack installs and `git_op clone` accept only `https://`,
+  `ssh://`, or `git@host:owner/repo.git` remotes, with dangerous git
+  transports disabled explicitly.
+- Docker file mounts are workspace-bound by default, including read-only
+  mounts. External read-only challenge files require explicit opt-in.
+- Provider setup stores API keys only in PawnLogic's private `.env` path and no
+  longer writes keys into shell startup files.
+- Provider auto-routing respects inactive providers, and runtime database/log
+  files use restrictive local permissions where supported.
+- User-facing internal/parser failure messages now point to debug/log
+  diagnostics instead of reporting a generic busy state.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
@@ -157,7 +157,7 @@ models when the provider does not supply a useful description.
 
 API keys are stored in `~/.pawnlogic/.env`. Provider configs, model aliases,
 and descriptions are stored in `~/.pawnlogic/custom_providers.json` without
-secret values.
+secret values. Provider setup does not write keys into shell startup files.
 
 Plain `http://` provider endpoints are allowed for local relays and lab
 setups, but user-friendly mode prints a trust-boundary warning because requests
@@ -194,6 +194,8 @@ User-friendly mode prints explicit trust-boundary notices for host shell
 execution, Docker container exec, browser/network-capable tools, private
 network URL access, delegated sub-agents, and plaintext HTTP providers. Use
 `pawn --debug` when you need lower-level tool arguments and diagnostics.
+Docker file mounts are workspace-bound by default, including read-only mounts;
+outside read-only challenge files require explicit `allow_host_read_mount`.
 
 ## MCP Tool Integration
 

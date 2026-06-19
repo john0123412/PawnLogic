@@ -5,6 +5,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.1.3] - 2026-06-19
+
+### Fixed
+- Hardened git clone transports for skill-pack installation and `git_op clone`
+  by allowing only `https://`, `ssh://`, and `git@host:owner/repo.git`
+  remotes while explicitly disabling `ext`, `fd`, and local `file` transports.
+- Fixed the Docs workflow path filter so changes to `GUIDE.md` trigger
+  translated document structure checks.
+- Restricted Docker host mounts so read-only mounts are workspace-bound by
+  default and credential paths or Docker sockets remain blocked.
+- Prevented `check_service` from returning `PAWN_*` or `API_*` environment
+  variables in tool output.
+- Stopped duplicating provider keys into shell startup files; provider setup now
+  persists keys only through PawnLogic's private `.env` path and current
+  process environment.
+- Made provider auto-routing respect inactive providers for fast-peer,
+  configured-model, and automatic vision-model selection.
+- Private runtime directories, SQLite database files, and log files now use
+  restrictive local permissions where supported.
+- Replaced misleading generic "System is busy" messages for internal parser
+  and traceback failures with debug/log guidance.
+- Fixed write blacklist path checks to use path boundaries instead of string
+  prefixes.
+
+### Tests
+- Verified the 0.1.3 release branch locally with ruff, translated document
+  structure checks, fast PR tests, full non-E2E release tests, dynamic E2E,
+  wheel/sdist build, twine metadata validation, dependency checks, and package
+  content checks.
+
 ## [0.1.2] - 2026-06-18
 
 ### Added

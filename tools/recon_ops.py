@@ -16,6 +16,8 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
+
 from config import scrub_sensitive_env
 
 
@@ -102,6 +104,41 @@ def _find_pid_by_port_proc(port: int) -> list[dict]:
     return pids
 
 
+_REPORTABLE_ENV_KEYS = {
+    "PATH", "HOME", "USER", "SHELL", "LD_LIBRARY_PATH",
+    "LD_PRELOAD", "PYTHONPATH", "NODE_PATH", "GOPATH",
+    "JAVA_HOME", "NO_PROXY",
+}
+
+
+def _redact_url_auth(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return value
+    if not parsed.username and not parsed.password:
+        return value
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    return urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
+
+
+def _filter_reportable_env(env_raw: str) -> dict:
+    """Return a non-secret subset of /proc environ for diagnostics."""
+    env_vars = {}
+    for entry in env_raw.split("\x00"):
+        if "=" not in entry:
+            continue
+        k, v = entry.split("=", 1)
+        k = k.strip()
+        if k in _REPORTABLE_ENV_KEYS:
+            env_vars[k] = v.strip()
+        elif k in {"HTTP_PROXY", "HTTPS_PROXY"}:
+            env_vars[k] = _redact_url_auth(v.strip())
+    return env_vars
+
+
 def _get_proc_info(pid: int) -> dict:
     """Extract detailed process information from /proc/<pid>/."""
     info = {"pid": pid}
@@ -132,22 +169,10 @@ def _get_proc_info(pid: int) -> dict:
     except OSError:
         info["cwd"] = "?"
 
-    # Environment variables, limited to security-relevant keys.
+    # Environment variables, limited to non-secret diagnostic keys.
     try:
         env_raw = (base / "environ").read_text(errors="ignore")
-        env_vars = {}
-        _SECURE_KEYS = (
-            "PATH", "HOME", "USER", "SHELL", "LD_LIBRARY_PATH",
-            "LD_PRELOAD", "PYTHONPATH", "NODE_PATH", "GOPATH",
-            "JAVA_HOME", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-        )
-        for entry in env_raw.split("\x00"):
-            if "=" in entry:
-                k, v = entry.split("=", 1)
-                k = k.strip()
-                if k in _SECURE_KEYS or k.startswith("PAWN_") or k.startswith("API_"):
-                    env_vars[k] = v.strip()
-        info["env"] = env_vars
+        info["env"] = _filter_reportable_env(env_raw)
     except OSError:
         info["env"] = {}
 

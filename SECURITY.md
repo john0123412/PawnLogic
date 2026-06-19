@@ -4,8 +4,9 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.1.2   | ✅ Yes     |
-| 0.1.1   | ✅ Yes     |
+| 0.1.3   | ✅ Yes     |
+| 0.1.2   | ⚠️ Upgrade recommended |
+| 0.1.1   | ⚠️ Upgrade recommended |
 | 0.1.0   | ⚠️ Upgrade recommended |
 | 0.0.10  | ⚠️ Upgrade recommended |
 | 0.0.1 – 0.0.9 | ⚠️ Upgrade recommended |
@@ -31,6 +32,6 @@ Areas of particular concern for this project:
 
 - **API key exposure** — keys stored in `~/.pawnlogic/.env`, never in the project directory
 - **Shell injection** — `DANGEROUS_PATTERNS` blocklist in `config/security.py`
-- **Path traversal** — RW mounts restricted to `~/.pawnlogic/workspace` in `docker_sandbox.py`
+- **Path traversal** — Docker file mounts are workspace-bound by default, including read-only mounts; write-capable file operations are resolved inside the workspace jail
 - **Docker escape** — containers run with `network_mode=none`, memory/CPU/PID limits
 - **CTF workflow boundaries** — CTF tools and skill packs are intended for legal CTFs, authorized labs, and systems you own or have permission to test

@@ -211,6 +211,9 @@ into `~/.pawnlogic/skills`, for example:
 /sp install <repo_url>
 ```
 
+Git-backed skill-pack installs accept only `https://`, `ssh://`, or
+`git@host:owner/repo.git` remotes.
+
 Only redistribute third-party CTF skill content from this repository after the
 upstream license, source URL, commit, and required notices have been recorded in
 `THIRD_PARTY_NOTICES.md`.
@@ -250,7 +253,8 @@ directory and `~/.pawnlogic/workspace`.
 All keys are stored in `~/.pawnlogic/.env`. **No secrets in the project directory.**
 For pip or one-line installer users, `pawn` creates `~/.pawnlogic/env.example`
 as an editable template. You can either run the first-run wizard, run `/setkey`,
-or copy the template manually:
+or copy the template manually. Provider setup does not write keys into shell
+startup files:
 
 ```bash
 cp ~/.pawnlogic/env.example ~/.pawnlogic/.env
@@ -339,6 +343,9 @@ Check key status at runtime: `/keys`
 | `/pwnenv` | CTF toolchain integrity check |
 | `/docker` | Docker container management |
 | `/stats` | Session token usage |
+
+Docker file mounts are workspace-bound by default, including read-only mounts.
+Outside read-only challenge files require explicit `allow_host_read_mount`.
 
 ### CTF Workflow
 

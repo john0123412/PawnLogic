@@ -13,8 +13,7 @@ Module-private helpers (provider/key/model setup; only used by these
 commands and by main.py's startup wizard, which imports `_run_key_wizard`,
 `_visible_models` and `_write_key_to_shell` from here):
 
-    _detect_shell_config       detect ~/.bashrc, ~/.zshrc, etc.
-    _write_key_to_shell        append `export KEY=...` to shell config
+    _write_key_to_shell        compatibility wrapper that persists keys to `.env`
     _run_key_wizard            interactive first-run / /setkey wizard
     _visible_models            MODELS subset whose provider is active and key is configured
 
@@ -36,9 +35,7 @@ from __future__ import annotations
 import json
 import os
 import inspect
-import shlex
 import sys
-from pathlib import Path
 
 from prompt_toolkit import prompt as ptk_prompt
 
@@ -53,6 +50,7 @@ from config import (
 from config.paths import VERSION
 from core.logger import logger
 from core.provider_runtime import (
+    ENV_PATH,
     fetch_models,
     format_alias_preview,
     model_alias_changes,
@@ -97,41 +95,18 @@ _WIZARD_PROVIDERS = [
 ]
 
 
-def _detect_shell_config() -> Path | None:
-    """Detect the user's shell configuration file."""
-    shell = os.environ.get("SHELL", "")
-    home = Path.home()
-    if "zsh" in shell and (home / ".zshrc").exists():
-        return home / ".zshrc"
-    if "bash" in shell:
-        for f in [".bashrc", ".bash_profile", ".profile"]:
-            if (home / f).exists():
-                return home / f
-        return home / ".bashrc"   # create if needed
-    return home / ".bashrc"
-
-
 def _write_key_to_shell(env_var: str, key: str) -> str:
-    """Append an export line to the shell config and inject os.environ."""
-    cfg_file = _detect_shell_config()
-    export_line = f"\nexport {env_var}={shlex.quote(key)}\n"
+    """Persist a key to PawnLogic's private .env and inject os.environ.
 
-    existing = ""
-    if cfg_file and cfg_file.exists():
-        try:
-            existing = cfg_file.read_text(encoding="utf-8")
-        except Exception:
-            pass
-
-    if env_var not in existing:
-        try:
-            with open(str(cfg_file), "a", encoding="utf-8") as f:
-                f.write(export_line)
-        except Exception as e:
-            return f"write failed: {e}"
-
-    os.environ[env_var] = key
-    return str(cfg_file)
+    The function name is kept for compatibility with older imports; it no
+    longer writes secrets to shell startup files such as ~/.bashrc.
+    """
+    try:
+        save_key(env_var, key)
+    except Exception as e:
+        os.environ[env_var] = key
+        return f"write failed: {e}"
+    return str(ENV_PATH)
 
 
 def _run_key_wizard() -> bool:
@@ -154,7 +129,7 @@ Select providers to configure. You can run this multiple times:
             already = c(GREEN, "  [configured ✓]")
         _print(f"  {c(CYAN, f'[{num}]')} {c(BOLD, f'{label:18}')} {c(GRAY, hint)}{already}")
 
-    _print(f"\n  {c(GRAY, '[0]')} Skip for now. Configure later with export KEY=sk-... or /setkey.")
+    _print(f"\n  {c(GRAY, '[0]')} Skip for now. Configure later with /setkey or ~/.pawnlogic/.env.")
     _print()
 
     configured_any = False
@@ -368,12 +343,8 @@ def _provider_add() -> None:
         return
 
     if key:
-        try:
-            save_key(env_var_name, key)
-        except Exception:
-            os.environ[env_var_name] = key
-        _write_key_to_shell(env_var_name, key)
-        _print(c(GREEN, f"  ✓ Key saved -> .env ({env_var_name})"))
+        written_to = _write_key_to_shell(env_var_name, key)
+        _print(c(GREEN, f"  ✓ Key saved -> {written_to} ({env_var_name})"))
 
     prov_cfg = {
         "base_url":    base_url,

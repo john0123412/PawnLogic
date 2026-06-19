@@ -207,6 +207,9 @@ skill-pack Markdown 安装进 PyPI 包。CTF skill pack 是可选扩展资产，
 /sp install <repo_url>
 ```
 
+git-backed skill pack 安装只接受 `https://`、`ssh://` 或
+`git@host:owner/repo.git` remote。
+
 只有在 `THIRD_PARTY_NOTICES.md` 中记录了上游许可证、来源 URL、commit 和必要 notice
 之后，才可以从本仓库再分发第三方 CTF skill 内容。
 
@@ -236,7 +239,8 @@ cp mcp_configs.example.json ~/.pawnlogic/mcp_configs.json
 
 所有 Key 存储在 `~/.pawnlogic/.env`，**项目目录中不含任何密钥**。
 pip 或一行安装脚本用户，`pawn` 会生成 `~/.pawnlogic/env.example` 作为可编辑模板。
-你可以使用首次启动向导、运行 `/setkey`，或手动复制模板：
+你可以使用首次启动向导、运行 `/setkey`，或手动复制模板。Provider 配置流程不会把 Key
+写入 shell 启动文件：
 
 ```bash
 cp ~/.pawnlogic/env.example ~/.pawnlogic/.env
@@ -325,6 +329,9 @@ MYRELAY_API_KEY=...
 | `/pwnenv` | CTF 工具链完整性检查 |
 | `/docker` | Docker 容器管理 |
 | `/stats` | 本次会话 Token 用量统计 |
+
+Docker 文件挂载默认限制在 workspace 内，包括 read-only 挂载。挂载外部只读 challenge
+文件需要显式设置 `allow_host_read_mount`。
 
 ### CTF 工作流
 

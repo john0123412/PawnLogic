@@ -491,8 +491,12 @@ def find_fast_peer(model_alias: str) -> str | None:
     if not m:
         return None
     provider = m.get("provider", "")
+    if not is_provider_active(provider):
+        return None
     for alias, cfg in MODELS.items():
         if cfg.get("provider") != provider:
+            continue
+        if not is_provider_active(cfg.get("provider", "")):
             continue
         if not is_fast_model(alias):
             continue
@@ -547,7 +551,11 @@ def validate_api_key(model_alias: str) -> tuple[bool, str]:
 
 def list_configured_models() -> list[str]:
     """Return all model aliases whose provider keys are configured."""
-    return [alias for alias in model_snapshot() if validate_api_key(alias)[0]]
+    return [
+        alias
+        for alias, cfg in model_snapshot().items()
+        if is_provider_active(cfg.get("provider", "")) and validate_api_key(alias)[0]
+    ]
 
 
 def get_best_vision_model() -> tuple[str | None, str | None, str | None]:
@@ -556,6 +564,8 @@ def get_best_vision_model() -> tuple[str | None, str | None, str | None]:
     for alias in VISION_PRIORITY:
         m = MODELS.get(alias)
         if not m or not m.get("vision"):
+            continue
+        if not is_provider_active(m.get("provider", "")):
             continue
         url, key = get_api_config(alias)
         if key:

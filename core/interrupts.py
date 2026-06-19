@@ -11,17 +11,13 @@ from types import FrameType
 from collections.abc import Callable, Iterator
 
 
-_INTERRUPTS = threading.local()
+_INTERRUPT_EVENT = threading.Event()
 _CANCEL_LOCK = threading.RLock()
 _current_cancel: Callable[[], None] | None = None
 
 
 def _event() -> threading.Event:
-    event = getattr(_INTERRUPTS, "event", None)
-    if event is None:
-        event = threading.Event()
-        _INTERRUPTS.event = event
-    return event
+    return _INTERRUPT_EVENT
 
 
 def request_interrupt() -> None:

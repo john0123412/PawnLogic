@@ -1290,7 +1290,7 @@ class AgentSession:
                 json_str[:4096],
             )
             if _user_mode():
-                print(c(RED, "  ❌ System is busy. Please try again later."))
+                print(c(RED, "  ❌ Model tool-call output could not be parsed. Details were logged; use /mode debug for diagnostics."))
             else:
                 print(c(RED, f"  ✗ [Hybrid Parser] JSON fallback parse failed: {exc}"))
 

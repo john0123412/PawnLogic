@@ -20,6 +20,7 @@ import os, sys, json, time
 from pathlib import Path
 
 from loguru import logger   # noqa: F401  — exported for `from core.logger import logger`
+from core.file_store import ensure_private_dir
 
 # Terminal format.
 _FMT_STDERR = (
@@ -50,6 +51,10 @@ def _safe_default_log_dir() -> Path:
     except Exception:
         home = Path(os.environ.get("TMPDIR") or "/tmp")
     return (home / ".pawnlogic" / "logs").expanduser()
+
+
+def _private_log_opener(path: str, flags: int) -> int:
+    return os.open(path, flags, 0o600)
 
 
 def audit_tool_call(
@@ -127,7 +132,7 @@ def setup_logger(stderr_level: str = "INFO", file_level: str = "DEBUG") -> None:
     )
 
     # Handler 2: rotating local file output.
-    log_dir.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(log_dir)
     log_file = log_dir / "pawnlogic_{time:YYYY-MM-DD}.log"
 
     logger.add(
@@ -137,6 +142,7 @@ def setup_logger(stderr_level: str = "INFO", file_level: str = "DEBUG") -> None:
         retention="1 week",     # Delete logs older than 1 week.
         compression="zip",      # Compress archives to save disk.
         encoding="utf-8",
+        opener=_private_log_opener,
         format=_FMT_FILE,
         backtrace=True,         # Full traceback on exceptions.
         diagnose=True,          # Include local variables for debugging.
@@ -163,6 +169,7 @@ def setup_logger(stderr_level: str = "INFO", file_level: str = "DEBUG") -> None:
             retention="4 weeks",    # Keep audit logs longer.
             compression="zip",
             encoding="utf-8",
+            opener=_private_log_opener,
             format="{message}",     # Pure JSON, no extra log formatting.
             enqueue=True,
             catch=True,

@@ -43,6 +43,22 @@ def atomic_write_text(path: Path, text: str, *, mode: int | None = None) -> None
                 os.unlink(tmp_name)
 
 
+def ensure_private_dir(path: Path, *, mode: int = 0o700) -> None:
+    """Create a runtime directory and keep it private when the OS allows it."""
+    target = Path(path)
+    target.mkdir(parents=True, exist_ok=True)
+    with suppress(OSError):
+        os.chmod(target, mode)
+
+
+def ensure_private_file(path: Path, *, mode: int = 0o600) -> None:
+    """Apply private file permissions to an existing runtime file."""
+    target = Path(path)
+    if target.exists():
+        with suppress(OSError):
+            os.chmod(target, mode)
+
+
 def _fsync_dir(path: Path) -> None:
     """Best-effort directory fsync after a replace."""
     if not hasattr(os, "O_DIRECTORY"):

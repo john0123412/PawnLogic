@@ -13,18 +13,26 @@ import socket
 import sys
 from pathlib import Path
 
-from tools import browser_ops, file_ops, web_ops
-
 ROOT = str(Path(__file__).resolve().parent.parent)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 for _key in list(sys.modules):
-    if _key == "config" or _key.startswith("config."):
+    if (
+        _key == "config"
+        or _key.startswith("config.")
+        or _key in {
+            "tools.browser_ops",
+            "tools.file_ops",
+            "tools.recon_ops",
+            "tools.web_ops",
+        }
+    ):
         _f = getattr(sys.modules[_key], "__file__", "") or ""
         if ROOT not in _f:
             del sys.modules[_key]
 
+from tools import browser_ops, file_ops, recon_ops, web_ops  # noqa: E402
 from config import PAWNLOGIC_HOME  # noqa: E402
 from config.security import (  # noqa: E402
     DANGEROUS_PATTERNS,
@@ -35,6 +43,10 @@ from config.security import (  # noqa: E402
     user_friendly_error,
 )
 from core.api_errors import format_http_error  # noqa: E402
+from core.git_security import (  # noqa: E402
+    git_with_safe_protocol_config,
+    is_allowed_git_remote,
+)
 
 
 def _is_blocked(cmd: str) -> bool:
@@ -137,6 +149,13 @@ def test_write_blacklist_contains_bin():
     assert "/bin" in WRITE_BLACKLIST
 
 
+def test_write_blacklist_uses_path_boundaries(monkeypatch):
+    monkeypatch.setattr(file_ops, "WRITE_BLACKLIST", ["/bin"])
+
+    assert file_ops._check_write("/bin/tool")[0] is False
+    assert file_ops._check_write("/binary/tool")[0] is True
+
+
 def test_scrub_sensitive_env_removes_credentials():
     env = {
         "PATH": "/usr/bin",
@@ -149,6 +168,34 @@ def test_scrub_sensitive_env_removes_credentials():
     assert scrubbed["NORMAL_VALUE"] == "ok"
     assert "OPENAI_API_KEY" not in scrubbed
     assert "CUSTOM_TOKEN" not in scrubbed
+
+
+def test_git_remote_policy_allows_only_expected_transports():
+    assert is_allowed_git_remote("https://github.com/user/repo.git")
+    assert is_allowed_git_remote("ssh://git@github.com/user/repo.git")
+    assert is_allowed_git_remote("git@github.com:user/repo.git")
+
+    assert not is_allowed_git_remote("ext::sh -c id")
+    assert not is_allowed_git_remote("fd::1")
+    assert not is_allowed_git_remote("file:///tmp/repo")
+    assert not is_allowed_git_remote("../local-repo")
+
+
+def test_git_safe_protocol_config_disables_dangerous_transports():
+    argv = git_with_safe_protocol_config("clone", "https://example.com/repo.git")
+
+    assert argv[:2] == ["git", "-c"]
+    assert "protocol.ext.allow=never" in argv
+    assert "protocol.fd.allow=never" in argv
+    assert "protocol.file.allow=never" in argv
+
+
+def test_docs_workflow_tracks_existing_guide_file():
+    workflow = (Path(ROOT) / ".github" / "workflows" / "docs.yml").read_text(encoding="utf-8")
+
+    assert "GUIDE.md" in workflow
+    assert "GUIDE_EN.md" not in workflow
+    assert "AGENTS.md" in workflow
 
 
 def test_user_friendly_error_preserves_http_status_details():
@@ -164,6 +211,30 @@ def test_user_friendly_error_explains_provider_5xx():
 
     assert "HTTP 502" in msg
     assert "provider" in msg.lower() or "gateway" in msg.lower()
+
+
+def test_user_friendly_error_does_not_mask_tracebacks_as_busy():
+    msg = user_friendly_error("Traceback (most recent call last):\nValueError: broken")
+
+    assert "Internal error" in msg
+    assert "debug" in msg
+    assert "System is busy" not in msg
+
+
+def test_recon_env_filter_drops_api_keys_and_redacts_proxy_auth():
+    env = recon_ops._filter_reportable_env(
+        "PATH=/usr/bin\x00"
+        "PAWN_API_KEY=sk-secret\x00"
+        "API_KEY=secret\x00"
+        "HTTP_PROXY=http://user:pass@example.com:8080\x00"
+        "CUSTOM_TOKEN=secret\x00"
+    )
+
+    assert env["PATH"] == "/usr/bin"
+    assert env["HTTP_PROXY"] == "http://example.com:8080"
+    assert "PAWN_API_KEY" not in env
+    assert "API_KEY" not in env
+    assert "CUSTOM_TOKEN" not in env
 
 
 def test_fetch_url_blocks_unsupported_scheme():

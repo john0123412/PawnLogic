@@ -13,7 +13,7 @@ Supported formats: jpg / jpeg / png / gif / webp / bmp.
 import os, base64, mimetypes
 from pathlib import Path
 from config import (
-    MODELS, get_best_vision_model, list_vision_models,
+    MODELS, get_best_vision_model, is_provider_active, list_vision_models,
 )
 from core.api_client import call_once
 from utils.ansi import c, BLUE
@@ -75,6 +75,8 @@ def analyze_local_image(a: dict) -> str:
         if not m.get("vision"):
             return (f"ERROR: '{model_alias}' does not support vision analysis.\n"
                     f"Choose a vision model: {list_vision_models()}")
+        if not is_provider_active(m.get("provider", "")):
+            return f"ERROR: provider for '{model_alias}' is not active. Activate it with /provider activate."
         from config import PROVIDERS
         prov   = PROVIDERS[m["provider"]]
         key    = os.environ.get(prov["api_key_env"], "")

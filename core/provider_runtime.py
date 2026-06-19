@@ -22,7 +22,7 @@ from config.providers import (
     models_url_from_base_url,
 )
 from core.api_errors import format_http_error, format_transport_error
-from core.file_store import atomic_write_text
+from core.file_store import atomic_write_text, ensure_private_dir
 from core.logger import logger
 from core.state import state as _runtime_state
 from core.trust import TrustLevel, trust_notice_for
@@ -54,7 +54,7 @@ def maybe_warn_insecure_provider(base_url: str, *, emit=print) -> None:
 
 def save_key(env_var: str, key: str) -> None:
     """Persist a provider API key to the runtime .env and current process."""
-    PAWNLOGIC_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(PAWNLOGIC_DIR)
     existing = ENV_PATH.read_text(encoding="utf-8") if ENV_PATH.exists() else ""
     lines = [line for line in existing.splitlines() if not line.startswith(f"{env_var}=")]
     lines.append(f"{env_var}={key}")
@@ -63,7 +63,7 @@ def save_key(env_var: str, key: str) -> None:
 
 
 def record_sync_time(provider_name: str) -> None:
-    PAWNLOGIC_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(PAWNLOGIC_DIR)
     data: dict[str, Any] = {"providers": {}, "models": {}, "sync_times": {}}
     if CUSTOM_PROVIDERS_PATH.exists():
         try:

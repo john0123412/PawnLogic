@@ -18,6 +18,7 @@ Concurrency:
 import sqlite3, json, re, os, hashlib, threading, time
 from datetime import datetime
 from config import DB_PATH
+from core.file_store import ensure_private_dir, ensure_private_file
 from core.logger import logger
 
 # ════════════════════════════════════════════════════════
@@ -61,7 +62,7 @@ def _get_tls_conn() -> sqlite3.Connection:
         except sqlite3.ProgrammingError:
             pass
 
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(DB_PATH.parent)
     conn = sqlite3.connect(
         str(DB_PATH),
         timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
@@ -78,6 +79,9 @@ def _get_tls_conn() -> sqlite3.Connection:
         PRAGMA mmap_size          = 67108864;
         PRAGMA wal_autocheckpoint = 100;
     """)
+    ensure_private_file(DB_PATH)
+    ensure_private_file(DB_PATH.with_name(DB_PATH.name + "-wal"))
+    ensure_private_file(DB_PATH.with_name(DB_PATH.name + "-shm"))
     _tls.conn = conn
     return conn
 
