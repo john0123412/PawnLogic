@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-06-19
+
 ### Added
 - Added an operation policy for host shell execution with structured
   allow/confirm/deny decisions, risk levels, redacted commands, matched rules,
