@@ -179,6 +179,13 @@ pawn --eval "prompt" --json       # 机器可读 JSON 输出
 或底层 API 失败时，使用 `pawn --debug`。`--json` 用于配合 `--eval` 输出脚本可读
 结果，不是 debug 显示模式。交互会话中，`/mode` 会在用户友好输出和 debug 输出之间切换。
 
+### Host Shell Operation Policy
+
+PawnLogic 不是 sandbox。Host shell 命令仍然使用当前用户权限执行，但 `run_shell`
+现在会在启动子进程前评估 operation policy。低风险命令允许执行，中等风险命令允许执行并写入审计分类，高风险命令需要明确的交互确认，critical 命令默认拒绝。非交互执行，包括 `pawn --eval`，在高风险命令需要确认时会 fail closed。
+
+该 policy 覆盖 workspace 外 shell 重定向、`tee`、`dd of=...`、原地 `sed`/`perl`、`find -delete`、`xargs rm`、`rm -rf`、递归 `chmod`/`chown`、下载后直接 pipe 到 shell 的命令，以及明显的 reverse shell 或 bind shell 模式。Critical 拒绝包括 `~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.kube`、`~/.pawnlogic/.env` 等 credential 路径、Docker socket，以及受保护的系统写入路径。`DANGEROUS_PATTERNS` 仅作为误操作/风险分类器保留，不是安全边界。
+
 ### 源码 checkout 启动器备用方式
 
 ```bash

@@ -5,6 +5,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- Added an operation policy for host shell execution with structured
+  allow/confirm/deny decisions, risk levels, redacted commands, matched rules,
+  and JSONL audit records.
+
+### Changed
+- `run_shell` now evaluates operation policy before subprocess startup. Low-risk
+  commands run normally, medium-risk commands are audited as misuse risk,
+  high-risk commands require interactive confirmation, and critical operations
+  are denied by default.
+- Non-interactive execution, including `pawn --eval`, fails closed when a
+  high-risk host shell command would require confirmation.
+- Repositioned `DANGEROUS_PATTERNS` as a compatibility risk classifier instead
+  of a direct host-shell security boundary.
+
+### Tests
+- Added targeted tests for operation-policy classification, path-boundary
+  checks, audit redaction, high-risk confirmation behavior, non-interactive
+  fail-closed behavior, and critical denial before `subprocess.Popen`.
+
 ## [0.1.3] - 2026-06-19
 
 ### Fixed

@@ -13,7 +13,6 @@ from pathlib import Path
 from config import (
     READ_BLACKLIST,
     WRITE_BLACKLIST,
-    DANGEROUS_PATTERNS,
     WORKSPACE_DIR,
     scrub_sensitive_env,
 )
@@ -21,6 +20,13 @@ from core.state import runtime_config
 from core.trust import TrustLevel, trust_notice_for
 from utils.ansi import c, YELLOW, BLUE, GRAY
 from core.logger import logger
+from core.operation_policy import (
+    OperationAction,
+    audit_operation_decision,
+    classify_shell_command,
+    is_confirmation_available,
+    prompt_for_confirmation,
+)
 
 # Current session cwd/workspace references.
 _session_cwd = [os.getcwd()]
@@ -175,11 +181,107 @@ def _check_write(path: str):
 # Shell execution used by file tools.
 # ════════════════════════════════════════════════════════
 
+def _format_policy_block(decision) -> str:
+    return (
+        "SECURITY BLOCK: host shell operation denied by operation policy.\n"
+        f"Risk: {decision.risk.value}\n"
+        f"Reason: {decision.reason}\n"
+        f"Rule: {decision.matched_rule}\n"
+        f"Command: {decision.redacted_command}"
+    )
+
+
+def _run_operation_policy(cmd: str, work_dir: str, *, operation_type: str):
+    decision = classify_shell_command(
+        cmd,
+        cwd=work_dir,
+        workspace_dir=_session_workspace_dir[0] or work_dir,
+    )
+    interactive = is_confirmation_available()
+
+    if decision.action == OperationAction.ALLOW:
+        audit_operation_decision(
+            decision,
+            operation_type=operation_type,
+            cwd=work_dir,
+            interactive=interactive,
+        )
+        return True, decision
+
+    if decision.action == OperationAction.DENY:
+        audit_operation_decision(
+            decision,
+            operation_type=operation_type,
+            cwd=work_dir,
+            interactive=interactive,
+        )
+        logger.warning(
+            "[{}] operation policy denied command | risk={} rule={} cmd={!r}",
+            operation_type,
+            decision.risk.value,
+            decision.matched_rule,
+            decision.redacted_command,
+        )
+        return False, decision
+
+    if not interactive:
+        denied = decision.with_action(
+            OperationAction.DENY,
+            reason=(
+                decision.reason
+                + " Confirmation unavailable in non-interactive or --eval mode."
+            ),
+            matched_rule=f"confirmation_unavailable:{decision.matched_rule}",
+        )
+        audit_operation_decision(
+            denied,
+            operation_type=operation_type,
+            cwd=work_dir,
+            interactive=False,
+        )
+        logger.warning(
+            "[{}] operation policy failed closed | risk={} rule={} cmd={!r}",
+            operation_type,
+            denied.risk.value,
+            denied.matched_rule,
+            denied.redacted_command,
+        )
+        return False, denied
+
+    try:
+        confirmed = prompt_for_confirmation(decision)
+    except Exception:
+        confirmed = False
+
+    if not confirmed:
+        denied = decision.with_action(
+            OperationAction.DENY,
+            reason=decision.reason + " User did not confirm the operation.",
+            matched_rule=f"user_denied:{decision.matched_rule}",
+        )
+        audit_operation_decision(
+            denied,
+            operation_type=operation_type,
+            cwd=work_dir,
+            interactive=True,
+        )
+        return False, denied
+
+    audit_operation_decision(
+        decision,
+        operation_type=operation_type,
+        cwd=work_dir,
+        interactive=True,
+    )
+    return True, decision
+
+
 def _run(cmd: str, timeout: int = 15, cwd: str = None, env=None) -> str:
     """
     Low-level shell command runner.
 
     Blocking safeguards:
+      - Operation policy classification before subprocess execution.
       - stdin=DEVNULL to avoid hanging interactive programs.
       - Timeout fail-fast behavior.
       - Cached HOST_IP/proxy environment injection.
@@ -187,15 +289,20 @@ def _run(cmd: str, timeout: int = 15, cwd: str = None, env=None) -> str:
       - Timeout cleanup with partial output collection.
     """
     work_dir = cwd or _session_cwd[0]
-    exec_env = env or _get_shell_env()
+    exec_env = env if env is not None else _get_shell_env()
 
-    # Security checks.
-    for pat in DANGEROUS_PATTERNS:
-        if re.search(pat, cmd):
-            logger.warning(f"[run_shell] SECURITY BLOCK: cmd={cmd!r}, pattern={pat!r}")
-            return f"SECURITY BLOCK: command matches dangerous pattern '{pat}'"
+    ok, policy_decision = _run_operation_policy(cmd, work_dir, operation_type="run_shell")
+    if not ok:
+        return _format_policy_block(policy_decision)
 
-    logger.debug(f"[run_shell] executing: {cmd!r}  (timeout={timeout}s, cwd={work_dir})")
+    logger.debug(
+        "[run_shell] executing | risk={} rule={} cmd={!r} timeout={} cwd={}",
+        policy_decision.risk.value,
+        policy_decision.matched_rule,
+        policy_decision.redacted_command,
+        timeout,
+        work_dir,
+    )
     _emit_run_shell_warning()
     print(c(YELLOW, f"  ⚡ $ {cmd[:120]}"))
 
@@ -776,9 +883,13 @@ def tool_run_interactive(a: dict) -> str:
 
     if not command:
         return "ERROR: 'command' parameter is required"
-    for pat in DANGEROUS_PATTERNS:
-        if re.search(pat, command):
-            return f"SECURITY BLOCK: dangerous command pattern '{pat}'"
+    ok, policy_decision = _run_operation_policy(
+        command,
+        cwd,
+        operation_type="run_interactive",
+    )
+    if not ok:
+        return _format_policy_block(policy_decision)
 
     print(c(YELLOW, f"  🔌 [interactive] $ {command[:100]}"))
     output_q: queue.Queue = queue.Queue()
