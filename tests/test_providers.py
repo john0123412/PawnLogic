@@ -28,7 +28,8 @@ for _key in list(sys.modules):
 from config.providers import (  # noqa: E402
     PROVIDERS, MODELS, DEFAULT_MODEL,
     _normalize_url, validate_api_key, get_api_format,
-    list_vision_models, is_fast_model,
+    list_vision_models, is_fast_model, find_fast_peer,
+    get_best_vision_model, list_configured_models,
     register_provider, remove_provider,
     register_model, remove_model, remove_models_for_provider,
     provider_snapshot, model_snapshot,
@@ -75,10 +76,11 @@ def test_normalize_url_strips_trailing_slash():
 
 # ── validate_api_key ──────────────────────────────────────
 
-def test_validate_api_key_missing_returns_false():
+def test_validate_api_key_missing_returns_false(monkeypatch):
     # Temporarily ensure the env var is unset
     model = DEFAULT_MODEL
     prov_key = PROVIDERS[MODELS[model]["provider"]]["api_key_env"]
+    monkeypatch.setattr(_provider_config, "_providers_initialized", True)
     original = os.environ.pop(prov_key, None)
     try:
         ok, env = validate_api_key(model)
@@ -230,6 +232,39 @@ def test_provider_store_lock_is_reentrant_for_snapshot_reads():
             assert "pytest:locked" in model_snapshot()
         finally:
             remove_model("pytest:locked")
+
+
+def test_provider_auto_routing_respects_inactive_providers(monkeypatch):
+    monkeypatch.setattr(
+        _provider_config,
+        "PROVIDERS",
+        {
+            "relay": {"api_key_env": "RELAY_API_KEY", "active": False},
+            "active": {
+                "base_url": "https://active.example.com/v1/chat/completions",
+                "api_key_env": "ACTIVE_API_KEY",
+                "active": True,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        _provider_config,
+        "MODELS",
+        {
+            "ds-v4-flash": {"id": "deepseek-v4-flash", "provider": "relay", "vision": False},
+            "relay-pro": {"id": "relay-pro", "provider": "relay", "vision": True},
+            "relay-fast": {"id": "relay-flash", "provider": "relay", "vision": True},
+            "active-vision": {"id": "active-mini", "provider": "active", "vision": True},
+        },
+    )
+    monkeypatch.setattr(_provider_config, "VISION_PRIORITY", ["relay-pro", "active-vision"])
+    monkeypatch.setattr(_provider_config, "_providers_initialized", True)
+    monkeypatch.setenv("RELAY_API_KEY", "relay-key")
+    monkeypatch.setenv("ACTIVE_API_KEY", "active-key")
+
+    assert find_fast_peer("relay-pro") is None
+    assert list_configured_models() == ["active-vision"]
+    assert get_best_vision_model()[0] == "active-vision"
 
 
 def test_load_custom_providers_logs_on_malformed_json(tmp_path, monkeypatch):

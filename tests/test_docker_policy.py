@@ -1,5 +1,7 @@
 """Tests for Docker sandbox risk policy gates."""
 
+import pytest
+
 from tools import docker_sandbox
 
 
@@ -91,3 +93,61 @@ def test_run_code_docker_rejects_invalid_python_dependency_names():
     )
 
     assert "invalid Python package name" in result
+
+
+def test_docker_ro_mount_outside_workspace_blocked_by_default(monkeypatch, tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "challenge.bin"
+    outside.write_text("fixture", encoding="utf-8")
+    monkeypatch.setattr(docker_sandbox, "SAFE_WORKSPACE", str(workspace.resolve()))
+
+    with pytest.raises(PermissionError, match="RO mounts are limited"):
+        docker_sandbox._check_path_safety(str(outside), "ro")
+
+
+def test_docker_ro_mount_outside_workspace_requires_explicit_allow(monkeypatch, tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "challenge.bin"
+    outside.write_text("fixture", encoding="utf-8")
+    monkeypatch.setattr(docker_sandbox, "SAFE_WORKSPACE", str(workspace.resolve()))
+
+    assert docker_sandbox._check_path_safety(
+        str(outside),
+        "ro",
+        allow_host_read_mount=True,
+    ) == str(outside.resolve())
+
+
+def test_docker_mount_blocks_sensitive_paths_even_when_read_only_allowed(monkeypatch, tmp_path):
+    workspace = tmp_path / "workspace"
+    secret_dir = tmp_path / ".ssh"
+    secret_file = secret_dir / "id_rsa"
+    workspace.mkdir()
+    secret_dir.mkdir()
+    secret_file.write_text("secret", encoding="utf-8")
+    monkeypatch.setattr(docker_sandbox, "SAFE_WORKSPACE", str(workspace.resolve()))
+    monkeypatch.setattr(docker_sandbox, "READ_BLACKLIST", [str(secret_dir)])
+
+    with pytest.raises(PermissionError, match="credentials"):
+        docker_sandbox._check_path_safety(
+            str(secret_file),
+            "ro",
+            allow_host_read_mount=True,
+        )
+
+
+def test_docker_mount_blocks_docker_socket(monkeypatch, tmp_path):
+    workspace = tmp_path / "workspace"
+    socket_path = tmp_path / "docker.sock"
+    workspace.mkdir()
+    socket_path.write_text("socket placeholder", encoding="utf-8")
+    monkeypatch.setattr(docker_sandbox, "SAFE_WORKSPACE", str(workspace.resolve()))
+
+    with pytest.raises(PermissionError, match=r"docker.sock|host control"):
+        docker_sandbox._check_path_safety(
+            str(socket_path),
+            "ro",
+            allow_host_read_mount=True,
+        )

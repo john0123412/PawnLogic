@@ -27,6 +27,11 @@ import re
 import subprocess
 from pathlib import Path
 from config import scrub_sensitive_env
+from core.git_security import (
+    git_remote_error,
+    git_with_safe_protocol_config,
+    is_allowed_git_remote,
+)
 
 
 class SkillScanner:
@@ -59,7 +64,7 @@ class SkillScanner:
             name = skill_dir.name
             try:
                 proc = subprocess.run(
-                    ["git", "pull", "--ff-only"],
+                    git_with_safe_protocol_config("pull", "--ff-only"),
                     cwd=str(skill_dir),
                     capture_output=True, text=True,
                     timeout=30, errors="ignore",
@@ -85,6 +90,10 @@ class SkillScanner:
         Invalidates cache on success. Returns
         {"status": "ok"|"error", "name": str, "detail": str}.
         """
+        repo_url = str(repo_url or "").strip()
+        if not is_allowed_git_remote(repo_url):
+            return {"status": "error", "name": "", "detail": git_remote_error(repo_url)}
+
         if not self.skills_dir.exists():
             self.skills_dir.mkdir(parents=True, exist_ok=True)
 
@@ -106,7 +115,7 @@ class SkillScanner:
 
         try:
             proc = subprocess.run(
-                ["git", "clone", "--depth=1", repo_url, str(target_dir)],
+                git_with_safe_protocol_config("clone", "--depth=1", repo_url, str(target_dir)),
                 capture_output=True, text=True,
                 timeout=60, errors="ignore",
                 env=scrub_sensitive_env(),

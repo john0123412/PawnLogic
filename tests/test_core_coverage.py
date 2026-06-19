@@ -520,7 +520,7 @@ def test_api_client_call_once_retries_transport_error(monkeypatch):
     assert calls["count"] == 2
 
 
-def test_interrupt_state_is_thread_local(monkeypatch):
+def test_interrupt_state_is_process_global(monkeypatch):
     _drop_project_modules("core.interrupts", force=True)
     from core import interrupts
     import threading
@@ -538,7 +538,7 @@ def test_interrupt_state_is_thread_local(monkeypatch):
 
     try:
         assert interrupts.interrupted() is True
-        assert states == [False]
+        assert states == [True]
     finally:
         interrupts.clear_interrupt()
 
@@ -839,6 +839,24 @@ def test_git_op_uses_scrubbed_env(monkeypatch, tmp_path):
     assert "OPENAI_API_KEY" not in captured["env"]
 
 
+def test_git_op_clone_rejects_unsafe_transport(monkeypatch, tmp_path):
+    _drop_project_modules("config", "utils.ansi")
+    _drop_project_modules("tools.web_ops", "tools.file_ops", force=True)
+    from tools import file_ops, web_ops
+
+    monkeypatch.setattr(file_ops, "_session_cwd", [str(tmp_path)])
+    monkeypatch.setattr(
+        web_ops.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("git must not run")),
+    )
+
+    result = web_ops.tool_git_op({"action": "clone", "url": "ext::sh -c id"})
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "Only https://" in result
+
+
 def test_skill_manager_subprocess_uses_scrubbed_env(monkeypatch, tmp_path):
     _drop_project_modules("config")
     _drop_project_modules("core.skill_manager", force=True)
@@ -864,6 +882,24 @@ def test_skill_manager_subprocess_uses_scrubbed_env(monkeypatch, tmp_path):
     assert scanner.sync_packs()[0]["status"] == "ok"
     assert captured_envs[0]["NORMAL_VALUE"] == "ok"
     assert "OPENAI_API_KEY" not in captured_envs[0]
+
+
+def test_skill_manager_install_rejects_unsafe_transport(monkeypatch, tmp_path):
+    _drop_project_modules("config")
+    _drop_project_modules("core.skill_manager", force=True)
+    from core import skill_manager
+
+    monkeypatch.setattr(
+        skill_manager.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("git must not run")),
+    )
+
+    scanner = skill_manager.SkillScanner(tmp_path / "skills")
+    result = scanner.install_pack("ext::sh -c id")
+
+    assert result["status"] == "error"
+    assert "Only https://" in result["detail"]
 
 
 def test_sandbox_drops_pythonpath_and_validates_package_names(monkeypatch, tmp_path):

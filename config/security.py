@@ -57,7 +57,7 @@ DANGEROUS_PATTERNS = [
 ]
 
 _ERROR_MAP = {
-    "Traceback":            "❌ System is busy. Please try again later.",
+    "Traceback":            "❌ Internal error. Details were logged; run with --debug or toggle /mode for diagnostics.",
     "ConnectionError":      "❌ Network connection failed. Please check your network.",
     "TimeoutError":         "❌ Request timed out. Please try again later.",
     "RateLimitError":       "❌ API rate limit exceeded. Please try again later.",

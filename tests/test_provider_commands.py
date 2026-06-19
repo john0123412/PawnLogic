@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shlex
+import stat
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -21,35 +21,46 @@ from core import provider_runtime, provider_tui
 from core.commands import provider as provider_cmd
 
 
-def test_write_key_to_shell_quotes_shell_metacharacters(tmp_path, monkeypatch):
+def _isolate_provider_env(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(provider_runtime, "PAWNLOGIC_DIR", tmp_path)
+    monkeypatch.setattr(provider_runtime, "ENV_PATH", env_path)
+    monkeypatch.setattr(provider_cmd, "ENV_PATH", env_path)
+    return env_path
+
+
+def test_write_key_to_shell_stores_key_in_private_dot_env_not_shell_rc(tmp_path, monkeypatch):
     bashrc = tmp_path / ".bashrc"
     bashrc.write_text("# shell config\n", encoding="utf-8")
-    key = "sk value\"with$dollar`tick'quote"
-    monkeypatch.setenv("SHELL", "/bin/bash")
-    monkeypatch.setattr(provider_cmd.Path, "home", staticmethod(lambda: tmp_path))
+    env_path = _isolate_provider_env(tmp_path, monkeypatch)
+    key = "sk-value_with$dollar`tick'quote"
     monkeypatch.delenv("WEIRD_API_KEY", raising=False)
 
     written_to = provider_cmd._write_key_to_shell("WEIRD_API_KEY", key)
 
-    assert written_to == str(bashrc)
-    line = bashrc.read_text(encoding="utf-8").splitlines()[-1]
-    assert line == f"export WEIRD_API_KEY={shlex.quote(key)}"
-    assert shlex.split(line) == ["export", f"WEIRD_API_KEY={key}"]
+    assert written_to == str(env_path)
+    assert bashrc.read_text(encoding="utf-8") == "# shell config\n"
+    assert env_path.read_text(encoding="utf-8") == f"WEIRD_API_KEY={key}\n"
+    assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
+    assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
     assert os.environ["WEIRD_API_KEY"] == key
     os.environ.pop("WEIRD_API_KEY", None)
 
 
-def test_write_key_to_shell_does_not_duplicate_existing_export(tmp_path, monkeypatch):
+def test_write_key_to_shell_replaces_existing_dot_env_value_without_touching_shell_rc(
+    tmp_path,
+    monkeypatch,
+):
     bashrc = tmp_path / ".bashrc"
     bashrc.write_text("export EXISTING_API_KEY='old value'\n", encoding="utf-8")
-    monkeypatch.setenv("SHELL", "/bin/bash")
-    monkeypatch.setattr(provider_cmd.Path, "home", staticmethod(lambda: tmp_path))
+    env_path = _isolate_provider_env(tmp_path, monkeypatch)
+    env_path.write_text("EXISTING_API_KEY=old-value\n", encoding="utf-8")
     monkeypatch.delenv("EXISTING_API_KEY", raising=False)
 
     provider_cmd._write_key_to_shell("EXISTING_API_KEY", "new value")
 
-    text = bashrc.read_text(encoding="utf-8")
-    assert text.count("export EXISTING_API_KEY=") == 1
+    assert bashrc.read_text(encoding="utf-8") == "export EXISTING_API_KEY='old value'\n"
+    assert env_path.read_text(encoding="utf-8") == "EXISTING_API_KEY=new value\n"
     assert os.environ["EXISTING_API_KEY"] == "new value"
     os.environ.pop("EXISTING_API_KEY", None)
 
@@ -1138,6 +1149,7 @@ def test_model_command_rejects_inactive_provider_model(monkeypatch, capsys):
     )
     monkeypatch.setattr(provider_cmd, "PROVIDERS", provider_config.PROVIDERS)
     monkeypatch.setattr(provider_cmd, "MODELS", provider_config.MODELS)
+    monkeypatch.setattr(provider_config, "_providers_initialized", True)
 
     asyncio.run(
         provider_cmd.cmd_model(

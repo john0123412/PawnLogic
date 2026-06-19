@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import sqlite3
+import stat
 
 import pytest
 
@@ -43,6 +44,13 @@ def test_connection_uses_central_busy_timeout(isolated_memory):
         row = conn.execute("PRAGMA busy_timeout").fetchone()
 
     assert row[0] == memory.SQLITE_BUSY_TIMEOUT_MS
+
+
+def test_database_runtime_files_are_private(isolated_memory):
+    memory = isolated_memory
+
+    assert stat.S_IMODE(memory.DB_PATH.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(memory.DB_PATH.stat().st_mode) == 0o600
 
 
 def test_save_messages_handles_concurrent_writes(isolated_memory, tmp_path):

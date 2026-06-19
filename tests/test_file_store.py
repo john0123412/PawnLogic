@@ -47,3 +47,25 @@ def test_atomic_write_text_applies_requested_mode(tmp_path):
 
     assert target.read_text(encoding="utf-8") == "TOKEN=value\n"
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_private_runtime_permissions_helpers(tmp_path):
+    directory = tmp_path / "runtime"
+    target = directory / "pawn.db"
+
+    file_store.ensure_private_dir(directory)
+    target.write_text("db", encoding="utf-8")
+    file_store.ensure_private_file(target)
+
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_private_log_opener_creates_private_file(tmp_path):
+    from core import logger as logger_mod
+
+    log_file = tmp_path / "pawnlogic.log"
+    fd = logger_mod._private_log_opener(str(log_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+    os.close(fd)
+
+    assert stat.S_IMODE(log_file.stat().st_mode) == 0o600

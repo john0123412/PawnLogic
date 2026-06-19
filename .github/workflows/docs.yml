@@ -12,9 +12,10 @@ on:
     paths:
       - "README.md"
       - "README_CN.md"
-      - "GUIDE_EN.md"
+      - "GUIDE.md"
       - "GUIDE_CN.md"
       - "AGENT.md"
+      - "AGENTS.md"
       - "CLAUDE.md"
       - "tools/check_doc_structure.py"
       - ".github/workflows/docs.yml"
@@ -23,9 +24,10 @@ on:
     paths:
       - "README.md"
       - "README_CN.md"
-      - "GUIDE_EN.md"
+      - "GUIDE.md"
       - "GUIDE_CN.md"
       - "AGENT.md"
+      - "AGENTS.md"
       - "CLAUDE.md"
       - "tools/check_doc_structure.py"
       - ".github/workflows/docs.yml"

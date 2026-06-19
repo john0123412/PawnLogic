@@ -125,6 +125,7 @@ def test_provider_runtime_save_key_writes_env_atomically_with_private_mode(tmp_p
     provider_runtime.save_key("RELAY_API_KEY", "secret-value")
 
     assert env_path.read_text(encoding="utf-8") == "RELAY_API_KEY=secret-value\n"
+    assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
     assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
 
 

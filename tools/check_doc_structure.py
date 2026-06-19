@@ -12,7 +12,7 @@ PAIRS = (
     ("README.md", "README_CN.md"),
     ("GUIDE.md", "GUIDE_CN.md"),
 )
-CLAUDE_WRAPPER_MAX_LINES = 20
+AGENT_WRAPPER_MAX_LINES = 20
 
 
 @dataclass(frozen=True)
@@ -78,20 +78,20 @@ def compare_pair(left_path: str, right_path: str) -> list[str]:
     return errors
 
 
-def check_claude_wrapper() -> list[str]:
-    path = ROOT / "CLAUDE.md"
+def check_agent_wrapper(filename: str, required_text: str) -> list[str]:
+    path = ROOT / filename
     lines = path.read_text(encoding="utf-8").splitlines()
     errors: list[str] = []
 
-    if "@AGENT.md" not in lines:
-        errors.append("CLAUDE.md must import AGENT.md with a standalone @AGENT.md line.")
-    if len(lines) > CLAUDE_WRAPPER_MAX_LINES:
+    if not any(required_text in line for line in lines):
+        errors.append(f"{filename} must delegate to AGENT.md.")
+    if len(lines) > AGENT_WRAPPER_MAX_LINES:
         errors.append(
-            f"CLAUDE.md should stay a thin wrapper; found {len(lines)} lines, "
-            f"limit is {CLAUDE_WRAPPER_MAX_LINES}."
+            f"{filename} should stay a thin wrapper; found {len(lines)} lines, "
+            f"limit is {AGENT_WRAPPER_MAX_LINES}."
         )
     if any(line.startswith("## ") for line in lines):
-        errors.append("CLAUDE.md must not duplicate AGENT.md sections.")
+        errors.append(f"{filename} must not duplicate AGENT.md sections.")
 
     return errors
 
@@ -100,7 +100,8 @@ def main() -> int:
     errors: list[str] = []
     for left_path, right_path in PAIRS:
         errors.extend(compare_pair(left_path, right_path))
-    errors.extend(check_claude_wrapper())
+    errors.extend(check_agent_wrapper("CLAUDE.md", "@AGENT.md"))
+    errors.extend(check_agent_wrapper("AGENTS.md", "AGENT.md"))
 
     if errors:
         print("Documentation heading structure check failed:", file=sys.stderr)

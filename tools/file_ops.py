@@ -162,7 +162,12 @@ def _resolve_write_path(path: str) -> tuple:
 def _check_write(path: str):
     abs_p = str(Path(path).expanduser().resolve())
     for bl in WRITE_BLACKLIST:
-        if abs_p.startswith(bl):
+        bl_p = str(Path(bl).expanduser().resolve())
+        try:
+            is_blocked = os.path.commonpath([abs_p, bl_p]) == bl_p
+        except ValueError:
+            is_blocked = False
+        if is_blocked:
             return False, f"SECURITY BLOCK: '{path}' is a protected system path; write denied."
     return True, ""
 

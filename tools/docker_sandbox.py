@@ -18,7 +18,7 @@ Dependencies:
 
 import os, re, tempfile
 
-from config import DANGEROUS_PATTERNS, WORKSPACE_DIR
+from config import DANGEROUS_PATTERNS, READ_BLACKLIST, WORKSPACE_DIR
 from core.state import state as _runtime_state, runtime_config
 from core.trust import TrustLevel, trust_notice_for
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN, MAGENTA, BOLD
@@ -31,25 +31,51 @@ SAFE_WORKSPACE = os.path.abspath(os.path.expanduser(WORKSPACE_DIR))
 os.makedirs(SAFE_WORKSPACE, exist_ok=True)
 
 
-def _check_path_safety(host_path: str, mode: str) -> str:
+def _is_under(path: str, root: str) -> bool:
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:
+        return False
+
+
+def _is_sensitive_host_path(path: str) -> bool:
+    if os.path.basename(path) == "docker.sock":
+        return True
+    for blocked in READ_BLACKLIST:
+        blocked_real = os.path.realpath(os.path.abspath(os.path.expanduser(blocked)))
+        if _is_under(path, blocked_real):
+            return True
+    return False
+
+
+def _check_path_safety(host_path: str, mode: str, *, allow_host_read_mount: bool = False) -> str:
     """
     Validate mount path safety.
     - Resolve absolute paths, removing .. and symlinks.
     - rw mode: path must be inside SAFE_WORKSPACE or PermissionError is raised.
-    - ro mode: only existence is checked by callers; any host path is allowed.
+    - ro mode: path must also be inside SAFE_WORKSPACE by default. Explicit
+      allow_host_read_mount permits outside read-only challenge files, but
+      credential paths and docker.sock remain denied.
     Returns the canonical absolute path string.
     """
+    mode = str(mode or "ro").lower()
+    if mode not in {"ro", "rw"}:
+        raise PermissionError("mount mode must be 'ro' or 'rw'")
     real = os.path.realpath(os.path.abspath(os.path.expanduser(host_path)))
-    if mode == "rw":
-        try:
-            common = os.path.commonpath([real, SAFE_WORKSPACE])
-        except ValueError:
-            common = ""
-        if common != SAFE_WORKSPACE:
-            raise PermissionError(
-                f"RW mode is limited to the workspace directory ({SAFE_WORKSPACE}); "
-                f"denied path: {real}"
-            )
+    in_workspace = _is_under(real, SAFE_WORKSPACE)
+    if _is_sensitive_host_path(real):
+        raise PermissionError(f"mount path may contain credentials or host control sockets: {real}")
+    if mode == "rw" and not in_workspace:
+        raise PermissionError(
+            f"RW mode is limited to the workspace directory ({SAFE_WORKSPACE}); "
+            f"denied path: {real}"
+        )
+    if mode == "ro" and not in_workspace and not allow_host_read_mount:
+        raise PermissionError(
+            f"RO mounts are limited to the workspace directory ({SAFE_WORKSPACE}) by default; "
+            "set allow_host_read_mount=true only for trusted read-only challenge files. "
+            f"denied path: {real}"
+        )
     return real
 
 
@@ -289,13 +315,20 @@ def tool_run_code_docker(a: dict) -> str:
         }
         # User-defined mounts (P4.1).
         # mount_files format: {"./vuln": {"bind": "/target", "mode": "ro"}}
+        allow_host_read_mount = _docker_policy_enabled(
+            a.get("allow_host_read_mount"), "PAWNLOGIC_DOCKER_ALLOW_HOST_READ_MOUNT"
+        )
         for host_path, bind_spec in mount_files.items():
             if isinstance(bind_spec, str):
                 # Backward-compatible format: {host: container_path}.
                 bind_spec = {"bind": bind_spec, "mode": "ro"}
             mount_mode = bind_spec.get("mode", "ro").lower()
             try:
-                real_hp = _check_path_safety(host_path, mount_mode)
+                real_hp = _check_path_safety(
+                    host_path,
+                    mount_mode,
+                    allow_host_read_mount=allow_host_read_mount,
+                )
             except PermissionError as e:
                 return f"ERROR: mount safety check failed - {e}"
             if os.path.exists(real_hp):
@@ -481,12 +514,19 @@ def tool_pwn_container(a: dict) -> str:
 
         # Build mount volumes (P4.1).
         volumes = {}
+        allow_host_read_mount = _docker_policy_enabled(
+            a.get("allow_host_read_mount"), "PAWNLOGIC_DOCKER_ALLOW_HOST_READ_MOUNT"
+        )
         for host_path, bind_spec in mount_files.items():
             if isinstance(bind_spec, str):
                 bind_spec = {"bind": bind_spec, "mode": "ro"}
             mount_mode = bind_spec.get("mode", "ro").lower()
             try:
-                real_hp = _check_path_safety(host_path, mount_mode)
+                real_hp = _check_path_safety(
+                    host_path,
+                    mount_mode,
+                    allow_host_read_mount=allow_host_read_mount,
+                )
             except PermissionError as e:
                 return f"ERROR: mount safety check failed - {e}"
             if os.path.exists(real_hp):
@@ -788,6 +828,10 @@ DOCKER_SCHEMAS = [
                         "type": "boolean",
                         "description": "Explicitly allow automatic docker pull when an image is missing (default false).",
                     },
+                    "allow_host_read_mount": {
+                        "type": "boolean",
+                        "description": "Explicitly allow read-only mounts outside the workspace for trusted challenge files.",
+                    },
                     "stdin": {
                         "type": "string",
                         "description": "Standard input passed to the program.",
@@ -852,6 +896,10 @@ DOCKER_SCHEMAS = [
                     "allow_auto_pull": {
                         "type": "boolean",
                         "description": "Explicitly allow automatic docker pull when an image is missing (default false).",
+                    },
+                    "allow_host_read_mount": {
+                        "type": "boolean",
+                        "description": "Explicitly allow read-only mounts outside the workspace for trusted challenge files.",
                     },
                 },
                 "required": ["action"],
