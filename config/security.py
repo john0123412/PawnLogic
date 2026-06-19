@@ -40,7 +40,7 @@ def scrub_sensitive_env(env: dict | None = None) -> dict:
         clean[key] = value
     return clean
 
-DANGEROUS_PATTERNS = [
+MISUSE_PATTERNS = [
     r"rm\s+-rf\s+[/~]", r"sudo\s+rm\s+-rf", r"mkfs\.",
     r"rm\s+-rf\s+(\*|\.\/|\./\*|\.)($|\s)",
     r"dd\s+if=", r">\s*/dev/sd", r"chmod\s+-R\s+777\s+/", r"\bshred\b",
@@ -55,6 +55,10 @@ DANGEROUS_PATTERNS = [
     r"\bsudo\b",
     r"docker\s+(run|exec|rm)",
 ]
+
+# Compatibility alias. These patterns are risk/misuse classifiers, not a
+# security boundary and not a substitute for sandboxing or user authorization.
+DANGEROUS_PATTERNS = MISUSE_PATTERNS
 
 _ERROR_MAP = {
     "Traceback":            "❌ Internal error. Details were logged; run with --debug or toggle /mode for diagnostics.",

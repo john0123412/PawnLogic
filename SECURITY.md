@@ -31,7 +31,8 @@ You will receive a response within **72 hours**. If the issue is confirmed, a pa
 Areas of particular concern for this project:
 
 - **API key exposure** — keys stored in `~/.pawnlogic/.env`, never in the project directory
-- **Shell injection** — `DANGEROUS_PATTERNS` blocklist in `config/security.py`
+- **Host shell execution** — `run_shell` uses an operation policy before subprocess startup; high-risk commands require interactive confirmation, critical operations are denied by default, and non-interactive / `--eval` paths fail closed when confirmation would be required
+- **Misuse classification** — `DANGEROUS_PATTERNS` in `config/security.py` is retained as a risk classifier only; it is not a sandbox boundary and cannot stop a malicious local user
 - **Path traversal** — Docker file mounts are workspace-bound by default, including read-only mounts; write-capable file operations are resolved inside the workspace jail
 - **Docker escape** — containers run with `network_mode=none`, memory/CPU/PID limits
 - **CTF workflow boundaries** — CTF tools and skill packs are intended for legal CTFs, authorized labs, and systems you own or have permission to test

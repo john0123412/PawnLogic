@@ -182,6 +182,24 @@ connectivity, parser behavior, tool-call arguments, or low-level API failures.
 mode. During an interactive session, `/mode` toggles between user-friendly and
 debug output.
 
+### Host Shell Operation Policy
+
+PawnLogic is not a sandbox. Host shell commands still execute with the current
+user's permissions, but `run_shell` now evaluates an operation policy before
+starting a subprocess. Low-risk commands are allowed, medium-risk commands are
+allowed with audit classification, high-risk commands require explicit
+interactive confirmation, and critical commands are denied by default.
+Non-interactive execution, including `pawn --eval`, fails closed when a
+high-risk command would require confirmation.
+
+The policy covers high-risk shell redirection outside the workspace, `tee`,
+`dd of=...`, in-place `sed`/`perl`, `find -delete`, `xargs rm`, `rm -rf`,
+recursive `chmod`/`chown`, download-pipe-shell commands, and obvious reverse
+or bind shell patterns. Critical denials include credential paths such as
+`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.pawnlogic/.env`, Docker sockets,
+and protected system write paths. `DANGEROUS_PATTERNS` is retained only as a
+misuse/risk classifier and is not a security boundary.
+
 ### Source-checkout launcher fallback
 
 ```bash

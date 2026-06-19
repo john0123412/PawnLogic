@@ -197,6 +197,14 @@ network URL access, delegated sub-agents, and plaintext HTTP providers. Use
 Docker file mounts are workspace-bound by default, including read-only mounts;
 outside read-only challenge files require explicit `allow_host_read_mount`.
 
+Host shell execution now passes through an operation policy before subprocess
+startup. Low-risk commands run normally, medium-risk commands are classified
+for audit, high-risk commands require explicit interactive confirmation, and
+critical operations are denied by default. Non-interactive execution, including
+`pawn --eval`, fails closed when a high-risk command would require
+confirmation. `DANGEROUS_PATTERNS` remains only one misuse/risk classifier; it
+is not a sandbox boundary and cannot stop a malicious local user.
+
 ## MCP Tool Integration
 
 For pip or one-line installer users, PawnLogic creates editable templates in

@@ -167,6 +167,8 @@ PawnLogic 是 agent 执行工具，不是安全沙箱。它会在你要求时，
 
 用户友好模式会针对 host shell 执行、Docker container exec、browser/network-capable 工具、private network URL 访问、delegated sub-agent 和 plaintext HTTP Provider 显示明确的 trust-boundary notice。需要更底层的工具参数和诊断信息时，使用 `pawn --debug`。Docker 文件挂载默认限制在 workspace 内，包括 read-only 挂载；挂载外部只读 challenge 文件需要显式设置 `allow_host_read_mount`。
 
+Host shell 执行现在会在启动子进程前经过 operation policy。低风险命令正常执行，中等风险命令会被分类并写入审计，高风险命令需要明确的交互确认，critical 操作默认拒绝。非交互执行，包括 `pawn --eval`，在高风险命令需要确认时会 fail closed。`DANGEROUS_PATTERNS` 只是误操作/风险分类的一部分，不是 sandbox 边界，也不能阻止恶意本地用户。
+
 ## MCP 工具集成
 
 pip 或一行安装脚本用户，PawnLogic 启动时会在 `~/.pawnlogic/` 下创建可编辑模板：
