@@ -38,6 +38,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Verified targeted workspace cleanup, LSP-lite, documentation structure,
   typed-island mypy, provider runtime, tool executor, session, turn, and API
   stream helper tests locally during release preparation.
+- Verified the remote release branch with Ruff, typed-island mypy, Python
+  3.10/3.11/3.12 full non-E2E matrix, dynamic E2E, and Docs workflows before
+  merging to `main`.
 
 ## [0.1.4] - 2026-06-19
 
