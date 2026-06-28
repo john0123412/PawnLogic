@@ -50,10 +50,42 @@ jobs:
       - name: ruff check
         run: ruff check . --output-format=github
 
+  # ── Typed island checks: keep scope narrow and fail fast ─────────────
+  typecheck:
+    name: "🔎 Type Check (mypy)"
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          python --version
+          python -m mypy --version
+
+      - name: mypy typed island
+        run: |
+          python -m mypy \
+            core/turn_api.py \
+            core/turn_guards.py \
+            core/tool_result.py \
+            core/tool_executor.py \
+            core/runtime_context.py \
+            core/provider_runtime.py
+
   # ── Fast feedback tests for normal development ─────────────────────
   test-fast:
     name: "🧪 Fast Tests (Python 3.11)"
-    needs: lint                    # Run tests only after lint passes
+    needs: [lint, typecheck]       # Run tests only after static checks pass
     runs-on: ubuntu-latest
     timeout-minutes: 10            # Prevent pytest from hanging forever
     if: >
@@ -108,7 +140,7 @@ jobs:
   # ── Release validation: full non-E2E matrix across supported Python ──
   test-full-matrix:
     name: "🧪 Full Matrix (Python ${{ matrix.python-version }}, non-E2E)"
-    needs: lint
+    needs: [lint, typecheck]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     if: >

@@ -47,6 +47,7 @@ dev = [
     "pytest-timeout>=2.0",
     "pexpect>=4.8; sys_platform != 'win32'",
     "ruff>=0.4",
+    "mypy>=1.10",
 ]
 docker = ["docker>=6.0"]
 browser = ["scrapling>=0.2", "patchright>=1.40"]
@@ -144,3 +145,10 @@ markers = [
     "e2e: real CLI or process-level end-to-end tests",
     "packaging: tests that build, install, or validate package distribution behavior",
 ]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+ignore_missing_imports = true
+explicit_package_bases = true
+follow_imports = "skip"

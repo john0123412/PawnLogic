@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前源码版本是 **0.1.4**；发布到 PyPI 和 GitHub Releases 需要在 release approval 后进行。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前源码版本是 **0.1.5**；发布到 PyPI 和 GitHub Releases 需要在 release approval 后进行。
 
 ## 系统要求
 
@@ -85,13 +85,13 @@ python -m pawnlogic --help
 
 ## 新特性
 
-0.1.4 增加 host shell operation policy 覆盖：
+0.1.5 强化维护和发布可靠性：
 
-- `run_shell` 会在启动子进程前评估 allow、confirm 和 deny 决策。
-- Critical 操作默认拒绝，高风险操作需要明确的交互确认。
-- 非交互执行，包括 `pawn --eval`，在高风险命令需要确认时会 fail closed。
-- 审计记录包含已脱敏命令、风险级别、匹配规则和 policy 决策。
-- `DANGEROUS_PATTERNS` 被记录为误操作/风险分类器，不是 sandbox 边界。
+- `/workspace cleanup restore` 会在替换当前 workspace 前验证 backup tar archive。
+- Restore 会拒绝可能写出 Runtime Home 或创建不安全 filesystem object 的 path traversal、link 和 special-file archive entry。
+- CI 现在会在 fast 和 release 测试前运行窄范围 mypy typed-island 检查。
+- `run_turn` 和 `stream_request` 被拆成更小 helper，同时保持现有 message 和 stream event 形状。
+- 增加 workspace cleanup、LSP-lite 和翻译文档结构检查的聚焦测试覆盖。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -105,7 +105,7 @@ python -m pawnlogic --help
 | Trust-boundary UX | 用户模式会明确提示工具何时跨越本地主机、容器、浏览器、网络、delegate 或明文 HTTP 边界。 |
 | MCP 集成 | stdio MCP server 可通过 `~/.pawnlogic/mcp_configs.json` 配置，PawnLogic 会处理 roots 和 stderr 日志。 |
 | CTF / pwn 工作流 | 可选 pwn 工具、Docker 容器 helper、GDB 自动化、ROP 链支持、libc leak 工作流和用户安装的本地 skill pack。 |
-| 发布卫生 | CI 先运行 Python 3.11 fast PR 检查；release/manual 验证再覆盖 Python 3.10/3.11/3.12、packaging、Dynamic E2E、文档结构、语言策略、包构建和 Trusted Publishing 护栏。 |
+| 发布卫生 | CI 先运行 Ruff、typed-island mypy 和 Python 3.11 fast PR 检查；release/manual 验证再覆盖 Python 3.10/3.11/3.12、packaging、Dynamic E2E、文档结构、语言策略、包构建和 Trusted Publishing 护栏。 |
 
 ## 支持模型
 

@@ -12,7 +12,6 @@ Targets zero-dependency or minimal-dependency functions only:
 """
 
 import sys
-import inspect
 import threading
 import time
 import types
@@ -113,7 +112,6 @@ if _mock_deps["core.skill_manager"] is not None:
 
 # Now import the real session functions
 from core.session import (  # noqa: E402
-    AgentSession,
     TurnInterrupted,
     _ThinkingSpinner,
     _ctx_chars,
@@ -165,12 +163,30 @@ def test_ctx_chars_empty():
     assert _ctx_chars([]) == 0
 
 
-def test_cot_guard_soft_intercept_branch_is_reachable():
-    source = inspect.getsource(AgentSession.run_turn)
-    assert 'elif _plan_decision.action == "soft":' in source
-    assert source.index('elif _plan_decision.action == "soft":') < source.index(
-        "_plan_signal_injected = True"
+def test_run_turn_hard_stops_after_soft_plan_corrections(monkeypatch, capsys):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    tool_runs = []
+
+    def fake_write(_args):
+        tool_runs.append("write")
+        return "OK: fake write"
+
+    monkeypatch.setitem(session_mod.TOOL_MAP, "write_file", fake_write)
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_sequence(
+            _tool_call_response("write_file", {"path": "a.txt"}, call_id="call_1", include_plan=False),
+            _tool_call_response("write_file", {"path": "b.txt"}, call_id="call_2", include_plan=False),
+            _tool_call_response("write_file", {"path": "c.txt"}, call_id="call_3", include_plan=False),
+        ),
     )
+
+    s.run_turn("write repeatedly without a plan")
+
+    assert tool_runs == ["write", "write"]
+    assert sum(1 for m in s.messages if m.get("role") == "tool") == 2
+    assert "Missing <plan>" in capsys.readouterr().out
 
 
 # ══════════════════════════════════════════════════════════

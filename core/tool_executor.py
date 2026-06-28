@@ -228,10 +228,11 @@ def execute_tool_handler(
         audit_ok = False
 
     elapsed_ms = int((clock() - started_at) * 1000)
+    content_text = str(content)
     return ToolExecutionResult(
         tool_call_id=tool_call_id,
         tool_name=tool_name,
-        content=content,
+        content=content_text,
         audit_ok=audit_ok,
         elapsed_ms=elapsed_ms,
         args_preview=args_preview,

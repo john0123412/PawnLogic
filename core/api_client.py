@@ -620,6 +620,150 @@ def _anthropic_parse_response(raw_bytes: bytes) -> tuple[str, str | None]:
     except Exception as e:
         return "", str(e)
 
+
+def _build_openai_payload(
+    messages: list,
+    model_alias: str,
+    model_id: str,
+    max_tokens: int,
+    tools_schema: list | None,
+    tool_choice: str,
+    response_format: dict | None,
+) -> dict:
+    # thinking-mode: preserve reasoning_content for reasoning models and strip it
+    # for non-reasoning models to avoid strict provider HTTP 400s.
+    clean = _sanitize_messages_for_model(messages, model_alias, model_id)
+    payload = {
+        "model":      model_id,
+        "messages":   clean,
+        "max_tokens": max_tokens,
+        "stream":     True,
+    }
+    if tools_schema:
+        payload["tools"]       = tools_schema
+        payload["tool_choice"] = tool_choice
+    if response_format:
+        payload["response_format"] = response_format
+    payload["stream_options"] = {"include_usage": True}
+    return payload
+
+
+def _build_openai_headers(api_key: str, body_len: int) -> dict:
+    return {
+        "Authorization":  f"Bearer {api_key}",
+        "Content-Type":   "application/json",
+        "Accept":         "text/event-stream",
+        "Cache-Control":  "no-cache",
+        "Content-Length": str(body_len),
+    }
+
+
+def _handle_stream_oserror(exc: OSError, partial_text: str) -> dict | None:
+    if partial_text:
+        return {
+            "_partial_end": True,
+            "_error": f"Stream interrupted after partial content: {exc}",
+        }
+    return None
+
+
+def _read_anthropic_sse_lines(resp):
+    current_event = ""
+    state: dict = {"tool_blocks": {}}
+    partial_text = ""
+    while True:
+        raise_if_interrupted()
+        try:
+            raw_line = resp.readline()
+            raise_if_interrupted()
+        except socket.timeout:
+            raise_if_interrupted()
+            yield {
+                "_error": (
+                    f"Read timeout ({_READ_TIMEOUT}s): provider stopped sending stream data. "
+                    "Check network, proxy settings, or switch provider."
+                )
+            }
+            return
+        except OSError as e:
+            raise_if_interrupted()
+            partial_event = _handle_stream_oserror(e, partial_text)
+            if partial_event is not None:
+                yield partial_event
+                return
+            raise
+
+        if not raw_line:
+            return
+
+        line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+
+        if line.startswith("event: "):
+            current_event = line[7:].strip()
+            continue
+
+        if not line.startswith("data: "):
+            continue
+
+        data_raw = line[6:].strip()
+        parsed = _anthropic_parse_sse(current_event, data_raw, state)
+        if parsed is not None:
+            raise_if_interrupted()
+            if "_usage" in parsed:
+                yield {"_usage": parsed["_usage"]}
+            if "choices" in parsed:
+                choices = parsed["choices"]
+                if choices:
+                    partial_text += choices[0].get("delta", {}).get("content") or ""
+                yield parsed
+
+
+def _read_openai_sse_lines(resp):
+    partial_text = ""
+    while True:
+        raise_if_interrupted()
+        try:
+            raw_line = resp.readline()
+            raise_if_interrupted()
+        except socket.timeout:
+            raise_if_interrupted()
+            yield {
+                "_error": (
+                    f"Read timeout ({_READ_TIMEOUT}s): provider stopped sending stream data. "
+                    "Check network, proxy settings, or switch provider."
+                )
+            }
+            return
+        except OSError as e:
+            raise_if_interrupted()
+            partial_event = _handle_stream_oserror(e, partial_text)
+            if partial_event is not None:
+                yield partial_event
+                return
+            raise
+
+        if not raw_line:
+            return
+
+        line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+        if not line.startswith("data: "):
+            continue
+
+        data_raw = line[6:].strip()
+        if data_raw == "[DONE]":
+            return
+
+        parsed = parse_sse_delta(data_raw)
+        if parsed is not None:
+            raise_if_interrupted()
+            choices = parsed.get("choices", [])
+            if choices:
+                partial_text += choices[0].get("delta", {}).get("content") or ""
+            usage = parsed.get("usage")
+            if usage and isinstance(usage, dict):
+                yield {"_usage": usage}
+            yield parsed
+
 # ════════════════════════════════════════════════════════
 # Streaming request generator.
 # ════════════════════════════════════════════════════════
@@ -649,21 +793,15 @@ def stream_request(
     if api_fmt == "anthropic":
         payload = _anthropic_build_payload(messages, model_id, _max_tok, tools_schema)
     else:
-        # thinking-mode: preserve reasoning_content for reasoning models and
-        # strip it for non-reasoning models to avoid strict provider HTTP 400s.
-        clean = _sanitize_messages_for_model(messages, model_alias, model_id)
-        payload = {
-            "model":      model_id,
-            "messages":   clean,
-            "max_tokens": _max_tok,
-            "stream":     True,
-        }
-        if tools_schema:
-            payload["tools"]       = tools_schema
-            payload["tool_choice"] = tool_choice
-        if response_format:
-            payload["response_format"] = response_format
-        payload["stream_options"] = {"include_usage": True}
+        payload = _build_openai_payload(
+            messages,
+            model_alias,
+            model_id,
+            _max_tok,
+            tools_schema,
+            tool_choice,
+            response_format,
+        )
 
     proxy = _detect_proxy()
 
@@ -689,13 +827,7 @@ def stream_request(
             if api_fmt == "anthropic":
                 hdrs = _anthropic_build_headers(api_key, len(body))
             else:
-                hdrs = {
-                    "Authorization":  f"Bearer {api_key}",
-                    "Content-Type":   "application/json",
-                    "Accept":         "text/event-stream",
-                    "Cache-Control":  "no-cache",
-                    "Content-Length": str(len(body)),
-                }
+                hdrs = _build_openai_headers(api_key, len(body))
             conn.request("POST", path, body=body, headers=hdrs)
 
             if conn.sock:
@@ -727,135 +859,13 @@ def stream_request(
             # Connection established; reset circuit breaker.
             _cb_record_success(provider)
 
-            # Read SSE line by line.
-            partial_text = ""
-
             if api_fmt == "anthropic":
-                # Native Anthropic SSE parsing.
-                current_event = ""
-                state: dict = {"tool_blocks": {}}
-                while True:
-                    raise_if_interrupted()
-                    try:
-                        raw_line = resp.readline()
-                        raise_if_interrupted()
-                    except socket.timeout:
-                        raise_if_interrupted()
-                        yield {
-                            "_error": (
-                                f"Read timeout ({_READ_TIMEOUT}s): provider stopped sending stream data. "
-                                "Check network, proxy settings, or switch provider."
-                            )
-                        }
-                        return
-                    except OSError as e:
-                        raise_if_interrupted()
-                        if partial_text:
-                            yield {"_partial_end": True,
-                                   "_error": f"Stream interrupted after partial content: {e}"}
-                        else:
-                            _cb_record_failure(provider)
-                            if attempt < _RETRY_MAX - 1:
-                                err_msg = format_transport_error(
-                                    e, proxy=proxy, connect_timeout=_CONN_TIMEOUT
-                                )
-                                delay = _retry_delay(attempt)
-                                yield {"_retry": retry_notice(err_msg, attempt, _RETRY_MAX, delay)}
-                                _interruptible_sleep(delay)
-                                break
-                            yield {
-                                "_error": format_transport_error(
-                                    e, proxy=proxy, connect_timeout=_CONN_TIMEOUT
-                                )
-                            }
-                        return
-
-                    if not raw_line:
-                        return
-
-                    line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
-
-                    if line.startswith("event: "):
-                        current_event = line[7:].strip()
-                        continue
-
-                    if not line.startswith("data: "):
-                        continue
-
-                    data_raw = line[6:].strip()
-                    parsed = _anthropic_parse_sse(current_event, data_raw, state)
-                    if parsed is not None:
-                        raise_if_interrupted()
-                        if "_usage" in parsed:
-                            yield {"_usage": parsed["_usage"]}
-                        if "choices" in parsed:
-                            choices = parsed["choices"]
-                            if choices:
-                                partial_text += choices[0].get("delta", {}).get("content") or ""
-                            yield parsed
-                continue
+                yield from _read_anthropic_sse_lines(resp)
+                return
 
             else:
-                # Native OpenAI SSE parsing.
-                while True:
-                    raise_if_interrupted()
-                    try:
-                        raw_line = resp.readline()
-                        raise_if_interrupted()
-                    except socket.timeout:
-                        raise_if_interrupted()
-                        yield {
-                            "_error": (
-                                f"Read timeout ({_READ_TIMEOUT}s): provider stopped sending stream data. "
-                                "Check network, proxy settings, or switch provider."
-                            )
-                        }
-                        return
-                    except OSError as e:
-                        raise_if_interrupted()
-                        if partial_text:
-                            yield {"_partial_end": True,
-                                   "_error": f"Stream interrupted after partial content: {e}"}
-                        else:
-                            _cb_record_failure(provider)
-                            if attempt < _RETRY_MAX - 1:
-                                err_msg = format_transport_error(
-                                    e, proxy=proxy, connect_timeout=_CONN_TIMEOUT
-                                )
-                                delay = _retry_delay(attempt)
-                                yield {"_retry": retry_notice(err_msg, attempt, _RETRY_MAX, delay)}
-                                _interruptible_sleep(delay)
-                                break
-                            yield {
-                                "_error": format_transport_error(
-                                    e, proxy=proxy, connect_timeout=_CONN_TIMEOUT
-                                )
-                            }
-                        return
-
-                    if not raw_line:
-                        return
-
-                    line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
-                    if not line.startswith("data: "):
-                        continue
-
-                    data_raw = line[6:].strip()
-                    if data_raw == "[DONE]":
-                        return
-
-                    parsed = parse_sse_delta(data_raw)
-                    if parsed is not None:
-                        raise_if_interrupted()
-                        choices = parsed.get("choices", [])
-                        if choices:
-                            partial_text += choices[0].get("delta", {}).get("content") or ""
-                        usage = parsed.get("usage")
-                        if usage and isinstance(usage, dict):
-                            yield {"_usage": usage}
-                        yield parsed
-
-                continue
+                yield from _read_openai_sse_lines(resp)
+                return
 
         except socket.timeout:
             raise_if_interrupted()

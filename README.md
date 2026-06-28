@@ -11,7 +11,7 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current source release is **0.1.4**; publication
+CTF-oriented toolchain. The current source release is **0.1.5**; publication
 to PyPI and GitHub Releases should happen only after release approval.
 
 ## System Requirements
@@ -96,18 +96,17 @@ Use `pawn --debug` or `/mode` when you need detailed diagnostics.
 
 ## What's New
 
-Version 0.1.4 adds host shell operation policy coverage:
+Version 0.1.5 hardens maintenance and release reliability:
 
-- `run_shell` evaluates allow, confirm, and deny decisions before subprocess
-  startup.
-- Critical operations are denied by default, and high-risk operations require
-  explicit interactive confirmation.
-- Non-interactive execution, including `pawn --eval`, fails closed when a
-  high-risk command would require confirmation.
-- Audit records include redacted commands, risk levels, matched rules, and
-  policy decisions.
-- `DANGEROUS_PATTERNS` is documented as a misuse/risk classifier, not a
-  sandbox boundary.
+- `/workspace cleanup restore` validates backup tar archives before replacing
+  the current workspace.
+- Restore rejects path traversal, links, and special-file archive entries that
+  could write outside the runtime home or create unsafe filesystem objects.
+- CI now runs a narrow mypy typed-island check before fast and release tests.
+- `run_turn` and `stream_request` were split into smaller helpers while keeping
+  the existing message and stream event shapes.
+- Added focused coverage for workspace cleanup, LSP-lite, and translated
+  documentation structure checks.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
@@ -121,7 +120,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 | Trust-boundary UX | User-mode warnings make it explicit when a tool crosses local host, container, browser, network, delegate, or plaintext HTTP boundaries. |
 | MCP integration | Stdio MCP servers can be configured from `~/.pawnlogic/mcp_configs.json`, with roots and stderr logging handled by PawnLogic. |
 | CTF / pwn workflows | Optional pwn tooling, Docker container helpers, GDB automation, ROP chain support, libc leak workflows, and user-installed local skill packs. |
-| Release hygiene | CI runs fast Python 3.11 PR checks first, then release/manual validation covers Python 3.10/3.11/3.12, packaging, dynamic E2E, docs structure, language policy, package build, and Trusted Publishing guardrails. |
+| Release hygiene | CI runs Ruff, typed-island mypy, and fast Python 3.11 PR checks first, then release/manual validation covers Python 3.10/3.11/3.12, packaging, dynamic E2E, docs structure, language policy, package build, and Trusted Publishing guardrails. |
 
 ## Supported Models
 

@@ -46,6 +46,13 @@ SKILLS_LOCKED_SUFFIX = (".json", ".yaml", ".yml")
 # Shared helpers.
 # ════════════════════════════════════════════════════════
 
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
 def _size_human(n: int) -> str:
     f = float(n)
     for unit in ("B", "KB", "MB", "GB"):
@@ -73,6 +80,33 @@ def _dir_size(path: Path) -> int:
     except OSError:
         pass
     return total
+
+
+def _validate_restore_member(member: tarfile.TarInfo, root: Path) -> None:
+    """Reject tar entries that could write outside the restore root."""
+    member_name = member.name
+    member_path = Path(member_name)
+    if not member_name or member_name in {".", ".."}:
+        raise ValueError(f"unsafe archive member path: {member_name!r}")
+    if member_path.is_absolute() or ".." in member_path.parts:
+        raise ValueError(f"unsafe archive member path: {member_name!r}")
+
+    target = (root / member_path).resolve(strict=False)
+    root_resolved = root.resolve(strict=False)
+    if not _is_relative_to(target, root_resolved):
+        raise ValueError(f"unsafe archive member path: {member_name!r}")
+
+    if member.issym() or member.islnk():
+        raise ValueError(f"unsafe archive link member: {member_name!r}")
+    if not (member.isdir() or member.isfile()):
+        raise ValueError(f"unsafe archive special member: {member_name!r}")
+
+
+def _validated_restore_members(tf: tarfile.TarFile, root: Path) -> list[tarfile.TarInfo]:
+    members = tf.getmembers()
+    for member in members:
+        _validate_restore_member(member, root)
+    return members
 
 
 def _categorize(name: str, is_dir: bool) -> str:
@@ -433,17 +467,25 @@ def restore_from_backup(backup_path: Optional[Path] = None) -> dict:
     if not backup_path.exists():
         return {"ok": False, "error": f"backup file does not exist: {backup_path}"}
 
-    # Rename current workspace to _replaced_<ts> before restore to avoid data loss.
+    try:
+        with tarfile.open(backup_path, "r:gz") as tf:
+            members = _validated_restore_members(tf, PAWN_HOME)
+    except (tarfile.TarError, OSError, ValueError) as exc:
+        return {"ok": False, "error": f"unsafe backup archive: {exc}"}
+
+    # Rename current workspace to _replaced_<ts> only after the archive is
+    # validated, so rejected backups leave current data untouched.
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    replaced: Path | None = None
     if WORKSPACE_PATH.exists():
         replaced = WORKSPACE_PATH.parent / f"workspace_replaced_{ts}"
         os.rename(str(WORKSPACE_PATH), str(replaced))
 
     with tarfile.open(backup_path, "r:gz") as tf:
-        tf.extractall(str(PAWN_HOME))
+        tf.extractall(str(PAWN_HOME), members=members)
 
     return {"ok": True, "restored_from": str(backup_path),
-            "old_workspace_renamed_to": str(replaced) if WORKSPACE_PATH.exists() else None}
+            "old_workspace_renamed_to": str(replaced) if replaced else None}
 
 
 # ════════════════════════════════════════════════════════

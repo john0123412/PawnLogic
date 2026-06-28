@@ -1488,8 +1488,7 @@ class AgentSession:
 
         return text_buf, tc_buf, reasoning_buf
 
-    # Main turn loop.
-    def run_turn(self, user_input: str):
+    def _prepare_turn(self, user_input: str) -> dict | None:
         self._reset_system_prompt(knowledge_query=user_input)
         self.messages.append({"role": "user", "content": user_input})
 
@@ -1514,17 +1513,16 @@ class AgentSession:
                 "API key missing | model={} required_env={}",
                 self.model_alias, env_name,
             )
-            return
+            return None
 
         cfg = self.model
         print(c(cfg["color"] + BOLD, f"[{self.model_alias.upper()}]"), end=" ", flush=True)
 
-        # Reset per-turn accounting
+        # Reset per-turn accounting.
         self._turn_prompt_tokens     = 0
         self._turn_completion_tokens = 0
         self._turn_tool_calls        = 0
 
-        # P1: Time-aware initialization.
         dynamic_cfg = _dynamic_config()
         self._turn_start_time = time.monotonic()
         self._time_budget_sec = dynamic_cfg.get("time_budget_sec", 0)
@@ -1533,6 +1531,115 @@ class AgentSession:
             _mins = self._time_budget_sec // 60
             _secs = self._time_budget_sec % 60
             print(c(GRAY, f"  ⏱  Time budget: {_mins}m{_secs}s"))
+        return dynamic_cfg
+
+    def _run_model_with_empty_response_recovery(
+        self,
+        api_msgs: list,
+        current_tools: list | None,
+        current_max_tokens: int,
+        renderer: _PlanRenderer,
+        iteration: int,
+    ) -> tuple[str, dict, str] | None:
+        _api_retry = 0
+        _API_RETRY_MAX = 3
+
+        while True:
+            _api_result = self._consume_api_stream_attempt(
+                api_msgs, current_tools, current_max_tokens, renderer, iteration
+            )
+            if _api_result.error:
+                self.messages.pop()
+                return None
+
+            text_buf, tc_buf, reasoning_buf = self._finalize_api_stream_result(
+                _api_result, renderer, iteration
+            )
+
+            # Empty-response detection with exponential-backoff retry.
+            # Usage-only and hidden reasoning-only deltas are not user-visible
+            # answers, even when the provider reports completion tokens.
+            _empty_response = is_empty_response(text_buf, tc_buf)
+
+            if not _empty_response:
+                return text_buf, tc_buf, reasoning_buf
+
+            _api_retry += 1
+            _retry_decision = decide_empty_response_retry(
+                api_retry=_api_retry, max_retries=_API_RETRY_MAX
+            )
+            if _retry_decision.action == "giveup":
+                if _debug_mode():
+                    print(c(YELLOW,
+                        f"\n  ⚠ [API Recovery] Received {_api_retry} consecutive empty responses; "
+                        "injecting recovery hint and continuing..."
+                    ))
+                logger.warning(
+                    "API empty response: retries exhausted | "
+                    "model={} session={} iteration={} retries={}",
+                    self.model_alias, self.session_id[:8], iteration, _api_retry,
+                )
+                self.messages.append({
+                    "role": "user",
+                    "content": (
+                        "[System] Received an invalid response (empty content / 0 tokens). "
+                        "Re-check the task objective and continue. "
+                        "If this repeats, consider switching models (/model) or checking the API key."
+                    ),
+                })
+                return "", {}, ""
+
+            _wait = _retry_decision.wait_seconds
+            if _debug_mode():
+                print(c(YELLOW,
+                    f"\n  ⚠ [API Recovery] Invalid response received; attempting recovery... "
+                    f"({_api_retry}/{_API_RETRY_MAX}, waiting {_wait}s)"
+                ))
+            logger.warning(
+                "API empty response detected, retrying | "
+                "model={} session={} iteration={} attempt={} wait={}s",
+                self.model_alias, self.session_id[:8], iteration, _api_retry, _wait,
+            )
+            time.sleep(_wait)
+
+    def _append_assistant_or_tool_call_message(
+        self,
+        text_buf: str,
+        tc_buf: dict,
+        reasoning_buf: str,
+    ) -> bool:
+        if not tc_buf:
+            # thinking-mode fix: store reasoning_content with the assistant
+            # message so the next API call can send it back unchanged.
+            _asst_msg: dict = {"role": "assistant", "content": text_buf}
+            if reasoning_buf:
+                _asst_msg["reasoning_content"] = reasoning_buf
+            self.messages.append(_asst_msg)
+            self._print_turn_summary()
+            self._autosave()
+            return False
+
+        # thinking-mode fix: persist reasoning_content with the assistant
+        # message so strict reasoning models can receive it back unchanged.
+        _asst_msg = {
+            "role":    "assistant",
+            "content": text_buf or None,
+            "tool_calls": [
+                {"id": tc_buf[i]["id"], "type": "function",
+                 "function": {"name": tc_buf[i]["name"], "arguments": tc_buf[i]["args"]}}
+                for i in sorted(tc_buf)
+            ],
+        }
+        if reasoning_buf:
+            _asst_msg["reasoning_content"] = reasoning_buf
+        self.messages.append(_asst_msg)
+        return True
+
+    # Main turn loop.
+    def run_turn(self, user_input: str):
+        dynamic_cfg = self._prepare_turn(user_input)
+        if dynamic_cfg is None:
+            return
 
         max_iter           = dynamic_cfg["max_iter"]
         renderer           = _PlanRenderer()
@@ -1679,85 +1786,22 @@ class AgentSession:
                             continue
                         print(c(_notice.color, _notice.message))
 
-                # API call with empty-response retry and exponential backoff.
-                _api_retry = 0
-                _API_RETRY_MAX = 3
-                text_buf = ""; tc_buf = {}
-
                 # Sliding-window view: send trimmed messages without mutating self.messages.
                 _api_msgs = self._build_api_messages()
-
-                while True:
-                    _api_result = self._consume_api_stream_attempt(
-                        _api_msgs, current_tools, current_max_tokens, renderer, iteration
-                    )
-                    if _api_result.error:
-                        self.messages.pop(); return
-
-                    text_buf, tc_buf, reasoning_buf = self._finalize_api_stream_result(
-                        _api_result, renderer, iteration
-                    )
-
-                    # Empty-response detection with exponential-backoff retry.
-                    # Usage-only and hidden reasoning-only deltas are not user-visible
-                    # answers, even when the provider reports completion tokens.
-                    _empty_response = is_empty_response(text_buf, tc_buf)
-
-                    if not _empty_response:
-                        break   # Valid response; exit retry loop.
-
-                    _api_retry += 1
-                    _retry_decision = decide_empty_response_retry(
-                        api_retry=_api_retry, max_retries=_API_RETRY_MAX
-                    )
-                    if _retry_decision.action == "giveup":
-                        if _debug_mode():
-                            print(c(YELLOW,
-                                f"\n  ⚠ [API Recovery] Received {_api_retry} consecutive empty responses; "
-                                "injecting recovery hint and continuing..."
-                            ))
-                        logger.warning(
-                            "API empty response: retries exhausted | "
-                            "model={} session={} iteration={} retries={}",
-                            self.model_alias, self.session_id[:8], iteration, _api_retry,
-                        )
-                        self.messages.append({
-                            "role": "user",
-                            "content": (
-                                "[System] Received an invalid response (empty content / 0 tokens). "
-                                "Re-check the task objective and continue. "
-                                "If this repeats, consider switching models (/model) or checking the API key."
-                            ),
-                        })
-                        break   # Exit retry loop and proceed to the next iteration.
-
-                    _wait = _retry_decision.wait_seconds
-                    if _debug_mode():
-                        print(c(YELLOW,
-                            f"\n  ⚠ [API Recovery] Invalid response received; attempting recovery... "
-                            f"({_api_retry}/{_API_RETRY_MAX}, waiting {_wait}s)"
-                        ))
-                    logger.warning(
-                        "API empty response detected, retrying | "
-                        "model={} session={} iteration={} attempt={} wait={}s",
-                        self.model_alias, self.session_id[:8], iteration, _api_retry, _wait,
-                    )
-                    time.sleep(_wait)
-                    continue   # Retry the API call.
-
-                # If retries are exhausted and the response is still empty, skip tool execution.
-                if _empty_response and _api_retry >= _API_RETRY_MAX:
-                    continue   # Proceed to the next iteration.
+                model_response = self._run_model_with_empty_response_recovery(
+                    _api_msgs, current_tools, current_max_tokens, renderer, iteration
+                )
+                if model_response is None:
+                    return
+                text_buf, tc_buf, reasoning_buf = model_response
+                if is_empty_response(text_buf, tc_buf):
+                    continue
 
                 if not tc_buf:
-                    # thinking-mode fix: store reasoning_content with the assistant
-                    # message so the next API call can send it back unchanged.
-                    _asst_msg: dict = {"role": "assistant", "content": text_buf}
-                    if reasoning_buf:
-                        _asst_msg["reasoning_content"] = reasoning_buf
-                    self.messages.append(_asst_msg)
-                    self._print_turn_summary()
-                    self._autosave(); return
+                    self._append_assistant_or_tool_call_message(
+                        text_buf, tc_buf, reasoning_buf
+                    )
+                    return
 
                 # ════════════════════════════════════════════════
                 # CoT Guard refactor: coaching mode.
@@ -1825,20 +1869,9 @@ class AgentSession:
                     )
 
 
-                # thinking-mode fix: persist reasoning_content with the assistant
-                # message so strict reasoning models can receive it back unchanged.
-                _asst_msg: dict = {
-                    "role":    "assistant",
-                    "content": text_buf or None,
-                    "tool_calls": [
-                        {"id": tc_buf[i]["id"], "type": "function",
-                         "function": {"name": tc_buf[i]["name"], "arguments": tc_buf[i]["args"]}}
-                        for i in sorted(tc_buf)
-                    ],
-                }
-                if reasoning_buf:
-                    _asst_msg["reasoning_content"] = reasoning_buf
-                self.messages.append(_asst_msg)
+                self._append_assistant_or_tool_call_message(
+                    text_buf, tc_buf, reasoning_buf
+                )
 
                 # Execute all tools.
                 for i in sorted(tc_buf):

@@ -292,7 +292,7 @@ async def fetch_models(
     maybe_warn_insecure_provider(models_url)
     all_data: list = []
     stats = {"returned": 0, "hidden_by_name": 0, "hidden_by_probe": 0, "selectable": 0}
-    url = f"{models_url}?limit=200"
+    url: str | None = f"{models_url}?limit=200"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             while url:

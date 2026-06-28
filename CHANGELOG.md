@@ -7,6 +7,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-06-28
+
+### Security
+- Hardened workspace backup restore so tar archives are validated before the
+  current workspace is moved. Restore now rejects absolute paths, parent
+  traversal, links, and special-file entries that could write outside the
+  runtime home or create unsafe filesystem objects.
+
+### Added
+- Added focused coverage for workspace cleanup restore safety, LSP-lite code
+  navigation helpers, and translated documentation structure checks.
+- Added a narrow mypy typed-island CI check for extracted turn, tool, runtime,
+  and provider-runtime modules.
+
+### Changed
+- Split safe turn preparation, empty-response recovery, and assistant/tool-call
+  message appending out of `AgentSession.run_turn` while preserving the existing
+  message shape and tool execution behavior.
+- Extracted OpenAI payload/header builders and OpenAI/Anthropic SSE line
+  readers from `stream_request` while keeping the existing dict delta protocol.
+- CI now runs the typed-island check after Ruff and before both fast and release
+  test jobs.
+
+### Fixed
+- Fixed workspace restore when no current workspace exists; the restore result
+  no longer references an unset replacement path.
+
+### Tests
+- Verified targeted workspace cleanup, LSP-lite, documentation structure,
+  typed-island mypy, provider runtime, tool executor, session, turn, and API
+  stream helper tests locally during release preparation.
+
 ## [0.1.4] - 2026-06-19
 
 ### Added
