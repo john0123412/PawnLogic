@@ -1,4 +1,4 @@
-[English](README.md) | **[中文](README_CN.md)**
+[English](README.md) | **[中文](README_zh-CN.md)**
 
 # PawnLogic
 
@@ -210,9 +210,9 @@ MCP 子进程 stderr 默认写入 `~/.pawnlogic/logs/mcp/<server>.stderr.log`。
 | 文档 | 描述 |
 |------|------|
 | [**README.md**](README.md) | 英文 README |
-| [**README_CN.md**](README_CN.md) | 本页 |
+| [**README_zh-CN.md**](README_zh-CN.md) | 本页 |
 | [**GUIDE.md**](GUIDE.md) | 完整参考：命令、架构和 FAQ |
-| [**GUIDE_CN.md**](GUIDE_CN.md) | 中文完整参考 |
+| [**GUIDE_zh-CN.md**](GUIDE_zh-CN.md) | 中文完整参考 |
 | [**CHANGELOG.md**](CHANGELOG.md) | 版本历史和发布说明 |
 | [**CONTRIBUTING.md**](CONTRIBUTING.md) | 贡献、Provider 和测试工作流 |
 | [**SECURITY.md**](SECURITY.md) | 漏洞报告策略 |

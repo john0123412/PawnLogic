@@ -20,12 +20,12 @@ def _tracked_files() -> list[str]:
     return [line for line in result.stdout.splitlines() if line]
 
 
-def test_chinese_text_only_appears_in_cn_files():
+def test_chinese_text_only_appears_in_zh_cn_files():
     violations: list[str] = []
 
     for relative_path in _tracked_files():
         path = ROOT / relative_path
-        if path.stem.endswith("_CN"):
+        if path.stem.endswith("_zh-CN"):
             continue
 
         try:
@@ -41,5 +41,5 @@ def test_chinese_text_only_appears_in_cn_files():
 
     assert not violations, (
         "Chinese text is only allowed in tracked files whose filename stem "
-        "ends with _CN:\n" + "\n".join(violations)
+        "ends with _zh-CN:\n" + "\n".join(violations)
     )

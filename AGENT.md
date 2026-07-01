@@ -104,7 +104,7 @@ The repository has one CLI runtime implementation.
 - English is the repository default. Do not add `_EN` suffixes for default
   English files; use names such as `README.md` and `GUIDE.md`.
 - Chinese is allowed only in repository files whose filename stem ends with
-  `_CN` (for example `README_CN.md` and `GUIDE_CN.md`), where it must match
+  `_zh-CN` (for example `README_zh-CN.md` and `GUIDE_zh-CN.md`), where it must match
   the English documentation semantically.
 - Do not introduce Chinese text anywhere else in the repository, including
   Python source, shell scripts, tests, fixtures, config files, commit-facing
@@ -128,15 +128,15 @@ Documentation drift is considered a bug.
   final report. If the change affects user-facing behavior, installation,
   commands, providers/models, MCP/tool behavior, trust boundaries, security
   posture, docs navigation, packaging, CI, or release flow, update both
-  `README.md` and `README_CN.md` in the same change.
+  `README.md` and `README_zh-CN.md` in the same change.
 - If a change does not require a README edit, say so explicitly in the final
   report as `README reviewed: no change needed`, with the reason.
 - README updates must be completed before release PR merge, release tag
   creation, package build, or PyPI upload. Do not treat a post-release README
   cleanup as fixing the already published PyPI project page.
-- `README.md` and `README_CN.md` must stay structurally and semantically
+- `README.md` and `README_zh-CN.md` must stay structurally and semantically
   equivalent.
-- `GUIDE.md` and `GUIDE_CN.md` must stay structurally and semantically
+- `GUIDE.md` and `GUIDE_zh-CN.md` must stay structurally and semantically
   equivalent.
 - `tools/check_doc_structure.py` and the Docs workflow must enforce matching
   heading level/order for the English and Chinese documentation pairs.
@@ -148,9 +148,9 @@ Documentation drift is considered a bug.
   `[desc]`.
 - When provider/model behavior changes, update all of these together:
   - `README.md`
-  - `README_CN.md`
+  - `README_zh-CN.md`
   - `GUIDE.md`
-  - `GUIDE_CN.md`
+  - `GUIDE_zh-CN.md`
   - `CONTRIBUTING.md` if contributor workflow is affected
   - `pawnlogic/cli.py` help text
   - `core/commands/provider.py` user-facing messages
@@ -163,10 +163,10 @@ Useful drift scans:
 
 ```bash
 rg -n "appear automatically|only shows configured|ds-chat|ds-r1|gpt-3\.5-turbo|myrelay/gpt-4o" \
-  README.md README_CN.md GUIDE.md GUIDE_CN.md CONTRIBUTING.md pawnlogic/cli.py core tests
+  README.md README_zh-CN.md GUIDE.md GUIDE_zh-CN.md CONTRIBUTING.md pawnlogic/cli.py core tests
 
 rg -n "<name>|/provider activate|/provider deactivate|active provider" \
-  README.md README_CN.md GUIDE.md GUIDE_CN.md pawnlogic/cli.py core/commands/provider.py
+  README.md README_zh-CN.md GUIDE.md GUIDE_zh-CN.md pawnlogic/cli.py core/commands/provider.py
 ```
 
 ## Third-Party Skill Pack Policy
@@ -197,7 +197,7 @@ package contents.
   resources after attribution is recorded. Do not claim third-party CTF skill
   content is fully self-developed or original to PawnLogic.
 - When changing skill-pack packaging or installation behavior, update
-  `README.md`, `README_CN.md`, `GUIDE.md`, `GUIDE_CN.md`,
+  `README.md`, `README_zh-CN.md`, `GUIDE.md`, `GUIDE_zh-CN.md`,
   `THIRD_PARTY_NOTICES.md`, `CHANGELOG.md`, and the packaging tests together.
 
 ## Configuration And Database Cleanliness
@@ -358,7 +358,7 @@ git commit -m "<type>: <summary>"
 - Version release work must start on a new remote test branch such as
   `test/release-<version>` or `fix/<issue>-<version>`.
 - Before tagging or publishing a version, verify that `README.md`,
-  `README_CN.md`, `GUIDE.md`, `GUIDE_CN.md`, `CHANGELOG.md`, `SECURITY.md`,
+  `README_zh-CN.md`, `GUIDE.md`, `GUIDE_zh-CN.md`, `CHANGELOG.md`, `SECURITY.md`,
   and package metadata all describe the release consistently.
 - PyPI renders the long description embedded in the built distribution at
   upload time. PyPI does not update an existing version's project description
@@ -450,7 +450,7 @@ Allowed version-bump edits:
 1. `config/paths.py`
    - Change only `VERSION`.
    - This is the only runtime source of truth.
-2. `README.md` and `README_CN.md`
+2. `README.md` and `README_zh-CN.md`
    - Update only the version badge when the badge contains a literal version.
    - Keep both language files aligned.
 3. `SECURITY.md`
@@ -475,9 +475,9 @@ Version-bump validation:
 ```bash
 rg -n '^VERSION = "[0-9]+\.[0-9]+\.[0-9]+"' config/paths.py
 rg -n 'pypi/v/pawnlogic|^## \[[0-9]+\.[0-9]+\.[0-9]+\]|^[|] [0-9]+\.[0-9]+\.[0-9]+' \
-  README.md README_CN.md CHANGELOG.md SECURITY.md
-git diff --stat -- config/paths.py README.md README_CN.md CHANGELOG.md SECURITY.md
-git diff --name-only | rg -v '^(config/paths\.py|README(_CN)?\.md|CHANGELOG\.md|SECURITY\.md)$' || true
+  README.md README_zh-CN.md CHANGELOG.md SECURITY.md
+git diff --stat -- config/paths.py README.md README_zh-CN.md CHANGELOG.md SECURITY.md
+git diff --name-only | rg -v '^(config/paths\.py|README(_zh-CN)?\.md|CHANGELOG\.md|SECURITY\.md)$' || true
 ```
 
 The diff should be limited to the fixed locations above unless the task

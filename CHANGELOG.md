@@ -258,7 +258,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [0.0.10] - 2026-06-14
 
 ### Added
-- Added a repository language policy test that fails when tracked non-`*_CN`
+- Added a repository language policy test that fails when tracked non-`*_zh-CN`
   files contain Chinese text, keeping source, workflows, config, prompts, and
   agent instructions English-only by default.
 - Added MCP Roots support for the stdio filesystem server and a configurable
@@ -400,7 +400,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `main.py` is now a thin source-checkout compatibility wrapper. The single
   CLI runtime implementation lives in `pawnlogic/cli.py`, and `pawn.sh` now
   launches `python -m pawnlogic`.
-- README, README_CN, GUIDE, GUIDE_CN, AGENT, CLAUDE, and CONTRIBUTING now
+- README, README_zh-CN, GUIDE, GUIDE_zh-CN, AGENT, CLAUDE, and CONTRIBUTING now
   document pip as the official install path and `install.sh` as a pip-based
   installer wrapper.
 
@@ -445,7 +445,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   exclude`; install with `pip install pawnlogic[ctf]` for CTF tooling
   dependencies and install skill packs explicitly when needed.
 - `requirements.txt` removed; `pip install -e .` is the single source of
-  truth. README, README_CN, GUIDE, GUIDE_CN, and `pawn.sh` all updated.
+  truth. README, README_zh-CN, GUIDE, GUIDE_zh-CN, and `pawn.sh` all updated.
 - README "What's New" sections now link to `CHANGELOG.md` instead of being
   re-edited each release.
 - `.env.example` clarifies that `XIAOMI_API_KEY` is for a custom provider
@@ -566,7 +566,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Issue and PR templates under `.github/`
 
 ### Documentation
-- Rewrote `README.md` and `README_CN.md` with accurate model list, provider table, and project structure
+- Rewrote `README.md` and `README_zh-CN.md` with accurate model list, provider table, and project structure
 
 ---
 

@@ -1,4 +1,4 @@
-**[English](README.md)** | [Chinese](README_CN.md)
+**[English](README.md)** | [Chinese](README_zh-CN.md)
 
 # PawnLogic
 
@@ -255,9 +255,9 @@ The project directory contains no secrets and is safe to commit or share.
 | Document | Description |
 |----------|-------------|
 | [**README.md**](README.md) | This page |
-| [**README_CN.md**](README_CN.md) | Chinese README |
+| [**README_zh-CN.md**](README_zh-CN.md) | Chinese README |
 | [**GUIDE.md**](GUIDE.md) | Full reference: commands, architecture, and FAQ |
-| [**GUIDE_CN.md**](GUIDE_CN.md) | Chinese full reference |
+| [**GUIDE_zh-CN.md**](GUIDE_zh-CN.md) | Chinese full reference |
 | [**CHANGELOG.md**](CHANGELOG.md) | Version history and release notes |
 | [**CONTRIBUTING.md**](CONTRIBUTING.md) | Contribution, provider, and test workflow |
 | [**SECURITY.md**](SECURITY.md) | Vulnerability reporting policy |

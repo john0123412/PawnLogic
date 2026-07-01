@@ -9,8 +9,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 PAIRS = (
-    ("README.md", "README_CN.md"),
-    ("GUIDE.md", "GUIDE_CN.md"),
+    ("README.md", "README_zh-CN.md"),
+    ("GUIDE.md", "GUIDE_zh-CN.md"),
 )
 AGENT_WRAPPER_MAX_LINES = 20
 
