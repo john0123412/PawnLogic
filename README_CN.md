@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.1.5**。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.1.6**。
 
 ## 系统要求
 
@@ -85,13 +85,13 @@ python -m pawnlogic --help
 
 ## 新特性
 
-0.1.5 强化维护和发布可靠性：
+0.1.6 延续维护加固路线：
 
-- `/workspace cleanup restore` 会在替换当前 workspace 前验证 backup tar archive。
-- Restore 会拒绝可能写出 Runtime Home 或创建不安全 filesystem object 的 path traversal、link 和 special-file archive entry。
-- CI 现在会在 fast 和 release 测试前运行窄范围 mypy typed-island 检查。
-- `run_turn` 和 `stream_request` 被拆成更小 helper，同时保持现有 message 和 stream event 形状。
-- 增加 workspace cleanup、LSP-lite 和翻译文档结构检查的聚焦测试覆盖。
+- `/workspace cleanup restore` 现在会先把 backup 解包到 staging 区域，确认成功后才替换当前 workspace。
+- Restore 在解包失败或 archive 缺少必需的 `workspace/` 目录时，会保留当前 workspace。
+- `run_turn` 继续拆出 plan guard、concurrency limit 和 tool batch helper，同时保持 message 形状和 tool result 顺序。
+- Provider stream reader 选择逻辑现在收敛到内部 `_read_sse_lines()` helper，不改变公开 stream delta schema。
+- typed-island CI 检查扩展到 API error、hybrid tool-call parsing、tool registry snapshot 和 context-window helper。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 

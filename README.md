@@ -11,7 +11,7 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.1.5**.
+CTF-oriented toolchain. The current public release is **0.1.6**.
 
 ## System Requirements
 
@@ -95,17 +95,18 @@ Use `pawn --debug` or `/mode` when you need detailed diagnostics.
 
 ## What's New
 
-Version 0.1.5 hardens maintenance and release reliability:
+Version 0.1.6 continues the maintenance hardening track:
 
-- `/workspace cleanup restore` validates backup tar archives before replacing
-  the current workspace.
-- Restore rejects path traversal, links, and special-file archive entries that
-  could write outside the runtime home or create unsafe filesystem objects.
-- CI now runs a narrow mypy typed-island check before fast and release tests.
-- `run_turn` and `stream_request` were split into smaller helpers while keeping
-  the existing message and stream event shapes.
-- Added focused coverage for workspace cleanup, LSP-lite, and translated
-  documentation structure checks.
+- `/workspace cleanup restore` now extracts backups into a staging area and
+  replaces the current workspace only after extraction succeeds.
+- Restore preserves the current workspace when extraction fails or the archive
+  does not contain the required `workspace/` directory.
+- `run_turn` now has smaller plan-guard, concurrency-limit, and tool-batch
+  helpers while preserving message shapes and tool result ordering.
+- Provider stream reader selection now uses an internal `_read_sse_lines()`
+  helper without changing the public stream delta schema.
+- The typed-island CI check now covers API errors, hybrid tool-call parsing,
+  tool registry snapshots, and context-window helpers.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
