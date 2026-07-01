@@ -363,6 +363,128 @@ def test_api_client_stream_request_yields_retry_notice_for_retryable_http(monkey
     assert events[1]["choices"][0]["delta"]["content"] == "ok"
 
 
+def test_api_client_stream_request_honors_retry_after(monkeypatch):
+    _drop_project_modules("config")
+    _drop_project_modules("core.api_client", force=True)
+    from core import api_client
+
+    class FakeSocket:
+        def settimeout(self, _timeout):
+            pass
+
+    class FakeResponse:
+        status = 429
+
+        def __init__(self):
+            self.headers = {"Retry-After": "3"}
+
+        def read(self, _limit=-1):
+            return b'{"error":{"message":"rate limited"}}'
+
+    class FakeConn:
+        sock = FakeSocket()
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return FakeResponse()
+
+        def close(self):
+            pass
+
+    retry_calls = []
+    sleeps = []
+
+    monkeypatch.setattr(
+        api_client,
+        "_open_connection",
+        lambda *_args, **_kwargs: (FakeConn(), "/v1/chat/completions"),
+    )
+    monkeypatch.setattr(
+        api_client,
+        "_retry_delay",
+        lambda attempt, retry_after=None: retry_calls.append((attempt, retry_after)) or 0.25,
+    )
+    monkeypatch.setattr(api_client, "_interruptible_sleep", lambda seconds: sleeps.append(seconds))
+
+    gen = api_client.stream_request([{"role": "user", "content": "hi"}], "ds-v4-flash")
+    event = next(gen)
+
+    assert event["_retry"].startswith("HTTP 429")
+    assert retry_calls == [(0, "3")]
+    assert sleeps == []
+
+    next(gen)
+    assert sleeps == [0.25]
+
+
+def test_api_client_stream_request_retries_oserror_before_partial_content(monkeypatch):
+    _drop_project_modules("config")
+    _drop_project_modules("core.api_client", force=True)
+    from core import api_client
+
+    class FakeSocket:
+        def settimeout(self, _timeout):
+            pass
+
+    class ErrorResponse:
+        status = 200
+
+        def __init__(self):
+            self.headers = {}
+
+        def readline(self):
+            raise OSError("stream reset before content")
+
+    class SuccessResponse:
+        status = 200
+
+        def __init__(self):
+            self.headers = {}
+            self._lines = [
+                b'data: {"choices":[{"delta":{"content":"ok"}}]}\r\n',
+                b"data: [DONE]\r\n",
+            ]
+
+        def readline(self):
+            if self._lines:
+                return self._lines.pop(0)
+            return b""
+
+    class FakeConn:
+        def __init__(self, response):
+            self.response = response
+            self.sock = FakeSocket()
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return self.response
+
+        def close(self):
+            pass
+
+    responses = [ErrorResponse(), SuccessResponse()]
+    sleeps = []
+
+    monkeypatch.setattr(
+        api_client,
+        "_open_connection",
+        lambda *_args, **_kwargs: (FakeConn(responses.pop(0)), "/v1/chat/completions"),
+    )
+    monkeypatch.setattr(api_client, "_retry_delay", lambda *_args, **_kwargs: 0.01)
+    monkeypatch.setattr(api_client, "_interruptible_sleep", lambda seconds: sleeps.append(seconds))
+
+    events = list(api_client.stream_request([{"role": "user", "content": "hi"}], "ds-v4-flash"))
+
+    assert events[0]["_retry"]
+    assert "stream reset before content" in events[0]["_retry"]
+    assert events[1]["choices"][0]["delta"]["content"] == "ok"
+    assert sleeps == [0.01]
+
+
 def test_api_client_call_once_retries_retryable_http(monkeypatch):
     _drop_project_modules("config")
     _drop_project_modules("core.api_client", force=True)

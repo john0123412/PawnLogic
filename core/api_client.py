@@ -764,6 +764,13 @@ def _read_openai_sse_lines(resp):
                 yield {"_usage": usage}
             yield parsed
 
+
+def _read_sse_lines(resp, api_fmt: str):
+    if api_fmt == "anthropic":
+        yield from _read_anthropic_sse_lines(resp)
+    else:
+        yield from _read_openai_sse_lines(resp)
+
 # ════════════════════════════════════════════════════════
 # Streaming request generator.
 # ════════════════════════════════════════════════════════
@@ -859,13 +866,8 @@ def stream_request(
             # Connection established; reset circuit breaker.
             _cb_record_success(provider)
 
-            if api_fmt == "anthropic":
-                yield from _read_anthropic_sse_lines(resp)
-                return
-
-            else:
-                yield from _read_openai_sse_lines(resp)
-                return
+            yield from _read_sse_lines(resp, api_fmt)
+            return
 
         except socket.timeout:
             raise_if_interrupted()

@@ -89,6 +89,59 @@ def test_read_anthropic_sse_lines_yields_usage_and_text_delta():
     ]
 
 
+def test_read_anthropic_sse_lines_yields_tool_use_deltas():
+    response = _FakeStreamResponse([
+        b"event: content_block_start\r\n",
+        (
+            b'data: {"type":"content_block_start","index":0,'
+            b'"content_block":{"type":"tool_use","id":"toolu_1","name":"read_file","input":{}}}\r\n'
+        ),
+        b"event: content_block_delta\r\n",
+        (
+            b'data: {"type":"content_block_delta","index":0,'
+            b'"delta":{"type":"input_json_delta","partial_json":"{\\"path\\""}}\r\n'
+        ),
+        b"event: content_block_delta\r\n",
+        (
+            b'data: {"type":"content_block_delta","index":0,'
+            b'"delta":{"type":"input_json_delta","partial_json":":\\"README.md\\"}"}}\r\n'
+        ),
+        b"event: content_block_stop\r\n",
+        b'data: {"type":"content_block_stop","index":0}\r\n',
+        b"event: message_stop\r\n",
+        b'data: {"type":"message_stop"}\r\n',
+    ])
+
+    events = list(api_client._read_anthropic_sse_lines(response))
+
+    assert events == [
+        {
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "toolu_1",
+                        "function": {"name": "read_file", "arguments": '{"path"'},
+                    }],
+                },
+                "finish_reason": None,
+            }],
+        },
+        {
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "toolu_1",
+                        "function": {"name": "read_file", "arguments": ':"README.md"}'},
+                    }],
+                },
+                "finish_reason": None,
+            }],
+        },
+    ]
+
+
 def test_read_openai_sse_lines_reports_partial_end_after_content_then_oserror():
     response = _FakeStreamResponse(
         [b'data: {"choices":[{"delta":{"content":"partial"}}]}\r\n'],
@@ -100,4 +153,30 @@ def test_read_openai_sse_lines_reports_partial_end_after_content_then_oserror():
     assert events == [
         {"choices": [{"delta": {"content": "partial"}}]},
         {"_partial_end": True, "_error": "Stream interrupted after partial content: connection lost"},
+    ]
+
+
+def test_read_openai_sse_lines_reraises_oserror_without_partial_content():
+    response = _FakeStreamResponse([], error_after_lines=OSError("connection lost"))
+
+    try:
+        list(api_client._read_openai_sse_lines(response))
+    except OSError as exc:
+        assert str(exc) == "connection lost"
+    else:
+        raise AssertionError("expected OSError")
+
+
+def test_read_sse_lines_selects_provider_reader():
+    openai_response = _FakeStreamResponse([b'data: {"choices":[{"delta":{"content":"ok"}}]}\r\n'])
+    anthropic_response = _FakeStreamResponse([
+        b"event: content_block_delta\r\n",
+        b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}\r\n',
+    ])
+
+    assert list(api_client._read_sse_lines(openai_response, "openai")) == [
+        {"choices": [{"delta": {"content": "ok"}}]},
+    ]
+    assert list(api_client._read_sse_lines(anthropic_response, "anthropic")) == [
+        {"choices": [{"delta": {"content": "hi"}, "finish_reason": None}]},
     ]
