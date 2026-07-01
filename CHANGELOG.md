@@ -7,6 +7,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-07-01
+
+### Security
+- Made workspace backup restore atomic by extracting archives into a staging
+  directory first, requiring a restored `workspace/` directory, and replacing
+  the current Workspace only after extraction succeeds.
+
+### Changed
+- Continued decomposing `AgentSession.run_turn()` by extracting plan-guard,
+  concurrency-limit, and tool-batch execution helpers while preserving the
+  existing Turn message shapes and Tool Call result ordering.
+- Consolidated provider stream reader selection behind an internal
+  `_read_sse_lines()` helper without changing the public stream delta schema.
+- Expanded the CI mypy typed island to cover API error formatting, hybrid Tool
+  Call parsing, tool registry snapshots, and context-window helpers.
+
+### Fixed
+- Preserved the current Workspace when restore extraction fails or when a backup
+  archive lacks the required `workspace/` directory.
+- Fixed the hybrid Tool Call parser's local regex match typing so the expanded
+  typed-island check passes without broadening mypy scope.
+
+### Tests
+- Added stream-reader regression coverage for Anthropic `tool_use` deltas,
+  OpenAI usage chunks, Retry-After handling, and pre-content stream resets.
+- Added maintenance-tool coverage for `tools/merge_ctf_skills.py`, including
+  dry-run behavior, default non-overwrite behavior, forced overwrite behavior,
+  and invalid source directory errors.
+- Verified the 0.1.6 release branch with Ruff, typed-island mypy, translated
+  documentation structure checks, Python 3.10/3.11/3.12 non-E2E suites, dynamic
+  E2E, package build checks, and wheel skill-pack exclusion checks.
+
 ## [0.1.5] - 2026-06-28
 
 ### Security
