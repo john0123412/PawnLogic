@@ -104,6 +104,45 @@ def test_restore_without_existing_workspace_does_not_reference_unset_replacement
     assert (wc.WORKSPACE_PATH / "restored.txt").read_text(encoding="utf-8") == "new"
 
 
+def test_restore_extract_failure_preserves_existing_workspace(monkeypatch, tmp_path):
+    wc = _load_workspace_cleanup(monkeypatch, tmp_path)
+    wc.WORKSPACE_PATH.mkdir(parents=True)
+    (wc.WORKSPACE_PATH / "keep.txt").write_text("keep", encoding="utf-8")
+    backup = _write_tar(
+        tmp_path / "backup.tar.gz",
+        [
+            ("dir", "workspace"),
+            ("file", "workspace/restored.txt", b"new"),
+        ],
+    )
+
+    def fail_extractall(self, path=".", members=None, *, numeric_owner=False):
+        raise OSError("boom")
+
+    monkeypatch.setattr(tarfile.TarFile, "extractall", fail_extractall)
+
+    result = wc.restore_from_backup(backup)
+
+    assert result["ok"] is False
+    assert "boom" in result["error"]
+    assert (wc.WORKSPACE_PATH / "keep.txt").read_text(encoding="utf-8") == "keep"
+    assert not (wc.WORKSPACE_PATH / "restored.txt").exists()
+
+
+def test_restore_requires_workspace_directory(monkeypatch, tmp_path):
+    wc = _load_workspace_cleanup(monkeypatch, tmp_path)
+    wc.WORKSPACE_PATH.mkdir(parents=True)
+    (wc.WORKSPACE_PATH / "keep.txt").write_text("keep", encoding="utf-8")
+    backup = _write_tar(tmp_path / "backup.tar.gz", [("file", "loose.txt", b"loose")])
+
+    result = wc.restore_from_backup(backup)
+
+    assert result["ok"] is False
+    assert "workspace" in result["error"].lower()
+    assert (wc.WORKSPACE_PATH / "keep.txt").read_text(encoding="utf-8") == "keep"
+    assert not (wc.PAWN_HOME / "loose.txt").exists()
+
+
 def test_restore_rejects_absolute_member_path_without_moving_workspace(monkeypatch, tmp_path):
     wc = _load_workspace_cleanup(monkeypatch, tmp_path)
     wc.WORKSPACE_PATH.mkdir(parents=True)

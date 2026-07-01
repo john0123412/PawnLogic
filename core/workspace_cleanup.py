@@ -109,6 +109,31 @@ def _validated_restore_members(tf: tarfile.TarFile, root: Path) -> list[tarfile.
     return members
 
 
+def _restore_staging_path(ts: str) -> Path:
+    return PAWN_HOME / f".restore_staging_{ts}"
+
+
+def _extract_restore_to_staging(
+    backup_path: Path,
+    members: list[tarfile.TarInfo],
+    staging: Path,
+) -> None:
+    staging.mkdir(parents=True, exist_ok=False)
+    with tarfile.open(backup_path, "r:gz") as tf:
+        tf.extractall(str(staging), members=members)
+    if not (staging / "workspace").is_dir():
+        raise ValueError("backup archive must contain a workspace directory")
+
+
+def _replace_workspace_from_staging(staging: Path, ts: str) -> Path | None:
+    replaced: Path | None = None
+    if WORKSPACE_PATH.exists():
+        replaced = WORKSPACE_PATH.parent / f"workspace_replaced_{ts}"
+        os.rename(str(WORKSPACE_PATH), str(replaced))
+    os.rename(str(staging / "workspace"), str(WORKSPACE_PATH))
+    return replaced
+
+
 def _categorize(name: str, is_dir: bool) -> str:
     """Map a file to an archive category consistent with cleanup_plan.md."""
     if is_dir and name.startswith("session_"):
@@ -459,7 +484,7 @@ def execute_cleanup(rows: list, db: dict) -> dict:
 # ════════════════════════════════════════════════════════
 
 def restore_from_backup(backup_path: Optional[Path] = None) -> dict:
-    """Extract a backup tar into ~/.pawnlogic/. This overwrites current workspace content."""
+    """Restore a workspace backup via staged extraction and atomic replacement."""
     if backup_path is None:
         if not LAST_BACKUP.exists():
             return {"ok": False, "error": ".last_backup record not found"}
@@ -467,22 +492,18 @@ def restore_from_backup(backup_path: Optional[Path] = None) -> dict:
     if not backup_path.exists():
         return {"ok": False, "error": f"backup file does not exist: {backup_path}"}
 
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    staging = _restore_staging_path(ts)
     try:
         with tarfile.open(backup_path, "r:gz") as tf:
-            members = _validated_restore_members(tf, PAWN_HOME)
+            members = _validated_restore_members(tf, staging)
+        _extract_restore_to_staging(backup_path, members, staging)
+        replaced = _replace_workspace_from_staging(staging, ts)
     except (tarfile.TarError, OSError, ValueError) as exc:
+        shutil.rmtree(staging, ignore_errors=True)
         return {"ok": False, "error": f"unsafe backup archive: {exc}"}
-
-    # Rename current workspace to _replaced_<ts> only after the archive is
-    # validated, so rejected backups leave current data untouched.
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    replaced: Path | None = None
-    if WORKSPACE_PATH.exists():
-        replaced = WORKSPACE_PATH.parent / f"workspace_replaced_{ts}"
-        os.rename(str(WORKSPACE_PATH), str(replaced))
-
-    with tarfile.open(backup_path, "r:gz") as tf:
-        tf.extractall(str(PAWN_HOME), members=members)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
     return {"ok": True, "restored_from": str(backup_path),
             "old_workspace_renamed_to": str(replaced) if replaced else None}
