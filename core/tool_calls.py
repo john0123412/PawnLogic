@@ -113,11 +113,11 @@ def extract_tool_calls(
     if "<tool_call>" not in text_buf:
         return results
 
-    match = _TOOL_CALL_JSON_RE.search(text_buf)
-    if not match:
+    json_match = _TOOL_CALL_JSON_RE.search(text_buf)
+    if not json_match:
         return results
 
-    json_str = _TOOL_CALL_CLOSE_RE.sub("", match.group(1)).strip()
+    json_str = _TOOL_CALL_CLOSE_RE.sub("", json_match.group(1)).strip()
     try:
         parsed_tc = json.loads(json_str, strict=False)
         parsed_call = _call_from_json(parsed_tc, "json")
