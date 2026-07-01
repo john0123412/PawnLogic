@@ -1635,6 +1635,244 @@ class AgentSession:
         self.messages.append(_asst_msg)
         return True
 
+    def _apply_plan_guard(
+        self,
+        text_buf: str,
+        tc_buf: dict,
+        plan_rejected: int,
+        iteration: int,
+    ) -> tuple[str, int, bool]:
+        plan_decision = decide_plan_guard(
+            missing_required_plan=_tool_call_missing_plan(text_buf, tc_buf),
+            plan_rejected=plan_rejected,
+            max_soft=_MAX_SOFT_CORRECTIONS,
+        )
+        plan_rejected = plan_decision.plan_rejected
+
+        if plan_decision.action == "hard":
+            print(c(RED,
+                    f"  ⛔ [CoT Guard] Missing <plan> for {plan_rejected} consecutive attempts; task stopped."
+                    ))
+            print(c(GRAY,
+                    "  Suggestions: 1. Simplify the instruction  2. Switch to a stronger model (/model ds-v4-pro)"
+                    ))
+            logger.warning(
+                "CoT Guard: hard kill triggered | "
+                "model={} session={} iteration={} plan_rejected={}",
+                self.model_alias, self.session_id[:8],
+                iteration, plan_rejected,
+            )
+            return "hard", plan_rejected, False
+
+        if plan_decision.action == "soft":
+            if _debug_mode():
+                print(c(YELLOW,
+                    f"  💭 [CoT Soft #{plan_rejected}/{_MAX_SOFT_CORRECTIONS}] "
+                    "Missing <plan> detected; tools will run and the correction signal will be injected after results..."
+                ))
+            logger.debug(
+                "CoT Guard: soft intercept #{} | model={} session={} iteration={}",
+                plan_rejected, self.model_alias, self.session_id[:8], iteration,
+            )
+            return "soft", plan_rejected, True
+
+        return "ok", plan_rejected, False
+
+    def _apply_concurrency_limit(self, tc_buf: dict) -> dict:
+        concurrency = decide_concurrency_truncation(
+            tc_buf.keys(), _MAX_CONCURRENT_TOOLS
+        )
+        if not concurrency.truncated:
+            return tc_buf
+
+        orig = concurrency.original_count
+        limited = {k: tc_buf[k] for k in concurrency.kept_keys}
+        if _debug_mode():
+            print(c(YELLOW, f"  ✂ [Concurrency Limit] Truncated {orig} tool calls to the first {_MAX_CONCURRENT_TOOLS}."))
+        logger.warning(
+            "Concurrent tool limit | model={} session={} original={} kept={}",
+            self.model_alias, self.session_id[:8], orig, _MAX_CONCURRENT_TOOLS,
+        )
+        return limited
+
+    def _execute_tool_batch(
+        self,
+        tc_buf: dict,
+        *,
+        plan_signal_injected: bool,
+        iteration: int,
+        max_iter: int,
+        tool_executor: ToolExecutor,
+        result_processor: ToolResultProcessor,
+        current_tools: list | None,
+    ) -> list | None:
+        for i in sorted(tc_buf):
+            tc = tc_buf[i]
+            name = tc["name"]
+
+            fn_args = resolve_tool_arguments(tc)
+            preview = preview_tool_arguments(fn_args)
+            iter_tag = c(GRAY, f"[{iteration+1}/{max_iter}]")
+
+            # In user mode, detect skill-pack script calls and simplify output.
+            _is_skill_call = False
+            if _user_mode() and name == "run_shell":
+                _cmd = fn_args.get("command", "") or fn_args.get("_raw_args", "")
+                _skills_dir_str = str(SKILLS_DIR).replace("\\", "/")
+                if _skills_dir_str in _cmd.replace("\\", "/") and any(
+                    _cmd.strip().endswith(ext) or f"python3 {_skills_dir_str}" in _cmd.replace("\\", "/")
+                    for ext in (".py", ".sh")
+                ):
+                    _is_skill_call = True
+                    # Extract the skill-pack name from the command path.
+                    _parts = _cmd.replace("\\", "/").split("/skills/")
+                    _pack_hint = _parts[1].split("/")[0] if len(_parts) > 1 else "unknown"
+                    print(c(GREEN, f"  🚀 [P6] Running automated validation script for {_pack_hint}...") + f" {iter_tag}")
+
+            if not _is_skill_call:
+                if _debug_mode():
+                    print(c(YELLOW, f"  🔧 {name}") + c(GRAY, f"({preview[:80]})") + f" {iter_tag}")
+                else:
+                    print(c(YELLOW, f"  Working with {name}...") + f" {iter_tag}")
+
+            # switch_phase intercept; mutate instance state directly.
+            if name == "switch_phase":
+                phase_result = tool_executor.execute_phase_switch(
+                    fn_args=fn_args,
+                    current_phase=self.current_phase,
+                )
+                result = phase_result.content
+                if phase_result.switched:
+                    self.current_phase = phase_result.target_phase
+                    # Rebuild the dynamic tool list for the next iteration.
+                    current_tools = phase_result.active_tools
+                    print(c(MAGENTA,
+                        f"  🔀 [Phase Switch] {phase_result.old_phase} → "
+                        f"{phase_result.target_phase}  ({phase_result.reason[:60]})"
+                    ))
+                    logger.info(
+                        "Phase switch | model={} session={} {} → {} reason={}",
+                        self.model_alias, self.session_id[:8],
+                        phase_result.old_phase,
+                        phase_result.target_phase,
+                        phase_result.reason,
+                    )
+                    # Refresh the phase-awareness block in the system prompt.
+                    self._reset_system_prompt()
+
+                # Phase results are not audited or truncated. A non-directory
+                # tool ran, so reset the directory counter, then record.
+                result_processor.reset_directory_counter()
+                self._turn_tool_calls += 1
+                self.total_tool_calls += 1
+                self.messages.append({
+                    "role": "tool", "tool_call_id": tc["id"], "content": result,
+                })
+
+            else:
+                precheck = tool_executor.precheck_failures(
+                    tool_name=name,
+                    args_preview=preview[:200],
+                    is_audited=name in _AUDITED_TOOLS,
+                )
+                _failure_warning = precheck.warning
+                if precheck.failure_count and _debug_mode():
+                    print(c(YELLOW,
+                        f"  ⚠ [Anti-Pattern] {name} has "
+                        f"{precheck.failure_count} historical failure records"
+                    ))
+
+                execution = tool_executor.execute_handler(
+                    tool_call_id=tc["id"],
+                    tool_name=name,
+                    fn_args=fn_args,
+                    context=self._tool_execution_context(iteration),
+                    args_preview=preview[:200],
+                )
+                result = execution.content
+                _audit_ok = execution.audit_ok
+                _elapsed_ms = execution.elapsed_ms
+
+                record_result = tool_executor.record_failure(
+                    tool_name=name,
+                    args_preview=preview[:200],
+                    content=result,
+                    audit_ok=_audit_ok,
+                    is_audited=name in _AUDITED_TOOLS,
+                    session_id=self.session_id,
+                )
+                if record_result.gsa_sunk and _debug_mode():
+                    print(c(YELLOW, f"  📝 [GSA Sink] {record_result.gsa_message}"))
+
+                processed = result_processor.process(
+                    result=result,
+                    tool_name=name,
+                    fn_args=fn_args,
+                    args_preview=preview[:200],
+                    audit_ok=_audit_ok,
+                    elapsed_ms=_elapsed_ms,
+                    failure_warning=_failure_warning,
+                    iteration=iteration,
+                    user_mode=_user_mode(),
+                    max_chars=_dynamic_config()["tool_max_chars"],
+                )
+
+                # Print processor notices, gated by display level.
+                for _notice in processed.notices:
+                    if _notice.level == "debug" and not _debug_mode():
+                        continue
+                    if _notice.level == "user" and not _user_mode():
+                        continue
+                    print(c(_notice.color, _notice.message))
+
+                # Write audit log (side effect kept in the caller).
+                _audit_event = processed.audit_event
+                if _audit_event is not None:
+                    try:
+                        _audit_metadata = None
+                        try:
+                            from core.ctf_workspace import ctf_audit_metadata
+                            _ctf_meta = ctf_audit_metadata(self.workspace_dir)
+                            if _ctf_meta:
+                                _audit_metadata = {"ctf": _ctf_meta}
+                        except Exception:
+                            _audit_metadata = None
+                        audit_tool_call(
+                            tool_name    = _audit_event.tool_name,
+                            args_summary = _audit_event.args_summary,
+                            result_len   = _audit_event.result_len,
+                            elapsed_ms   = _audit_event.elapsed_ms,
+                            session_id   = self.session_id,
+                            model_alias  = self.model_alias,
+                            iteration    = _audit_event.iteration,
+                            success      = _audit_event.success,
+                            metadata     = _audit_metadata,
+                        )
+                    except Exception:
+                        pass  # Audit logging must not block the main flow.
+
+                self._turn_tool_calls += 1
+                self.total_tool_calls += 1
+                self.messages.append({
+                    "role": "tool", "tool_call_id": tc["id"], "content": processed.content,
+                })
+                for _injection in processed.injections:
+                    self.messages.append({"role": "user", "content": _injection})
+
+        # After all tool results are appended, inject PLAN_MISSING if a soft
+        # intercept fired. The model sees results first, then corrects.
+        if plan_signal_injected:
+            self.messages.append({
+                "role":    "user",
+                "content": _PLAN_MISSING_SIGNAL,
+            })
+            print(c(GRAY,
+                "  🔄 [CoT Self-Correction] PLAN_MISSING correction signal injected; "
+                "the model will self-correct next iteration."
+            ))
+
+        return current_tools
+
     # Main turn loop.
     def run_turn(self, user_input: str):
         dynamic_cfg = self._prepare_turn(user_input)
@@ -1815,231 +2053,29 @@ class AgentSession:
                 #   · Does not block tool execution; the model sees results first.
                 #   · Appends the signal as a "user" role after tool results.
                 # ════════════════════════════════════════════════
-                _plan_signal_injected = False
-                _plan_decision = decide_plan_guard(
-                    missing_required_plan=_tool_call_missing_plan(text_buf, tc_buf),
-                    plan_rejected=_plan_rejected,
-                    max_soft=_MAX_SOFT_CORRECTIONS,
+                _plan_action, _plan_rejected, _plan_signal_injected = self._apply_plan_guard(
+                    text_buf, tc_buf, _plan_rejected, iteration
                 )
-                _plan_rejected = _plan_decision.plan_rejected
-
-                if _plan_decision.action == "hard":
+                if _plan_action == "hard":
                     # Hard stop after soft intercepts are exhausted.
-                    print(c(RED,
-                            f"  ⛔ [CoT Guard] Missing <plan> for {_plan_rejected} consecutive attempts; task stopped."
-                            ))
-                    print(c(GRAY,
-                            "  Suggestions: 1. Simplify the instruction  2. Switch to a stronger model (/model ds-v4-pro)"
-                            ))
-                    logger.warning(
-                        "CoT Guard: hard kill triggered | "
-                        "model={} session={} iteration={} plan_rejected={}",
-                        self.model_alias, self.session_id[:8],
-                        iteration, _plan_rejected,
-                    )
                     if self.messages and self.messages[-1]["role"] == "user":
                         self.messages.pop()  # Remove the latest user message to keep context clean.
                     return
 
-                elif _plan_decision.action == "soft":
-                    # Soft intercept: tools still run; inject correction signal after results.
-                    if _debug_mode():
-                        print(c(YELLOW,
-                            f"  💭 [CoT Soft #{_plan_rejected}/{_MAX_SOFT_CORRECTIONS}] "
-                            "Missing <plan> detected; tools will run and the correction signal will be injected after results..."
-                        ))
-                    logger.debug(
-                        "CoT Guard: soft intercept #{} | model={} session={} iteration={}",
-                        _plan_rejected, self.model_alias, self.session_id[:8], iteration,
-                    )
-                    _plan_signal_injected = True
-
                 # Module 1B: concurrent call truncation.
-                _concurrency = decide_concurrency_truncation(
-                    tc_buf.keys(), _MAX_CONCURRENT_TOOLS
-                )
-                if _concurrency.truncated:
-                    orig = _concurrency.original_count
-                    tc_buf = {k: tc_buf[k] for k in _concurrency.kept_keys}
-                    if _debug_mode():
-                        print(c(YELLOW, f"  ✂ [Concurrency Limit] Truncated {orig} tool calls to the first {_MAX_CONCURRENT_TOOLS}."))
-                    logger.warning(
-                        "Concurrent tool limit | model={} session={} original={} kept={}",
-                        self.model_alias, self.session_id[:8], orig, _MAX_CONCURRENT_TOOLS,
-                    )
-
-
+                tc_buf = self._apply_concurrency_limit(tc_buf)
                 self._append_assistant_or_tool_call_message(
                     text_buf, tc_buf, reasoning_buf
                 )
-
-                # Execute all tools.
-                for i in sorted(tc_buf):
-                    tc = tc_buf[i];
-                    name = tc["name"]
-
-                    fn_args = resolve_tool_arguments(tc)
-                    preview  = preview_tool_arguments(fn_args)
-                    iter_tag = c(GRAY, f"[{iteration+1}/{max_iter}]")
-
-                    # In user mode, detect skill-pack script calls and simplify output.
-                    _is_skill_call = False
-                    if _user_mode() and name == "run_shell":
-                        _cmd = fn_args.get("command", "") or fn_args.get("_raw_args", "")
-                        _skills_dir_str = str(SKILLS_DIR).replace("\\", "/")
-                        if _skills_dir_str in _cmd.replace("\\", "/") and any(
-                            _cmd.strip().endswith(ext) or f"python3 {_skills_dir_str}" in _cmd.replace("\\", "/")
-                            for ext in (".py", ".sh")
-                        ):
-                            _is_skill_call = True
-                            # Extract the skill-pack name from the command path.
-                            _parts = _cmd.replace("\\", "/").split("/skills/")
-                            _pack_hint = _parts[1].split("/")[0] if len(_parts) > 1 else "unknown"
-                            print(c(GREEN, f"  🚀 [P6] Running automated validation script for {_pack_hint}...") + f" {iter_tag}")
-
-                    if not _is_skill_call:
-                        if _debug_mode():
-                            print(c(YELLOW, f"  🔧 {name}") + c(GRAY, f"({preview[:80]})") + f" {iter_tag}")
-                        else:
-                            print(c(YELLOW, f"  Working with {name}...") + f" {iter_tag}")
-
-                    # switch_phase intercept; mutate instance state directly.
-                    if name == "switch_phase":
-                        phase_result = tool_executor.execute_phase_switch(
-                            fn_args=fn_args,
-                            current_phase=self.current_phase,
-                        )
-                        result = phase_result.content
-                        if phase_result.switched:
-                            self.current_phase = phase_result.target_phase
-                            # Rebuild the dynamic tool list for the next iteration.
-                            current_tools = phase_result.active_tools
-                            print(c(MAGENTA,
-                                f"  🔀 [Phase Switch] {phase_result.old_phase} → "
-                                f"{phase_result.target_phase}  ({phase_result.reason[:60]})"
-                            ))
-                            logger.info(
-                                "Phase switch | model={} session={} {} → {} reason={}",
-                                self.model_alias, self.session_id[:8],
-                                phase_result.old_phase,
-                                phase_result.target_phase,
-                                phase_result.reason,
-                            )
-                            # Refresh the phase-awareness block in the system prompt.
-                            self._reset_system_prompt()
-
-                        # Phase results are not audited or truncated. A non-directory
-                        # tool ran, so reset the directory counter, then record.
-                        result_processor.reset_directory_counter()
-                        self._turn_tool_calls += 1
-                        self.total_tool_calls += 1
-                        self.messages.append({
-                            "role": "tool", "tool_call_id": tc["id"], "content": result,
-                        })
-
-                    else:
-                        precheck = tool_executor.precheck_failures(
-                            tool_name=name,
-                            args_preview=preview[:200],
-                            is_audited=name in _AUDITED_TOOLS,
-                        )
-                        _failure_warning = precheck.warning
-                        if precheck.failure_count and _debug_mode():
-                            print(c(YELLOW,
-                                f"  ⚠ [Anti-Pattern] {name} has "
-                                f"{precheck.failure_count} historical failure records"
-                            ))
-
-                        execution = tool_executor.execute_handler(
-                            tool_call_id=tc["id"],
-                            tool_name=name,
-                            fn_args=fn_args,
-                            context=self._tool_execution_context(iteration),
-                            args_preview=preview[:200],
-                        )
-                        result = execution.content
-                        _audit_ok = execution.audit_ok
-                        _elapsed_ms = execution.elapsed_ms
-
-                        record_result = tool_executor.record_failure(
-                            tool_name=name,
-                            args_preview=preview[:200],
-                            content=result,
-                            audit_ok=_audit_ok,
-                            is_audited=name in _AUDITED_TOOLS,
-                            session_id=self.session_id,
-                        )
-                        if record_result.gsa_sunk and _debug_mode():
-                            print(c(YELLOW, f"  📝 [GSA Sink] {record_result.gsa_message}"))
-
-                        processed = result_processor.process(
-                            result=result,
-                            tool_name=name,
-                            fn_args=fn_args,
-                            args_preview=preview[:200],
-                            audit_ok=_audit_ok,
-                            elapsed_ms=_elapsed_ms,
-                            failure_warning=_failure_warning,
-                            iteration=iteration,
-                            user_mode=_user_mode(),
-                            max_chars=_dynamic_config()["tool_max_chars"],
-                        )
-
-                        # Print processor notices, gated by display level.
-                        for _notice in processed.notices:
-                            if _notice.level == "debug" and not _debug_mode():
-                                continue
-                            if _notice.level == "user" and not _user_mode():
-                                continue
-                            print(c(_notice.color, _notice.message))
-
-                        # Write audit log (side effect kept in the caller).
-                        _audit_event = processed.audit_event
-                        if _audit_event is not None:
-                            try:
-                                _audit_metadata = None
-                                try:
-                                    from core.ctf_workspace import ctf_audit_metadata
-                                    _ctf_meta = ctf_audit_metadata(self.workspace_dir)
-                                    if _ctf_meta:
-                                        _audit_metadata = {"ctf": _ctf_meta}
-                                except Exception:
-                                    _audit_metadata = None
-                                audit_tool_call(
-                                    tool_name    = _audit_event.tool_name,
-                                    args_summary = _audit_event.args_summary,
-                                    result_len   = _audit_event.result_len,
-                                    elapsed_ms   = _audit_event.elapsed_ms,
-                                    session_id   = self.session_id,
-                                    model_alias  = self.model_alias,
-                                    iteration    = _audit_event.iteration,
-                                    success      = _audit_event.success,
-                                    metadata     = _audit_metadata,
-                                )
-                            except Exception:
-                                pass  # Audit logging must not block the main flow.
-
-                        self._turn_tool_calls += 1
-                        self.total_tool_calls += 1
-                        self.messages.append({
-                            "role": "tool", "tool_call_id": tc["id"], "content": processed.content,
-                        })
-                        for _injection in processed.injections:
-                            self.messages.append({"role": "user", "content": _injection})
-
-                # ════════════════════════════════════════════════
-                # After all tool results are appended, inject PLAN_MISSING if a
-                # soft intercept fired. The model sees results first, then corrects.
-                # ════════════════════════════════════════════════
-                if _plan_signal_injected:
-                    self.messages.append({
-                        "role":    "user",
-                        "content": _PLAN_MISSING_SIGNAL,
-                    })
-                    print(c(GRAY,
-                        "  🔄 [CoT Self-Correction] PLAN_MISSING correction signal injected; "
-                        "the model will self-correct next iteration."
-                    ))
+                current_tools = self._execute_tool_batch(
+                    tc_buf,
+                    plan_signal_injected=_plan_signal_injected,
+                    iteration=iteration,
+                    max_iter=max_iter,
+                    tool_executor=tool_executor,
+                    result_processor=result_processor,
+                    current_tools=current_tools,
+                )
 
             except KeyboardInterrupt:
                 self._autosave()
