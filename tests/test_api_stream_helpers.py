@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from core import api_client
+from core import provider_streams
 
 
 class _FakeStreamResponse:
@@ -232,3 +233,32 @@ def test_read_sse_lines_selects_provider_reader():
     assert list(api_client._read_sse_lines(anthropic_response, "anthropic")) == [
         {"choices": [{"delta": {"content": "hi"}, "finish_reason": None}]},
     ]
+
+
+def test_provider_streams_selector_matches_api_client_wrapper():
+    openai_response = _FakeStreamResponse([b'data: {"choices":[{"delta":{"content":"ok"}}]}\r\n'])
+
+    events = list(provider_streams.read_sse_lines(
+        openai_response,
+        "openai",
+        read_timeout=60,
+        raise_if_interrupted=lambda: None,
+    ))
+
+    assert events == [{"choices": [{"delta": {"content": "ok"}}]}]
+
+
+def test_api_client_stream_helpers_are_compatibility_wrappers():
+    event = api_client._anthropic_parse_sse(
+        "content_block_delta",
+        '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}',
+        {"tool_blocks": {}},
+    )
+
+    assert event == {"choices": [{"delta": {"content": "hi"}, "finish_reason": None}]}
+    assert api_client.parse_sse_delta('{"choices":[]}') == {"choices": []}
+    assert api_client._stream_interruption_delta(
+        OSError("connection lost"), "partial"
+    ) == provider_streams.stream_interruption_delta(
+        OSError("connection lost"), "partial"
+    )

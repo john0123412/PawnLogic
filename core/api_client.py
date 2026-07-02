@@ -10,7 +10,7 @@ and exponential backoff.
 """
 
 import copy
-import json, re, os, ssl, socket, time, threading
+import json, os, ssl, socket, time, threading
 import http.client
 from urllib.parse import urlparse
 from config import get_provider_config, MODELS, DEFAULT_MODEL, DYNAMIC_CONFIG
@@ -21,6 +21,7 @@ from core.api_errors import (
     retry_notice,
 )
 from core.interrupts import clear_cancel_callback, raise_if_interrupted, set_cancel_callback
+from core import provider_streams
 from core.provider_runtime import maybe_warn_insecure_provider
 
 
@@ -328,54 +329,7 @@ def _open_connection(
 # ════════════════════════════════════════════════════════
 
 def parse_sse_delta(raw: str) -> dict | None:
-    raw = raw.strip()
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-    cleaned = re.sub(r',\s*([}\]])', r'\1', raw)
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        pass
-
-    def _escape_inner(s: str) -> str:
-        result = []; in_str = False; escaped = False
-        for ch in s:
-            if escaped:
-                result.append(ch); escaped = False; continue
-            if ch == '\\':
-                result.append(ch); escaped = True; continue
-            if ch == '"':
-                in_str = not in_str; result.append(ch); continue
-            if in_str and ch == '\n':
-                result.append('\\n'); continue
-            if in_str and ch == '\r':
-                result.append('\\r'); continue
-            if in_str and ch == '\t':
-                result.append('\\t'); continue
-            result.append(ch)
-        return "".join(result)
-
-    cleaned2 = _escape_inner(cleaned)
-    try:
-        return json.loads(cleaned2)
-    except json.JSONDecodeError:
-        pass
-
-    # Fallback: extract content with regex.
-    result: dict = {"choices": [{"delta": {}, "finish_reason": None}]}
-    delta = result["choices"][0]["delta"]
-    m_content = re.search(r'"content"\s*:\s*"((?:[^"\\]|\\.)*)"', cleaned2)
-    if m_content:
-        try:    delta["content"] = json.loads('"' + m_content.group(1) + '"')
-        except Exception: delta["content"] = m_content.group(1)
-    m_finish = re.search(r'"finish_reason"\s*:\s*"?(\w+)"?', raw)
-    if m_finish:
-        result["choices"][0]["finish_reason"] = m_finish.group(1)
-    return result if delta else None
+    return provider_streams.parse_sse_delta(raw)
 
 # ════════════════════════════════════════════════════════
 # tool_call ID completion.
@@ -527,85 +481,7 @@ def _anthropic_build_headers(api_key: str, body_len: int) -> dict:
 # ════════════════════════════════════════════════════════
 
 def _anthropic_parse_sse(event_type: str, data_raw: str, state: dict) -> dict | None:
-    """
-    Parse one Anthropic SSE event and return a unified delta dict.
-    state tracks: {"tool_blocks": {idx: {id, name, args}}}
-    """
-    try:
-        data = json.loads(data_raw)
-    except json.JSONDecodeError:
-        return None
-
-    etype = data.get("type", event_type)
-
-    if etype == "message_start":
-        usage = data.get("message", {}).get("usage", {})
-        if usage:
-            return {"_usage": usage}
-        return None
-
-    if etype == "content_block_start":
-        block = data.get("content_block", {})
-        idx = data.get("index", 0)
-        if block.get("type") == "tool_use":
-            state.setdefault("tool_blocks", {})[idx] = {
-                "id":   block.get("id", ""),
-                "name": block.get("name", ""),
-                "args": "",
-            }
-        return None
-
-    if etype == "content_block_delta":
-        delta = data.get("delta", {})
-        idx = data.get("index", 0)
-        delta_type = delta.get("type", "")
-
-        if delta_type == "text_delta":
-            return {
-                "choices": [{
-                    "delta":          {"content": delta.get("text", "")},
-                    "finish_reason":  None,
-                }],
-            }
-
-        if delta_type == "input_json_delta":
-            partial = delta.get("partial_json", "")
-            tb = state.get("tool_blocks", {}).get(idx, {})
-            tb["args"] = tb.get("args", "") + partial
-            return {
-                "choices": [{
-                    "delta": {
-                        "tool_calls": [{
-                            "index": idx,
-                            "id":     tb.get("id", ""),
-                            "function": {
-                                "name":      tb.get("name", ""),
-                                "arguments": partial,
-                            },
-                        }],
-                    },
-                    "finish_reason": None,
-                }],
-            }
-        return None
-
-    if etype == "content_block_stop":
-        return None
-
-    if etype == "message_delta":
-        usage = data.get("usage", {})
-        result = {}
-        if usage:
-            result["_usage"] = usage
-        stop = data.get("delta", {}).get("stop_reason")
-        if stop:
-            result["choices"] = [{"delta": {}, "finish_reason": stop}]
-        return result if result else None
-
-    if etype == "message_stop":
-        return None
-
-    return None
+    return provider_streams.parse_anthropic_sse_event(event_type, data_raw, state)
 
 
 def _anthropic_parse_response(raw_bytes: bytes) -> tuple[str, str | None]:
@@ -659,117 +535,32 @@ def _build_openai_headers(api_key: str, body_len: int) -> dict:
 
 
 def _stream_interruption_delta(error: OSError, partial_text: str) -> dict[str, object] | None:
-    if not partial_text:
-        return None
-    return {
-        "_partial_end": True,
-        "_error": f"Stream interrupted after partial content: {error}",
-    }
+    return provider_streams.stream_interruption_delta(error, partial_text)
 
 
 def _read_anthropic_sse_lines(resp):
-    current_event = ""
-    state: dict = {"tool_blocks": {}}
-    partial_text = ""
-    while True:
-        raise_if_interrupted()
-        try:
-            raw_line = resp.readline()
-            raise_if_interrupted()
-        except socket.timeout:
-            raise_if_interrupted()
-            yield {
-                "_error": (
-                    f"Read timeout ({_READ_TIMEOUT}s): provider stopped sending stream data. "
-                    "Check network, proxy settings, or switch provider."
-                )
-            }
-            return
-        except OSError as e:
-            raise_if_interrupted()
-            partial_event = _stream_interruption_delta(e, partial_text)
-            if partial_event is not None:
-                yield partial_event
-                return
-            raise
-
-        if not raw_line:
-            return
-
-        line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
-
-        if line.startswith("event: "):
-            current_event = line[7:].strip()
-            continue
-
-        if not line.startswith("data: "):
-            continue
-
-        data_raw = line[6:].strip()
-        parsed = _anthropic_parse_sse(current_event, data_raw, state)
-        if parsed is not None:
-            raise_if_interrupted()
-            if "_usage" in parsed:
-                yield {"_usage": parsed["_usage"]}
-            if "choices" in parsed:
-                choices = parsed["choices"]
-                if choices:
-                    partial_text += choices[0].get("delta", {}).get("content") or ""
-                yield parsed
+    yield from provider_streams.read_anthropic_sse_lines(
+        resp,
+        read_timeout=_READ_TIMEOUT,
+        raise_if_interrupted=raise_if_interrupted,
+    )
 
 
 def _read_openai_sse_lines(resp):
-    partial_text = ""
-    while True:
-        raise_if_interrupted()
-        try:
-            raw_line = resp.readline()
-            raise_if_interrupted()
-        except socket.timeout:
-            raise_if_interrupted()
-            yield {
-                "_error": (
-                    f"Read timeout ({_READ_TIMEOUT}s): provider stopped sending stream data. "
-                    "Check network, proxy settings, or switch provider."
-                )
-            }
-            return
-        except OSError as e:
-            raise_if_interrupted()
-            partial_event = _stream_interruption_delta(e, partial_text)
-            if partial_event is not None:
-                yield partial_event
-                return
-            raise
-
-        if not raw_line:
-            return
-
-        line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
-        if not line.startswith("data: "):
-            continue
-
-        data_raw = line[6:].strip()
-        if data_raw == "[DONE]":
-            return
-
-        parsed = parse_sse_delta(data_raw)
-        if parsed is not None:
-            raise_if_interrupted()
-            choices = parsed.get("choices", [])
-            if choices:
-                partial_text += choices[0].get("delta", {}).get("content") or ""
-            usage = parsed.get("usage")
-            if usage and isinstance(usage, dict):
-                yield {"_usage": usage}
-            yield parsed
+    yield from provider_streams.read_openai_sse_lines(
+        resp,
+        read_timeout=_READ_TIMEOUT,
+        raise_if_interrupted=raise_if_interrupted,
+    )
 
 
 def _read_sse_lines(resp, api_fmt: str):
-    if api_fmt == "anthropic":
-        yield from _read_anthropic_sse_lines(resp)
-    else:
-        yield from _read_openai_sse_lines(resp)
+    yield from provider_streams.read_sse_lines(
+        resp,
+        api_fmt,
+        read_timeout=_READ_TIMEOUT,
+        raise_if_interrupted=raise_if_interrupted,
+    )
 
 # ════════════════════════════════════════════════════════
 # Streaming request generator.

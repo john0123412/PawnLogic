@@ -85,6 +85,7 @@ jobs:
             core/tool_executor.py \
             core/runtime_context.py \
             core/provider_runtime.py \
+            core/provider_streams.py \
             core/api_errors.py \
             core/tool_calls.py \
             core/tool_registry.py \
