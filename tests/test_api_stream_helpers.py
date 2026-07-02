@@ -142,6 +142,58 @@ def test_read_anthropic_sse_lines_yields_tool_use_deltas():
     ]
 
 
+def test_stream_interruption_delta_returns_none_without_partial_text():
+    assert api_client._stream_interruption_delta(OSError("connection lost"), "") is None
+
+
+def test_stream_interruption_delta_reports_partial_text():
+    event = api_client._stream_interruption_delta(OSError("connection lost"), "partial")
+
+    assert event == {
+        "_partial_end": True,
+        "_error": "Stream interrupted after partial content: connection lost",
+    }
+
+
+def test_read_anthropic_sse_lines_preserves_multiple_tool_use_delta_order():
+    response = _FakeStreamResponse([
+        b"event: content_block_start\r\n",
+        (
+            b'data: {"type":"content_block_start","index":0,'
+            b'"content_block":{"type":"tool_use","id":"toolu_1","name":"read_file","input":{}}}\r\n'
+        ),
+        b"event: content_block_delta\r\n",
+        (
+            b'data: {"type":"content_block_delta","index":0,'
+            b'"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":\\"README.md\\"}"}}\r\n'
+        ),
+        b"event: content_block_start\r\n",
+        (
+            b'data: {"type":"content_block_start","index":1,'
+            b'"content_block":{"type":"tool_use","id":"toolu_2","name":"list_dir","input":{}}}\r\n'
+        ),
+        b"event: content_block_delta\r\n",
+        (
+            b'data: {"type":"content_block_delta","index":1,'
+            b'"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":\\".\\"}"}}\r\n'
+        ),
+        b"event: message_stop\r\n",
+        b'data: {"type":"message_stop"}\r\n',
+    ])
+
+    events = list(api_client._read_anthropic_sse_lines(response))
+
+    tool_calls = [
+        event["choices"][0]["delta"]["tool_calls"][0]
+        for event in events
+        if "tool_calls" in event["choices"][0]["delta"]
+    ]
+    assert [(call["index"], call["id"], call["function"]["name"]) for call in tool_calls] == [
+        (0, "toolu_1", "read_file"),
+        (1, "toolu_2", "list_dir"),
+    ]
+
+
 def test_read_openai_sse_lines_reports_partial_end_after_content_then_oserror():
     response = _FakeStreamResponse(
         [b'data: {"choices":[{"delta":{"content":"partial"}}]}\r\n'],

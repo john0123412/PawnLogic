@@ -658,13 +658,13 @@ def _build_openai_headers(api_key: str, body_len: int) -> dict:
     }
 
 
-def _handle_stream_oserror(exc: OSError, partial_text: str) -> dict | None:
-    if partial_text:
-        return {
-            "_partial_end": True,
-            "_error": f"Stream interrupted after partial content: {exc}",
-        }
-    return None
+def _stream_interruption_delta(error: OSError, partial_text: str) -> dict[str, object] | None:
+    if not partial_text:
+        return None
+    return {
+        "_partial_end": True,
+        "_error": f"Stream interrupted after partial content: {error}",
+    }
 
 
 def _read_anthropic_sse_lines(resp):
@@ -687,7 +687,7 @@ def _read_anthropic_sse_lines(resp):
             return
         except OSError as e:
             raise_if_interrupted()
-            partial_event = _handle_stream_oserror(e, partial_text)
+            partial_event = _stream_interruption_delta(e, partial_text)
             if partial_event is not None:
                 yield partial_event
                 return
@@ -736,7 +736,7 @@ def _read_openai_sse_lines(resp):
             return
         except OSError as e:
             raise_if_interrupted()
-            partial_event = _handle_stream_oserror(e, partial_text)
+            partial_event = _stream_interruption_delta(e, partial_text)
             if partial_event is not None:
                 yield partial_event
                 return
