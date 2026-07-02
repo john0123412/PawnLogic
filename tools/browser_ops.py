@@ -193,7 +193,7 @@ def _retry_fetch(fetcher, url: str, timeout_ms: int, max_retries: int = 3):
                 f"retrying after {delay}s..."
             ))
             time.sleep(delay)
-    raise last_exc
+    raise RuntimeError("fetch retry loop exhausted") from last_exc
 
 
 def _safe_path(filename: str) -> str:

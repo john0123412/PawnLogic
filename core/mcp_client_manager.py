@@ -504,6 +504,8 @@ class MCPClientManager:
                 _truncate_stderr_log(errlog_path)
             raise
 
+        if self._stack is None:
+            raise RuntimeError("MCP client manager is not running")
         await self._stack.enter_async_context(sub)
         self._sessions[name] = session
 
