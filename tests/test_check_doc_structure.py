@@ -55,3 +55,9 @@ def test_check_agent_wrapper_rejects_long_wrapper(monkeypatch, tmp_path):
     errors = check_doc_structure.check_agent_wrapper("CLAUDE.md", "@AGENT.md")
 
     assert any("should stay a thin wrapper" in error for error in errors)
+
+
+def test_doc_structure_uses_formal_zh_cn_filenames():
+    assert ("README.md", "README_zh-CN.md") in check_doc_structure.PAIRS
+    assert ("GUIDE.md", "GUIDE_zh-CN.md") in check_doc_structure.PAIRS
+    assert all("_CN.md" not in right for _, right in check_doc_structure.PAIRS)

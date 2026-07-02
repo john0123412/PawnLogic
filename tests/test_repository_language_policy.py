@@ -43,3 +43,9 @@ def test_chinese_text_only_appears_in_zh_cn_files():
         "Chinese text is only allowed in tracked files whose filename stem "
         "ends with _zh-CN:\n" + "\n".join(violations)
     )
+
+
+def test_legacy_cn_documentation_filenames_are_not_tracked():
+    legacy_names = {"README_CN.md", "GUIDE_CN.md"}
+
+    assert legacy_names.isdisjoint(_tracked_files())
