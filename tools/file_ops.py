@@ -17,7 +17,7 @@ from config import (
     scrub_sensitive_env,
 )
 from core.state import runtime_config
-from core.trust import TrustLevel, trust_notice_for
+from core.trust import TrustBoundaryKind, trust_notice_for_boundary
 from utils.ansi import c, YELLOW, BLUE, GRAY
 from core.logger import logger
 from core.operation_policy import (
@@ -88,7 +88,7 @@ def _emit_run_shell_warning() -> None:
     if not _runtime_state.user_mode:
         return
     _run_shell_warning_emitted = True
-    print(c(YELLOW, trust_notice_for(TrustLevel.HOST_SHELL)))
+    print(c(YELLOW, trust_notice_for_boundary(TrustBoundaryKind.HOST_SHELL)))
 
 # ════════════════════════════════════════════════════════
 # Security checks.

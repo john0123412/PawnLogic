@@ -34,9 +34,9 @@ from config import BROWSER_CONFIG, WORKSPACE_DIR
 from core.state import state as _runtime_state
 from core.trust import (
     BROWSER_SANDBOX_DISABLED,
-    TrustLevel,
+    TrustBoundaryKind,
     trust_notice,
-    trust_notice_for,
+    trust_notice_for_boundary,
 )
 from tools.web_ops import validate_fetch_url
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN
@@ -81,7 +81,7 @@ def _emit_browser_trust_warning() -> None:
     if _browser_warning_emitted or not _user_mode():
         return
     _browser_warning_emitted = True
-    print(c(YELLOW, trust_notice_for(TrustLevel.NETWORK)))
+    print(c(YELLOW, trust_notice_for_boundary(TrustBoundaryKind.BROWSER_NETWORK)))
     if BROWSER_CONFIG.get("allow_no_sandbox", False):
         print(c(YELLOW, trust_notice(BROWSER_SANDBOX_DISABLED)))
 

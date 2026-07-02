@@ -25,7 +25,7 @@ from core.api_errors import format_http_error, format_transport_error
 from core.file_store import atomic_write_text, ensure_private_dir
 from core.logger import logger
 from core.state import state as _runtime_state
-from core.trust import TrustLevel, trust_notice_for
+from core.trust import TrustBoundaryKind, trust_notice_for_boundary
 
 PAWNLOGIC_DIR = PAWNLOGIC_HOME
 ENV_PATH = PAWNLOGIC_DIR / ".env"
@@ -49,7 +49,7 @@ def maybe_warn_insecure_provider(base_url: str, *, emit=print) -> None:
         return
     _WARNED_HTTP_PROVIDER_URLS.add(url)
     if _user_mode():
-        emit(trust_notice_for(TrustLevel.INSECURE_TRANSPORT))
+        emit(trust_notice_for_boundary(TrustBoundaryKind.PLAIN_HTTP))
 
 
 def save_key(env_var: str, key: str) -> None:

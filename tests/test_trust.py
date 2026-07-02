@@ -4,9 +4,14 @@ from core import provider_runtime
 from core.state import state as runtime_state
 from core.trust import (
     BROWSER_SANDBOX_DISABLED,
+    TRUST_BOUNDARIES,
+    TRUST_NOTICES,
+    TrustBoundaryKind,
     TrustLevel,
     subagent_notice,
+    trust_boundary_for,
     trust_notice,
+    trust_notice_for_boundary,
     trust_notice_for,
 )
 
@@ -18,6 +23,23 @@ def test_trust_notice_adds_standard_prefix():
 def test_every_trust_level_has_a_standard_notice():
     for level in TrustLevel:
         assert trust_notice_for(level).startswith("  [Trust Boundary] ")
+
+
+def test_every_named_boundary_has_a_standard_notice_and_legacy_level():
+    assert set(TRUST_BOUNDARIES) == set(TrustBoundaryKind)
+    for kind, boundary in TRUST_BOUNDARIES.items():
+        assert boundary.kind is kind
+        assert boundary.level in TrustLevel
+        assert boundary.notice == trust_notice(boundary.message)
+        assert trust_notice_for_boundary(kind) == boundary.notice
+        assert trust_boundary_for(boundary.level) == boundary
+
+
+def test_legacy_notice_mapping_delegates_to_boundaries():
+    for level, message in TRUST_NOTICES.items():
+        boundary = trust_boundary_for(level)
+        assert message == boundary.message
+        assert trust_notice_for(level) == boundary.notice
 
 
 def test_static_trust_notices_match_existing_user_facing_text():
@@ -68,4 +90,4 @@ def test_insecure_provider_warning_uses_centralized_notice(monkeypatch):
         emit=emitted.append,
     )
 
-    assert emitted == [trust_notice_for(TrustLevel.INSECURE_TRANSPORT)]
+    assert emitted == [trust_notice_for_boundary(TrustBoundaryKind.PLAIN_HTTP)]
