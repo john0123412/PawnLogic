@@ -56,6 +56,7 @@ from config.security import scrub_sensitive_env
 DEFAULT_TIMEOUT = 30                       # Default call_tool timeout, seconds.
 STARTUP_TIMEOUT = 60                       # Total server startup timeout.
 DEFAULT_SERVER_STARTUP_TIMEOUT = 15        # Per-server initialization timeout.
+MCP_STDERR_LOG_MAX_BYTES = 64 * 1024       # Keep failed-server stderr logs bounded.
 NAME_SEPARATOR = "__"                      # Tool-name prefix separator.
 WORKSPACE_ASSETS = PAWNLOGIC_HOME / "workspace" / "mcp_assets"
 MCP_STDERR_LOG_DIR = PAWNLOGIC_HOME / "logs" / "mcp"
@@ -128,6 +129,21 @@ def _safe_server_log_name(name: str) -> str:
 
 def _mcp_stderr_log_path(name: str) -> Path:
     return MCP_STDERR_LOG_DIR / f"{_safe_server_log_name(name)}.stderr.log"
+
+
+def _truncate_stderr_log(path: Path, max_bytes: int = MCP_STDERR_LOG_MAX_BYTES) -> None:
+    """Keep an MCP stderr log bounded after a startup failure."""
+    try:
+        if max_bytes <= 0 or not path.exists() or path.stat().st_size <= max_bytes:
+            return
+        with path.open("rb") as fh:
+            fh.seek(-max_bytes, os.SEEK_END)
+            tail = fh.read()
+        path.write_bytes(
+            b"[stderr truncated; keeping latest bytes]\n" + tail
+        )
+    except Exception as exc:
+        logger.debug(f"[MCP] failed to truncate stderr log {path}: {exc}")
 
 
 def _resolve_roots() -> list[Path]:
@@ -467,13 +483,15 @@ class MCPClientManager:
 
         # One sub-stack per server: local cleanup on failure, graft into global on success.
         sub = AsyncExitStack()
+        errlog_path: Path | None = None
         try:
             if self._debug_stderr:
                 errlog = sys.stderr
             else:
                 MCP_STDERR_LOG_DIR.mkdir(parents=True, exist_ok=True)
+                errlog_path = _mcp_stderr_log_path(name)
                 errlog = sub.enter_context(
-                    _mcp_stderr_log_path(name).open("a", encoding="utf-8")
+                    errlog_path.open("a", encoding="utf-8")
                 )
             read, write = await sub.enter_async_context(stdio_client(params, errlog=errlog))
             session = await sub.enter_async_context(
@@ -482,6 +500,8 @@ class MCPClientManager:
             await session.initialize()
         except BaseException:
             await sub.aclose()                 # Clean up subprocess.
+            if errlog_path is not None:
+                _truncate_stderr_log(errlog_path)
             raise
 
         await self._stack.enter_async_context(sub)
