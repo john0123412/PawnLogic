@@ -1873,6 +1873,22 @@ class AgentSession:
 
         return current_tools
 
+    def _autosave_iteration_checkpoint(self, iteration: int) -> None:
+        if iteration > 0 and iteration % 5 == 0:
+            self._autosave()
+
+    def _maybe_append_anti_loop_injection(self, result_processor, iteration: int) -> None:
+        anti_loop = result_processor.maybe_anti_loop_injection(iteration)
+        if anti_loop is None:
+            return
+        self.messages.append({"role": "user", "content": anti_loop.injection})
+        for notice in anti_loop.notices:
+            if notice.level == "debug" and not _debug_mode():
+                continue
+            if notice.level == "user" and not _user_mode():
+                continue
+            print(c(notice.color, notice.message))
+
     # Main turn loop.
     def run_turn(self, user_input: str):
         dynamic_cfg = self._prepare_turn(user_input)
@@ -1910,8 +1926,7 @@ class AgentSession:
         for iteration in range(max_iter):
             try:
                 # Mid-turn checkpoint: save intermediate state every 5 iterations.
-                if iteration > 0 and iteration % 5 == 0:
-                    self._autosave()
+                self._autosave_iteration_checkpoint(iteration)
 
                 # P6.5: show loaded skill-pack status on the first iteration.
                 if iteration == 0 and self._loaded_skill_packs:
@@ -2014,15 +2029,7 @@ class AgentSession:
                 compact_redundant_tool_error_messages(self.messages)
 
                 # 3. Repeated error detection: identical command and error 3 times.
-                _anti_loop = result_processor.maybe_anti_loop_injection(iteration)
-                if _anti_loop is not None:
-                    self.messages.append({"role": "user", "content": _anti_loop.injection})
-                    for _notice in _anti_loop.notices:
-                        if _notice.level == "debug" and not _debug_mode():
-                            continue
-                        if _notice.level == "user" and not _user_mode():
-                            continue
-                        print(c(_notice.color, _notice.message))
+                self._maybe_append_anti_loop_injection(result_processor, iteration)
 
                 # Sliding-window view: send trimmed messages without mutating self.messages.
                 _api_msgs = self._build_api_messages()

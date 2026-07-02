@@ -586,6 +586,50 @@ def test_run_turn_unknown_tool_appends_error_tool_result(monkeypatch):
     assert audit_tool_call.call_args.kwargs["success"] is False
 
 
+def test_run_turn_preserves_tool_result_order(monkeypatch):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    monkeypatch.setitem(session_mod.TOOL_MAP, "list_dir", lambda _args: "one")
+    monkeypatch.setitem(session_mod.TOOL_MAP, "read_file", lambda _args: "two")
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_sequence(
+            (
+                {"choices": [{"delta": {"content": "<plan><intent>run tools</intent></plan>"}}]},
+                {
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": "call_1",
+                                "function": {"name": "list_dir", "arguments": "{}"},
+                            }],
+                        },
+                    }],
+                },
+                {
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 1,
+                                "id": "call_2",
+                                "function": {"name": "read_file", "arguments": "{}"},
+                            }],
+                        },
+                    }],
+                },
+            ),
+            _assistant_done_response(),
+        ),
+    )
+
+    s.run_turn("use tools")
+
+    tool_messages = [msg for msg in s.messages if msg.get("role") == "tool"]
+    assert [msg["tool_call_id"] for msg in tool_messages] == ["call_1", "call_2"]
+    assert [msg["content"] for msg in tool_messages] == ["one", "two"]
+
+
 def test_run_turn_tool_exception_appends_error_result(monkeypatch):
     s, session_mod = _prepare_run_turn_session(monkeypatch)
     monkeypatch.setattr(session_mod._runtime_state, "user_mode", False)
