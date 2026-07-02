@@ -8,6 +8,7 @@ import socket
 
 DEFAULT_CONNECT_TIMEOUT = 20
 DEFAULT_RETRY_AFTER_MAX = 10
+RETRYABLE_HTTP_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
 HTTP_STATUS_HINTS: dict[int, tuple[str, str]] = {
     400: ("Bad Request", "provider rejected the request; check model ID, base URL, and request format."),
@@ -95,6 +96,11 @@ def format_transport_error(
     return f"Connection failed ({type(exc).__name__}): {exc}.{hint}"
 
 
+def is_retryable_http_status(status: int) -> bool:
+    """Return whether a provider HTTP status should use retry/backoff."""
+    return status in RETRYABLE_HTTP_STATUS_CODES
+
+
 def _retry_delay(
     attempt: int,
     retry_after: str | None = None,
@@ -116,7 +122,9 @@ def retry_notice(message: str, attempt: int, max_attempts: int, delay: float) ->
 
 
 __all__ = [
+    "RETRYABLE_HTTP_STATUS_CODES",
     "format_http_error",
     "format_transport_error",
+    "is_retryable_http_status",
     "retry_notice",
 ]

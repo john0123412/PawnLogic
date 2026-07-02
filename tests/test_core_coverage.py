@@ -419,6 +419,88 @@ def test_api_client_stream_request_honors_retry_after(monkeypatch):
     assert sleeps == [0.25]
 
 
+def test_api_client_anthropic_stream_request_uses_shared_retry_policy(monkeypatch):
+    _drop_project_modules("config")
+    _drop_project_modules("core.api_client", force=True)
+    from core import api_client
+
+    class FakeSocket:
+        def settimeout(self, _timeout):
+            pass
+
+    class FakeResponse:
+        def __init__(self, status, body=b"", lines=None):
+            self.status = status
+            self._body = body
+            self.headers = {}
+            self._lines = list(lines or [])
+
+        def read(self, _limit=-1):
+            return self._body
+
+        def readline(self):
+            if self._lines:
+                return self._lines.pop(0)
+            return b""
+
+    class FakeConn:
+        def __init__(self, response):
+            self.response = response
+            self.sock = FakeSocket()
+            self.requests = []
+
+        def request(self, *args, **kwargs):
+            self.requests.append((args, kwargs))
+
+        def getresponse(self):
+            return self.response
+
+        def close(self):
+            pass
+
+    responses = [
+        FakeResponse(503, b'{"error":{"message":"overloaded"}}'),
+        FakeResponse(
+            200,
+            lines=[
+                b"event: content_block_delta\r\n",
+                b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}\r\n',
+            ],
+        ),
+    ]
+    conns = []
+
+    monkeypatch.setitem(api_client.MODELS, "unit-anthropic", {
+        "id": "claude-unit",
+        "provider": "unit",
+    })
+    monkeypatch.setattr(
+        api_client,
+        "get_provider_config",
+        lambda _alias: {
+            "base_url": "https://unit.example/v1/messages",
+            "api_key": "unit-key",
+            "api_format": "anthropic",
+        },
+    )
+
+    def fake_open_connection(*_args, **_kwargs):
+        conn = FakeConn(responses.pop(0))
+        conns.append(conn)
+        return conn, "/v1/messages"
+
+    monkeypatch.setattr(api_client, "_open_connection", fake_open_connection)
+    monkeypatch.setattr(api_client, "_interruptible_sleep", lambda _seconds: None)
+    monkeypatch.setattr(api_client, "_retry_delay", lambda *_args, **_kwargs: 0.01)
+
+    events = list(api_client.stream_request([{"role": "user", "content": "hi"}], "unit-anthropic"))
+
+    assert events[0]["_retry"].startswith("HTTP 503")
+    assert events[1]["choices"][0]["delta"]["content"] == "ok"
+    assert conns[0].requests[0][1]["headers"]["anthropic-version"] == "2023-06-01"
+    assert conns[1].requests[0][1]["headers"]["Accept"] == "text/event-stream"
+
+
 def test_api_client_stream_request_retries_oserror_before_partial_content(monkeypatch):
     _drop_project_modules("config")
     _drop_project_modules("core.api_client", force=True)

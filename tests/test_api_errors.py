@@ -1,6 +1,12 @@
 """Tests for shared provider API error formatting."""
 
-from core.api_errors import format_http_error, format_transport_error, retry_notice
+from core.api_errors import (
+    _retry_delay,
+    format_http_error,
+    format_transport_error,
+    is_retryable_http_status,
+    retry_notice,
+)
 
 
 def test_format_http_error_covers_common_provider_statuses():
@@ -31,3 +37,30 @@ def test_retry_notice_includes_attempt_budget_and_delay():
     assert retry_notice("HTTP 502 Bad Gateway", attempt=1, max_attempts=3, delay=4) == (
         "HTTP 502 Bad Gateway Retrying in 4s (2/3)."
     )
+
+
+def test_retryable_http_status_policy_is_explicit():
+    retryable = {429, 500, 502, 503, 504}
+    non_retryable = {400, 401, 403, 404, 408, 409, 422}
+
+    assert all(is_retryable_http_status(status) for status in retryable)
+    assert not any(is_retryable_http_status(status) for status in non_retryable)
+
+
+def test_retry_delay_honors_bounded_retry_after():
+    assert _retry_delay(0, "3") == 3
+    assert _retry_delay(0, "999") == 10
+    assert _retry_delay(0, "-2") == 0
+
+
+def test_retry_delay_falls_back_for_invalid_retry_after():
+    assert _retry_delay(0, "not-a-number") == 2
+    assert _retry_delay(3, None) == 8
+
+
+def test_format_transport_error_is_user_friendly_without_traceback_detail():
+    msg = format_transport_error(OSError("connection reset by peer"))
+
+    assert "Network error (OSError): connection reset by peer" in msg
+    assert "Check network, proxy settings, and provider Base URL." in msg
+    assert "Traceback" not in msg

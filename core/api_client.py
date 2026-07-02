@@ -15,9 +15,11 @@ import http.client
 from urllib.parse import urlparse
 from config import get_provider_config, MODELS, DEFAULT_MODEL, DYNAMIC_CONFIG
 from core.api_errors import (
+    RETRYABLE_HTTP_STATUS_CODES,
     _retry_delay,
     format_http_error,
     format_transport_error,
+    is_retryable_http_status,
     retry_notice,
 )
 from core.interrupts import clear_cancel_callback, raise_if_interrupted, set_cancel_callback
@@ -115,7 +117,7 @@ _CIRCUIT_BREAKERS: dict[str, dict] = {}
 _CB_TRIP_AT   = 3      # Consecutive failures before opening the circuit.
 _CB_RESET_SEC = 30     # Seconds from OPEN to HALF_OPEN.
 _RETRY_MAX    = 3      # Maximum request attempts, including the first attempt.
-_RETRY_CODES  = {429, 500, 502, 503, 504}  # HTTP status codes that trigger backoff.
+_RETRY_CODES  = RETRYABLE_HTTP_STATUS_CODES  # Backward-compatible module alias.
 
 
 def _cb_get(provider: str) -> dict:
@@ -635,7 +637,7 @@ def stream_request(
             response_ref["response"] = resp
 
             # HTTP status codes that should be retried.
-            if resp.status in _RETRY_CODES:
+            if is_retryable_http_status(resp.status):
                 _cb_record_failure(provider)
                 err_body = resp.read(600)
                 err_msg = format_http_error(resp.status, err_body)
@@ -818,7 +820,7 @@ def call_once(
             resp = conn.getresponse()
             raw  = resp.read()
 
-            if resp.status in _RETRY_CODES and attempt < _RETRY_MAX - 1:
+            if is_retryable_http_status(resp.status) and attempt < _RETRY_MAX - 1:
                 _interruptible_sleep(_retry_delay(attempt, resp.headers.get("Retry-After")))
                 continue
             if resp.status != 200:
