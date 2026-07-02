@@ -87,14 +87,15 @@ python -m pawnlogic --help
 
 ## 新特性
 
-0.1.7 延续维护加固路线：
+0.1.7 是当前公开发布版本。本地 0.2.0 consolidation 工作正在为下一版准备内部加固：
 
-- Release consistency preflight 检查现在会让面向 release 的文档和运行时版本唯一来源保持一致。
-- 文档检查现在会保护正式的 `README_zh-CN.md` 和 `GUIDE_zh-CN.md` 文件名，并拒绝旧的 `*_CN.md` 文档名称。
-- `run_turn` 继续拆出 autosave 和 anti-loop bookkeeping helper，同时保持 message 形状、reasoning 持久化和 tool result 顺序。
-- Provider stream 回归覆盖现在保护 partial-content interruption event 和 Anthropic 多工具 delta 顺序。
-- Workspace restore rollback 覆盖现在保护当前 workspace，避免 replacement 在当前 workspace 已被移走后失败造成丢失。
-- typed-island CI 检查现在覆盖 workspace cleanup 和维护工具。
+- Release consistency preflight 检查从运行时版本唯一来源派生面向 release 的预期。
+- `run_turn` bookkeeping 已拆入 helper 和内部 turn-state snapshot，同时保持 message 形状、reasoning 持久化和 tool result 顺序。
+- Provider stream 解析现在隔离在内部 OpenAI-compatible 和 Anthropic stream adapter 后面，不改变公开 delta dict schema。
+- API retry 覆盖、MCP failure-path 覆盖、browser recovery 覆盖和 trust-boundary 测试会保护现有用户可见行为。
+- 内部 runtime metrics snapshot 会跟踪 turn、retry、token、tool latency 和 failure-class 计数，不新增 telemetry、不改变持久化 schema，也不改变默认终端输出。
+- Skill-pack metadata 被定义为运行时发现数据；第三方 skill pack 在完成再分发审查前仍不会进入 PyPI wheel。
+- typed-island CI 检查现在覆盖新的内部 runtime 模块和稳定维护工具。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 

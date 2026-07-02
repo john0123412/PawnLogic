@@ -7,6 +7,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Added an internal runtime metrics snapshot for turn count, provider retry
+  count, token usage, tool count, tool latency, and failure-class counters
+  without telemetry, persistence schema changes, or default terminal output
+  changes.
+- Added generated skill-pack manifest metadata that marks third-party CTF skill
+  pack redistribution as blocked until review metadata is complete.
+
+### Changed
+- Continued 0.2.0 consolidation by isolating provider stream readers, expanding
+  the internal turn-state snapshot, and centralizing trust-boundary notice
+  categories while preserving public CLI, provider visibility, stream delta
+  dicts, tool result message shape, and reasoning persistence behavior.
+- Expanded the typed-island mypy check to cover the new runtime metrics module,
+  provider stream module, MCP client manager, browser operations, and LSP-lite
+  helper.
+
+### Tests
+- Added coverage for unified API retry policy, MCP failure paths, browser tool
+  recovery paths, trust-boundary categories, internal runtime metrics snapshots,
+  and skill-pack metadata packaging boundaries.
+- Strengthened wheel packaging checks to assert that PyPI wheels contain zero
+  top-level `skills/` files.
+
 ## [0.1.7] - 2026-07-02
 
 ### Added

@@ -414,6 +414,14 @@ PawnLogic/
 └── skills/              # 源码 checkout 技能包（不随 PyPI wheel 发布）
 ```
 
+0.2.0 consolidation 路线会保持公开 CLI、Provider 可见性、stream delta dict、tool result message 和 reasoning 持久化稳定，同时把运行时细节移动到内部模块：
+
+- `core/turn_state.py` 让每轮 loop 状态不进入公开 session 和持久化契约。
+- `core/provider_streams.py` 将 OpenAI-compatible 和 Anthropic stream reader 隔离在现有 `stream_request()` delta dict 输出之后。
+- `core/runtime_metrics.py` 记录内部 turn、retry、token、tool latency 和 failure-class snapshot，不新增 telemetry，也不改变默认输出。
+- `core/trust.py` 集中维护工具 trust-boundary notice 分类，同时保持现有 warning 文案和执行决策。
+- Skill-pack manifest 只是运行时发现元数据；再分发授权仍由 `THIRD_PARTY_NOTICES.md` 和 packaging 测试约束。
+
 ### 运行时数据（`~/.pawnlogic/`）
 
 ```

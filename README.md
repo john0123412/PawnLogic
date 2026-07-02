@@ -97,19 +97,26 @@ Use `pawn --debug` or `/mode` when you need detailed diagnostics.
 
 ## What's New
 
-Version 0.1.7 continues the maintenance hardening track:
+Version 0.1.7 is the current public release. Local 0.2.0 consolidation work is
+preparing the next release with internal hardening:
 
-- Release consistency preflight checks now keep release-facing docs aligned
-  with the runtime version source of truth.
-- Documentation checks now guard the formal `README_zh-CN.md` and
-  `GUIDE_zh-CN.md` filenames and reject legacy `*_CN.md` documentation names.
-- `run_turn` has smaller autosave and anti-loop bookkeeping helpers while
-  preserving message shapes, reasoning persistence, and tool result ordering.
-- Provider stream regression coverage now protects partial-content interruption
-  events and Anthropic multi-tool delta ordering.
-- Workspace restore rollback coverage now protects the existing workspace if
-  replacement fails after the current workspace was moved aside.
-- The typed-island CI check now covers workspace cleanup and maintenance tools.
+- Release consistency preflight checks derive release-facing expectations from
+  the runtime version source of truth.
+- `run_turn` bookkeeping is split across helpers plus an internal turn-state
+  snapshot, while preserving message shapes, reasoning persistence, and tool
+  result ordering.
+- Provider stream parsing now lives behind internal OpenAI-compatible and
+  Anthropic stream adapters without changing the public delta dict schema.
+- API retry coverage, MCP failure-path coverage, browser recovery coverage, and
+  trust-boundary tests guard existing user-facing behavior.
+- Internal runtime metrics snapshots track turn, retry, token, tool latency, and
+  failure-class counters without telemetry, persistence schema changes, or
+  default terminal output changes.
+- Skill-pack metadata is documented as runtime discovery data only; third-party
+  skill packs remain outside PyPI wheels unless redistribution review is
+  complete.
+- The typed-island CI check now covers the new internal runtime modules and
+  stable maintenance tools.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 

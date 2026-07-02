@@ -440,6 +440,21 @@ PawnLogic/
 └── skills/              # Source-checkout skill packs (not shipped in PyPI wheels)
 ```
 
+The 0.2.0 consolidation path keeps public CLI, provider visibility, stream
+delta dictionaries, tool result messages, and reasoning persistence stable while
+moving runtime details into internal modules:
+
+- `core/turn_state.py` keeps per-turn loop state out of the public session and
+  persistence contracts.
+- `core/provider_streams.py` isolates OpenAI-compatible and Anthropic stream
+  readers behind the existing `stream_request()` delta dict output.
+- `core/runtime_metrics.py` records internal turn, retry, token, tool latency,
+  and failure-class snapshots without telemetry or default output changes.
+- `core/trust.py` centralizes tool trust-boundary notice categories while
+  preserving existing warning text and execution decisions.
+- Skill-pack manifests are runtime discovery metadata only; redistribution
+  approval remains governed by `THIRD_PARTY_NOTICES.md` and packaging tests.
+
 ### Runtime Data (`~/.pawnlogic/`)
 
 ```
