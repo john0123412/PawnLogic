@@ -61,6 +61,7 @@ from core.tool_result import (
 from core.tool_registry import ToolRegistry
 from core.tool_routing import select_phase_tools
 from core.turn_api import TurnApiResult, consume_model_stream
+from core.turn_state import TurnState
 from core.turn_guards import (
     decide_concurrency_truncation,
     decide_empty_response_retry,
@@ -1924,9 +1925,8 @@ class AgentSession:
     def _apply_urgent_mode_if_needed(
         self,
         remaining: float,
-        current_tools,
-        current_max_tokens: int,
-    ):
+        state: TurnState,
+    ) -> None:
         urgent_decision = decide_urgent_mode(
             remaining=remaining,
             already_urgent=self._urgent_mode,
@@ -1939,9 +1939,10 @@ class AgentSession:
             validate_api_key=validate_api_key,
         )
         if not urgent_decision.activate:
-            return current_tools, current_max_tokens
+            return
 
         self._urgent_mode = True
+        state.mark_urgent_mode()
         print(c(RED,
             f"  🚨 [URGENT_MODE] {remaining:.0f}s remaining — "
             f"switching to fast mode"
@@ -1966,12 +1967,14 @@ class AgentSession:
             current_tools = select_phase_tools(
                 _tool_schema_snapshot(), AGENT_PHASES, self.current_phase
             )
-            current_max_tokens = min(current_max_tokens, 4096)
+            state.update_tools(current_tools)
+            state.update_max_tokens(min(state.current_max_tokens, 4096))
 
-        return current_tools, current_max_tokens
-
-    def _maybe_trigger_logic_refresh(self, iteration: int) -> None:
-        if iteration <= 0 or iteration % _LOGIC_REFRESH_INTERVAL != 0:
+    def _maybe_trigger_logic_refresh(self, state: TurnState) -> None:
+        if (
+            state.iteration <= 0
+            or state.iteration % state.logic_refresh_interval != 0
+        ):
             return
         recent_observations = []
         for message in self.messages[-20:]:
@@ -1982,43 +1985,39 @@ class AgentSession:
 
         observations_text = "\n".join(recent_observations[-10:])
         summary_prompt = (
-            f"[Logic Refresh — Iteration {iteration}]\n"
+            f"[Logic Refresh — Iteration {state.iteration}]\n"
             f"Summarize the recent exploration path below in at most 5 sentences. "
             f"Extract key findings, paths already ruled out, and the current best direction:\n\n{observations_text}"
         )
         self.messages.append({"role": "user", "content": summary_prompt})
         if _debug_mode():
             print(c(CYAN,
-                f"  🔄 [Logic Refresh] Phase summary triggered (iteration={iteration})"
+                f"  🔄 [Logic Refresh] Phase summary triggered (iteration={state.iteration})"
             ))
         logger.info(
             "Logic Refresh: phase summary triggered | "
             "session={} iteration={} obs_count={}",
-            self.session_id[:8], iteration, len(recent_observations),
+            self.session_id[:8], state.iteration, len(recent_observations),
         )
 
     def _run_iteration_bookkeeping(
         self,
         *,
-        iteration: int,
-        current_tools,
-        current_max_tokens: int,
+        state: TurnState,
         result_processor: ToolResultProcessor,
-    ):
-        self._autosave_iteration_checkpoint(iteration)
-        self._maybe_show_loaded_skill_packs(iteration)
+    ) -> bool:
+        self._autosave_iteration_checkpoint(state.iteration)
+        self._maybe_show_loaded_skill_packs(state.iteration)
 
         remaining = self._time_remaining()
         if self._time_budget_exhausted(remaining):
-            return current_tools, current_max_tokens, True
+            return True
 
-        current_tools, current_max_tokens = self._apply_urgent_mode_if_needed(
-            remaining, current_tools, current_max_tokens
-        )
-        self._maybe_trigger_logic_refresh(iteration)
+        self._apply_urgent_mode_if_needed(remaining, state)
+        self._maybe_trigger_logic_refresh(state)
         compact_redundant_tool_error_messages(self.messages)
-        self._maybe_append_anti_loop_injection(result_processor, iteration)
-        return current_tools, current_max_tokens, False
+        self._maybe_append_anti_loop_injection(result_processor, state.iteration)
+        return False
 
     # Main turn loop.
     def run_turn(self, user_input: str):
@@ -2026,40 +2025,42 @@ class AgentSession:
         if dynamic_cfg is None:
             return
 
-        max_iter           = dynamic_cfg["max_iter"]
         renderer           = _PlanRenderer()
         is_vision_model    = self.model.get("vision", False)
-        current_max_tokens = 4096 if is_vision_model else dynamic_cfg["max_tokens"]
         if is_vision_model:
             print(c(YELLOW, "  ℹ Tool calls are disabled for vision models"))
-            current_tools = None
+            initial_tools = None
         else:
             # MoE dynamic tool pruning.
-            current_tools = select_phase_tools(
+            initial_tools = select_phase_tools(
                 _tool_schema_snapshot(), AGENT_PHASES, self.current_phase
             )
             if _debug_mode():
                 print(c(GRAY,
                     f"  📡 [Phase:{self.current_phase}] "
-                    f"Loaded {len(current_tools)} tools "
-                    f"({', '.join(s['function']['name'] for s in current_tools)})"
+                    f"Loaded {len(initial_tools)} tools "
+                    f"({', '.join(s['function']['name'] for s in initial_tools)})"
                 ))
+        turn_state = TurnState.for_turn(
+            max_iter=dynamic_cfg["max_iter"],
+            max_tokens=dynamic_cfg["max_tokens"],
+            is_vision_model=is_vision_model,
+            current_tools=initial_tools,
+            logic_refresh_interval=_LOGIC_REFRESH_INTERVAL,
+            urgent_mode_active=self._urgent_mode,
+        )
 
-        _plan_rejected    = 0
         tool_executor = self._make_tool_executor()
         # Per-turn tool result processing: owns directory/anti-loop/anti-code-loop
         # counters previously kept as locals here.
         result_processor = self._make_result_processor()
 
-        for iteration in range(max_iter):
+        for iteration in range(turn_state.max_iter):
             try:
-                current_tools, current_max_tokens, should_stop = (
-                    self._run_iteration_bookkeeping(
-                        iteration=iteration,
-                        current_tools=current_tools,
-                        current_max_tokens=current_max_tokens,
-                        result_processor=result_processor,
-                    )
+                turn_state.set_iteration(iteration)
+                should_stop = self._run_iteration_bookkeeping(
+                    state=turn_state,
+                    result_processor=result_processor,
                 )
                 if should_stop:
                     break
@@ -2067,7 +2068,11 @@ class AgentSession:
                 # Sliding-window view: send trimmed messages without mutating self.messages.
                 _api_msgs = self._build_api_messages()
                 model_response = self._run_model_with_empty_response_recovery(
-                    _api_msgs, current_tools, current_max_tokens, renderer, iteration
+                    _api_msgs,
+                    turn_state.current_tools,
+                    turn_state.current_max_tokens,
+                    renderer,
+                    turn_state.iteration,
                 )
                 if model_response is None:
                     return
@@ -2093,9 +2098,10 @@ class AgentSession:
                 #   · Does not block tool execution; the model sees results first.
                 #   · Appends the signal as a "user" role after tool results.
                 # ════════════════════════════════════════════════
-                _plan_action, _plan_rejected, _plan_signal_injected = self._apply_plan_guard(
-                    text_buf, tc_buf, _plan_rejected, iteration
+                _plan_action, plan_rejected, _plan_signal_injected = self._apply_plan_guard(
+                    text_buf, tc_buf, turn_state.plan_rejected, turn_state.iteration
                 )
+                turn_state.replace_plan_rejected(plan_rejected)
                 if _plan_action == "hard":
                     # Hard stop after soft intercepts are exhausted.
                     if self.messages and self.messages[-1]["role"] == "user":
@@ -2110,21 +2116,22 @@ class AgentSession:
                 current_tools = self._execute_tool_batch(
                     tc_buf,
                     plan_signal_injected=_plan_signal_injected,
-                    iteration=iteration,
-                    max_iter=max_iter,
+                    iteration=turn_state.iteration,
+                    max_iter=turn_state.max_iter,
                     tool_executor=tool_executor,
                     result_processor=result_processor,
-                    current_tools=current_tools,
+                    current_tools=turn_state.current_tools,
                 )
+                turn_state.update_tools(current_tools)
 
             except KeyboardInterrupt:
                 self._autosave()
                 raise TurnInterrupted()
 
-        print(c(RED, f"\n[Reached max_iter={max_iter}; use /mid, /deep, or /iter <n> to raise it]"))
+        print(c(RED, f"\n[Reached max_iter={turn_state.max_iter}; use /mid, /deep, or /iter <n> to raise it]"))
         logger.warning(
             "max_iter reached | model={} session={} max_iter={}",
-            self.model_alias, self.session_id[:8], max_iter,
+            self.model_alias, self.session_id[:8], turn_state.max_iter,
         )
         self._print_turn_summary()
         self._autosave()

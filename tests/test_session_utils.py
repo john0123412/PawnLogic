@@ -442,6 +442,7 @@ def test_reset_system_prompt_keeps_loaded_packs_when_builder_does_not_update(mon
 
 def test_apply_urgent_mode_appends_signal_and_switches_model(monkeypatch):
     import core.session as session_mod
+    from core.turn_state import TurnState
 
     s = _make_session()
     selected_tools = [{"function": {"name": "read_file"}}]
@@ -449,18 +450,21 @@ def test_apply_urgent_mode_appends_signal_and_switches_model(monkeypatch):
     monkeypatch.setattr(session_mod, "find_fast_peer", lambda _alias: "ds-v4-flash")
     monkeypatch.setattr(session_mod, "select_phase_tools", MagicMock(return_value=selected_tools))
 
-    current_tools, current_max_tokens = s._apply_urgent_mode_if_needed(
-        10.0,
+    state = TurnState.for_turn(
+        max_iter=3,
+        max_tokens=8192,
+        is_vision_model=False,
         current_tools=[{"function": {"name": "run_shell"}}],
-        current_max_tokens=8192,
     )
+    s._apply_urgent_mode_if_needed(10.0, state)
 
     assert s._urgent_mode is True
     assert s.model_alias == "ds-v4-flash"
     assert s.messages[-1]["role"] == "user"
     assert "URGENT_MODE" in s.messages[-1]["content"]
-    assert current_tools == selected_tools
-    assert current_max_tokens == 4096
+    assert state.current_tools == selected_tools
+    assert state.current_max_tokens == 4096
+    assert state.urgent_mode_active is True
 
 
 def test_time_budget_exhausted_reports_stop(monkeypatch):
@@ -478,6 +482,7 @@ def test_time_budget_exhausted_reports_stop(monkeypatch):
 
 def test_logic_refresh_appends_recent_tool_summary_prompt(monkeypatch):
     import core.session as session_mod
+    from core.turn_state import TurnState
 
     s = _make_session()
     s.messages = [{"role": "system", "content": "sys"}]
@@ -485,8 +490,15 @@ def test_logic_refresh_appends_recent_tool_summary_prompt(monkeypatch):
         s.messages.append({"role": "tool", "content": f"observation {index}"})
     logged = MagicMock()
     monkeypatch.setattr(session_mod.logger, "info", logged)
+    state = TurnState.for_turn(
+        max_iter=30,
+        max_tokens=2048,
+        is_vision_model=False,
+        current_tools=None,
+    )
+    state.set_iteration(20)
 
-    s._maybe_trigger_logic_refresh(20)
+    s._maybe_trigger_logic_refresh(state)
 
     assert s.messages[-1]["role"] == "user"
     assert s.messages[-1]["content"].startswith("[Logic Refresh")

@@ -80,6 +80,7 @@ jobs:
           python -m mypy \
             core/turn_api.py \
             core/turn_guards.py \
+            core/turn_state.py \
             core/tool_result.py \
             core/tool_executor.py \
             core/runtime_context.py \
