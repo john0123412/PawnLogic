@@ -26,13 +26,17 @@ def check_repository(root: Path) -> list[str]:
 
     expectations = {
         "README.md": f"The current public release is **{version}**.",
-        "README_zh-CN.md": f"当前公开发布版本是 **{version}**。",
+        "README_zh-CN.md": (
+            f"\u5f53\u524d\u516c\u5f00\u53d1\u5e03\u7248\u672c\u662f **{version}**\u3002"
+        ),
         "CHANGELOG.md": f"## [{version}] - ",
-        "SECURITY.md": f"| {version}   | ✅ Yes",
+        "SECURITY.md": f"| {version}   | \u2705 Yes",
     }
     forbidden = {
         "README.md": "The current public release is **0.1.6**.",
-        "README_zh-CN.md": "当前公开发布版本是 **0.1.6**。",
+        "README_zh-CN.md": (
+            "\u5f53\u524d\u516c\u5f00\u53d1\u5e03\u7248\u672c\u662f **0.1.6**\u3002"
+        ),
     }
 
     for relative_path, expected in expectations.items():
