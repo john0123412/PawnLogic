@@ -350,6 +350,8 @@ def _make_session():
         s._history_summary = ""
         s._summary_turn_count = 0
         s._turn_count = 0
+        from core.runtime_metrics import RuntimeMetrics
+        s._runtime_metrics = RuntimeMetrics()
         s._naming_done = False
         s._naming_attempted_at = 0.0
         s._urgent_mode = False
@@ -695,6 +697,9 @@ def test_run_turn_preserves_tool_result_order(monkeypatch):
     tool_messages = [msg for msg in s.messages if msg.get("role") == "tool"]
     assert [msg["tool_call_id"] for msg in tool_messages] == ["call_1", "call_2"]
     assert [msg["content"] for msg in tool_messages] == ["one", "two"]
+    metrics = s._runtime_metrics_snapshot()
+    assert metrics.turn_tool_calls == 2
+    assert metrics.total_tool_calls == 2
 
 
 def test_run_turn_tool_exception_appends_error_result(monkeypatch):
@@ -804,6 +809,9 @@ def test_run_turn_audited_tool_failure_records_failure(monkeypatch):
     assert write_failure.call_args.kwargs["tool_name"] == "run_shell"
     assert write_failure.call_args.kwargs["error_type"] == "Permission"
     assert audit_tool_call.call_args.kwargs["success"] is False
+    metrics = s._runtime_metrics_snapshot()
+    assert metrics.turn_failure_classes == {"Permission": 1}
+    assert metrics.total_failure_classes == {"Permission": 1}
 
 
 def test_run_turn_tool_keyboard_interrupt_raises_for_cli_rollback(monkeypatch):
@@ -927,6 +935,8 @@ def _prepare_run_turn_session(monkeypatch):
     s._turn_prompt_tokens = 0
     s._turn_completion_tokens = 0
     s._turn_tool_calls = 0
+    from core.runtime_metrics import RuntimeMetrics
+    s._runtime_metrics = RuntimeMetrics()
     s.total_prompt_tokens = 0
     s.total_completion_tokens = 0
     s.total_tool_calls = 0
@@ -1050,6 +1060,9 @@ def test_run_turn_prints_api_retry_notice_before_final_output(monkeypatch, capsy
     assert "HTTP 502" in out
     assert "Retrying" in out
     assert "visible answer" in out
+    metrics = s._runtime_metrics_snapshot()
+    assert metrics.turn_provider_retries == 1
+    assert metrics.total_provider_retries == 1
 
 
 @pytest.mark.parametrize("status", [403, 502])
@@ -1085,6 +1098,11 @@ def test_run_turn_accepts_message_content_in_stream_choice(monkeypatch):
 
     assert s.messages[-1]["role"] == "assistant"
     assert s.messages[-1]["content"] == "message fallback answer"
+    metrics = s._runtime_metrics_snapshot()
+    assert metrics.turn_prompt_tokens == 1
+    assert metrics.turn_completion_tokens == 5
+    assert metrics.turn_tokens == 6
+    assert metrics.total_tokens == 6
 
 
 def test_thinking_spinner_can_be_disabled_for_non_tty(monkeypatch):

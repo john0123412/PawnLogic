@@ -46,6 +46,7 @@ from core.context_window import (
 )
 from core.state import state as _runtime_state, runtime_config
 from core.runtime_context import RuntimeContext
+from core.runtime_metrics import RuntimeMetrics, RuntimeMetricsSnapshot
 from core.prompt_builder import build_session_prompt
 from core.tool_calls import extract_tool_calls
 from core.tool_executor import (
@@ -808,6 +809,7 @@ class AgentSession:
         self._turn_prompt_tokens     = 0
         self._turn_completion_tokens = 0
         self._turn_tool_calls        = 0
+        self._runtime_metrics = RuntimeMetrics()
         # P6.5: matched skill-pack cache.
         self._loaded_skill_packs: list = []
         # Sliding window + history summary state.
@@ -1340,6 +1342,19 @@ class AgentSession:
         self._turn_completion_tokens += ct
         self.total_prompt_tokens     += pt
         self.total_completion_tokens += ct
+        self._runtime_metrics.record_usage(
+            prompt_tokens=pt,
+            completion_tokens=ct,
+        )
+
+    def _record_tool_metrics(self, *, elapsed_ms: int = 0) -> None:
+        self._turn_tool_calls += 1
+        self.total_tool_calls += 1
+        self._runtime_metrics.record_tool_call(elapsed_ms=elapsed_ms)
+
+    def _runtime_metrics_snapshot(self) -> RuntimeMetricsSnapshot:
+        """Return an internal snapshot of runtime counters."""
+        return self._runtime_metrics.snapshot()
 
     def _consume_api_stream_attempt(
         self,
@@ -1417,6 +1432,7 @@ class AgentSession:
         finally:
             spinner.stop()
 
+        self._runtime_metrics.record_provider_retries(len(result.retry_events))
         self._record_turn_usage(result.usage)
         return result
 
@@ -1525,6 +1541,7 @@ class AgentSession:
         self._turn_prompt_tokens     = 0
         self._turn_completion_tokens = 0
         self._turn_tool_calls        = 0
+        self._runtime_metrics.reset_turn()
 
         dynamic_cfg = _dynamic_config()
         self._turn_start_time = time.monotonic()
@@ -1766,8 +1783,7 @@ class AgentSession:
                 # Phase results are not audited or truncated. A non-directory
                 # tool ran, so reset the directory counter, then record.
                 result_processor.reset_directory_counter()
-                self._turn_tool_calls += 1
-                self.total_tool_calls += 1
+                self._record_tool_metrics()
                 self.messages.append({
                     "role": "tool", "tool_call_id": tc["id"], "content": result,
                 })
@@ -1806,6 +1822,7 @@ class AgentSession:
                 )
                 if record_result.gsa_sunk and _debug_mode():
                     print(c(YELLOW, f"  📝 [GSA Sink] {record_result.gsa_message}"))
+                self._runtime_metrics.record_failure_class(record_result.error_type)
 
                 processed = result_processor.process(
                     result=result,
@@ -1854,8 +1871,7 @@ class AgentSession:
                     except Exception:
                         pass  # Audit logging must not block the main flow.
 
-                self._turn_tool_calls += 1
-                self.total_tool_calls += 1
+                self._record_tool_metrics(elapsed_ms=_elapsed_ms)
                 self.messages.append({
                     "role": "tool", "tool_call_id": tc["id"], "content": processed.content,
                 })
@@ -2174,6 +2190,7 @@ class AgentSession:
         # Turn count increments on every call, regardless of success, interrupt,
         # or max_iter exhaustion. _maybe_autoname requires at least 2 turns.
         self._turn_count += 1
+        self._runtime_metrics.record_turn_completed()
         msgs_snapshot = [dict(m) for m in self.messages]
         sid, model_alias, cwd, workspace_dir, cfg_snap = (
             self.session_id, self.model_alias, self.cwd, self.workspace_dir,
