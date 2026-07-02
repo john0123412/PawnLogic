@@ -555,6 +555,8 @@ _URGENT_MODEL_CANDIDATES = [
     "gpt-4.1",
 ]
 
+_LOGIC_REFRESH_INTERVAL = 20   # Trigger a phase summary every 20 iterations.
+
 _URGENT_SIGNAL = (
     "[SYSTEM: URGENT_MODE — time budget nearly exhausted]\n"
     "Time remaining is critically low. You MUST:\n"
@@ -1889,6 +1891,135 @@ class AgentSession:
                 continue
             print(c(notice.color, notice.message))
 
+    def _maybe_show_loaded_skill_packs(self, iteration: int) -> None:
+        if iteration != 0 or not self._loaded_skill_packs:
+            return
+        if _user_mode():
+            print(c(GREEN, _skill_scanner.format_user_message(self._loaded_skill_packs)))
+            return
+        for skill_pack in self._loaded_skill_packs:
+            print(c(
+                CYAN,
+                f"  📦 [Skill Pack] {skill_pack.get('name', '?')} "
+                f"v{skill_pack.get('version', '1.0')}",
+            ))
+            skill_pack_path = skill_pack.get("_path", "")
+            if skill_pack.get("guide"):
+                print(c(GRAY, f"     guide: {skill_pack_path}/{skill_pack['guide']}"))
+            if skill_pack.get("scripts"):
+                print(c(GRAY, f"     scripts: {', '.join(skill_pack['scripts'])}"))
+
+    def _time_budget_exhausted(self, remaining: float) -> bool:
+        if remaining > 0:
+            return False
+        print(c(RED,
+            f"\n  ⏰ [Time Budget] Budget exhausted ({self._time_budget_sec}s); stopping task."
+        ))
+        logger.warning(
+            "Time budget exhausted | session={} budget={}s",
+            self.session_id[:8], self._time_budget_sec,
+        )
+        return True
+
+    def _apply_urgent_mode_if_needed(
+        self,
+        remaining: float,
+        current_tools,
+        current_max_tokens: int,
+    ):
+        urgent_decision = decide_urgent_mode(
+            remaining=remaining,
+            already_urgent=self._urgent_mode,
+            threshold=_URGENT_THRESHOLD_SEC,
+            model_alias=self.model_alias,
+            is_fast_model=is_fast_model,
+            find_fast_peer=find_fast_peer,
+            candidates=_URGENT_MODEL_CANDIDATES,
+            available_models=MODELS,
+            validate_api_key=validate_api_key,
+        )
+        if not urgent_decision.activate:
+            return current_tools, current_max_tokens
+
+        self._urgent_mode = True
+        print(c(RED,
+            f"  🚨 [URGENT_MODE] {remaining:.0f}s remaining — "
+            f"switching to fast mode"
+        ))
+        logger.info(
+            "URGENT_MODE activated | session={} remaining={:.1f}s",
+            self.session_id[:8], remaining,
+        )
+
+        self.messages.append({
+            "role": "user",
+            "content": _URGENT_SIGNAL,
+        })
+
+        if urgent_decision.target_model:
+            old_model = self.model_alias
+            self.model_alias = urgent_decision.target_model
+            print(c(MAGENTA,
+                f"  🚨 [URGENT] Model switched: "
+                f"{old_model} -> {urgent_decision.target_model} (fast response)"
+            ))
+            current_tools = select_phase_tools(
+                _tool_schema_snapshot(), AGENT_PHASES, self.current_phase
+            )
+            current_max_tokens = min(current_max_tokens, 4096)
+
+        return current_tools, current_max_tokens
+
+    def _maybe_trigger_logic_refresh(self, iteration: int) -> None:
+        if iteration <= 0 or iteration % _LOGIC_REFRESH_INTERVAL != 0:
+            return
+        recent_observations = []
+        for message in self.messages[-20:]:
+            if message.get("role") == "tool" and message.get("content"):
+                recent_observations.append(message["content"][:200])
+        if not recent_observations:
+            return
+
+        observations_text = "\n".join(recent_observations[-10:])
+        summary_prompt = (
+            f"[Logic Refresh — Iteration {iteration}]\n"
+            f"Summarize the recent exploration path below in at most 5 sentences. "
+            f"Extract key findings, paths already ruled out, and the current best direction:\n\n{observations_text}"
+        )
+        self.messages.append({"role": "user", "content": summary_prompt})
+        if _debug_mode():
+            print(c(CYAN,
+                f"  🔄 [Logic Refresh] Phase summary triggered (iteration={iteration})"
+            ))
+        logger.info(
+            "Logic Refresh: phase summary triggered | "
+            "session={} iteration={} obs_count={}",
+            self.session_id[:8], iteration, len(recent_observations),
+        )
+
+    def _run_iteration_bookkeeping(
+        self,
+        *,
+        iteration: int,
+        current_tools,
+        current_max_tokens: int,
+        result_processor: ToolResultProcessor,
+    ):
+        self._autosave_iteration_checkpoint(iteration)
+        self._maybe_show_loaded_skill_packs(iteration)
+
+        remaining = self._time_remaining()
+        if self._time_budget_exhausted(remaining):
+            return current_tools, current_max_tokens, True
+
+        current_tools, current_max_tokens = self._apply_urgent_mode_if_needed(
+            remaining, current_tools, current_max_tokens
+        )
+        self._maybe_trigger_logic_refresh(iteration)
+        compact_redundant_tool_error_messages(self.messages)
+        self._maybe_append_anti_loop_injection(result_processor, iteration)
+        return current_tools, current_max_tokens, False
+
     # Main turn loop.
     def run_turn(self, user_input: str):
         dynamic_cfg = self._prepare_turn(user_input)
@@ -1920,116 +2051,18 @@ class AgentSession:
         # counters previously kept as locals here.
         result_processor = self._make_result_processor()
 
-        # Logic Refresh module state.
-        _LOGIC_REFRESH_INTERVAL = 20   # Trigger a phase summary every 20 iterations.
-
         for iteration in range(max_iter):
             try:
-                # Mid-turn checkpoint: save intermediate state every 5 iterations.
-                self._autosave_iteration_checkpoint(iteration)
-
-                # P6.5: show loaded skill-pack status on the first iteration.
-                if iteration == 0 and self._loaded_skill_packs:
-                    if _user_mode():
-                        print(c(GREEN, _skill_scanner.format_user_message(self._loaded_skill_packs)))
-                    else:
-                        for _sp in self._loaded_skill_packs:
-                            print(c(CYAN, f"  📦 [Skill Pack] {_sp.get('name', '?')} v{_sp.get('version', '1.0')}"))
-                            _sp_path = _sp.get("_path", "")
-                            if _sp.get("guide"):
-                                print(c(GRAY, f"     guide: {_sp_path}/{_sp['guide']}"))
-                            if _sp.get("scripts"):
-                                print(c(GRAY, f"     scripts: {', '.join(_sp['scripts'])}"))
-
-                # P1: per-iteration time check.
-                _remaining = self._time_remaining()
-                if _remaining <= 0:
-                    print(c(RED,
-                        f"\n  ⏰ [Time Budget] Budget exhausted ({self._time_budget_sec}s); stopping task."
-                    ))
-                    logger.warning(
-                        "Time budget exhausted | session={} budget={}s",
-                        self.session_id[:8], self._time_budget_sec,
+                current_tools, current_max_tokens, should_stop = (
+                    self._run_iteration_bookkeeping(
+                        iteration=iteration,
+                        current_tools=current_tools,
+                        current_max_tokens=current_max_tokens,
+                        result_processor=result_processor,
                     )
-                    break
-
-                _urgent_decision = decide_urgent_mode(
-                    remaining=_remaining,
-                    already_urgent=self._urgent_mode,
-                    threshold=_URGENT_THRESHOLD_SEC,
-                    model_alias=self.model_alias,
-                    is_fast_model=is_fast_model,
-                    find_fast_peer=find_fast_peer,
-                    candidates=_URGENT_MODEL_CANDIDATES,
-                    available_models=MODELS,
-                    validate_api_key=validate_api_key,
                 )
-                if _urgent_decision.activate:
-                    # Activate URGENT_MODE.
-                    self._urgent_mode = True
-                    print(c(RED,
-                        f"  🚨 [URGENT_MODE] {_remaining:.0f}s remaining — "
-                        f"switching to fast mode"
-                    ))
-                    logger.info(
-                        "URGENT_MODE activated | session={} remaining={:.1f}s",
-                        self.session_id[:8], _remaining,
-                    )
-
-                    # Inject the URGENT signal into context.
-                    self.messages.append({
-                        "role": "user",
-                        "content": _URGENT_SIGNAL,
-                    })
-
-                    # Auto-switch to a fast model, preferring the same provider.
-                    if _urgent_decision.target_model:
-                        old_model = self.model_alias
-                        self.model_alias = _urgent_decision.target_model
-                        print(c(MAGENTA,
-                            f"  🚨 [URGENT] Model switched: "
-                            f"{old_model} -> {_urgent_decision.target_model} (fast response)"
-                        ))
-                        # Rebuild the tool list.
-                        current_tools = select_phase_tools(
-                            _tool_schema_snapshot(), AGENT_PHASES, self.current_phase
-                        )
-                        current_max_tokens = min(current_max_tokens, 4096)
-
-                # ════════════════════════════════════════════════
-                # Logic Refresh: phase summary, redundancy cleanup, and error detection.
-                # ════════════════════════════════════════════════
-
-                # 1. Phase summary, triggered every N iterations.
-                if iteration > 0 and iteration % _LOGIC_REFRESH_INTERVAL == 0:
-                    # Collect recent tool observations.
-                    _recent_obs = []
-                    for _m in self.messages[-20:]:
-                        if _m.get("role") == "tool" and _m.get("content"):
-                            _recent_obs.append(_m["content"][:200])
-                    if _recent_obs:
-                        _obs_text = "\n".join(_recent_obs[-10:])
-                        _summary_prompt = (
-                            f"[Logic Refresh — Iteration {iteration}]\n"
-                            f"Summarize the recent exploration path below in at most 5 sentences. "
-                            f"Extract key findings, paths already ruled out, and the current best direction:\n\n{_obs_text}"
-                        )
-                        self.messages.append({"role": "user", "content": _summary_prompt})
-                        if _debug_mode():
-                            print(c(CYAN,
-                                f"  🔄 [Logic Refresh] Phase summary triggered (iteration={iteration})"
-                            ))
-                        logger.info(
-                            "Logic Refresh: phase summary triggered | "
-                            "session={} iteration={} obs_count={}",
-                            self.session_id[:8], iteration, len(_recent_obs),
-                        )
-
-                # 2. Redundant data cleanup: merge repeated ls/cat-style errors.
-                compact_redundant_tool_error_messages(self.messages)
-
-                # 3. Repeated error detection: identical command and error 3 times.
-                self._maybe_append_anti_loop_injection(result_processor, iteration)
+                if should_stop:
+                    break
 
                 # Sliding-window view: send trimmed messages without mutating self.messages.
                 _api_msgs = self._build_api_messages()

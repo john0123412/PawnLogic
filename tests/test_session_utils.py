@@ -440,6 +440,61 @@ def test_reset_system_prompt_keeps_loaded_packs_when_builder_does_not_update(mon
     assert s._loaded_skill_packs == [{"name": "old"}]
 
 
+def test_apply_urgent_mode_appends_signal_and_switches_model(monkeypatch):
+    import core.session as session_mod
+
+    s = _make_session()
+    selected_tools = [{"function": {"name": "read_file"}}]
+    monkeypatch.setattr(session_mod, "is_fast_model", lambda _alias: False)
+    monkeypatch.setattr(session_mod, "find_fast_peer", lambda _alias: "ds-v4-flash")
+    monkeypatch.setattr(session_mod, "select_phase_tools", MagicMock(return_value=selected_tools))
+
+    current_tools, current_max_tokens = s._apply_urgent_mode_if_needed(
+        10.0,
+        current_tools=[{"function": {"name": "run_shell"}}],
+        current_max_tokens=8192,
+    )
+
+    assert s._urgent_mode is True
+    assert s.model_alias == "ds-v4-flash"
+    assert s.messages[-1]["role"] == "user"
+    assert "URGENT_MODE" in s.messages[-1]["content"]
+    assert current_tools == selected_tools
+    assert current_max_tokens == 4096
+
+
+def test_time_budget_exhausted_reports_stop(monkeypatch):
+    import core.session as session_mod
+
+    s = _make_session()
+    s._time_budget_sec = 5
+    logged = MagicMock()
+    monkeypatch.setattr(session_mod.logger, "warning", logged)
+
+    assert s._time_budget_exhausted(0.0) is True
+
+    logged.assert_called_once()
+
+
+def test_logic_refresh_appends_recent_tool_summary_prompt(monkeypatch):
+    import core.session as session_mod
+
+    s = _make_session()
+    s.messages = [{"role": "system", "content": "sys"}]
+    for index in range(12):
+        s.messages.append({"role": "tool", "content": f"observation {index}"})
+    logged = MagicMock()
+    monkeypatch.setattr(session_mod.logger, "info", logged)
+
+    s._maybe_trigger_logic_refresh(20)
+
+    assert s.messages[-1]["role"] == "user"
+    assert s.messages[-1]["content"].startswith("[Logic Refresh")
+    assert "observation 11" in s.messages[-1]["content"]
+    assert "observation 0" not in s.messages[-1]["content"]
+    logged.assert_called_once()
+
+
 def test_count_turns_with_tool_messages():
     s = _make_session()
     s.messages = [
