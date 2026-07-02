@@ -143,6 +143,43 @@ def test_restore_requires_workspace_directory(monkeypatch, tmp_path):
     assert not (wc.PAWN_HOME / "loose.txt").exists()
 
 
+def test_restore_replace_failure_keeps_existing_workspace(monkeypatch, tmp_path):
+    wc = _load_workspace_cleanup(monkeypatch, tmp_path)
+    wc.WORKSPACE_PATH.mkdir(parents=True)
+    (wc.WORKSPACE_PATH / "keep.txt").write_text("keep", encoding="utf-8")
+    backup = _write_tar(
+        tmp_path / "backup.tar.gz",
+        [
+            ("dir", "workspace"),
+            ("file", "workspace/restored.txt", b"new"),
+        ],
+    )
+
+    def fail_after_moving_current_workspace(staging, ts):
+        replaced = wc.WORKSPACE_PATH.parent / f"workspace_replaced_{ts}"
+        wc.os.rename(str(wc.WORKSPACE_PATH), str(replaced))
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(wc, "_replace_workspace_from_staging", fail_after_moving_current_workspace)
+
+    result = wc.restore_from_backup(backup)
+
+    assert result["ok"] is False
+    assert "replace failed" in result["error"]
+    assert (wc.WORKSPACE_PATH / "keep.txt").read_text(encoding="utf-8") == "keep"
+    assert not (wc.WORKSPACE_PATH / "restored.txt").exists()
+
+
+def test_failed_restore_cleans_staging_directory(monkeypatch, tmp_path):
+    wc = _load_workspace_cleanup(monkeypatch, tmp_path)
+    backup = _write_tar(tmp_path / "backup.tar.gz", [("file", "loose.txt", b"loose")])
+
+    result = wc.restore_from_backup(backup)
+
+    assert result["ok"] is False
+    assert not list(wc.PAWN_HOME.glob(".restore_staging_*"))
+
+
 def test_restore_rejects_absolute_member_path_without_moving_workspace(monkeypatch, tmp_path):
     wc = _load_workspace_cleanup(monkeypatch, tmp_path)
     wc.WORKSPACE_PATH.mkdir(parents=True)

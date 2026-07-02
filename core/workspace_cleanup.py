@@ -127,11 +127,27 @@ def _extract_restore_to_staging(
 
 def _replace_workspace_from_staging(staging: Path, ts: str) -> Path | None:
     replaced: Path | None = None
-    if WORKSPACE_PATH.exists():
-        replaced = WORKSPACE_PATH.parent / f"workspace_replaced_{ts}"
-        os.rename(str(WORKSPACE_PATH), str(replaced))
-    os.rename(str(staging / "workspace"), str(WORKSPACE_PATH))
+    try:
+        if WORKSPACE_PATH.exists():
+            replaced = WORKSPACE_PATH.parent / f"workspace_replaced_{ts}"
+            os.rename(str(WORKSPACE_PATH), str(replaced))
+        os.rename(str(staging / "workspace"), str(WORKSPACE_PATH))
+    except OSError:
+        _restore_replaced_workspace(ts)
+        raise
     return replaced
+
+
+def _restore_replaced_workspace(ts: str) -> None:
+    replaced = WORKSPACE_PATH.parent / f"workspace_replaced_{ts}"
+    if not replaced.exists():
+        return
+    if WORKSPACE_PATH.exists():
+        if WORKSPACE_PATH.is_dir() and not WORKSPACE_PATH.is_symlink():
+            shutil.rmtree(WORKSPACE_PATH)
+        else:
+            WORKSPACE_PATH.unlink()
+    os.rename(str(replaced), str(WORKSPACE_PATH))
 
 
 def _categorize(name: str, is_dir: bool) -> str:
@@ -500,6 +516,7 @@ def restore_from_backup(backup_path: Optional[Path] = None) -> dict:
         _extract_restore_to_staging(backup_path, members, staging)
         replaced = _replace_workspace_from_staging(staging, ts)
     except (tarfile.TarError, OSError, ValueError) as exc:
+        _restore_replaced_workspace(ts)
         shutil.rmtree(staging, ignore_errors=True)
         return {"ok": False, "error": f"unsafe backup archive: {exc}"}
     finally:
