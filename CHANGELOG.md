@@ -7,6 +7,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-07-02
+
+### Added
+- Added release consistency preflight checks so `config/paths.py`,
+  `README.md`, `README_zh-CN.md`, `CHANGELOG.md`, and `SECURITY.md` must agree
+  on the current public release before CI proceeds.
+- Added regression guards for formal zh-CN documentation filenames so legacy
+  `*_CN.md` names do not re-enter the tracked documentation set.
+
+### Changed
+- Continued low-risk `AgentSession.run_turn()` decomposition by extracting
+  autosave checkpoint and anti-loop injection bookkeeping helpers while
+  preserving message shape, tool-call serialization, reasoning persistence, and
+  tool result ordering.
+- Expanded the typed-island mypy check to cover workspace cleanup and
+  maintenance tools used by documentation, release, and CTF skill-pack flows.
+
+### Fixed
+- Restored the existing workspace if backup restore replacement fails after
+  moving the current workspace aside, and kept failed restore staging
+  directories cleaned up.
+- Consolidated provider stream interruption handling behind a shared helper
+  while preserving partial-content stream end events and no-partial error
+  behavior.
+
+### Tests
+- Added focused coverage for zh-CN documentation naming, release consistency,
+  turn tool-result ordering, provider stream interruption invariants, Anthropic
+  multi-tool stream ordering, workspace restore rollback paths, and the expanded
+  typed island.
+
 ## [0.1.6] - 2026-07-01
 
 ### Security

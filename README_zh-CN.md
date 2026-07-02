@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.1.6**。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.1.7**。
 
 ## 系统要求
 
@@ -85,13 +85,14 @@ python -m pawnlogic --help
 
 ## 新特性
 
-0.1.6 延续维护加固路线：
+0.1.7 延续维护加固路线：
 
-- `/workspace cleanup restore` 现在会先把 backup 解包到 staging 区域，确认成功后才替换当前 workspace。
-- Restore 在解包失败或 archive 缺少必需的 `workspace/` 目录时，会保留当前 workspace。
-- `run_turn` 继续拆出 plan guard、concurrency limit 和 tool batch helper，同时保持 message 形状和 tool result 顺序。
-- Provider stream reader 选择逻辑现在收敛到内部 `_read_sse_lines()` helper，不改变公开 stream delta schema。
-- typed-island CI 检查扩展到 API error、hybrid tool-call parsing、tool registry snapshot 和 context-window helper。
+- Release consistency preflight 检查现在会让面向 release 的文档和运行时版本唯一来源保持一致。
+- 文档检查现在会保护正式的 `README_zh-CN.md` 和 `GUIDE_zh-CN.md` 文件名，并拒绝旧的 `*_CN.md` 文档名称。
+- `run_turn` 继续拆出 autosave 和 anti-loop bookkeeping helper，同时保持 message 形状、reasoning 持久化和 tool result 顺序。
+- Provider stream 回归覆盖现在保护 partial-content interruption event 和 Anthropic 多工具 delta 顺序。
+- Workspace restore rollback 覆盖现在保护当前 workspace，避免 replacement 在当前 workspace 已被移走后失败造成丢失。
+- typed-island CI 检查现在覆盖 workspace cleanup 和维护工具。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 

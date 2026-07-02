@@ -11,7 +11,7 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.1.6**.
+CTF-oriented toolchain. The current public release is **0.1.7**.
 
 ## System Requirements
 
@@ -95,18 +95,19 @@ Use `pawn --debug` or `/mode` when you need detailed diagnostics.
 
 ## What's New
 
-Version 0.1.6 continues the maintenance hardening track:
+Version 0.1.7 continues the maintenance hardening track:
 
-- `/workspace cleanup restore` now extracts backups into a staging area and
-  replaces the current workspace only after extraction succeeds.
-- Restore preserves the current workspace when extraction fails or the archive
-  does not contain the required `workspace/` directory.
-- `run_turn` now has smaller plan-guard, concurrency-limit, and tool-batch
-  helpers while preserving message shapes and tool result ordering.
-- Provider stream reader selection now uses an internal `_read_sse_lines()`
-  helper without changing the public stream delta schema.
-- The typed-island CI check now covers API errors, hybrid tool-call parsing,
-  tool registry snapshots, and context-window helpers.
+- Release consistency preflight checks now keep release-facing docs aligned
+  with the runtime version source of truth.
+- Documentation checks now guard the formal `README_zh-CN.md` and
+  `GUIDE_zh-CN.md` filenames and reject legacy `*_CN.md` documentation names.
+- `run_turn` has smaller autosave and anti-loop bookkeeping helpers while
+  preserving message shapes, reasoning persistence, and tool result ordering.
+- Provider stream regression coverage now protects partial-content interruption
+  events and Anthropic multi-tool delta ordering.
+- Workspace restore rollback coverage now protects the existing workspace if
+  replacement fails after the current workspace was moved aside.
+- The typed-island CI check now covers workspace cleanup and maintenance tools.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
