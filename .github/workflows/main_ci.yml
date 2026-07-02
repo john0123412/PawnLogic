@@ -87,7 +87,11 @@ jobs:
             core/api_errors.py \
             core/tool_calls.py \
             core/tool_registry.py \
-            core/context_window.py
+            core/context_window.py \
+            core/workspace_cleanup.py \
+            tools/check_doc_structure.py \
+            tools/check_release_consistency.py \
+            tools/merge_ctf_skills.py
 
   # ── Fast feedback tests for normal development ─────────────────────
   test-fast:

@@ -324,7 +324,7 @@ def render_plan(rows: list, db: dict, plan_path: Path = DEFAULT_PLAN) -> str:
         "",
     ]
 
-    by_conf = {}
+    by_conf: dict[str, int] = {}
     total_size = archive_size = 0
     for r in rows:
         by_conf[r["confidence"]] = by_conf.get(r["confidence"], 0) + 1
@@ -478,10 +478,10 @@ def execute_cleanup(rows: list, db: dict) -> dict:
             now_iso = datetime.now().isoformat(timespec="seconds")
             for r in empty_rows:
                 sid = r["id"]
-                target = sid_to_archive.get(sid, str(placeholder))
+                target_workspace = sid_to_archive.get(sid, str(placeholder))
                 conn.execute(
                     "UPDATE sessions SET workspace_dir=?, updated_at=? WHERE id=?",
-                    (target, now_iso, sid),
+                    (target_workspace, now_iso, sid),
                 )
                 db_updated += 1
             conn.commit()
