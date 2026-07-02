@@ -50,6 +50,9 @@ jobs:
       - name: ruff check
         run: ruff check . --output-format=github
 
+      - name: Release consistency check
+        run: python tools/check_release_consistency.py
+
   # ── Typed island checks: keep scope narrow and fail fast ─────────────
   typecheck:
     name: "🔎 Type Check (mypy)"
