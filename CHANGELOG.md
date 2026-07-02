@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-02
+
 ### Added
 - Added an internal runtime metrics snapshot for turn count, provider retry
   count, token usage, tool count, tool latency, and failure-class counters

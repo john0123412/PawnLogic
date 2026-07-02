@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.1.7**。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.2.0**。
 
 ## 系统要求
 
@@ -87,7 +87,7 @@ python -m pawnlogic --help
 
 ## 新特性
 
-0.1.7 是当前公开发布版本。本地 0.2.0 consolidation 工作正在为下一版准备内部加固：
+0.2.0 是一个 consolidation release，包含内部加固：
 
 - Release consistency preflight 检查从运行时版本唯一来源派生面向 release 的预期。
 - `run_turn` bookkeeping 已拆入 helper 和内部 turn-state snapshot，同时保持 message 形状、reasoning 持久化和 tool result 顺序。

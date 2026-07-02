@@ -11,7 +11,7 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.1.7**.
+CTF-oriented toolchain. The current public release is **0.2.0**.
 
 ## System Requirements
 
@@ -97,8 +97,7 @@ Use `pawn --debug` or `/mode` when you need detailed diagnostics.
 
 ## What's New
 
-Version 0.1.7 is the current public release. Local 0.2.0 consolidation work is
-preparing the next release with internal hardening:
+Version 0.2.0 is a consolidation release with internal hardening:
 
 - Release consistency preflight checks derive release-facing expectations from
   the runtime version source of truth.
