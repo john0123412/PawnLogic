@@ -211,6 +211,13 @@ def _clean(text: str) -> str:
     return text.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
 
 
+def _format_browser_error(action: str, exc: Exception) -> str:
+    """Return a compact browser-tool error without traceback internals."""
+    detail = " ".join(str(exc).split())
+    detail = detail.replace("Traceback (most recent call last):", "").strip()
+    return f"ERROR: {action}: {type(exc).__name__}: {_clean(detail)}"
+
+
 # ════════════════════════════════════════════════════════
 # Tool implementations.
 # ════════════════════════════════════════════════════════
@@ -268,7 +275,7 @@ def tool_web_fetch(a: dict) -> str:
         return result
 
     except Exception as e:
-        return f"ERROR: Scrapling fetch failed: {type(e).__name__}: {e}"
+        return _format_browser_error("Scrapling fetch failed", e)
 
 
 def tool_web_click(a: dict) -> str:
@@ -285,7 +292,7 @@ def tool_web_click(a: dict) -> str:
         page.wait_for_load_state("domcontentloaded", timeout=5000)
         return f"OK: clicked {selector}"
     except Exception as e:
-        return f"ERROR: click failed ({selector}): {type(e).__name__}: {e}"
+        return _format_browser_error(f"click failed ({selector})", e)
 
 
 def tool_web_screenshot(a: dict) -> str:
@@ -319,7 +326,7 @@ def tool_web_screenshot(a: dict) -> str:
             return f"OK: screenshot saved: {save_path} ({size_kb:.1f} KB)"
         return "ERROR: screenshot file was not generated"
     except Exception as e:
-        return f"ERROR: screenshot failed: {type(e).__name__}: {e}"
+        return _format_browser_error("screenshot failed", e)
 
 
 def tool_web_select(a: dict) -> str:
@@ -354,7 +361,7 @@ def tool_web_select(a: dict) -> str:
         return "\n".join(results) if results else f"Elements exist but content is empty: {selector}"
 
     except Exception as e:
-        return f"ERROR: selector query failed ({selector}): {type(e).__name__}: {e}"
+        return _format_browser_error(f"selector query failed ({selector})", e)
 
 
 def tool_web_type(a: dict) -> str:
@@ -371,7 +378,7 @@ def tool_web_type(a: dict) -> str:
         page.fill(selector, text, timeout=10000)
         return f"OK: typed {len(text)} chars into {selector}"
     except Exception as e:
-        return f"ERROR: type failed ({selector}): {type(e).__name__}: {e}"
+        return _format_browser_error(f"type failed ({selector})", e)
 
 
 def tool_web_navigate(a: dict) -> str:
@@ -397,7 +404,7 @@ def tool_web_navigate(a: dict) -> str:
         title = page.title()
         return f"OK: navigated to {url}\n  Title: {title}"
     except Exception as e:
-        return f"ERROR: navigation failed ({url}): {type(e).__name__}: {e}"
+        return _format_browser_error(f"navigation failed ({url})", e)
 
 
 # ════════════════════════════════════════════════════════
