@@ -20,6 +20,11 @@ Scanning:
     2. Find skill.md, guide.md, or the first .md file.
     3. Auto-extract keywords from the folder name and Markdown headings.
     4. manifest.json keywords/triggers override auto extraction when present.
+
+The scanner reads runtime discovery metadata only. A manifest can make a local
+or user-installed pack discoverable, but it does not approve redistribution in
+PyPI wheels, sdists, release archives, Docker images, or generated bundled-skill
+directories. Redistribution decisions live in THIRD_PARTY_NOTICES.md.
 """
 
 import json

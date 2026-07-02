@@ -331,10 +331,12 @@ def test_built_wheel_does_not_ship_top_level_main_module(tmp_path):
     with zipfile.ZipFile(wheels[-1]) as wheel:
         names = set(wheel.namelist())
 
+    skill_file_count = sum(name.startswith("skills/") for name in names)
+
     assert "main.py" not in names
     assert "pawnlogic/cli.py" in names
     assert "pawnlogic/__main__.py" in names
-    assert not any(name.startswith("skills/") for name in names)
+    assert skill_file_count == 0
 
 
 @pytest.mark.slow

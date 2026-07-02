@@ -235,6 +235,8 @@ Git-backed skill-pack installs accept only `https://`, `ssh://`, or
 Only redistribute third-party CTF skill content from this repository after the
 upstream license, source URL, commit, and required notices have been recorded in
 `THIRD_PARTY_NOTICES.md`.
+Skill-pack manifests are runtime discovery metadata only; they do not authorize
+redistribution by themselves.
 
 ### MCP Tools
 

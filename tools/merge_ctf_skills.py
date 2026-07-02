@@ -93,6 +93,22 @@ def build_skill(
             f"{category_name.replace('ctf-', '')} exploit",
         ],
         "author": "MateoBogo/claude-skills-ctf",
+        "source": {
+            "upstream": "MateoBogo/claude-skills-ctf",
+            "category": category_name,
+            "commit": "",
+            "license": "unknown",
+        },
+        "redistribution": {
+            "status": "blocked",
+            "decision": "review_pending",
+            "reason": (
+                "Runtime skill metadata does not authorize redistribution. "
+                "Record upstream URL, commit, license, copied files, local "
+                "modifications, and required notices in THIRD_PARTY_NOTICES.md "
+                "before packaging this skill pack."
+            ),
+        },
     }
 
     if dry_run:

@@ -70,6 +70,8 @@ optional extension assets that users install explicitly, for example with
 `/sp install <repo_url>` into `~/.pawnlogic/skills`. Third-party skill packs are
 not bundled into PyPI distributions unless their upstream license and notices
 have been reviewed for redistribution.
+Skill-pack manifests are runtime discovery metadata only; they do not authorize
+redistribution without a matching `THIRD_PARTY_NOTICES.md` entry.
 Git-backed skill-pack installs accept only `https://`, `ssh://`, or
 `git@host:owner/repo.git` remotes.
 

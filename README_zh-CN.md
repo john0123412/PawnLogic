@@ -63,7 +63,9 @@ pip install -e ".[dev,ctf]"        # 源码 checkout + 测试 + CTF 工具
 `pawnlogic[ctf]` 只安装 CTF 工具依赖。CTF skill pack 是可选扩展资产，需要用户显式安装，
 例如通过 `/sp install <repo_url>` 安装到 `~/.pawnlogic/skills`。第三方 skill pack
 只有在上游许可证和 notice 已完成再分发审查后，才会随 PyPI 分发。git-backed skill
-pack 安装只接受 `https://`、`ssh://` 或 `git@host:owner/repo.git` remote。
+pack manifest 只是运行时发现元数据；没有匹配的 `THIRD_PARTY_NOTICES.md` 条目时，
+它不授权再分发。git-backed skill pack 安装只接受 `https://`、`ssh://` 或
+`git@host:owner/repo.git` remote。
 
 源码 checkout 启动器备用方式：
 

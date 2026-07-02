@@ -62,6 +62,15 @@ def test_force_overwrites_existing_destination_files(tmp_path):
     manifest = json.loads((existing / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "CTF Pwn"
     assert "pwn" in manifest["keywords"]
+    assert manifest["source"] == {
+        "upstream": "MateoBogo/claude-skills-ctf",
+        "category": "ctf-pwn",
+        "commit": "",
+        "license": "unknown",
+    }
+    assert manifest["redistribution"]["status"] == "blocked"
+    assert manifest["redistribution"]["decision"] == "review_pending"
+    assert "THIRD_PARTY_NOTICES.md" in manifest["redistribution"]["reason"]
 
 
 def test_invalid_source_directories_return_nonzero_and_clear_error(tmp_path, capsys):

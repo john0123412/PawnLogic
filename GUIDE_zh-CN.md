@@ -219,6 +219,7 @@ git-backed skill pack 安装只接受 `https://`、`ssh://` 或
 
 只有在 `THIRD_PARTY_NOTICES.md` 中记录了上游许可证、来源 URL、commit 和必要 notice
 之后，才可以从本仓库再分发第三方 CTF skill 内容。
+skill-pack manifest 只是运行时发现元数据，本身不授权再分发。
 
 ### MCP 工具接入
 
