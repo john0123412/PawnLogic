@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from core import api_client
+from core import api_payloads
 from core import provider_streams
 
 
@@ -388,3 +389,11 @@ def test_api_client_stream_helpers_are_compatibility_wrappers():
     ) == provider_streams.stream_interruption_delta(
         OSError("connection lost"), "partial"
     )
+
+
+def test_api_payload_builders_remain_api_client_compatibility_helpers():
+    assert api_client._build_openai_payload is api_payloads._build_openai_payload
+    assert api_client._build_openai_headers is api_payloads._build_openai_headers
+    assert api_client._anthropic_build_payload is api_payloads._anthropic_build_payload
+    assert api_client._anthropic_build_headers is api_payloads._anthropic_build_headers
+    assert api_client._sanitize_messages_for_model is api_payloads._sanitize_messages_for_model

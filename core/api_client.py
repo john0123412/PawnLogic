@@ -9,11 +9,20 @@ Shared infrastructure: connection management, proxy tunneling, circuit breaker,
 and exponential backoff.
 """
 
-import copy
 import json, os, ssl, socket, time, threading
 import http.client
 from urllib.parse import urlparse
 from config import get_provider_config, MODELS, DEFAULT_MODEL, DYNAMIC_CONFIG
+from core.api_payloads import (
+    _anthropic_build_headers,
+    _anthropic_build_payload,
+    _anthropic_convert_messages as _anthropic_convert_messages,
+    _anthropic_convert_tools as _anthropic_convert_tools,
+    _build_openai_headers,
+    _build_openai_payload,
+    _is_reasoning_model as _is_reasoning_model,
+    _sanitize_messages_for_model,
+)
 from core.api_errors import (
     RETRYABLE_HTTP_STATUS_CODES,
     _retry_delay,
@@ -31,82 +40,6 @@ from core.provider_runtime import maybe_warn_insecure_provider
 class APIEmptyResponseError(Exception):
     """Model returned an empty response: no text, no tool calls, and 0 tokens."""
     pass
-
-
-# ════════════════════════════════════════════════════════
-# thinking-mode support: reasoning_content field handling.
-#
-# Reasoning models may return reasoning_content and strictly require the
-# corresponding assistant message in the next request to pass it back unchanged.
-# Otherwise they can return HTTP 400:
-# "The reasoning_content in the thinking mode must be passed back to the API."
-#
-# Non-reasoning models vary in how they handle unknown fields:
-#   · Some APIs ignore unknown fields.
-#   · Some APIs return 400 unknown parameter.
-# To avoid false failures, strip reasoning_content for non-reasoning models.
-# ════════════════════════════════════════════════════════
-
-# Reasoning model heuristic: model_alias or model_id contains one of these terms.
-_REASONING_MODEL_PATTERNS = (
-    "mimo",        # Xiaomi MiMo family, including legacy aliases.
-    "deepseek",    # DeepSeek family: v4-flash / v4-pro / reasoner / r1.
-    "qwq",         # Alibaba QwQ reasoning series.
-)
-
-
-def _is_reasoning_model(model_alias: str, model_id: str = "") -> bool:
-    """Return whether a model supports the reasoning_content field.
-
-    Prefer explicit MODELS[alias].reasoning; fallback to keyword matching for
-    custom providers when it is not declared.
-    """
-    m = MODELS.get(model_alias)
-    if m is not None and "reasoning" in m:
-        return bool(m["reasoning"])
-    # Fallback keyword matching for custom providers.
-    combo = f"{(model_alias or '').lower()}|{(model_id or '').lower()}"
-    return any(p in combo for p in _REASONING_MODEL_PATTERNS)
-
-
-def _sanitize_messages_for_model(
-    messages: list,
-    model_alias: str,
-    model_id: str = "",
-) -> list:
-    """
-    Build a clean OpenAI-format messages list for the target model.
-
-    Signature compatibility:
-      · Simple callers can use _sanitize_messages_for_model(messages, model_alias)
-      · model_id is optional and improves custom-provider detection
-
-    Handling:
-      · First, deepcopy messages so the original session.messages is never mutated.
-      · Then detect reasoning models through explicit config or keyword fallback.
-      · Finally trim:
-          - remove private fields whose keys start with "_"
-          - remove empty reasoning_content values to avoid sending null
-          - remove reasoning_content for non-reasoning models
-          - preserve non-empty reasoning_content for reasoning models
-    """
-    is_reasoning = _is_reasoning_model(model_alias, model_id)
-    # deepcopy breaks references to nested session structures such as tool_calls.
-    # Without it, stripping reasoning_content for a non-reasoning model would
-    # corrupt the original session when switching back to a reasoning model.
-    cloned_msgs = copy.deepcopy(messages)
-    out: list[dict] = []
-    for m in cloned_msgs:
-        clean = {
-            k: v for k, v in m.items()
-            if not (isinstance(k, str) and k.startswith("_"))
-        }
-        rc = clean.get("reasoning_content")
-        # Remove empty values or remove the field for non-reasoning models.
-        if not rc or not is_reasoning:
-            clean.pop("reasoning_content", None)
-        out.append(clean)
-    return out
 
 
 # Circuit-breaker state storage per provider base_url.
@@ -350,137 +283,6 @@ def ensure_tool_call_id(tcd: dict, iteration: int, idx: int) -> str:
 
 
 # ════════════════════════════════════════════════════════
-# Anthropic native path: request construction.
-# ════════════════════════════════════════════════════════
-
-def _anthropic_convert_tools(tools_schema: list) -> list:
-    """Convert OpenAI tool schema to Anthropic input_schema format."""
-    result = []
-    for tool in (tools_schema or []):
-        fn = tool.get("function", {})
-        result.append({
-            "name":        fn.get("name", ""),
-            "description": fn.get("description", ""),
-            "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
-        })
-    return result
-
-
-def _anthropic_convert_messages(messages: list) -> tuple[list, str | None]:
-    """
-    Convert OpenAI messages to Anthropic messages.
-    Returns (converted_messages, system_prompt).
-    - system is extracted as a top-level field
-    - tool role -> user + tool_result content block
-    - assistant tool_calls -> tool_use content block
-    - consecutive same-role messages are merged because Anthropic requires alternation
-    """
-    system_prompt = None
-    converted = []
-
-    for msg in messages:
-        role = msg.get("role")
-
-        if role == "system":
-            system_prompt = msg.get("content", "")
-            continue
-
-        if role == "tool":
-            converted.append({
-                "role": "user",
-                "content": [{
-                    "type":         "tool_result",
-                    "tool_use_id":  msg.get("tool_call_id", ""),
-                    "content":      msg.get("content", ""),
-                }],
-            })
-            continue
-
-        if role == "assistant":
-            content = msg.get("content") or ""
-            tool_calls = msg.get("tool_calls") or []
-            if not tool_calls:
-                converted.append({"role": "assistant", "content": content or "."})
-            else:
-                blocks = []
-                if content:
-                    blocks.append({"type": "text", "text": content})
-                for tc in tool_calls:
-                    fn = tc.get("function", {})
-                    args_str = fn.get("arguments", "{}")
-                    try:
-                        args = json.loads(args_str) if isinstance(args_str, str) else args_str
-                    except json.JSONDecodeError:
-                        args = {"_raw": args_str}
-                    blocks.append({
-                        "type":  "tool_use",
-                        "id":    tc.get("id", ""),
-                        "name":  fn.get("name", ""),
-                        "input": args,
-                    })
-                converted.append({"role": "assistant", "content": blocks})
-            continue
-
-        if role == "user":
-            content = msg.get("content", "")
-            if isinstance(content, str):
-                converted.append({"role": "user", "content": content})
-            else:
-                converted.append(msg)
-            continue
-
-    # Anthropic requires user/assistant alternation; merge consecutive same-role messages.
-    merged = []
-    for msg in converted:
-        if merged and merged[-1]["role"] == msg["role"]:
-            prev = merged[-1]["content"]
-            curr = msg["content"]
-            if isinstance(prev, str) and isinstance(curr, str):
-                merged[-1]["content"] = prev + "\n\n" + curr
-            elif isinstance(prev, list) and isinstance(curr, list):
-                merged[-1]["content"] = prev + curr
-            elif isinstance(prev, str) and isinstance(curr, list):
-                merged[-1]["content"] = [{"type": "text", "text": prev}] + curr
-            elif isinstance(prev, list) and isinstance(curr, str):
-                merged[-1]["content"] = prev + [{"type": "text", "text": curr}]
-        else:
-            merged.append(msg)
-
-    return merged, system_prompt
-
-
-def _anthropic_build_payload(
-    messages: list, model_id: str, max_tokens: int,
-    tools_schema: list | None,
-) -> dict:
-    """Build a native Anthropic Messages API request body."""
-    conv_msgs, system_prompt = _anthropic_convert_messages(messages)
-    payload: dict = {
-        "model":      model_id,
-        "max_tokens": max_tokens or DYNAMIC_CONFIG["max_tokens"],
-        "messages":   conv_msgs,
-        "stream":     True,
-    }
-    if system_prompt:
-        payload["system"] = system_prompt
-    if tools_schema:
-        payload["tools"] = _anthropic_convert_tools(tools_schema)
-    return payload
-
-
-def _anthropic_build_headers(api_key: str, body_len: int) -> dict:
-    """Build native Anthropic request headers."""
-    return {
-        "x-api-key":         api_key,
-        "anthropic-version": "2023-06-01",
-        "Content-Type":      "application/json",
-        "Accept":            "text/event-stream",
-        "Cache-Control":     "no-cache",
-        "Content-Length":    str(body_len),
-    }
-
-
-# ════════════════════════════════════════════════════════
 # Anthropic native path: SSE parsing.
 # ════════════════════════════════════════════════════════
 
@@ -499,43 +301,6 @@ def _anthropic_parse_response(raw_bytes: bytes) -> tuple[str, str | None]:
         return "".join(parts).strip(), None
     except Exception as e:
         return "", str(e)
-
-
-def _build_openai_payload(
-    messages: list,
-    model_alias: str,
-    model_id: str,
-    max_tokens: int,
-    tools_schema: list | None,
-    tool_choice: str,
-    response_format: dict | None,
-) -> dict:
-    # thinking-mode: preserve reasoning_content for reasoning models and strip it
-    # for non-reasoning models to avoid strict provider HTTP 400s.
-    clean = _sanitize_messages_for_model(messages, model_alias, model_id)
-    payload = {
-        "model":      model_id,
-        "messages":   clean,
-        "max_tokens": max_tokens,
-        "stream":     True,
-    }
-    if tools_schema:
-        payload["tools"]       = tools_schema
-        payload["tool_choice"] = tool_choice
-    if response_format:
-        payload["response_format"] = response_format
-    payload["stream_options"] = {"include_usage": True}
-    return payload
-
-
-def _build_openai_headers(api_key: str, body_len: int) -> dict:
-    return {
-        "Authorization":  f"Bearer {api_key}",
-        "Content-Type":   "application/json",
-        "Accept":         "text/event-stream",
-        "Cache-Control":  "no-cache",
-        "Content-Length": str(body_len),
-    }
 
 
 def _stream_interruption_delta(error: OSError, partial_text: str) -> dict[str, object] | None:

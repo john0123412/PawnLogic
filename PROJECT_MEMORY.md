@@ -104,6 +104,8 @@ These contracts are more important than local refactoring convenience:
 
 - `core/api_client.py` owns API request orchestration and compatibility entry
   points.
+- `core/api_payloads.py` owns provider request payload/header builders and
+  reasoning-message sanitization used by `core/api_client.py`.
 - `core/provider_streams.py` owns provider-specific stream adapter details while
   preserving the existing public delta dict schema.
 - `core/api_errors.py` owns user-facing API error classification and formatting.
