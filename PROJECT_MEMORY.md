@@ -69,9 +69,13 @@ These contracts are more important than local refactoring convenience:
 - `pawnlogic/cli.py` owns parser options, startup behavior, slash-command
   guidance, completer behavior, and `PawnCompleter`.
 - `main.py`, `pawnlogic/__main__.py`, and `pawn.sh` stay thin adapters.
+- `tools/cli_transcript_runner.py` owns deterministic maintainer transcript
+  checks for slash-command output without starting the full REPL.
 - `tests/test_deployment_friendly.py` protects source checkout, installed
   package, entry point, and runtime-data isolation behavior.
 - `tests/test_cli_startup.py` protects startup output and mode behavior.
+- `tests/test_cli_transcripts.py` protects user-visible transcript output for
+  core slash-command flows.
 
 ### Session Runtime
 
@@ -129,13 +133,14 @@ These contracts are more important than local refactoring convenience:
 - `tools/runtime_eval.py` owns the local runtime evaluation harness and writes
   redacted JSONL artifacts under ignored `.pawnlogic_eval/`. Real API smoke
   remains opt-in through `PAWNLOGIC_REAL_API_SMOKE=true` and guarded by local
-  call and duration budgets.
+  call and duration budgets. The `tools` suite covers safe local file/shell
+  flows and fail-closed policy checks without network targets.
 - `tools/merge_ctf_skills.py` is a maintenance helper for optional CTF skills.
 - `THIRD_PARTY_NOTICES.md` records redistribution decisions for third-party
   skill content.
 - `tests/test_runtime_eval.py` protects the runtime evaluation artifact
   contract, redaction, deterministic fake scenarios, real API gating, spend
-  guards, and timeout classification.
+  guards, safe tool smoke, and timeout classification.
 - `tests/test_workspace_cleanup.py`,
   `tests/test_merge_ctf_skills.py`, and packaging tests protect these flows.
 

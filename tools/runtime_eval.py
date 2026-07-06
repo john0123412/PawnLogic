@@ -128,6 +128,85 @@ def pass_scenario() -> ScenarioOutcome:
     return ScenarioOutcome(status="passed", summary="Harness-only fake scenario passed.")
 
 
+def _tools_local_smoke_scenario() -> ScenarioOutcome:
+    from core import provider_runtime
+    from tools import file_ops
+
+    class QuietLogger:
+        def debug(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def warning(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def error(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    old_cwd = list(file_ops._session_cwd)
+    old_workspace = list(file_ops._session_workspace_dir)
+    old_get_shell_env = file_ops._get_shell_env
+    old_logger = file_ops.logger
+    try:
+        with tempfile.TemporaryDirectory(prefix="pawnlogic-tools-smoke-") as tmp:
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            outside = Path(tmp) / "outside.txt"
+            file_ops._session_cwd[0] = str(workspace)
+            file_ops._session_workspace_dir[0] = str(workspace)
+            file_ops._get_shell_env = lambda: {}
+            file_ops.logger = QuietLogger()
+
+            write_result = file_ops.tool_write_file(
+                {"path": "notes.txt", "content": "pawnlogic tools smoke\n"}
+            )
+            read_result = file_ops.tool_read_file({"path": str(workspace / "notes.txt")})
+            traversal_result = file_ops.tool_write_file(
+                {"path": str(outside), "content": "blocked\n"}
+            )
+            shell_result = file_ops.tool_run_shell(
+                {"command": "printf pawnlogic-tools-ok", "timeout": 5}
+            )
+            high_risk_result = file_ops.tool_run_shell(
+                {"command": f"echo blocked > {outside}", "timeout": 5}
+            )
+
+            warnings: list[str] = []
+            provider_runtime.maybe_warn_insecure_provider(
+                "http://provider.example/v1",
+                emit=warnings.append,
+            )
+
+        checks = {
+            "safe file write": write_result.startswith("OK: wrote"),
+            "safe file read": "pawnlogic tools smoke" in read_result,
+            "traversal rejection": "SECURITY BLOCK" in traversal_result,
+            "safe shell": "pawnlogic-tools-ok" in shell_result,
+            "high-risk fail-closed": "SECURITY BLOCK" in high_risk_result,
+            "plain HTTP warning": any("plain HTTP" in warning for warning in warnings),
+        }
+        failed = [name for name, ok in checks.items() if not ok]
+        if failed:
+            return ScenarioOutcome(
+                status="failed",
+                summary="Tool smoke failed checks: " + ", ".join(failed),
+                tool_calls=6,
+                failure_class="ToolSmokeFailure",
+            )
+        return ScenarioOutcome(
+            status="passed",
+            summary=(
+                "Validated safe file ops, traversal rejection, safe shell, "
+                "high-risk fail-closed, and plain HTTP warning."
+            ),
+            tool_calls=6,
+        )
+    finally:
+        file_ops._session_cwd[:] = old_cwd
+        file_ops._session_workspace_dir[:] = old_workspace
+        file_ops._get_shell_env = old_get_shell_env
+        file_ops.logger = old_logger
+
+
 def _env_enabled(value: str | None) -> bool:
     return (value or "").strip().lower() == "true"
 
@@ -257,6 +336,8 @@ def scenarios_for_suite(
                 expected_api_calls=1,
             )
         ]
+    if suite == "tools":
+        return [Scenario("tools.local_smoke", suite, _tools_local_smoke_scenario)]
     return [Scenario(f"{suite}.harness_smoke", suite, pass_scenario)]
 
 
