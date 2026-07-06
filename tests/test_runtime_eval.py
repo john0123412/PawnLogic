@@ -138,3 +138,136 @@ def test_all_supported_suites_have_harness_only_fake_scenarios():
         scenarios = runtime_eval.scenarios_for_suite(suite)
         assert scenarios
         assert {scenario.suite for scenario in scenarios} == {suite}
+
+
+def test_real_api_suite_is_skipped_without_explicit_gate(monkeypatch, tmp_path):
+    monkeypatch.delenv(runtime_eval.REAL_API_GATE_ENV, raising=False)
+
+    records = runtime_eval.run_suite(
+        "real-api",
+        max_duration_seconds=10,
+        source_env_path=tmp_path / "missing.env",
+        env={},
+    )
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.status == "skipped"
+    assert record.api_calls == 0
+    assert record.failure_class == "RealApiSmokeDisabled"
+
+
+def test_real_api_cli_without_gate_writes_skipped_artifact(monkeypatch, tmp_path):
+    monkeypatch.delenv(runtime_eval.REAL_API_GATE_ENV, raising=False)
+    output_dir = tmp_path / ".pawnlogic_eval"
+
+    assert runtime_eval.main(
+        [
+            "--suite",
+            "real-api",
+            "--output-dir",
+            str(output_dir),
+            "--max-api-calls",
+            "0",
+            "--stop-on-first-failure",
+        ]
+    ) == 0
+
+    artifacts = sorted(output_dir.glob("*.jsonl"))
+    assert len(artifacts) == 1
+    records = _lines(artifacts[0])
+    assert len(records) == 1
+    assert records[0]["status"] == "skipped"
+    assert records[0]["failure_class"] == "RealApiSmokeDisabled"
+
+
+def test_real_api_gate_without_key_skips_before_network_runner(tmp_path):
+    def unexpected_runner(*_args, **_kwargs):
+        raise AssertionError("real API runner should not run without a key")
+
+    records = runtime_eval.run_suite(
+        "real-api",
+        max_duration_seconds=10,
+        env={runtime_eval.REAL_API_GATE_ENV: "true"},
+        source_env_path=tmp_path / "missing.env",
+        command_runner=unexpected_runner,
+    )
+
+    assert len(records) == 1
+    assert records[0].status == "skipped"
+    assert records[0].api_calls == 0
+    assert records[0].failure_class == "ProviderKeyUnavailable"
+
+
+def test_api_call_budget_prevents_expensive_scenario_from_running():
+    calls: list[str] = []
+
+    def call_api() -> runtime_eval.ScenarioOutcome:
+        calls.append("called")
+        return runtime_eval.ScenarioOutcome(
+            status="passed",
+            summary="called",
+            provider="real-api",
+            model="configured",
+            api_calls=1,
+        )
+
+    records = runtime_eval.run_scenarios(
+        [
+            runtime_eval.Scenario(
+                "real-api.expensive",
+                "real-api",
+                call_api,
+                expected_api_calls=1,
+            )
+        ],
+        max_duration_seconds=10,
+        max_api_calls=0,
+    )
+
+    assert calls == []
+    assert len(records) == 1
+    assert records[0].status == "failed"
+    assert records[0].failure_class == "ApiCallBudgetExceeded"
+
+
+def test_stop_on_first_failure_does_not_run_later_scenarios():
+    calls: list[str] = []
+
+    def fail() -> runtime_eval.ScenarioOutcome:
+        calls.append("fail")
+        return runtime_eval.ScenarioOutcome(status="failed", summary="failed")
+
+    def succeed() -> runtime_eval.ScenarioOutcome:
+        calls.append("succeed")
+        return runtime_eval.ScenarioOutcome(status="passed", summary="passed")
+
+    records = runtime_eval.run_scenarios(
+        [
+            runtime_eval.Scenario("fake.fail", "offline", fail),
+            runtime_eval.Scenario("fake.succeed", "offline", succeed),
+        ],
+        max_duration_seconds=10,
+        stop_on_first_failure=True,
+    )
+
+    assert calls == ["fail"]
+    assert len(records) == 1
+    assert records[0].status == "failed"
+
+
+def test_prepare_real_api_home_copies_env_with_owner_only_permissions(tmp_path):
+    source_env = tmp_path / "source.env"
+    secret = "DEEPSEEK_API_KEY=" + "x" * 32
+    source_env.write_text(secret + "\n", encoding="utf-8")
+    target_home = tmp_path / "runtime-home"
+
+    copied = runtime_eval.prepare_real_api_home(
+        target_home=target_home,
+        source_env_path=source_env,
+    )
+
+    assert copied == target_home
+    target_env = target_home / ".env"
+    assert target_env.read_text(encoding="utf-8") == secret + "\n"
+    assert target_env.stat().st_mode & 0o777 == 0o600
