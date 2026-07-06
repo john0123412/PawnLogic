@@ -103,6 +103,9 @@ These contracts are more important than local refactoring convenience:
 - `core/provider_streams.py` owns provider-specific stream adapter details while
   preserving the existing public delta dict schema.
 - `core/api_errors.py` owns user-facing API error classification and formatting.
+- API retry behavior is globally tunable through `PAWNLOGIC_API_RETRY_MAX` and
+  `PAWNLOGIC_API_RETRY_AFTER_MAX`; default behavior remains three attempts and
+  a ten-second `Retry-After` cap.
 - `tests/test_api_stream_helpers.py` and `tests/test_api_errors.py` protect
   stream shape, retry behavior, partial stream recovery, and error formatting.
 

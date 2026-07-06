@@ -169,6 +169,13 @@ Plain `http://` provider endpoints are allowed for local relays and lab
 setups, but user-friendly mode prints a trust-boundary warning because requests
 and API keys are not protected by TLS.
 
+Unstable custom providers can be tuned through environment variables in
+`~/.pawnlogic/.env`: `PAWNLOGIC_API_RETRY_MAX` controls total request attempts
+including the first attempt, `PAWNLOGIC_API_RETRY_AFTER_MAX` caps provider
+`Retry-After` delays, and `PAWNLOGIC_API_CONNECT_TIMEOUT`,
+`PAWNLOGIC_API_READ_TIMEOUT`, and `PAWNLOGIC_API_NONSTREAM_TIMEOUT` tune
+connection and response wait times.
+
 ## Quick Command Reference
 
 ```bash

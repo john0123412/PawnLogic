@@ -119,6 +119,8 @@
 - 以 `/v1` 结尾 → 追加端点后缀
 - 裸域名 → 追加 `/v1/chat/completions` 或 `/v1/messages`
 
+Provider retry 和 timeout 可以在 `~/.pawnlogic/.env` 中调节。`PAWNLOGIC_API_RETRY_MAX` 控制包含首次请求在内的总尝试次数，`PAWNLOGIC_API_RETRY_AFTER_MAX` 限制 Provider `Retry-After` 延迟上限，`PAWNLOGIC_API_CONNECT_TIMEOUT`、`PAWNLOGIC_API_READ_TIMEOUT` 和 `PAWNLOGIC_API_NONSTREAM_TIMEOUT` 分别调节连接、streaming 和 non-streaming 等待时间。
+
 ### 模型过滤机制
 
 `/model` 命令和 Tab 补全只显示 DeepSeek，以及 active 且已配置 API Key 的 Provider。自定义 Provider 默认 inactive，拉取并选择模型后需要运行 `/provider activate <name>`。

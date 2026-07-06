@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import socket
 
 DEFAULT_CONNECT_TIMEOUT = 20
@@ -101,16 +102,35 @@ def is_retryable_http_status(status: int) -> bool:
     return status in RETRYABLE_HTTP_STATUS_CODES
 
 
+def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(max_value, value))
+
+
+def retry_after_max_from_env() -> int:
+    """Return the bounded Retry-After cap for provider retry delays."""
+    return _env_int(
+        "PAWNLOGIC_API_RETRY_AFTER_MAX",
+        DEFAULT_RETRY_AFTER_MAX,
+        1,
+        60,
+    )
+
+
 def _retry_delay(
     attempt: int,
     retry_after: str | None = None,
     *,
-    retry_after_max: int = DEFAULT_RETRY_AFTER_MAX,
+    retry_after_max: int | None = None,
 ) -> float:
     """Return retry delay for an attempt index, honoring bounded Retry-After."""
+    cap = retry_after_max_from_env() if retry_after_max is None else retry_after_max
     if retry_after:
         try:
-            return min(max(float(retry_after), 0.0), retry_after_max)
+            return min(max(float(retry_after), 0.0), cap)
         except ValueError:
             pass
     return float(min(2 ** (attempt + 1), 8))
@@ -126,5 +146,6 @@ __all__ = [
     "format_http_error",
     "format_transport_error",
     "is_retryable_http_status",
+    "retry_after_max_from_env",
     "retry_notice",
 ]
