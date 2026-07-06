@@ -123,9 +123,14 @@ These contracts are more important than local refactoring convenience:
 - `core/workspace_cleanup.py` owns workspace backup, restore, staging, cleanup,
   and rollback behavior.
 - `core/skill_manager.py` owns skill-pack metadata and indexing behavior.
+- `tools/runtime_eval.py` owns the local runtime evaluation harness and writes
+  redacted JSONL artifacts under ignored `.pawnlogic_eval/`.
 - `tools/merge_ctf_skills.py` is a maintenance helper for optional CTF skills.
 - `THIRD_PARTY_NOTICES.md` records redistribution decisions for third-party
   skill content.
+- `tests/test_runtime_eval.py` protects the runtime evaluation artifact
+  contract, redaction, deterministic fake scenarios, and timeout
+  classification.
 - `tests/test_workspace_cleanup.py`,
   `tests/test_merge_ctf_skills.py`, and packaging tests protect these flows.
 
