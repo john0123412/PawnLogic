@@ -205,6 +205,37 @@ def test_provider_active_state_defaults_deepseek_only_for_model_visibility(monke
     assert sorted(visible) == ["ds-v4-flash", "mimo"]
 
 
+def test_visible_models_require_active_provider_and_configured_key(monkeypatch):
+    monkeypatch.setattr(
+        provider_config,
+        "PROVIDERS",
+        {
+            "deepseek": {"api_key_env": "DEEPSEEK_API_KEY", "active": True},
+            "relay": {"api_key_env": "RELAY_API_KEY", "active": True},
+            "dormant": {"api_key_env": "DORMANT_API_KEY", "active": False},
+        },
+    )
+    monkeypatch.setattr(
+        provider_config,
+        "MODELS",
+        {
+            "ds-v4-flash": {"id": "deepseek-v4-flash", "provider": "deepseek"},
+            "relay-chat": {"id": "relay-chat", "provider": "relay"},
+            "dormant-chat": {"id": "dormant-chat", "provider": "dormant"},
+        },
+    )
+    monkeypatch.setattr(provider_cmd, "PROVIDERS", provider_config.PROVIDERS)
+    monkeypatch.setattr(provider_cmd, "MODELS", provider_config.MODELS)
+    monkeypatch.setattr(provider_config, "_providers_initialized", True)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.delenv("RELAY_API_KEY", raising=False)
+    monkeypatch.setenv("DORMANT_API_KEY", "test-key")
+
+    visible = provider_cmd._visible_models()
+
+    assert sorted(visible) == ["ds-v4-flash"]
+
+
 def test_load_custom_providers_defaults_only_deepseek_active_without_config(tmp_path, monkeypatch):
     path = tmp_path / "custom_providers.json"
     monkeypatch.setattr(provider_config, "CUSTOM_PROVIDERS_PATH", path)
@@ -441,6 +472,55 @@ def test_provider_detail_test_uses_registered_provider_model(monkeypatch):
         "model_id": "relay-chat-id",
     }
     assert tui._detail_status == "✅ Connected"
+
+
+def test_provider_command_test_uses_loaded_model_id(monkeypatch):
+    alias = "pytest_loaded_alias"
+    provider_name = "pytest_loaded_provider"
+    env_key = "PYTEST_LOADED_PROVIDER_API_KEY"
+    monkeypatch.setenv(env_key, "test-key")
+    monkeypatch.setattr(
+        provider_cmd,
+        "PROVIDERS",
+        {
+            provider_name: {
+                "base_url": "https://api.example.com/v1",
+                "api_key_env": env_key,
+                "api_format": "openai",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        provider_cmd,
+        "MODELS",
+        {
+            alias: {
+                "id": "provider-native-chat-id",
+                "provider": provider_name,
+            }
+        },
+    )
+    monkeypatch.setattr(provider_cmd, "validate_api_key", lambda _alias: (True, env_key))
+    seen: dict[str, str] = {}
+
+    async def fake_test_connection(base_url, api_key, api_format, model_id):
+        seen["base_url"] = base_url
+        seen["api_key"] = api_key
+        seen["api_format"] = api_format
+        seen["model_id"] = model_id
+        return True, "Connected", 1
+
+    monkeypatch.setattr(provider_cmd, "test_connection", fake_test_connection)
+
+    asyncio.run(provider_cmd._provider_test(SimpleNamespace(), alias))
+
+    assert seen == {
+        "base_url": "https://api.example.com/v1",
+        "api_key": "test-key",
+        "api_format": "openai",
+        "model_id": "provider-native-chat-id",
+    }
+    assert seen["model_id"] not in {"gpt-3.5-turbo", "ds-chat", "ds-r1"}
 
 
 def test_provider_detail_test_without_models_does_not_use_fallback_model(monkeypatch):

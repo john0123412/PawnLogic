@@ -97,6 +97,58 @@ def test_provider_runtime_fetch_models_builds_candidates_and_stats(monkeypatch):
     assert candidates[0][1]["desc"] == "Dynamically fetched model; 1 unsupported hidden"
 
 
+def test_provider_runtime_fetch_filters_non_chat_models_before_probe(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": [
+                    {"id": "text-embedding-3-large"},
+                    {"id": "gpt-image-2"},
+                    {"id": "gpt-3.5-turbo-instruct"},
+                    {"id": "relay-chat"},
+                    {"id": "relay-pro"},
+                ],
+                "has_more": False,
+            }
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, _exc_type, _exc, _tb):
+            return False
+
+        async def get(self, _url, headers):
+            assert headers == {"Authorization": "Bearer test-key"}
+            return FakeResponse()
+
+    seen_candidate_ids: list[str] = []
+
+    async def fake_filter(_base_url, _api_key, candidates, _api_format="openai"):
+        seen_candidate_ids.extend(mid for mid, _cfg in candidates)
+        return candidates, 0
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda timeout: FakeClient())
+    monkeypatch.setattr(provider_runtime, "filter_supported_chat_models", fake_filter)
+
+    candidates, err, stats = asyncio.run(
+        provider_runtime.fetch_models("https://api.example.com/v1", "test-key", "openai")
+    )
+
+    assert err == ""
+    assert seen_candidate_ids == ["relay-chat", "relay-pro"]
+    assert [model_id for model_id, _cfg in candidates] == seen_candidate_ids
+    assert stats["hidden_by_name"] == 3
+
+
 def test_provider_runtime_set_active_delegates_to_provider_config(monkeypatch):
     monkeypatch.setattr(provider_runtime, "PROVIDERS", {"relay": {"active": False}})
     seen = {}
@@ -114,6 +166,24 @@ def test_provider_runtime_set_active_delegates_to_provider_config(monkeypatch):
     assert ok is True
     assert message == "Provider is now active."
     assert seen == {"name": "relay", "active": True}
+
+
+def test_provider_runtime_refuses_to_deactivate_deepseek(monkeypatch):
+    monkeypatch.setattr(provider_runtime, "PROVIDERS", {"deepseek": {"active": True}})
+
+    def fail_set_provider_active(_name, _active):
+        raise AssertionError("DeepSeek deactivate should be blocked before persistence")
+
+    monkeypatch.setattr(
+        provider_runtime.provider_config,
+        "set_provider_active",
+        fail_set_provider_active,
+    )
+
+    ok, message = provider_runtime.set_active("deepseek", False)
+
+    assert ok is False
+    assert message == "DeepSeek is always active."
 
 
 def test_provider_runtime_save_key_writes_env_atomically_with_private_mode(tmp_path, monkeypatch):
