@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import io
 import importlib
+import sqlite3
 import sys
 import tarfile
 from pathlib import Path
+from datetime import datetime
 
 
 def _drop_project_modules(*module_names: str) -> None:
@@ -168,6 +170,7 @@ def test_restore_replace_failure_keeps_existing_workspace(monkeypatch, tmp_path)
     assert "replace failed" in result["error"]
     assert (wc.WORKSPACE_PATH / "keep.txt").read_text(encoding="utf-8") == "keep"
     assert not (wc.WORKSPACE_PATH / "restored.txt").exists()
+    assert not list(wc.PAWN_HOME.glob(".restore_staging_*"))
 
 
 def test_failed_restore_cleans_staging_directory(monkeypatch, tmp_path):
@@ -177,6 +180,23 @@ def test_failed_restore_cleans_staging_directory(monkeypatch, tmp_path):
     result = wc.restore_from_backup(backup)
 
     assert result["ok"] is False
+    assert not list(wc.PAWN_HOME.glob(".restore_staging_*"))
+
+
+def test_restore_validation_failure_preserves_workspace_and_has_no_staging(
+    monkeypatch,
+    tmp_path,
+):
+    wc = _load_workspace_cleanup(monkeypatch, tmp_path)
+    wc.WORKSPACE_PATH.mkdir(parents=True)
+    (wc.WORKSPACE_PATH / "keep.txt").write_text("keep", encoding="utf-8")
+    backup = _write_tar(tmp_path / "bad.tar.gz", [("file", "../escaped.txt", b"escape")])
+
+    result = wc.restore_from_backup(backup)
+
+    assert result["ok"] is False
+    assert "unsafe" in result["error"].lower()
+    assert (wc.WORKSPACE_PATH / "keep.txt").read_text(encoding="utf-8") == "keep"
     assert not list(wc.PAWN_HOME.glob(".restore_staging_*"))
 
 
@@ -278,3 +298,45 @@ def test_scan_classifies_loose_files_and_safe_directories(monkeypatch, tmp_path)
     by_path = {row["path"]: row for row in rows}
     assert by_path["screenshots"]["action"] == "KEEP"
     assert by_path["exploit.py"]["category"] == "legacy_exploits"
+
+
+def test_cleanup_execute_keeps_active_session_workspace(monkeypatch, tmp_path):
+    wc = _load_workspace_cleanup(monkeypatch, tmp_path)
+    wc.WORKSPACE_PATH.mkdir(parents=True)
+    session_dir = wc.WORKSPACE_PATH / "session_active123"
+    session_dir.mkdir()
+    (session_dir / "notes.txt").write_text("active", encoding="utf-8")
+    wc.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(str(wc.DB_PATH)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                auto_name TEXT,
+                workspace_dir TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
+            (
+                "active123",
+                "Active",
+                "",
+                str(session_dir),
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        conn.commit()
+
+    rows, db = wc.scan()
+    by_path = {row["path"]: row for row in rows}
+
+    assert by_path["session_active123"]["action"] == "KEEP"
+
+    result = wc.execute_cleanup(rows, db)
+
+    assert result["moved"] == []
+    assert (session_dir / "notes.txt").read_text(encoding="utf-8") == "active"
