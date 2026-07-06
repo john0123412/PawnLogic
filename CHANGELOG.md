@@ -7,6 +7,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-06
+
+### Changed
+- Prepared the 0.2.1 stabilization release with the typed-island CI command
+  aligned to the local release-validation mypy scope.
+- Updated release-facing documentation and security support metadata for the
+  0.2.1 public release.
+
+### Tests
+- Expanded install smoke, CLI user-friendly mode, provider visibility, provider
+  stream adapter, tool trust-boundary, workspace cleanup, runtime metrics, and
+  release documentation guard regressions.
+- Verified dynamic package version metadata, installed entry point discovery,
+  stream delta dict shape, tool result message shape, runtime metrics
+  isolation, documentation structure, release consistency, and wheel
+  skill-pack exclusion checks for the 0.2.1 release path.
+
 ## [0.2.0] - 2026-07-02
 
 ### Added

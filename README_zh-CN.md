@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.2.0**。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.2.1**。
 
 ## 系统要求
 
@@ -87,15 +87,14 @@ python -m pawnlogic --help
 
 ## 新特性
 
-0.2.0 是一个 consolidation release，包含内部加固：
+0.2.1 是面向 0.2.0 consolidation architecture 的 post-release stabilization patch：
 
-- Release consistency preflight 检查从运行时版本唯一来源派生面向 release 的预期。
-- `run_turn` bookkeeping 已拆入 helper 和内部 turn-state snapshot，同时保持 message 形状、reasoning 持久化和 tool result 顺序。
-- Provider stream 解析现在隔离在内部 OpenAI-compatible 和 Anthropic stream adapter 后面，不改变公开 delta dict schema。
-- API retry 覆盖、MCP failure-path 覆盖、browser recovery 覆盖和 trust-boundary 测试会保护现有用户可见行为。
-- 内部 runtime metrics snapshot 会跟踪 turn、retry、token、tool latency 和 failure-class 计数，不新增 telemetry、不改变持久化 schema，也不改变默认终端输出。
-- Skill-pack metadata 被定义为运行时发现数据；第三方 skill pack 在完成再分发审查前仍不会进入 PyPI wheel。
-- typed-island CI 检查现在覆盖新的内部 runtime 模块和稳定维护工具。
+- Install smoke 测试现在验证源码 checkout help 入口、动态 package version metadata，以及文档化的 `pawn` console script contract。
+- User-friendly CLI mode 增加了回归覆盖，证明默认输出会隐藏内部细节，而 `pawn --debug` 仍保留显式诊断。
+- Provider visibility 和 stream adapter 测试锁定 DeepSeek/custom-provider 可见性规则、公开 delta dict 形状、usage chunk、tool delta 顺序和 no-partial stream error 行为。
+- Trust-boundary 和 workspace cleanup 测试覆盖非交互 fail-closed 行为、trust notice、restore rollback 和 staging cleanup 可靠性。
+- Runtime metrics 测试验证 snapshot 是 copy、保持本地且默认静默、不会记录 secret-like failure detail，也不会改变 message persistence shape。
+- Release documentation guard 现在覆盖 README 版本一致性、SECURITY support row、翻译文档配对、语言策略、typed-island scope 和 wheel skill-pack 排除。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 

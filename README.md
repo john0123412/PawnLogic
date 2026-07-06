@@ -11,7 +11,7 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.2.0**.
+CTF-oriented toolchain. The current public release is **0.2.1**.
 
 ## System Requirements
 
@@ -97,25 +97,24 @@ Use `pawn --debug` or `/mode` when you need detailed diagnostics.
 
 ## What's New
 
-Version 0.2.0 is a consolidation release with internal hardening:
+Version 0.2.1 is a post-release stabilization patch for the 0.2.0
+consolidation architecture:
 
-- Release consistency preflight checks derive release-facing expectations from
-  the runtime version source of truth.
-- `run_turn` bookkeeping is split across helpers plus an internal turn-state
-  snapshot, while preserving message shapes, reasoning persistence, and tool
-  result ordering.
-- Provider stream parsing now lives behind internal OpenAI-compatible and
-  Anthropic stream adapters without changing the public delta dict schema.
-- API retry coverage, MCP failure-path coverage, browser recovery coverage, and
-  trust-boundary tests guard existing user-facing behavior.
-- Internal runtime metrics snapshots track turn, retry, token, tool latency, and
-  failure-class counters without telemetry, persistence schema changes, or
-  default terminal output changes.
-- Skill-pack metadata is documented as runtime discovery data only; third-party
-  skill packs remain outside PyPI wheels unless redistribution review is
-  complete.
-- The typed-island CI check now covers the new internal runtime modules and
-  stable maintenance tools.
+- Install smoke tests now verify source checkout help entry points, dynamic
+  package version metadata, and the documented `pawn` console script contract.
+- User-friendly CLI mode has regression coverage proving default output hides
+  internals while `pawn --debug` keeps explicit diagnostics available.
+- Provider visibility and stream adapter tests lock DeepSeek/custom-provider
+  visibility rules, public delta dict shape, usage chunks, tool delta ordering,
+  and no-partial stream error behavior.
+- Trust-boundary and workspace cleanup tests cover non-interactive fail-closed
+  behavior, trust notices, restore rollback, and staging cleanup reliability.
+- Runtime metrics tests verify snapshots are copies, remain local and silent,
+  avoid secret-like failure details, and do not change message persistence
+  shape.
+- Release documentation guards now cover README version alignment, SECURITY
+  support rows, translated documentation pairs, language policy, typed-island
+  scope, and wheel skill-pack exclusion.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
