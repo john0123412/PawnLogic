@@ -15,13 +15,21 @@ import sys
 import tarfile
 import zipfile
 from pathlib import Path
-from importlib.metadata import PathDistribution
 from unittest.mock import patch
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_pyproject() -> dict:
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
+        import tomli as tomllib
+
+    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
 
 def _clean_runtime_env(tmp_path: Path) -> dict[str, str]:
@@ -178,6 +186,63 @@ def test_source_and_module_help_use_same_runtime(tmp_path):
     assert "--quiet" not in main_result.stdout
 
 
+def test_source_help_entry_points_do_not_write_runtime_state_to_checkout(tmp_path):
+    env = _clean_runtime_env(tmp_path)
+    env["PAWNLOGIC_TEST_MODE"] = "true"
+
+    entry_points = [
+        [sys.executable, str(ROOT / "main.py"), "--help"],
+        [sys.executable, "-m", "pawnlogic", "--help"],
+        [str(ROOT / "pawn.sh"), "--help"],
+    ]
+
+    for command in entry_points:
+        result = subprocess.run(
+            command,
+            cwd=ROOT,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=15,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "PawnLogic" in result.stdout
+
+    assert not (ROOT / ".pawnlogic").exists()
+    for runtime_file in [
+        "pawn.db",
+        "custom_providers.json",
+        "mcp_configs.json",
+        ".env",
+    ]:
+        assert not (ROOT / runtime_file).exists()
+
+
+def test_package_metadata_version_matches_runtime_version_source():
+    from config.paths import VERSION
+
+    pyproject = _load_pyproject()
+
+    assert pyproject["project"]["name"] == "pawnlogic"
+    assert "version" in pyproject["project"]["dynamic"]
+    assert (
+        pyproject["tool"]["setuptools"]["dynamic"]["version"]["attr"]
+        == "config.paths.VERSION"
+    )
+    assert isinstance(VERSION, str) and VERSION.count(".") == 2
+
+
+def test_fresh_install_pawn_contract_is_documented_and_discoverable():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    pyproject = _load_pyproject()
+
+    assert "pip install pawnlogic" in readme
+    assert "pawn" in readme
+    assert pyproject["project"]["scripts"]["pawn"] == "pawnlogic.cli:run"
+
+
 def test_default_cli_suppresses_internal_terminal_logs():
     source = (ROOT / "pawnlogic" / "cli.py").read_text(encoding="utf-8")
 
@@ -304,13 +369,9 @@ def test_pawn_symlink_launcher_executes_checkout_script(tmp_path):
 
 @pytest.mark.packaging
 def test_packaging_entry_point_uses_package_cli():
-    dist = PathDistribution.at(ROOT / "pawnlogic.egg-info")
-    scripts = [ep for ep in dist.entry_points if ep.group == "console_scripts"]
+    pyproject = _load_pyproject()
 
-    assert any(
-        ep.name == "pawn" and ep.value == "pawnlogic.cli:run"
-        for ep in scripts
-    )
+    assert pyproject["project"]["scripts"]["pawn"] == "pawnlogic.cli:run"
 
 
 @pytest.mark.slow
