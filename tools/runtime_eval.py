@@ -8,12 +8,18 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
 import time
 
 
 ARTIFACT_DIR_NAME = ".pawnlogic_eval"
+REAL_API_GATE_ENV = "PAWNLOGIC_REAL_API_SMOKE"
 SUPPORTED_SUITES = (
     "offline",
     "tools",
@@ -22,6 +28,22 @@ SUPPORTED_SUITES = (
     "browser",
     "ctf",
     "soak",
+)
+FAILING_STATUSES = {"failed", "timed_out"}
+PROVIDER_KEY_NAMES = (
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+    "MISTRAL_API_KEY",
+    "OPENROUTER_API_KEY",
+    "TOGETHER_API_KEY",
+    "DASHSCOPE_API_KEY",
+    "MOONSHOT_API_KEY",
+    "ZHIPU_API_KEY",
+    "XAI_API_KEY",
 )
 SECRET_RE = re.compile(
     r"sk-ant-[A-Za-z0-9_-]{20,}|"
@@ -65,6 +87,7 @@ class Scenario:
     scenario_id: str
     suite: str
     run: Callable[[], ScenarioOutcome]
+    expected_api_calls: int = 0
 
 
 @dataclass(frozen=True)
@@ -105,9 +128,135 @@ def pass_scenario() -> ScenarioOutcome:
     return ScenarioOutcome(status="passed", summary="Harness-only fake scenario passed.")
 
 
-def scenarios_for_suite(suite: str) -> list[Scenario]:
+def _env_enabled(value: str | None) -> bool:
+    return (value or "").strip().lower() == "true"
+
+
+def _has_provider_key(env: dict[str, str]) -> bool:
+    return any(bool(env.get(name)) for name in PROVIDER_KEY_NAMES)
+
+
+def prepare_real_api_home(
+    *,
+    target_home: Path | None = None,
+    source_env_path: Path | None = None,
+) -> Path:
+    target = target_home or Path(tempfile.mkdtemp(prefix="pawnlogic-real-api-"))
+    target.mkdir(parents=True, exist_ok=True)
+    source = source_env_path or (Path.home() / ".pawnlogic" / ".env")
+    if source.exists():
+        target_env = target / ".env"
+        shutil.copyfile(source, target_env)
+        target_env.chmod(0o600)
+    return target
+
+
+def _real_api_disabled_scenario() -> ScenarioOutcome:
+    return ScenarioOutcome(
+        status="skipped",
+        summary=f"Set {REAL_API_GATE_ENV}=true to run real API smoke.",
+        failure_class="RealApiSmokeDisabled",
+    )
+
+
+def _real_api_missing_key_scenario() -> ScenarioOutcome:
+    return ScenarioOutcome(
+        status="skipped",
+        summary="No provider API key was available for real API smoke.",
+        failure_class="ProviderKeyUnavailable",
+    )
+
+
+def _real_api_smoke_scenario(
+    *,
+    env: dict[str, str],
+    max_duration_seconds: float,
+    source_env_path: Path | None,
+    command_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> ScenarioOutcome:
+    source = source_env_path or (Path.home() / ".pawnlogic" / ".env")
+    if not _has_provider_key(env) and not source.exists():
+        return _real_api_missing_key_scenario()
+
+    with tempfile.TemporaryDirectory(prefix="pawnlogic-real-api-") as home:
+        real_api_home = prepare_real_api_home(
+            target_home=Path(home),
+            source_env_path=source,
+        )
+        run_env = dict(os.environ)
+        run_env.update(env)
+        run_env["PAWNLOGIC_HOME"] = str(real_api_home)
+        run_env["MCP_ENABLED"] = "false"
+        run_env.pop("PAWNLOGIC_TEST_MODE", None)
+        result = command_runner(
+            [
+                sys.executable,
+                "-m",
+                "pawnlogic",
+                "--json",
+                "--eval",
+                "Reply with exactly: pawnlogic-runtime-eval-ok",
+            ],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            env=run_env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=max_duration_seconds,
+        )
+
+    summary = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
+    if result.returncode != 0:
+        return ScenarioOutcome(
+            status="failed",
+            summary=summary or f"Real API smoke exited {result.returncode}.",
+            provider="real-api",
+            model="configured",
+            api_calls=1,
+            failure_class="RealApiSmokeFailed",
+        )
+    return ScenarioOutcome(
+        status="passed",
+        summary=summary or "Real API smoke passed.",
+        provider="real-api",
+        model="configured",
+        api_calls=1,
+    )
+
+
+def scenarios_for_suite(
+    suite: str,
+    *,
+    env: dict[str, str] | None = None,
+    max_duration_seconds: float = 60.0,
+    source_env_path: Path | None = None,
+    command_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> list[Scenario]:
     if suite not in SUPPORTED_SUITES:
         raise ValueError(f"unsupported suite: {suite}")
+    if suite == "real-api":
+        scenario_env = dict(os.environ if env is None else env)
+        if not _env_enabled(scenario_env.get(REAL_API_GATE_ENV)):
+            return [
+                Scenario(
+                    "real-api.disabled_gate",
+                    suite,
+                    _real_api_disabled_scenario,
+                )
+            ]
+        return [
+            Scenario(
+                "real-api.smoke",
+                suite,
+                lambda: _real_api_smoke_scenario(
+                    env=scenario_env,
+                    max_duration_seconds=max_duration_seconds,
+                    source_env_path=source_env_path,
+                    command_runner=command_runner,
+                ),
+                expected_api_calls=1,
+            )
+        ]
     return [Scenario(f"{suite}.harness_smoke", suite, pass_scenario)]
 
 
@@ -148,10 +297,35 @@ def run_scenarios(
     scenarios: Sequence[Scenario],
     *,
     max_duration_seconds: float,
+    max_api_calls: int = 1,
+    stop_on_first_failure: bool = False,
     now: Callable[[], float] = time.monotonic,
 ) -> list[RuntimeEvalRecord]:
     records: list[RuntimeEvalRecord] = []
+    api_calls_used = 0
     for scenario in scenarios:
+        if api_calls_used + scenario.expected_api_calls > max_api_calls:
+            records.append(
+                RuntimeEvalRecord(
+                    scenario_id=scenario.scenario_id,
+                    suite=scenario.suite,
+                    status="failed",
+                    duration_ms=0,
+                    provider="real-api" if scenario.suite == "real-api" else "offline",
+                    model="configured" if scenario.suite == "real-api" else "fake",
+                    api_calls=0,
+                    tool_calls=0,
+                    failure_class="ApiCallBudgetExceeded",
+                    redacted_summary=(
+                        "Scenario was not run because it would exceed "
+                        f"--max-api-calls={max_api_calls}."
+                    ),
+                )
+            )
+            if stop_on_first_failure:
+                break
+            continue
+
         start = now()
         try:
             outcome = scenario.run()
@@ -171,17 +345,21 @@ def run_scenarios(
                     redacted_summary=redact_summary(str(exc)),
                 )
             )
+            if stop_on_first_failure:
+                break
             continue
 
         end = now()
-        records.append(
-            _record_from_outcome(
-                scenario=scenario,
-                outcome=outcome,
-                duration_ms=_duration_ms(start, end),
-                max_duration_seconds=max_duration_seconds,
-            )
+        record = _record_from_outcome(
+            scenario=scenario,
+            outcome=outcome,
+            duration_ms=_duration_ms(start, end),
+            max_duration_seconds=max_duration_seconds,
         )
+        records.append(record)
+        api_calls_used += record.api_calls
+        if stop_on_first_failure and record.status in FAILING_STATUSES:
+            break
     return records
 
 
@@ -189,11 +367,24 @@ def run_suite(
     suite: str,
     *,
     max_duration_seconds: float,
+    max_api_calls: int = 1,
+    stop_on_first_failure: bool = False,
+    source_env_path: Path | None = None,
+    env: dict[str, str] | None = None,
+    command_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     now: Callable[[], float] = time.monotonic,
 ) -> list[RuntimeEvalRecord]:
     return run_scenarios(
-        scenarios_for_suite(suite),
+        scenarios_for_suite(
+            suite,
+            env=env,
+            max_duration_seconds=max_duration_seconds,
+            source_env_path=source_env_path,
+            command_runner=command_runner,
+        ),
         max_duration_seconds=max_duration_seconds,
+        max_api_calls=max_api_calls,
+        stop_on_first_failure=stop_on_first_failure,
         now=now,
     )
 
@@ -235,14 +426,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=60.0,
         help="Maximum allowed duration per scenario before timeout classification.",
     )
+    parser.add_argument(
+        "--max-api-calls",
+        type=int,
+        default=1,
+        help="Maximum real provider calls allowed for this run.",
+    )
+    parser.add_argument(
+        "--stop-on-first-failure",
+        action="store_true",
+        help="Stop running scenarios after the first failed or timed-out record.",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    records = run_suite(args.suite, max_duration_seconds=args.max_duration_seconds)
+    records = run_suite(
+        args.suite,
+        max_duration_seconds=args.max_duration_seconds,
+        max_api_calls=args.max_api_calls,
+        stop_on_first_failure=args.stop_on_first_failure,
+    )
     artifact = write_artifact(records, output_dir=args.output_dir, suite=args.suite)
-    failed = [record for record in records if record.status != "passed"]
+    failed = [record for record in records if record.status in FAILING_STATUSES]
 
     print(f"Wrote {artifact}")
     print(f"Scenarios: {len(records)} passed={len(records) - len(failed)} failed={len(failed)}")
