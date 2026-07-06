@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -153,6 +154,123 @@ def test_tools_suite_runs_safe_local_tool_smoke():
     assert record.failure_class == ""
     assert "safe file ops" in record.redacted_summary
     assert "plain HTTP warning" in record.redacted_summary
+
+
+def test_optional_dynamic_suites_do_not_use_harness_fake_fallback():
+    expected = {
+        "docker": "docker.local_smoke",
+        "browser": "browser.local_static",
+        "ctf": "ctf.local_binary",
+    }
+
+    for suite, scenario_id in expected.items():
+        scenarios = runtime_eval.scenarios_for_suite(suite)
+        assert [scenario.scenario_id for scenario in scenarios] == [scenario_id]
+
+
+def test_docker_suite_skips_cleanly_when_docker_is_unavailable(monkeypatch):
+    from tools import docker_sandbox
+
+    monkeypatch.setattr(docker_sandbox, "_get_docker_client", lambda: None)
+    monkeypatch.setattr(docker_sandbox, "_docker_error", "not running")
+
+    records = runtime_eval.run_suite("docker", max_duration_seconds=30)
+
+    assert len(records) == 1
+    assert records[0].status == "skipped"
+    assert records[0].failure_class == "DockerUnavailable"
+    assert records[0].api_calls == 0
+
+
+def test_docker_suite_uses_no_network_and_workspace_bound_mount(monkeypatch):
+    from tools import docker_sandbox
+
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        pass
+
+    def fake_tool_run_code_docker(args: dict[str, object]) -> str:
+        captured.update(args)
+        mount_files = args["mount_files"]
+        assert isinstance(mount_files, dict)
+        [host_path] = mount_files.keys()
+        assert Path(host_path).is_relative_to(Path(docker_sandbox.SAFE_WORKSPACE))
+        return "[run_code_docker - OK | image: python:3.12-slim | network: none]\npawnlogic-docker-ok"
+
+    monkeypatch.setattr(docker_sandbox, "_get_docker_client", lambda: FakeClient())
+    monkeypatch.setattr(
+        runtime_eval,
+        "_select_local_docker_python_image",
+        lambda _client: "python:3.12-slim",
+    )
+    monkeypatch.setattr(docker_sandbox, "tool_run_code_docker", fake_tool_run_code_docker)
+
+    records = runtime_eval.run_suite("docker", max_duration_seconds=30)
+
+    assert len(records) == 1
+    assert records[0].status == "passed"
+    assert captured["network"] == "none"
+    assert captured["image"] == "python:3.12-slim"
+    assert records[0].tool_calls == 1
+
+
+def test_browser_suite_skips_cleanly_when_dependencies_are_unavailable(monkeypatch):
+    monkeypatch.setattr(runtime_eval, "_browser_dependencies_available", lambda: False)
+
+    records = runtime_eval.run_suite("browser", max_duration_seconds=30)
+
+    assert len(records) == 1
+    assert records[0].status == "skipped"
+    assert records[0].failure_class == "BrowserDependenciesUnavailable"
+    assert records[0].api_calls == 0
+
+
+def test_browser_suite_uses_local_static_html_server(monkeypatch):
+    monkeypatch.setattr(runtime_eval, "_browser_dependencies_available", lambda: True)
+
+    records = runtime_eval.run_suite("browser", max_duration_seconds=30)
+
+    assert len(records) == 1
+    assert records[0].status == "passed"
+    assert records[0].tool_calls == 1
+    assert "local static HTML server" in records[0].redacted_summary
+    assert "127.0.0.1" not in records[0].redacted_summary
+
+
+def test_ctf_suite_skips_cleanly_when_local_tools_are_unavailable(monkeypatch):
+    monkeypatch.setattr(runtime_eval, "_missing_commands", lambda _commands: ["strings"])
+
+    records = runtime_eval.run_suite("ctf", max_duration_seconds=30)
+
+    assert len(records) == 1
+    assert records[0].status == "skipped"
+    assert records[0].failure_class == "CtfToolsUnavailable"
+    assert records[0].api_calls == 0
+
+
+def test_ctf_suite_uses_local_binary_tools_and_metadata(monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_runner(cmd, **_kwargs):
+        calls.append(list(cmd))
+        if cmd[0] == "file":
+            return subprocess.CompletedProcess(cmd, 0, stdout="ELF executable\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="pawnlogic-ctf-ok\n", stderr="")
+
+    monkeypatch.setattr(runtime_eval, "_missing_commands", lambda _commands: [])
+
+    records = runtime_eval.run_suite(
+        "ctf",
+        max_duration_seconds=30,
+        command_runner=fake_runner,
+    )
+
+    assert len(records) == 1
+    assert records[0].status == "passed"
+    assert records[0].tool_calls == 3
+    assert [call[0] for call in calls] == ["file", "strings"]
+    assert "remote targets" in records[0].redacted_summary
 
 
 def test_real_api_suite_is_skipped_without_explicit_gate(monkeypatch, tmp_path):
