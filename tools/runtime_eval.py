@@ -7,6 +7,9 @@ import argparse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import partial
+import http.server
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -15,7 +18,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import urllib.request
 
 
 ARTIFACT_DIR_NAME = ".pawnlogic_eval"
@@ -303,6 +308,221 @@ def _real_api_smoke_scenario(
     )
 
 
+def _module_available(name: str) -> bool:
+    return importlib.util.find_spec(name) is not None
+
+
+def _select_local_docker_python_image(client: object) -> str | None:
+    candidates = (
+        "python:3.12-slim",
+        "python:3.11-slim",
+        "python:3.10-slim",
+        "python:3-slim",
+    )
+    images = getattr(client, "images", None)
+    if images is None:
+        return None
+    for image in candidates:
+        try:
+            images.get(image)
+        except Exception:
+            continue
+        return image
+    return None
+
+
+def _docker_local_smoke_scenario() -> ScenarioOutcome:
+    from tools import docker_sandbox
+
+    client = docker_sandbox._get_docker_client()
+    if client is None:
+        return ScenarioOutcome(
+            status="skipped",
+            summary="Docker runtime or Python SDK is unavailable; optional Docker suite skipped.",
+            failure_class="DockerUnavailable",
+        )
+
+    image = _select_local_docker_python_image(client)
+    if image is None:
+        return ScenarioOutcome(
+            status="skipped",
+            summary=(
+                "No local Python Docker image was available; optional Docker suite "
+                "skipped without pulling images."
+            ),
+            failure_class="DockerImageUnavailable",
+        )
+
+    old_safe_workspace = docker_sandbox.SAFE_WORKSPACE
+    try:
+        with tempfile.TemporaryDirectory(prefix="pawnlogic-docker-smoke-") as tmp:
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            fixture = workspace / "fixture.txt"
+            fixture.write_text("pawnlogic-docker-ok\n", encoding="utf-8")
+            docker_sandbox.SAFE_WORKSPACE = str(workspace.resolve())
+            result = docker_sandbox.tool_run_code_docker(
+                {
+                    "language": "python",
+                    "image": image,
+                    "network": "none",
+                    "timeout": 15,
+                    "mount_files": {
+                        str(fixture): {"bind": "/mnt/fixture.txt", "mode": "ro"}
+                    },
+                    "code": (
+                        "from pathlib import Path\n"
+                        "print(Path('/mnt/fixture.txt').read_text().strip())\n"
+                    ),
+                }
+            )
+    finally:
+        docker_sandbox.SAFE_WORKSPACE = old_safe_workspace
+
+    if "pawnlogic-docker-ok" not in result or "network: none" not in result:
+        return ScenarioOutcome(
+            status="failed",
+            summary="Docker local smoke failed no-network workspace-mounted execution.",
+            tool_calls=1,
+            failure_class="DockerSmokeFailure",
+        )
+    return ScenarioOutcome(
+        status="passed",
+        summary="Validated no-network Docker execution with a workspace-bound read-only mount.",
+        tool_calls=1,
+    )
+
+
+def _browser_dependencies_available() -> bool:
+    return _module_available("patchright") or _module_available("scrapling")
+
+
+def _browser_local_static_scenario() -> ScenarioOutcome:
+    if not _browser_dependencies_available():
+        return ScenarioOutcome(
+            status="skipped",
+            summary="Browser dependencies are unavailable; optional browser suite skipped.",
+            failure_class="BrowserDependenciesUnavailable",
+        )
+
+    httpd: http.server.ThreadingHTTPServer | None = None
+    thread: threading.Thread | None = None
+    try:
+        with tempfile.TemporaryDirectory(prefix="pawnlogic-browser-smoke-") as tmp:
+            root = Path(tmp)
+            (root / "index.html").write_text(
+                "<!doctype html><title>PawnLogic</title><p>pawnlogic-browser-ok</p>",
+                encoding="utf-8",
+            )
+            handler = partial(
+                http.server.SimpleHTTPRequestHandler,
+                directory=str(root),
+            )
+            httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            port = httpd.server_address[1]
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/index.html",
+                timeout=5,
+            ) as response:
+                body = response.read().decode("utf-8", errors="ignore")
+    except Exception as exc:
+        return ScenarioOutcome(
+            status="failed",
+            summary=f"Browser local static smoke failed: {type(exc).__name__}",
+            tool_calls=1,
+            failure_class=exc.__class__.__name__,
+        )
+    finally:
+        if httpd is not None:
+            httpd.shutdown()
+            httpd.server_close()
+        if thread is not None:
+            thread.join(timeout=5)
+
+    if "pawnlogic-browser-ok" not in body:
+        return ScenarioOutcome(
+            status="failed",
+            summary="Browser local static smoke did not retrieve the expected page.",
+            tool_calls=1,
+            failure_class="BrowserSmokeFailure",
+        )
+    return ScenarioOutcome(
+        status="passed",
+        summary="Validated browser dependency gate with a local static HTML server.",
+        tool_calls=1,
+    )
+
+
+def _missing_commands(commands: Sequence[str]) -> list[str]:
+    return [command for command in commands if shutil.which(command) is None]
+
+
+def _ctf_local_smoke_scenario(
+    *,
+    command_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> ScenarioOutcome:
+    missing = _missing_commands(("file", "strings"))
+    if missing:
+        return ScenarioOutcome(
+            status="skipped",
+            summary=(
+                "Local CTF binary tools are unavailable; optional CTF suite skipped: "
+                + ", ".join(missing)
+            ),
+            failure_class="CtfToolsUnavailable",
+        )
+
+    from core import ctf_workspace
+
+    with tempfile.TemporaryDirectory(prefix="pawnlogic-ctf-smoke-") as tmp:
+        workspace = Path(tmp)
+        fixture = workspace / "challenge.bin"
+        fixture.write_bytes(b"\x7fELF\x02\x01\x01\x00pawnlogic-ctf-ok\x00")
+        ctf_workspace.init_ctf_metadata(
+            workspace,
+            challenge_name="local smoke",
+            category="pwn",
+            source="local fixture",
+        )
+        ctf_workspace.add_artifact(workspace, fixture.name)
+        file_result = command_runner(
+            ["file", str(fixture)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={},
+        )
+        strings_result = command_runner(
+            ["strings", str(fixture)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={},
+        )
+        loaded = ctf_workspace.load_ctf_metadata(workspace, strict=True)
+
+    if (
+        file_result.returncode != 0
+        or strings_result.returncode != 0
+        or "pawnlogic-ctf-ok" not in strings_result.stdout
+        or loaded is None
+        or "challenge.bin" not in loaded.artifacts
+    ):
+        return ScenarioOutcome(
+            status="failed",
+            summary="CTF local smoke failed local binary inspection or metadata checks.",
+            tool_calls=3,
+            failure_class="CtfSmokeFailure",
+        )
+    return ScenarioOutcome(
+        status="passed",
+        summary="Validated local CTF binary tooling and workspace metadata without remote targets.",
+        tool_calls=3,
+    )
+
+
 def scenarios_for_suite(
     suite: str,
     *,
@@ -338,6 +558,18 @@ def scenarios_for_suite(
         ]
     if suite == "tools":
         return [Scenario("tools.local_smoke", suite, _tools_local_smoke_scenario)]
+    if suite == "docker":
+        return [Scenario("docker.local_smoke", suite, _docker_local_smoke_scenario)]
+    if suite == "browser":
+        return [Scenario("browser.local_static", suite, _browser_local_static_scenario)]
+    if suite == "ctf":
+        return [
+            Scenario(
+                "ctf.local_binary",
+                suite,
+                lambda: _ctf_local_smoke_scenario(command_runner=command_runner),
+            )
+        ]
     return [Scenario(f"{suite}.harness_smoke", suite, pass_scenario)]
 
 

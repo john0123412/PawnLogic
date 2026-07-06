@@ -134,7 +134,11 @@ These contracts are more important than local refactoring convenience:
   redacted JSONL artifacts under ignored `.pawnlogic_eval/`. Real API smoke
   remains opt-in through `PAWNLOGIC_REAL_API_SMOKE=true` and guarded by local
   call and duration budgets. The `tools` suite covers safe local file/shell
-  flows and fail-closed policy checks without network targets.
+  flows and fail-closed policy checks without network targets. Optional
+  `docker`, `browser`, and `ctf` suites skip cleanly when local dependencies
+  are unavailable; when available, they stay local by using no-network Docker
+  execution with workspace-bound mounts, a local static HTML server, and local
+  binary tooling only.
 - `tools/merge_ctf_skills.py` is a maintenance helper for optional CTF skills.
 - `THIRD_PARTY_NOTICES.md` records redistribution decisions for third-party
   skill content.
