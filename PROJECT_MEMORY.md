@@ -14,8 +14,9 @@ release history.
 - Current public release: `0.2.1`.
 - Runtime version source of truth: `config/paths.py:VERSION`.
 - Latest published tag: `v0.2.1`.
-- Next planned iteration: post-0.2.1 maintenance, not yet planned.
+- Active iteration: `0.2.2` runtime evaluation and architecture slimming.
 - Most recent completed plan: `docs/plans/0.2.1-post-release-stabilization.md`.
+- Active plan: `docs/plans/0.2.2-runtime-evaluation-architecture-slimming.md`.
 - Local release artifacts such as `dist/`, `build/`, and `*.egg-info/` should
   not remain after release validation unless a maintainer explicitly asks to
   keep them.
@@ -140,25 +141,30 @@ These contracts are more important than local refactoring convenience:
 - `tests/test_repository_language_policy.py` enforces that Chinese text appears
   only in tracked files whose stem ends with `_zh-CN`.
 
-## Current Iteration: 0.2.1 Stabilization
+## Active Iteration: 0.2.2 Runtime Evaluation And Architecture Slimming
 
-The active 0.2.1 work should prioritize regression surfaces over new features.
-Use the plan file as the source of task order:
+The active 0.2.2 work should add durable local runtime evaluation and reduce
+code bloat through behavior-preserving splits. Use
+`docs/plans/0.2.2-runtime-evaluation-architecture-slimming.md` as the source
+of task order.
 
-1. Expand install smoke coverage.
-2. Harden CLI user-friendly mode regressions.
-3. Protect provider visibility rules.
-4. Lock provider stream adapter contract.
-5. Lock tool trust boundary behavior.
-6. Harden workspace cleanup reliability.
-7. Audit runtime metrics isolation.
-8. Tighten release documentation guards.
-9. Expand typed island for stabilization.
-10. Prepare the 0.2.1 release.
-11. Run remote release validation and publish only after explicit maintainer
-    authorization.
+Primary workstreams:
 
-Do not push, tag, or publish during Tasks 1 through 10.
+1. Plan the 0.2.2 iteration without changing `config/paths.py`.
+2. Add a runtime evaluation harness with deterministic fake/offline scenarios
+   before adding provider-specific or dependency-heavy suites.
+3. Add bounded real API smoke only behind explicit spend guards and redaction.
+4. Add CLI transcript and safe tool dynamic smoke coverage.
+5. Add optional Docker, browser, CTF, and soak suites that skip cleanly when
+   dependencies are unavailable.
+6. Add a fast CI-safe offline runtime evaluation job.
+7. Split large modules by ownership boundary while preserving public contracts.
+8. Prepare and publish 0.2.2 only after local validation and remote CI pass.
+
+Do not change public CLI syntax, provider visibility rules, public stream delta
+dict schema, tool result message shape, assistant message shape, or
+`reasoning_content` persistence during this iteration. Do not tag or publish
+0.2.2 until explicitly authorized for the final release phase.
 
 ## Typed Island
 
