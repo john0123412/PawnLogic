@@ -18,6 +18,9 @@ wrapper that imports this file; do not duplicate the shared instructions there.
   `PAWNLOGIC_HOME`.
 - Version source of truth: `config/paths.py:VERSION`.
 - Build backend: setuptools with dynamic version in `pyproject.toml`.
+- Project memory: `PROJECT_MEMORY.md` is the compact architecture, ownership,
+  active-plan, and risk map for agents. Read it after this file before broad
+  planning, code changes, release work, or multi-file audits.
 
 ## Non-Negotiable Safety Rules
 
@@ -131,6 +134,12 @@ Documentation drift is considered a bug.
   `README.md` and `README_zh-CN.md` in the same change.
 - If a change does not require a README edit, say so explicitly in the final
   report as `README reviewed: no change needed`, with the reason.
+- Every completed repository change must also include a `PROJECT_MEMORY.md`
+  review before the final report. Update it in the same commit when the change
+  affects architecture boundaries, module ownership, public contracts, active
+  release plans, typed-island scope, release state, or known recurring risks.
+  If no update is needed, say so explicitly in the final report as
+  `PROJECT_MEMORY reviewed: no change needed`, with the reason.
 - README updates must be completed before release PR merge, release tag
   creation, package build, or PyPI upload. Do not treat a post-release README
   cleanup as fixing the already published PyPI project page.

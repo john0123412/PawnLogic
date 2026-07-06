@@ -1,0 +1,241 @@
+# PawnLogic Project Memory
+
+This file is the compact project memory for maintainers and coding agents. Read
+it after `AGENT.md` and before broad planning, code changes, release work, or
+multi-file audits.
+
+Keep this file current when a change affects architecture, module ownership,
+release direction, public contracts, maintenance risks, or the next planned
+tasks. Do not use it as a changelog; `CHANGELOG.md` remains the user-facing
+release history.
+
+## Current Release State
+
+- Current public release: `0.2.0`.
+- Runtime version source of truth: `config/paths.py:VERSION`.
+- Latest published tag: `v0.2.0`.
+- Next planned iteration: `0.2.1` post-release stabilization.
+- Active plan: `docs/plans/0.2.1-post-release-stabilization.md`.
+- Local release artifacts such as `dist/`, `build/`, and `*.egg-info/` should
+  not remain after release validation unless a maintainer explicitly asks to
+  keep them.
+
+## Product Shape
+
+PawnLogic is a terminal AI agent with:
+
+- multi-provider model routing
+- provider and model management through CLI commands and a TUI
+- persistent SQLite-backed sessions and memory
+- real tool execution with trust boundaries
+- MCP integration
+- browser automation helpers
+- CTF-oriented tooling and optional external skill packs
+
+The installed CLI entry point is `pawn`, implemented by `pawnlogic.cli:run`.
+Source checkout compatibility entry points are thin wrappers:
+
+- `python main.py`
+- `python -m pawnlogic`
+- `./pawn.sh`
+
+Do not duplicate runtime CLI logic into wrappers.
+
+## High-Value Contracts
+
+These contracts are more important than local refactoring convenience:
+
+- DeepSeek is active by default and must not be deactivated.
+- Custom providers are inactive by default and become visible only when active
+  and configured.
+- `/model` and completions show only visible, configured chat models.
+- Provider fetch registers only user-selected supported chat models.
+- Connection tests use a loaded chat model, not legacy hardcoded defaults.
+- Default startup is user-friendly mode and hides raw tool-call internals,
+  parser diagnostics, detailed reasoning streams, and low-level API errors.
+- `pawn --debug` is the explicit path for detailed terminal diagnostics.
+- Public stream delta dicts must remain stable.
+- Tool result message shape, assistant message shape, and `reasoning_content`
+  persistence rules must remain stable.
+- Runtime metrics must not introduce telemetry, network calls, secrets, or
+  default terminal noise.
+- Third-party skill packs must not be included in wheels or sdists by default.
+
+## Architecture Map
+
+### CLI And Startup
+
+- `pawnlogic/cli.py` owns parser options, startup behavior, slash-command
+  guidance, completer behavior, and `PawnCompleter`.
+- `main.py`, `pawnlogic/__main__.py`, and `pawn.sh` stay thin adapters.
+- `tests/test_deployment_friendly.py` protects source checkout, installed
+  package, entry point, and runtime-data isolation behavior.
+- `tests/test_cli_startup.py` protects startup output and mode behavior.
+
+### Session Runtime
+
+- `core/session.py` owns the main turn loop and session orchestration.
+- `core/turn_state.py` is an internal per-turn state snapshot, not a public API.
+- `core/runtime_context.py` owns session runtime state such as cwd, workspace,
+  sink, debug mode, user mode, and dynamic config.
+- `core/runtime_metrics.py` owns internal metrics snapshots. Metrics are local
+  runtime state only.
+- `tests/test_session_utils.py` and `tests/test_turn_guards.py` protect turn
+  behavior, guard behavior, message ordering, and persistence shape.
+
+### Providers And Models
+
+- `config/providers.py` defines provider metadata and model registry defaults.
+- `core/provider_runtime.py` owns shared provider operations such as connection
+  testing, fetching models, saving keys, and activation.
+- `core/commands/provider.py` owns `/provider` and `/model` command semantics.
+- `core/provider_tui.py` owns provider TUI input, paste, focus, and confirmation
+  behavior.
+- `tests/test_provider_commands.py` is the main provider visibility and command
+  regression suite.
+- `tests/test_provider_runtime.py` protects shared provider operation behavior.
+
+### API And Streaming
+
+- `core/api_client.py` owns API request orchestration and compatibility entry
+  points.
+- `core/provider_streams.py` owns provider-specific stream adapter details while
+  preserving the existing public delta dict schema.
+- `core/api_errors.py` owns user-facing API error classification and formatting.
+- `tests/test_api_stream_helpers.py` and `tests/test_api_errors.py` protect
+  stream shape, retry behavior, partial stream recovery, and error formatting.
+
+### Tools, Trust, And Sandboxing
+
+- `core/trust.py` and `core/operation_policy.py` own trust-boundary categories,
+  notices, and command-risk policy.
+- `tools/file_ops.py` owns workspace-bound file operations.
+- `tools/sandbox.py` owns host shell execution policy integration.
+- `tools/docker_sandbox.py` owns Docker execution boundaries.
+- `tools/browser_ops.py` owns browser automation operations and recovery paths.
+- `tests/test_trust.py`, `tests/test_operation_policy.py`,
+  `tests/test_run_shell_policy.py`, and `tests/test_docker_policy.py` protect
+  trust boundary behavior.
+
+### Workspace, Skills, And Maintenance
+
+- `core/workspace_cleanup.py` owns workspace backup, restore, staging, cleanup,
+  and rollback behavior.
+- `core/skill_manager.py` owns skill-pack metadata and indexing behavior.
+- `tools/merge_ctf_skills.py` is a maintenance helper for optional CTF skills.
+- `THIRD_PARTY_NOTICES.md` records redistribution decisions for third-party
+  skill content.
+- `tests/test_workspace_cleanup.py`,
+  `tests/test_merge_ctf_skills.py`, and packaging tests protect these flows.
+
+### Documentation And Release Guards
+
+- `README.md` and `README_zh-CN.md` must stay structurally and semantically
+  aligned.
+- `GUIDE.md` and `GUIDE_zh-CN.md` must stay structurally and semantically
+  aligned.
+- `tools/check_doc_structure.py` enforces translated heading structure and thin
+  agent wrappers.
+- `tools/check_release_consistency.py` enforces release version consistency.
+- `tests/test_repository_language_policy.py` enforces that Chinese text appears
+  only in tracked files whose stem ends with `_zh-CN`.
+
+## Current Iteration: 0.2.1 Stabilization
+
+The active 0.2.1 work should prioritize regression surfaces over new features.
+Use the plan file as the source of task order:
+
+1. Expand install smoke coverage.
+2. Harden CLI user-friendly mode regressions.
+3. Protect provider visibility rules.
+4. Lock provider stream adapter contract.
+5. Lock tool trust boundary behavior.
+6. Harden workspace cleanup reliability.
+7. Audit runtime metrics isolation.
+8. Tighten release documentation guards.
+9. Expand typed island for stabilization.
+10. Prepare the 0.2.1 release.
+11. Run remote release validation and publish only after explicit maintainer
+    authorization.
+
+Do not push, tag, or publish during Tasks 1 through 10.
+
+## Typed Island
+
+The typed-island mypy check is intentionally selective. It should grow through
+stable modules and narrow fixes only. Avoid broad `# type: ignore`, global
+strict mode, or behavior changes disguised as type cleanup.
+
+Current stable candidates and covered modules include:
+
+- `core/turn_api.py`
+- `core/turn_guards.py`
+- `core/tool_result.py`
+- `core/tool_executor.py`
+- `core/runtime_context.py`
+- `core/provider_runtime.py`
+- `core/api_errors.py`
+- `core/tool_calls.py`
+- `core/tool_registry.py`
+- `core/context_window.py`
+- `core/workspace_cleanup.py`
+- `core/turn_state.py`
+- `core/provider_streams.py`
+- `core/runtime_metrics.py`
+- `core/mcp_client_manager.py`
+- `tools/check_doc_structure.py`
+- `tools/check_release_consistency.py`
+- `tools/merge_ctf_skills.py`
+- `tools/browser_ops.py`
+- `tools/lsp_lite.py`
+
+## Agent Workflow Shortcut
+
+For broad code changes:
+
+1. Read `AGENT.md`.
+2. Read this file.
+3. Read the active plan under `docs/plans/`.
+4. Refresh the code index before audit or multi-file edits:
+
+   ```bash
+   python tools/code_index.py build
+   ```
+
+5. Use the index before broad text searches for known symbols:
+
+   ```bash
+   python tools/code_index.py symbol <name>
+   python tools/code_index.py refs <name>
+   ```
+
+6. Run narrow tests first, then wider validation before committing.
+7. Update this file if the work changes module ownership, public contracts,
+   active plans, release state, or known risks.
+
+## Known Risks To Recheck Often
+
+- Provider visibility drift between CLI, TUI, completions, and runtime fetch.
+- User-friendly mode accidentally leaking debug internals.
+- Stream adapters changing public delta dict keys or ordering.
+- Workspace restore paths moving current work before validation succeeds.
+- Tool trust notices drifting from operation policy behavior.
+- Runtime metrics accidentally persisting secrets or changing message shape.
+- Packaging accidentally including `skills/` content.
+- English and zh-CN docs drifting in structure or command examples.
+- Release prep editing version literals outside fixed locations.
+
+## Update Rules For This File
+
+Update `PROJECT_MEMORY.md` in the same commit when a change:
+
+- changes module ownership or architecture boundaries
+- adds, removes, or renames a major subsystem
+- changes public CLI, provider, model, stream, tool, MCP, workspace, packaging,
+  security, or release behavior
+- changes the active release plan or current public release state
+- changes typed-island scope
+- adds a new recurring risk or retires an old one
+
+Do not update this file for a purely local test assertion, typo, formatting
+change, or narrow bug fix that does not affect future agent orientation.
