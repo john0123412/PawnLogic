@@ -67,6 +67,46 @@ def test_static_trust_notices_match_existing_user_facing_text():
     )
 
 
+def test_named_trust_boundaries_match_stable_categories_and_text():
+    expected = {
+        TrustBoundaryKind.HOST_SHELL: (
+            TrustLevel.HOST_SHELL,
+            "  [Trust Boundary] run_shell executes on the host shell. "
+            "Pattern filters are limited and not a sandbox.",
+        ),
+        TrustBoundaryKind.CONTAINER_EXEC: (
+            TrustLevel.CONTAINER_EXEC,
+            "  [Trust Boundary] Container exec runs arbitrary shell inside the target container.",
+        ),
+        TrustBoundaryKind.BROWSER_NETWORK: (
+            TrustLevel.NETWORK,
+            "  [Trust Boundary] Browser tools are network-capable and not a host sandbox.",
+        ),
+        TrustBoundaryKind.PRIVATE_NETWORK: (
+            TrustLevel.PRIVATE_NETWORK,
+            "  [Trust Boundary] Private network access is allowed, "
+            "but this crosses the local trust boundary.",
+        ),
+        TrustBoundaryKind.PLAIN_HTTP: (
+            TrustLevel.INSECURE_TRANSPORT,
+            "  [Trust Boundary] Provider uses plain HTTP. "
+            "Requests and API keys are not protected by TLS.",
+        ),
+        TrustBoundaryKind.DELEGATE: (
+            TrustLevel.SUBAGENT,
+            "  [Trust Boundary] delegate_task is a non-isolated sub-agent; "
+            "tool side effects are real and run with parent permissions.",
+        ),
+    }
+
+    assert set(expected) == set(TrustBoundaryKind)
+    for kind, (level, notice) in expected.items():
+        boundary = TRUST_BOUNDARIES[kind]
+        assert boundary.kind is kind
+        assert boundary.level is level
+        assert trust_notice_for_boundary(kind) == notice
+
+
 def test_named_browser_sandbox_notice_is_stable():
     assert trust_notice(BROWSER_SANDBOX_DISABLED) == (
         "  [Trust Boundary] Chromium sandbox is disabled by explicit config."
@@ -91,3 +131,16 @@ def test_insecure_provider_warning_uses_centralized_notice(monkeypatch):
     )
 
     assert emitted == [trust_notice_for_boundary(TrustBoundaryKind.PLAIN_HTTP)]
+
+
+def test_insecure_provider_warning_is_plain_http_boundary_and_warns_once(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(runtime_state, "user_mode", True)
+    monkeypatch.setattr(provider_runtime, "_WARNED_HTTP_PROVIDER_URLS", set())
+
+    provider_runtime.maybe_warn_insecure_provider("http://provider.example/v1", emit=emitted.append)
+    provider_runtime.maybe_warn_insecure_provider("http://provider.example/v1", emit=emitted.append)
+
+    boundary = TRUST_BOUNDARIES[TrustBoundaryKind.PLAIN_HTTP]
+    assert boundary.level is TrustLevel.INSECURE_TRANSPORT
+    assert emitted == [boundary.notice]

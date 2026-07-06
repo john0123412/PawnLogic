@@ -130,6 +130,14 @@ def test_required_high_risk_command_families(tmp_path):
         assert decision.risk == RiskLevel.HIGH, command
 
 
+def test_confirmation_availability_is_false_for_eval_mode_even_with_tty(monkeypatch):
+    monkeypatch.setattr(policy.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(policy.sys.stdout, "isatty", lambda: True, raising=False)
+
+    assert policy.is_confirmation_available(eval_mode=False) is True
+    assert policy.is_confirmation_available(eval_mode=True) is False
+
+
 def test_env_and_user_expansion_before_sensitive_path_check(tmp_path, monkeypatch):
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
