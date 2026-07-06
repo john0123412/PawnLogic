@@ -814,6 +814,35 @@ def test_run_turn_audited_tool_failure_records_failure(monkeypatch):
     assert metrics.total_failure_classes == {"Permission": 1}
 
 
+def test_run_turn_failure_metrics_do_not_store_secret_like_details(monkeypatch):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    secret_marker = "<SECRET_VALUE_SHOULD_NOT_APPEAR>"
+    monkeypatch.setattr(session_mod, "check_failure", MagicMock(return_value=[]))
+    monkeypatch.setattr(session_mod, "write_failure", MagicMock(return_value=123))
+    monkeypatch.setattr(session_mod, "count_failure", MagicMock(return_value=1))
+    monkeypatch.setitem(
+        session_mod.TOOL_MAP,
+        "run_shell",
+        lambda _args: f"ERROR: provider token leaked {secret_marker}",
+    )
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_sequence(
+            _tool_call_response("run_shell", {"command": "./target"}, call_id="call_secret"),
+            _assistant_done_response(),
+        ),
+    )
+
+    s.run_turn("run failing shell")
+
+    metrics = s._runtime_metrics_snapshot()
+    assert metrics.turn_failure_classes == {"RuntimeError": 1}
+    assert metrics.total_failure_classes == {"RuntimeError": 1}
+    assert secret_marker not in repr(metrics.turn_failure_classes)
+    assert secret_marker not in repr(metrics.total_failure_classes)
+
+
 def test_run_turn_tool_keyboard_interrupt_raises_for_cli_rollback(monkeypatch):
     s, session_mod = _prepare_run_turn_session(monkeypatch)
 
@@ -1103,6 +1132,53 @@ def test_run_turn_accepts_message_content_in_stream_choice(monkeypatch):
     assert metrics.turn_completion_tokens == 5
     assert metrics.turn_tokens == 6
     assert metrics.total_tokens == 6
+
+
+def test_run_turn_metrics_collection_is_silent_in_default_output(monkeypatch, capsys):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    monkeypatch.setattr(session_mod._runtime_state, "user_mode", True)
+    monkeypatch.setattr(session_mod._runtime_state, "debug_mode", False)
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_request(
+            {"_usage": {"prompt_tokens": 2, "completion_tokens": 3}},
+            {"choices": [{"delta": {"content": "visible answer"}}]},
+        ),
+    )
+
+    s.run_turn("collect metrics quietly")
+
+    out = capsys.readouterr().out
+    assert "visible answer" in out
+    assert "runtime_metrics" not in out
+    assert "turn_failure_classes" not in out
+    assert "total_failure_classes" not in out
+    assert "turn_tool_latency_ms" not in out
+
+
+def test_run_turn_metrics_do_not_change_message_shape(monkeypatch):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    monkeypatch.setitem(session_mod.TOOL_MAP, "list_dir", lambda _args: "file.txt")
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_sequence(
+            _tool_call_response("list_dir", {"path": "."}, call_id="call_list"),
+            (
+                {"choices": [{"delta": {"reasoning_content": "hidden thought"}}]},
+                {"choices": [{"delta": {"content": "done"}}]},
+            ),
+        ),
+    )
+
+    s.run_turn("list files")
+
+    allowed_keys = {"role", "content", "tool_calls", "tool_call_id", "reasoning_content"}
+    assert s._runtime_metrics_snapshot().turn_tool_calls == 1
+    for message in s.messages:
+        assert set(message) <= allowed_keys
+        assert not any(key.startswith("runtime") or key.endswith("_metrics") for key in message)
 
 
 def test_thinking_spinner_can_be_disabled_for_non_tty(monkeypatch):

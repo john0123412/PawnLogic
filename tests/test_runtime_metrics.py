@@ -66,5 +66,8 @@ def test_runtime_metrics_snapshot_returns_copies():
 
     snapshot = metrics.snapshot()
     snapshot.turn_failure_classes["Timeout"] = 99
+    snapshot.total_failure_classes["RuntimeError"] = 1
 
-    assert metrics.snapshot().turn_failure_classes == {"Timeout": 1}
+    fresh_snapshot = metrics.snapshot()
+    assert fresh_snapshot.turn_failure_classes == {"Timeout": 1}
+    assert fresh_snapshot.total_failure_classes == {"Timeout": 1}
