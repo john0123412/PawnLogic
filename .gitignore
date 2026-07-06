@@ -37,6 +37,7 @@ __pycache__/
 .cline/
 .thought
 .pawnlogic_index/
+.pawnlogic_eval/
 
 # --- Editors and IDEs (JetBrains/VS Code) ---
 .idea/
