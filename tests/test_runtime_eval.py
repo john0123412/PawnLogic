@@ -140,6 +140,21 @@ def test_all_supported_suites_have_harness_only_fake_scenarios():
         assert {scenario.suite for scenario in scenarios} == {suite}
 
 
+def test_tools_suite_runs_safe_local_tool_smoke():
+    records = runtime_eval.run_suite("tools", max_duration_seconds=30)
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.scenario_id == "tools.local_smoke"
+    assert record.status == "passed"
+    assert record.provider == "offline"
+    assert record.api_calls == 0
+    assert record.tool_calls >= 5
+    assert record.failure_class == ""
+    assert "safe file ops" in record.redacted_summary
+    assert "plain HTTP warning" in record.redacted_summary
+
+
 def test_real_api_suite_is_skipped_without_explicit_gate(monkeypatch, tmp_path):
     monkeypatch.delenv(runtime_eval.REAL_API_GATE_ENV, raising=False)
 
