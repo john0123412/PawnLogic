@@ -887,7 +887,8 @@ async def _run_eval_mode(session: AgentSession, args, sink) -> None:
             session.run_turn(args.eval)
         except Exception as exc:  # noqa: BLE001
             sink.print(c(RED, f"  ✗ {exc}"))
-            traceback.print_exc()
+            if _runtime_state.debug_mode:
+                traceback.print_exc()
             detach_external_mcp_tools()
             sys.exit(1)
 
