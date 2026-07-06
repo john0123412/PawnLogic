@@ -49,9 +49,19 @@ def describe_heading(path: str, heading: Heading | None) -> str:
 
 
 def compare_pair(left_path: str, right_path: str) -> list[str]:
-    left = collect_headings(ROOT / left_path)
-    right = collect_headings(ROOT / right_path)
     errors: list[str] = []
+    left_file = ROOT / left_path
+    right_file = ROOT / right_path
+
+    if not left_file.exists():
+        errors.append(f"{left_path} is missing.")
+    if not right_file.exists():
+        errors.append(f"Missing translated documentation file: {right_path}.")
+    if errors:
+        return errors
+
+    left = collect_headings(left_file)
+    right = collect_headings(right_file)
 
     if len(left) != len(right):
         errors.append(

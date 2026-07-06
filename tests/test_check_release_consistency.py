@@ -70,6 +70,22 @@ def test_release_consistency_rejects_stale_zh_cn_readme_version(tmp_path):
     )
 
 
+def test_release_consistency_rejects_english_zh_cn_readme_version_mismatch(tmp_path):
+    _write_release_fixture(tmp_path, version="9.9.9")
+    (tmp_path / "README_zh-CN.md").write_text(
+        "\u5f53\u524d\u516c\u5f00\u53d1\u5e03\u7248\u672c\u662f **9.9.8**\u3002\n",
+        encoding="utf-8",
+    )
+
+    errors = check_release_consistency.check_repository(tmp_path)
+
+    assert any(
+        "README_zh-CN.md public release version is 9.9.8, expected 9.9.9" in error
+        for error in errors
+    )
+    assert not any("README.md public release version" in error for error in errors)
+
+
 def test_release_consistency_rejects_missing_changelog_section(tmp_path):
     _write_release_fixture(tmp_path)
     (tmp_path / "CHANGELOG.md").write_text(

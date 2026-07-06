@@ -36,6 +36,16 @@ def test_compare_pair_reports_heading_count_and_level_mismatches(monkeypatch, tm
     assert any("Missing translated heading at position 3" in e for e in errors)
 
 
+def test_compare_pair_rejects_missing_zh_cn_pair(monkeypatch, tmp_path):
+    left = tmp_path / "README.md"
+    left.write_text("# Title\n", encoding="utf-8")
+    monkeypatch.setattr(check_doc_structure, "ROOT", tmp_path)
+
+    errors = check_doc_structure.compare_pair("README.md", "README_zh-CN.md")
+
+    assert errors == ["Missing translated documentation file: README_zh-CN.md."]
+
+
 def test_check_agent_wrapper_requires_thin_delegating_file(monkeypatch, tmp_path):
     wrapper = tmp_path / "AGENTS.md"
     wrapper.write_text("Line without delegation\n## Duplicated Section\n", encoding="utf-8")
