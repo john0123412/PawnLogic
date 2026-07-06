@@ -140,7 +140,7 @@ These contracts are more important than local refactoring convenience:
   `docker`, `browser`, and `ctf` suites skip cleanly when local dependencies
   are unavailable; when available, they stay local by using no-network Docker
   execution with workspace-bound mounts, a local static HTML server, and local
-  binary tooling only.
+  binary tooling only. CI runs only the offline runtime evaluation suite.
 - `tools/merge_ctf_skills.py` is a maintenance helper for optional CTF skills.
 - `THIRD_PARTY_NOTICES.md` records redistribution decisions for third-party
   skill content.
