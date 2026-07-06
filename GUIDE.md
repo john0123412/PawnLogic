@@ -119,6 +119,13 @@
 - Ends with `/v1` → appends endpoint suffix
 - Bare domain → appends `/v1/chat/completions` or `/v1/messages`
 
+Provider retry and timeout tuning can be set in `~/.pawnlogic/.env`.
+`PAWNLOGIC_API_RETRY_MAX` controls total attempts including the first request,
+`PAWNLOGIC_API_RETRY_AFTER_MAX` caps provider `Retry-After` delays, and
+`PAWNLOGIC_API_CONNECT_TIMEOUT`, `PAWNLOGIC_API_READ_TIMEOUT`, and
+`PAWNLOGIC_API_NONSTREAM_TIMEOUT` tune connection, streaming, and non-streaming
+wait times.
+
 ### Model Visibility
 
 `/model` and Tab completion only show DeepSeek plus providers that are active and have a configured API key. Custom providers are inactive by default; run `/provider activate <name>` after fetching the models you want. Custom model descriptions are loaded from `~/.pawnlogic/custom_providers.json`; fetched models receive an English fallback description when the provider does not supply one.

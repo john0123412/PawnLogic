@@ -363,6 +363,74 @@ def test_api_client_stream_request_yields_retry_notice_for_retryable_http(monkey
     assert events[1]["choices"][0]["delta"]["content"] == "ok"
 
 
+def test_api_client_retry_max_can_be_configured_for_streaming(monkeypatch):
+    monkeypatch.setenv("PAWNLOGIC_API_RETRY_MAX", "5")
+    _drop_project_modules("config")
+    _drop_project_modules("core.api_client", force=True)
+    from core import api_client
+
+    class FakeSocket:
+        def settimeout(self, _timeout):
+            pass
+
+    class FakeResponse:
+        def __init__(self):
+            self.status = 502
+            self.headers = {}
+
+        def read(self, _limit=-1):
+            return b'{"error":{"message":"unstable custom provider"}}'
+
+    class FakeConn:
+        sock = FakeSocket()
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return FakeResponse()
+
+        def close(self):
+            pass
+
+    assert api_client._RETRY_MAX == 5
+    monkeypatch.setattr(
+        api_client,
+        "_open_connection",
+        lambda *_args, **_kwargs: (FakeConn(), "/v1/chat/completions"),
+    )
+
+    event = next(api_client.stream_request([{"role": "user", "content": "hi"}], "ds-v4-flash"))
+
+    assert event["_retry"].startswith("HTTP 502")
+    assert "(1/5)" in event["_retry"]
+
+
+def test_api_client_retry_max_invalid_env_falls_back(monkeypatch):
+    monkeypatch.setenv("PAWNLOGIC_API_RETRY_MAX", "not-an-int")
+    _drop_project_modules("config")
+    _drop_project_modules("core.api_client", force=True)
+    from core import api_client
+
+    assert api_client._RETRY_MAX == 3
+
+
+def test_api_client_retry_max_env_is_clamped(monkeypatch):
+    monkeypatch.setenv("PAWNLOGIC_API_RETRY_MAX", "999")
+    _drop_project_modules("config")
+    _drop_project_modules("core.api_client", force=True)
+    from core import api_client
+
+    assert api_client._RETRY_MAX == 8
+
+    monkeypatch.setenv("PAWNLOGIC_API_RETRY_MAX", "0")
+    _drop_project_modules("config")
+    _drop_project_modules("core.api_client", force=True)
+    from core import api_client as api_client_low
+
+    assert api_client_low._RETRY_MAX == 1
+
+
 def test_api_client_stream_request_honors_retry_after(monkeypatch):
     _drop_project_modules("config")
     _drop_project_modules("core.api_client", force=True)

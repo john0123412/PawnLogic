@@ -116,8 +116,18 @@ _CIRCUIT_BREAKERS: dict[str, dict] = {}
 #              "failures": int, "opened_at": float}
 _CB_TRIP_AT   = 3      # Consecutive failures before opening the circuit.
 _CB_RESET_SEC = 30     # Seconds from OPEN to HALF_OPEN.
-_RETRY_MAX    = 3      # Maximum request attempts, including the first attempt.
 _RETRY_CODES  = RETRYABLE_HTTP_STATUS_CODES  # Backward-compatible module alias.
+
+
+def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(max_value, value))
+
+
+_RETRY_MAX = _env_int("PAWNLOGIC_API_RETRY_MAX", 3, 1, 8)
 
 
 def _cb_get(provider: str) -> dict:
@@ -216,14 +226,6 @@ def _cancel_connection(
 
 
 # ── per-read / connect timeout ────────────────────────────
-
-def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
-    try:
-        value = int(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        value = default
-    return max(min_value, min(max_value, value))
-
 
 _READ_TIMEOUT = _env_int("PAWNLOGIC_API_READ_TIMEOUT", 60, 5, 300)
 _CONN_TIMEOUT = _env_int("PAWNLOGIC_API_CONNECT_TIMEOUT", 20, 3, 120)

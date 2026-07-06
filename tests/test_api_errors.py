@@ -5,6 +5,7 @@ from core.api_errors import (
     format_http_error,
     format_transport_error,
     is_retryable_http_status,
+    retry_after_max_from_env,
     retry_notice,
 )
 
@@ -56,6 +57,28 @@ def test_retry_delay_honors_bounded_retry_after():
 def test_retry_delay_falls_back_for_invalid_retry_after():
     assert _retry_delay(0, "not-a-number") == 2
     assert _retry_delay(3, None) == 8
+
+
+def test_retry_after_max_can_be_configured(monkeypatch):
+    monkeypatch.setenv("PAWNLOGIC_API_RETRY_AFTER_MAX", "30")
+
+    assert retry_after_max_from_env() == 30
+    assert _retry_delay(0, "999") == 30
+
+
+def test_retry_after_max_invalid_env_falls_back(monkeypatch):
+    monkeypatch.setenv("PAWNLOGIC_API_RETRY_AFTER_MAX", "not-an-int")
+
+    assert retry_after_max_from_env() == 10
+    assert _retry_delay(0, "999") == 10
+
+
+def test_retry_after_max_env_is_clamped(monkeypatch):
+    monkeypatch.setenv("PAWNLOGIC_API_RETRY_AFTER_MAX", "999")
+    assert retry_after_max_from_env() == 60
+
+    monkeypatch.setenv("PAWNLOGIC_API_RETRY_AFTER_MAX", "0")
+    assert retry_after_max_from_env() == 1
 
 
 def test_format_transport_error_is_user_friendly_without_traceback_detail():
