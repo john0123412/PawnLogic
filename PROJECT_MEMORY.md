@@ -11,12 +11,12 @@ release history.
 
 ## Current Release State
 
-- Current public release: `0.2.2` release candidate.
+- Current public release: `0.2.2`.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Latest published tag: `v0.2.1`.
-- Active iteration: `0.2.2` runtime evaluation and architecture slimming.
-- Most recent completed plan: `docs/plans/0.2.1-post-release-stabilization.md`.
-- Active plan: `docs/plans/0.2.2-runtime-evaluation-architecture-slimming.md`.
+- Latest published tag: `v0.2.2`.
+- Most recent completed plan:
+  `docs/plans/0.2.2-runtime-evaluation-architecture-slimming.md`.
+- Active plan: none selected.
 - Local release artifacts such as `dist/`, `build/`, and `*.egg-info/` should
   not remain after release validation unless a maintainer explicitly asks to
   keep them.
