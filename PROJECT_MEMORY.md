@@ -11,7 +11,7 @@ release history.
 
 ## Current Release State
 
-- Current public release: `0.2.1`.
+- Current public release: `0.2.2` release candidate.
 - Runtime version source of truth: `config/paths.py:VERSION`.
 - Latest published tag: `v0.2.1`.
 - Active iteration: `0.2.2` runtime evaluation and architecture slimming.

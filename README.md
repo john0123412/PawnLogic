@@ -11,7 +11,7 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.2.1**.
+CTF-oriented toolchain. The current public release is **0.2.2**.
 
 ## System Requirements
 
@@ -97,24 +97,23 @@ Use `pawn --debug` or `/mode` when you need detailed diagnostics.
 
 ## What's New
 
-Version 0.2.1 is a post-release stabilization patch for the 0.2.0
-consolidation architecture:
+Version 0.2.2 makes runtime debugging more repeatable while preserving the
+0.2.1 public contracts:
 
-- Install smoke tests now verify source checkout help entry points, dynamic
-  package version metadata, and the documented `pawn` console script contract.
-- User-friendly CLI mode has regression coverage proving default output hides
-  internals while `pawn --debug` keeps explicit diagnostics available.
-- Provider visibility and stream adapter tests lock DeepSeek/custom-provider
-  visibility rules, public delta dict shape, usage chunks, tool delta ordering,
-  and no-partial stream error behavior.
-- Trust-boundary and workspace cleanup tests cover non-interactive fail-closed
-  behavior, trust notices, restore rollback, and staging cleanup reliability.
-- Runtime metrics tests verify snapshots are copies, remain local and silent,
-  avoid secret-like failure details, and do not change message persistence
-  shape.
-- Release documentation guards now cover README version alignment, SECURITY
-  support rows, translated documentation pairs, language policy, typed-island
-  scope, and wheel skill-pack exclusion.
+- A local runtime evaluation harness now writes redacted JSONL artifacts for
+  deterministic offline checks, safe tool smoke, bounded real API smoke, and
+  optional Docker/browser/CTF suites.
+- Real API smoke remains opt-in and bounded by local API-call and duration
+  budgets; raw provider keys are not printed or persisted.
+- CLI transcript checks cover core slash-command output for `/help`, `/mode`,
+  `/provider list`, `/model`, and `/exit`.
+- CI now runs the offline runtime evaluation suite in the fast Python 3.11
+  path and uploads redacted runtime evaluation artifacts.
+- Provider retry behavior is configurable with `PAWNLOGIC_API_RETRY_MAX` and
+  `PAWNLOGIC_API_RETRY_AFTER_MAX` while keeping existing defaults.
+- API payload/header construction moved into a smaller internal module without
+  changing CLI syntax, provider visibility, stream delta dicts, tool result
+  shape, or `reasoning_content` persistence.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
