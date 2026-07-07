@@ -146,12 +146,27 @@ jobs:
           set -o pipefail
           pytest tests/ -v --tb=short --timeout=60 --ignore=tests/test_e2e.py -m "not slow and not e2e and not packaging" 2>&1 | tee pytest-fast-3.11.log
 
+      - name: Run offline runtime evaluation
+        run: |
+          set -o pipefail
+          python tools/runtime_eval.py --suite offline --max-duration-seconds 120 2>&1 | tee runtime-eval-offline.log
+
       - name: Upload pytest logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: pytest-fast-3.11
           path: pytest-fast-3.11.log
+          retention-days: 7
+
+      - name: Upload offline runtime evaluation artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: runtime-eval-offline
+          path: |
+            runtime-eval-offline.log
+            .pawnlogic_eval/*.jsonl
           retention-days: 7
 
   # ── Release validation: full non-E2E matrix across supported Python ──
