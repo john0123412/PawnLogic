@@ -7,6 +7,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-07
+
+### Added
+- Added a local runtime evaluation harness with redacted JSONL artifacts for
+  deterministic offline checks, safe tool smoke, bounded real API smoke,
+  optional Docker/browser/CTF suites, and CI-safe offline runtime evaluation.
+- Added deterministic CLI transcript checks for core slash-command flows.
+- Added configurable provider retry controls through
+  `PAWNLOGIC_API_RETRY_MAX` and `PAWNLOGIC_API_RETRY_AFTER_MAX` while
+  preserving existing defaults.
+
+### Changed
+- Split API payload and header construction into `core/api_payloads.py` while
+  preserving `core/api_client.py` compatibility helpers, public stream delta
+  dicts, provider visibility, message shape, and `reasoning_content`
+  persistence.
+- Updated CI to run the offline runtime evaluation suite in the fast Python
+  3.11 path and upload redacted runtime evaluation artifacts.
+
+### Tests
+- Added coverage for runtime evaluation artifact schema, redaction, spend
+  guards, temporary runtime-home handling, CLI transcripts, safe local tool
+  smoke, optional dynamic debug suites, and API payload helper compatibility.
+- Remote-validated the 0.2.2 PR sequence through GitHub Actions before release
+  preparation.
+
 ## [0.2.1] - 2026-07-06
 
 ### Changed

@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.2.1**。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.2.2**。
 
 ## 系统要求
 
@@ -87,14 +87,14 @@ python -m pawnlogic --help
 
 ## 新特性
 
-0.2.1 是面向 0.2.0 consolidation architecture 的 post-release stabilization patch：
+0.2.2 让 runtime debugging 更可重复，同时保持 0.2.1 的公开 contract 不变：
 
-- Install smoke 测试现在验证源码 checkout help 入口、动态 package version metadata，以及文档化的 `pawn` console script contract。
-- User-friendly CLI mode 增加了回归覆盖，证明默认输出会隐藏内部细节，而 `pawn --debug` 仍保留显式诊断。
-- Provider visibility 和 stream adapter 测试锁定 DeepSeek/custom-provider 可见性规则、公开 delta dict 形状、usage chunk、tool delta 顺序和 no-partial stream error 行为。
-- Trust-boundary 和 workspace cleanup 测试覆盖非交互 fail-closed 行为、trust notice、restore rollback 和 staging cleanup 可靠性。
-- Runtime metrics 测试验证 snapshot 是 copy、保持本地且默认静默、不会记录 secret-like failure detail，也不会改变 message persistence shape。
-- Release documentation guard 现在覆盖 README 版本一致性、SECURITY support row、翻译文档配对、语言策略、typed-island scope 和 wheel skill-pack 排除。
+- 本地 runtime evaluation harness 现在会为 deterministic offline check、safe tool smoke、bounded real API smoke，以及可选 Docker/browser/CTF suite 写入已脱敏的 JSONL artifact。
+- Real API smoke 仍是 opt-in，并受本地 API call 和 duration budget 限制；原始 Provider key 不会被打印或持久化。
+- CLI transcript check 覆盖 `/help`、`/mode`、`/provider list`、`/model` 和 `/exit` 的核心 slash-command 输出。
+- CI 现在会在 Python 3.11 fast path 中运行 offline runtime evaluation suite，并上传已脱敏的 runtime evaluation artifact。
+- Provider retry 行为可通过 `PAWNLOGIC_API_RETRY_MAX` 和 `PAWNLOGIC_API_RETRY_AFTER_MAX` 配置，同时保持现有默认值。
+- API payload/header 构建已移动到更小的内部模块，不改变 CLI syntax、Provider visibility、stream delta dict、tool result shape 或 `reasoning_content` persistence。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
