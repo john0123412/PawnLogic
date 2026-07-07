@@ -162,14 +162,14 @@ These contracts are more important than local refactoring convenience:
 - `tests/test_repository_language_policy.py` enforces that Chinese text appears
   only in tracked files whose stem ends with `_zh-CN`.
 
-## Active Iteration: 0.2.2 Runtime Evaluation And Architecture Slimming
+## Completed Iteration: 0.2.2 Runtime Evaluation And Architecture Slimming
 
-The active 0.2.2 work should add durable local runtime evaluation and reduce
-code bloat through behavior-preserving splits. Use
-`docs/plans/0.2.2-runtime-evaluation-architecture-slimming.md` as the source
-of task order.
+The 0.2.2 iteration added durable local runtime evaluation and reduced code
+bloat through behavior-preserving splits. Use
+`docs/plans/0.2.2-runtime-evaluation-architecture-slimming.md` as the release
+record for completed task order and validation.
 
-Primary workstreams:
+Completed workstreams:
 
 1. Plan the 0.2.2 iteration without changing `config/paths.py`.
 2. Add a runtime evaluation harness with deterministic fake/offline scenarios
@@ -182,10 +182,9 @@ Primary workstreams:
 7. Split large modules by ownership boundary while preserving public contracts.
 8. Prepare and publish 0.2.2 only after local validation and remote CI pass.
 
-Do not change public CLI syntax, provider visibility rules, public stream delta
-dict schema, tool result message shape, assistant message shape, or
-`reasoning_content` persistence during this iteration. Do not tag or publish
-0.2.2 until explicitly authorized for the final release phase.
+The iteration preserved public CLI syntax, provider visibility rules, public
+stream delta dict schema, tool result message shape, assistant message shape,
+and `reasoning_content` persistence.
 
 ## Typed Island
 
