@@ -21,7 +21,6 @@ on:
         type: choice
         options:
           - testpypi
-          - pypi
 
 concurrency:
   group: publish-${{ github.ref }}-${{ inputs.target || 'tag' }}
@@ -229,7 +228,7 @@ jobs:
   publish-pypi:
     name: "🚀 Publish to PyPI"
     needs: build-distributions
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
