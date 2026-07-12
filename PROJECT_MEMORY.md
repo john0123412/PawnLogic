@@ -254,8 +254,6 @@ For broad code changes:
 
 ## Known Risks To Recheck Often
 
-- Docs workflow paths can drift from the canonical `_zh-CN` filenames.
-- Production publish conditions must not permit an untagged manual PyPI upload.
 - Runtime path checks must use canonical active-root containment rather than
   string prefixes or process-global Workspace roots.
 - Host, Docker, browser, MCP, and CTF execution paths can drift around the
