@@ -16,7 +16,8 @@ release history.
 - Latest published tag: `v0.2.2`.
 - Most recent completed plan:
   `docs/plans/0.2.2-runtime-evaluation-architecture-slimming.md`.
-- Active plan: none selected.
+- Active plan:
+  `docs/plans/0.2.3-autonomous-runtime-reliability-deepening.md`.
 - Local release artifacts such as `dist/`, `build/`, and `*.egg-info/` should
   not remain after release validation unless a maintainer explicitly asks to
   keep them.
@@ -186,6 +187,18 @@ The iteration preserved public CLI syntax, provider visibility rules, public
 stream delta dict schema, tool result message shape, assistant message shape,
 and `reasoning_content` persistence.
 
+## Active Iteration: 0.2.3 Autonomous Runtime Reliability And Deepening
+
+The active iteration closes confirmed safety and release-gate gaps before
+deepening runtime Modules. It then improves custom Provider transaction/retry
+behavior, makes runtime evaluation enforce real budgets and exercise real local
+paths, restores bounded WSL2 Codex automation, and reduces large-file ownership
+hotspots without changing public runtime contracts.
+
+Use `docs/plans/0.2.3-autonomous-runtime-reliability-deepening.md` for PR order,
+Interface definitions, targeted tests, CI monitoring, stop conditions, and the
+separate release-authorization gate.
+
 ## Typed Island
 
 The typed-island mypy check is intentionally selective. It should grow through
@@ -241,6 +254,16 @@ For broad code changes:
 
 ## Known Risks To Recheck Often
 
+- Docs workflow paths can drift from the canonical `_zh-CN` filenames.
+- Production publish conditions must not permit an untagged manual PyPI upload.
+- Runtime path checks must use canonical active-root containment rather than
+  string prefixes or process-global Workspace roots.
+- Host, Docker, browser, MCP, and CTF execution paths can drift around the
+  shared trust and Operation Policy Interfaces.
+- Provider mutation ordering, format-specific fetch headers, and stream versus
+  non-stream retry classification can diverge.
+- Runtime evaluation must enforce real deadlines and measured budgets; a fake
+  pass scenario is not evidence for the path named by a suite.
 - Provider visibility drift between CLI, TUI, completions, and runtime fetch.
 - User-friendly mode accidentally leaking debug internals.
 - Stream adapters changing public delta dict keys or ordering.
