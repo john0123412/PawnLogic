@@ -32,6 +32,8 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Callable, Optional
 
+from core.path_policy import resolve_within, safe_filename_fragment
+
 try:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
@@ -247,10 +249,14 @@ def _save_binary_asset(data_b64: str, mime: str, server: str) -> str:
     ext = ext_map.get((mime or "").lower(), "bin")
     try:
         WORKSPACE_ASSETS.mkdir(parents=True, exist_ok=True)
-        fname = f"{server}_{int(time.time() * 1000)}.{ext}"
-        path  = WORKSPACE_ASSETS / fname
-        path.write_bytes(base64.b64decode(data_b64))
-        return str(path)
+        safe_server = safe_filename_fragment(server, fallback="mcp")
+        fname = f"{safe_server}_{int(time.time() * 1000)}.{ext}"
+        # Verify the final path stays inside the assets directory.
+        resolved = resolve_within(WORKSPACE_ASSETS, fname)
+        resolved.write_bytes(base64.b64decode(data_b64))
+        return str(resolved)
+    except ValueError as e:
+        return f"[binary save failed: {e}]"
     except Exception as e:
         return f"[binary save failed: {type(e).__name__}: {e}]"
 

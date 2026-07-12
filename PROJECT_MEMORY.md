@@ -222,6 +222,7 @@ Current stable candidates and covered modules include:
 - `core/provider_streams.py`
 - `core/runtime_metrics.py`
 - `core/mcp_client_manager.py`
+- `core/path_policy.py`
 - `tools/check_doc_structure.py`
 - `tools/check_release_consistency.py`
 - `tools/merge_ctf_skills.py`
