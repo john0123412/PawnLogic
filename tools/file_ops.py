@@ -10,6 +10,7 @@ Patch support:
 
 import fnmatch, os, re, difflib, subprocess
 from pathlib import Path
+from core.path_policy import resolve_within
 from config import (
     READ_BLACKLIST,
     WRITE_BLACKLIST,
@@ -143,27 +144,28 @@ def _resolve_write_path(path: str) -> tuple:
     """Resolve writes into WORKSPACE_DIR.
 
     Returns (resolved_abs_path, error_msg). An empty error allows the write.
+
+    This function never creates directories; callers must create the parent
+    directory only after validation succeeds.
     """
     p = Path(path).expanduser()
-    workspace_root = str(Path(WORKSPACE_DIR).expanduser().resolve())
-    session_workspace = Path(_session_workspace_dir[0] or workspace_root).expanduser().resolve()
-    session_workspace.mkdir(parents=True, exist_ok=True)
+    workspace_root = Path(WORKSPACE_DIR).expanduser().resolve()
+    session_workspace = Path(_session_workspace_dir[0] or str(workspace_root)).expanduser().resolve()
 
-    # Absolute paths must stay inside the workspace.
+    # Absolute paths must stay inside the workspace root.
     if p.is_absolute():
-        abs_p = str(p.resolve())
         try:
-            common = os.path.commonpath([abs_p, workspace_root])
+            resolved = resolve_within(workspace_root, p)
         except ValueError:
-            common = ""
-        if common != workspace_root:
             return "", f"SECURITY BLOCK: '{path}' is outside the workspace. Write under {WORKSPACE_DIR}/."
-        return abs_p, ""
+        return str(resolved), ""
 
     # Relative paths are redirected into the current session workspace.
-    redirected = session_workspace / p
-    redirected.parent.mkdir(parents=True, exist_ok=True)
-    return str(redirected.resolve()), ""
+    try:
+        resolved = resolve_within(session_workspace, p)
+    except ValueError:
+        return "", f"SECURITY BLOCK: '{path}' escapes the session workspace."
+    return str(resolved), ""
 
 def _check_write(path: str):
     abs_p = str(Path(path).expanduser().resolve())

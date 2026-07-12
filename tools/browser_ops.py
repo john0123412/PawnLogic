@@ -29,8 +29,10 @@ import os
 import time
 import threading
 from datetime import datetime
+from pathlib import Path
 
 from config import BROWSER_CONFIG, WORKSPACE_DIR
+from core.path_policy import resolve_within
 from core.state import state as _runtime_state
 from core.trust import (
     BROWSER_SANDBOX_DISABLED,
@@ -197,11 +199,12 @@ def _retry_fetch(fetcher, url: str, timeout_ms: int, max_retries: int = 3):
 
 
 def _safe_path(filename: str) -> str:
-    """Ensure a file path stays inside SAFE_WORKSPACE."""
-    full = os.path.abspath(os.path.join(SCREENSHOT_DIR, filename))
-    if not full.startswith(os.path.abspath(SCREENSHOT_DIR)):
-        raise ValueError(f"path escapes screenshot directory: {filename}")
-    return full
+    """Ensure a file path stays inside SCREENSHOT_DIR using canonical containment."""
+    try:
+        resolved = resolve_within(Path(SCREENSHOT_DIR), filename)
+    except ValueError:
+        raise ValueError(f"path escapes screenshot directory: {filename}") from None
+    return str(resolved)
 
 
 def _clean(text: str) -> str:
