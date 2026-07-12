@@ -127,7 +127,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 | Trust-boundary UX | User-mode warnings make it explicit when a tool crosses local host, container, browser, network, delegate, or plaintext HTTP boundaries. |
 | MCP integration | Stdio MCP servers can be configured from `~/.pawnlogic/mcp_configs.json`, with roots and stderr logging handled by PawnLogic. |
 | CTF / pwn workflows | Optional pwn tooling, Docker container helpers, GDB automation, ROP chain support, libc leak workflows, and user-installed local skill packs. |
-| Release hygiene | CI runs Ruff, typed-island mypy, and fast Python 3.11 PR checks first, then release/manual validation covers Python 3.10/3.11/3.12, packaging, dynamic E2E, docs structure, language policy, package build, and Trusted Publishing guardrails. |
+| Release hygiene | CI runs Ruff, typed-island mypy, docs guard, and fast Python 3.11 PR checks first, then release/manual validation covers Python 3.10/3.11/3.12, packaging, dynamic E2E, docs structure, language policy, package build, and Trusted Publishing guardrails. Production PyPI publishing is tag-only through Trusted Publishing; manual workflow dispatch targets TestPyPI only. |
 
 ## Supported Models
 

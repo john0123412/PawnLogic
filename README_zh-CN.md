@@ -108,7 +108,7 @@ python -m pawnlogic --help
 | Trust-boundary UX | 用户模式会明确提示工具何时跨越本地主机、容器、浏览器、网络、delegate 或明文 HTTP 边界。 |
 | MCP 集成 | stdio MCP server 可通过 `~/.pawnlogic/mcp_configs.json` 配置，PawnLogic 会处理 roots 和 stderr 日志。 |
 | CTF / pwn 工作流 | 可选 pwn 工具、Docker 容器 helper、GDB 自动化、ROP 链支持、libc leak 工作流和用户安装的本地 skill pack。 |
-| 发布卫生 | CI 先运行 Ruff、typed-island mypy 和 Python 3.11 fast PR 检查；release/manual 验证再覆盖 Python 3.10/3.11/3.12、packaging、Dynamic E2E、文档结构、语言策略、包构建和 Trusted Publishing 护栏。 |
+| 发布卫生 | CI 先运行 Ruff、typed-island mypy、docs guard 和 Python 3.11 fast PR 检查；release/manual 验证再覆盖 Python 3.10/3.11/3.12、packaging、Dynamic E2E、文档结构、语言策略、包构建和 Trusted Publishing 护栏。生产 PyPI 发布只能由版本 tag 通过 Trusted Publishing 触发；手动 workflow dispatch 仅面向 TestPyPI。 |
 
 ## 支持模型
 
