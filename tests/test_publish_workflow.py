@@ -72,13 +72,28 @@ def test_pypi_publish_job_uses_oidc_environment():
 
     assert "needs: build-distributions" in publish_job
     assert "github.event_name == 'push'" in publish_job
-    assert "inputs.target == 'pypi'" in publish_job
+    # Production PyPI must NOT be reachable from workflow_dispatch.
+    assert "workflow_dispatch" not in publish_job
     assert re.search(r"environment:\n\s+name: pypi\n", publish_job)
     assert re.search(r"permissions:\n(?:\s+[A-Za-z-]+: [a-z]+\n)*\s+id-token: write\n", publish_job)
     assert "actions/download-artifact@v7" in publish_job
     assert "name: python-distributions" in publish_job
     assert "pypa/gh-action-pypi-publish@release/v1" in publish_job
     assert "repository-url:" not in publish_job
+
+
+def test_workflow_dispatch_allows_only_testpypi():
+    """Manual dispatch must not offer production PyPI as a target."""
+    text = _workflow_text()
+
+    # The workflow_dispatch inputs.target.options must not include 'pypi'.
+    # Only 'testpypi' should remain.
+    import yaml
+
+    wf = yaml.load(text, Loader=yaml.BaseLoader)
+    options = wf["on"]["workflow_dispatch"]["inputs"]["target"]["options"]
+    assert "testpypi" in options, "workflow_dispatch must offer testpypi"
+    assert "pypi" not in options, "workflow_dispatch must NOT offer pypi"
 
 
 def test_github_release_runs_only_after_pypi_publish():

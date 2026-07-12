@@ -53,6 +53,31 @@ jobs:
       - name: Release consistency check
         run: python tools/check_release_consistency.py
 
+  # ── Documentation guard: structure, consistency, and language policy ──
+  docs-guard:
+    name: "📖 Docs Guard"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install PyYAML
+        run: pip install "PyYAML>=6.0"
+
+      - name: Check doc structure
+        run: python tools/check_doc_structure.py
+
+      - name: Check release consistency
+        run: python tools/check_release_consistency.py
+
+      - name: Repository language policy
+        run: python -m pytest tests/test_repository_language_policy.py -q --timeout=60
+
   # ── Typed island checks: keep scope narrow and fail fast ─────────────
   typecheck:
     name: "🔎 Type Check (mypy)"
