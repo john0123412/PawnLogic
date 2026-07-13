@@ -9,7 +9,8 @@ from __future__ import annotations
 import contextlib
 import multiprocessing
 import os
-import signal
+import queue as queue_module
+import subprocess
 import time
 from collections.abc import Callable, Sequence
 
@@ -19,6 +20,7 @@ from tools.eval.artifacts import unique_run_id
 
 SCHEMA_VERSION = 1
 _IS_POSIX = os.name == "posix"
+_VALID_STATUSES = frozenset({"passed", "failed", "timed_out", "skipped"})
 
 
 def _duration_ms(start: float, end: float) -> int:
@@ -26,14 +28,27 @@ def _duration_ms(start: float, end: float) -> int:
 
 
 def _run_in_child(
-    scenario_fn: Callable[[], dict], queue: multiprocessing.Queue
+    scenario_fn: Callable[[], dict], result_queue: multiprocessing.Queue
 ) -> None:
     """Run scenario_fn in a child process and put the result in the queue."""
     try:
         result = scenario_fn()
-        queue.put(("ok", result))
+        result_queue.put(("ok", result))
+    except subprocess.TimeoutExpired as exc:
+        result_queue.put(
+            (
+                "ok",
+                {
+                    "status": "timed_out",
+                    "summary": str(exc),
+                    "api_calls": 0,
+                    "tool_calls": 0,
+                    "failure_class": "TimeoutExpired",
+                },
+            )
+        )
     except Exception as exc:
-        queue.put(
+        result_queue.put(
             (
                 "error",
                 {
@@ -69,8 +84,10 @@ def run_scenario_with_deadline(
             "failure_class": "BudgetExhausted",
         }
 
-    # Use child process for hard deadline enforcement when deadline is tight.
-    if _IS_POSIX and remaining < 5.0:
+    # A post-return elapsed-time check is not a hard deadline. Use an isolated
+    # child for every real-clock POSIX run so a stuck scenario can be stopped.
+    # Deterministic tests may inject a synthetic clock and remain in-process.
+    if _IS_POSIX and now is time.monotonic:
         return _run_in_child_with_deadline(scenario_fn, remaining)
 
     # Same-process execution with elapsed-time check.
@@ -97,6 +114,14 @@ def run_scenario_with_deadline(
                 "failure_class": "",
             }
         )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "status": "timed_out",
+            "summary": str(exc),
+            "api_calls": 0,
+            "tool_calls": 0,
+            "failure_class": "TimeoutExpired",
+        }
     except Exception as exc:
         return {
             "status": "failed",
@@ -112,9 +137,9 @@ def _run_in_child_with_deadline(
     timeout: float,
 ) -> dict:
     """Run scenario in a child process with hard deadline enforcement."""
-    queue: multiprocessing.Queue = multiprocessing.Queue()
+    result_queue: multiprocessing.Queue = multiprocessing.Queue()
     proc = multiprocessing.Process(
-        target=_run_in_child, args=(scenario_fn, queue), daemon=True
+        target=_run_in_child, args=(scenario_fn, result_queue), daemon=True
     )
     proc.start()
 
@@ -140,11 +165,13 @@ def _run_in_child_with_deadline(
             "failure_class": "DeadlineExceeded",
         }
 
-    if not queue.empty():
-        status, result = queue.get_nowait()
+    try:
+        status, result = result_queue.get(timeout=1.0)
         if status == "ok" and isinstance(result, dict):
             return result
         return result
+    except queue_module.Empty:
+        pass
 
     return {
         "status": "failed",
@@ -196,47 +223,39 @@ def run_suite(
     for i, scenario_fn in enumerate(scenarios):
         scenario_id = getattr(scenario_fn, "__name__", f"scenario_{i}")
 
-        # Check API call budget.
-        if total_api_calls >= budget.max_api_calls:
-            records.append(
-                RuntimeEvalRecord(
-                    schema_version=SCHEMA_VERSION,
-                    run_id=rid,
-                    scenario_id=scenario_id,
-                    status="failed",
-                    duration_ms=0,
-                    api_calls=0,
-                    tool_calls=0,
-                    failure_class="ApiCallBudgetExceeded",
-                    redacted_summary=f"Budget exhausted ({budget.max_api_calls} API calls).",
-                )
-            )
-            if stop_on_first_failure:
-                break
-            continue
-
         start = now()
         result = run_scenario_with_deadline(scenario_fn, deadline=deadline, now=now)
         elapsed = now() - start
 
         api_calls = int(result.get("api_calls", 0))
         total_api_calls += api_calls
+        status = str(result.get("status", "failed"))
+        failure_class = str(result.get("failure_class", ""))
+        summary = str(result.get("summary", ""))
+        if status not in _VALID_STATUSES:
+            status = "failed"
+            failure_class = "UnknownStatus"
+            summary = "Scenario returned an unsupported status."
+        if total_api_calls > budget.max_api_calls:
+            status = "failed"
+            failure_class = "ApiCallBudgetExceeded"
+            summary = f"Budget exceeded ({budget.max_api_calls} API calls allowed)."
 
         records.append(
             RuntimeEvalRecord(
                 schema_version=SCHEMA_VERSION,
                 run_id=rid,
                 scenario_id=scenario_id,
-                status=result.get("status", "failed"),
+                status=status,
                 duration_ms=_duration_ms(start, start + elapsed),
                 api_calls=api_calls,
                 tool_calls=int(result.get("tool_calls", 0)),
-                failure_class=result.get("failure_class", ""),
-                redacted_summary=redact_summary(result.get("summary", "")),
+                failure_class=failure_class,
+                redacted_summary=redact_summary(summary),
             )
         )
 
-        if result.get("status") in ("failed", "timed_out") and stop_on_first_failure:
+        if status in ("failed", "timed_out") and stop_on_first_failure:
             break
 
     return records

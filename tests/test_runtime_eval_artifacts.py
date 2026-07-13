@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -102,6 +103,17 @@ class TestArtifacts:
         content = path.read_text()
         assert "s1" in content
 
+    def test_same_second_artifacts_do_not_overwrite(self, tmp_path: Path) -> None:
+        first = RuntimeEvalRecord(run_id="run-one", scenario_id="s1")
+        second = RuntimeEvalRecord(run_id="run-two", scenario_id="s2")
+
+        first_path = write_artifact_atomic([first], output_dir=tmp_path, suite="offline")
+        second_path = write_artifact_atomic([second], output_dir=tmp_path, suite="offline")
+
+        assert first_path != second_path
+        assert first_path.exists()
+        assert second_path.exists()
+
 
 # ---------------------------------------------------------------------------
 # runner
@@ -185,6 +197,69 @@ class TestRunner:
         assert len(records) == 1
         assert records[0].status == "failed"
         assert records[0].failure_class == "ApiCallBudgetExceeded"
+
+    def test_zero_api_budget_allows_zero_call_scenario(self) -> None:
+        def offline_scenario() -> dict:
+            return {
+                "status": "passed",
+                "summary": "offline",
+                "api_calls": 0,
+                "tool_calls": 1,
+                "failure_class": "",
+            }
+
+        records = run_suite(
+            [offline_scenario],
+            budget=EvalBudget(max_duration_seconds=10.0, max_api_calls=0),
+            run_id="test",
+        )
+
+        assert records[0].status == "passed"
+        assert records[0].tool_calls == 1
+
+    def test_unknown_status_fails_closed(self) -> None:
+        def unknown() -> dict:
+            return {"status": "mystery", "summary": "unknown", "api_calls": 0}
+
+        records = run_suite(
+            [unknown],
+            budget=EvalBudget(max_duration_seconds=10.0, max_api_calls=0),
+            run_id="test",
+        )
+
+        assert records[0].status == "failed"
+        assert records[0].failure_class == "UnknownStatus"
+
+    def test_timeout_expired_is_classified_as_timed_out(self) -> None:
+        def timeout() -> dict:
+            raise subprocess.TimeoutExpired(["worker"], 1)
+
+        records = run_suite(
+            [timeout],
+            budget=EvalBudget(max_duration_seconds=10.0, max_api_calls=0),
+            run_id="test",
+        )
+
+        assert records[0].status == "timed_out"
+        assert records[0].failure_class == "TimeoutExpired"
+
+    def test_posix_deadline_always_uses_child_process(self, monkeypatch) -> None:
+        from tools.eval import runner
+
+        called: list[float] = []
+
+        def fake_child(_scenario, timeout: float) -> dict:
+            called.append(timeout)
+            return {"status": "passed", "summary": "ok", "api_calls": 0}
+
+        monkeypatch.setattr(runner, "_IS_POSIX", True)
+        monkeypatch.setattr(runner, "_run_in_child_with_deadline", fake_child)
+        deadline = runner.time.monotonic() + 30.0
+
+        result = runner.run_scenario_with_deadline(lambda: {}, deadline=deadline)
+
+        assert result["status"] == "passed"
+        assert called and called[0] > 5.0
 
     def test_run_suite_negative_budget_raises(self) -> None:
         budget = EvalBudget(max_duration_seconds=-1.0, max_api_calls=0)

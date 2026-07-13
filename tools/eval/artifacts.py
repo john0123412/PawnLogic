@@ -34,8 +34,8 @@ def write_artifact_atomic(
     Uses temp-file-then-rename to prevent partial writes from being read.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    target = output_dir / f"{stamp}-{suite}.jsonl"
+    run_id = next((record.run_id for record in records if record.run_id), "")
+    target = output_dir / f"{run_id or unique_run_id()}-{suite}.jsonl"
 
     # Write to a temp file first, then atomically rename.
     fd, tmp_path = tempfile.mkstemp(

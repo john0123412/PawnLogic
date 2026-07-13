@@ -8,6 +8,8 @@ variables with bounded validation.
 from __future__ import annotations
 
 import os
+import socket
+import ssl
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -21,6 +23,61 @@ class RetryPolicy:
     connect_timeout_seconds: float = 20.0
     read_timeout_seconds: float = 60.0
     nonstream_timeout_seconds: float = 60.0
+
+
+RETRYABLE_HTTP_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+_RETRYABLE_EXCEPTION_NAMES = frozenset(
+    {
+        "ConnectError",
+        "ConnectTimeout",
+        "ReadError",
+        "ReadTimeout",
+        "RemoteProtocolError",
+        "TimeoutException",
+        "WriteError",
+        "WriteTimeout",
+    }
+)
+
+
+def is_retryable_http_status(status: int) -> bool:
+    """Return whether an HTTP response is safe to retry before content."""
+    return status in RETRYABLE_HTTP_STATUS_CODES
+
+
+def is_retryable_transport_error(exc: BaseException) -> bool:
+    """Classify transport failures consistently across provider call paths.
+
+    Certificate validation, malformed URL/payload errors, and programming
+    errors fail closed. DNS, refused/reset connections, and timeouts retry.
+    """
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (ssl.SSLError, ssl.CertificateError)):
+            return False
+        if isinstance(current, (ValueError, TypeError)):
+            return False
+        if isinstance(
+            current,
+            (
+                socket.gaierror,
+                TimeoutError,
+                ConnectionRefusedError,
+                ConnectionResetError,
+                BrokenPipeError,
+                OSError,
+            ),
+        ):
+            return True
+        if type(current).__name__ in _RETRYABLE_EXCEPTION_NAMES:
+            message = str(current).lower()
+            if "certificate" in message or "ssl" in message:
+                return False
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _env_float(
@@ -70,3 +127,12 @@ def retry_policy_from_env(env: Mapping[str, str] | None = None) -> RetryPolicy:
             env, "PAWNLOGIC_API_NONSTREAM_TIMEOUT", 60.0, 10.0, 300.0
         ),
     )
+
+
+__all__ = [
+    "RETRYABLE_HTTP_STATUS_CODES",
+    "RetryPolicy",
+    "is_retryable_http_status",
+    "is_retryable_transport_error",
+    "retry_policy_from_env",
+]

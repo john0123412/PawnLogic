@@ -31,10 +31,15 @@ from core.api_errors import (
     is_retryable_http_status,
     retry_notice,
 )
-from core.api_retry import RetryPolicy, retry_policy_from_env
+from core.api_retry import (
+    RetryPolicy,
+    is_retryable_transport_error,
+    retry_policy_from_env,
+)
 from core.interrupts import clear_cancel_callback, raise_if_interrupted, set_cancel_callback
 from core import provider_streams
 from core.provider_runtime import maybe_warn_insecure_provider
+from core.runtime_metrics import RuntimeMetrics, RuntimeMetricsSnapshot
 
 
 # Custom exceptions.
@@ -51,6 +56,7 @@ _CIRCUIT_BREAKERS: dict[str, dict] = {}
 _CB_TRIP_AT   = 3      # Consecutive failures before opening the circuit.
 _CB_RESET_SEC = 30     # Seconds from OPEN to HALF_OPEN.
 _RETRY_CODES  = RETRYABLE_HTTP_STATUS_CODES  # Backward-compatible module alias.
+_API_RUNTIME_METRICS = RuntimeMetrics()
 
 
 def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
@@ -74,7 +80,8 @@ def _cb_get(provider: str) -> dict:
     with _CB_LOCK:
         if provider not in _CIRCUIT_BREAKERS:
             _CIRCUIT_BREAKERS[provider] = {
-                "state": "closed", "failures": 0, "opened_at": 0.0
+                "state": "closed", "failures": 0, "opened_at": 0.0,
+                "probe_in_flight": False,
             }
         return _CIRCUIT_BREAKERS[provider]
 
@@ -85,17 +92,28 @@ def _cb_record_success(provider: str) -> None:
         if cb:
             cb["state"]    = "closed"
             cb["failures"] = 0
+            cb["probe_in_flight"] = False
+            _API_RUNTIME_METRICS.record_circuit_success()
 
 
 def _cb_record_failure(provider: str) -> None:
     with _CB_LOCK:
         cb = _CIRCUIT_BREAKERS.setdefault(
-            provider, {"state": "closed", "failures": 0, "opened_at": 0.0}
+            provider,
+            {
+                "state": "closed",
+                "failures": 0,
+                "opened_at": 0.0,
+                "probe_in_flight": False,
+            },
         )
+        was_probe = cb["state"] == "half_open"
+        cb["probe_in_flight"] = False
         cb["failures"] += 1
-        if cb["failures"] >= _CB_TRIP_AT:
+        if was_probe or cb["failures"] >= _CB_TRIP_AT:
             cb["state"]     = "open"
             cb["opened_at"] = time.monotonic()
+        _API_RUNTIME_METRICS.record_circuit_failure()
 
 
 def _cb_allow(provider: str) -> bool:
@@ -107,10 +125,22 @@ def _cb_allow(provider: str) -> bool:
         if cb["state"] == "open":
             if time.monotonic() - cb["opened_at"] >= _CB_RESET_SEC:
                 cb["state"] = "half_open"
-                return True          # Allow probe request.
+                cb["probe_in_flight"] = True
+                _API_RUNTIME_METRICS.record_circuit_probe()
+                return True          # Lease one probe request.
+            _API_RUNTIME_METRICS.record_circuit_rejection()
             return False             # Still in the open period.
-        # half_open: allow one request.
+        if cb.get("probe_in_flight", False):
+            _API_RUNTIME_METRICS.record_circuit_rejection()
+            return False
+        cb["probe_in_flight"] = True
+        _API_RUNTIME_METRICS.record_circuit_probe()
         return True
+
+
+def api_runtime_metrics_snapshot() -> RuntimeMetricsSnapshot:
+    """Return local-only retry/circuit evidence without telemetry."""
+    return _API_RUNTIME_METRICS.snapshot()
 
 
 def _interruptible_sleep(delay: float) -> None:
@@ -392,8 +422,13 @@ def stream_request(
 
         conn: http.client.HTTPConnection | None = None
         cancel_callback = None
+        partial_emitted = False
         try:
-            conn, path = _open_connection(base_url, proxy, timeout=_CONN_TIMEOUT)
+            conn, path = _open_connection(
+                base_url,
+                proxy,
+                timeout=policy.connect_timeout_seconds,
+            )
             response_ref: dict[str, http.client.HTTPResponse | None] = {"response": None}
             cancel_callback = lambda conn=conn, response_ref=response_ref: _cancel_connection(
                 conn,
@@ -409,7 +444,7 @@ def stream_request(
             conn.request("POST", path, body=body, headers=hdrs)
 
             if conn.sock:
-                conn.sock.settimeout(_READ_TIMEOUT)
+                conn.sock.settimeout(policy.read_timeout_seconds)
 
             resp = conn.getresponse()
             response_ref["response"] = resp
@@ -434,10 +469,18 @@ def stream_request(
                 yield {"_error": format_http_error(resp.status, err_body)}
                 return
 
-            # Connection established; reset circuit breaker.
-            _cb_record_success(provider)
-
-            yield from _read_sse_lines(resp, api_fmt)
+            partial_terminal = False
+            for delta in _read_sse_lines(resp, api_fmt):
+                if not any(key in delta for key in ("_retry", "_error")):
+                    partial_emitted = True
+                if delta.get("_partial_end"):
+                    partial_terminal = True
+                yield delta
+            if partial_terminal:
+                _cb_record_failure(provider)
+            else:
+                # A streaming response succeeds only after full consumption.
+                _cb_record_success(provider)
             return
 
         except socket.timeout:
@@ -445,51 +488,54 @@ def stream_request(
             _cb_record_failure(provider)
             err_msg = format_transport_error(
                 TimeoutError(
-                    f"no response within {_CONN_TIMEOUT}s connection/header timeout"
+                    "no response within "
+                    f"{policy.connect_timeout_seconds:g}s connection/header timeout"
                 ),
                 proxy=proxy,
-                connect_timeout=_CONN_TIMEOUT,
+                connect_timeout=int(policy.connect_timeout_seconds),
             )
+            if partial_emitted:
+                yield {"_partial_end": True, "_error": err_msg}
+                return
             if attempt < max_attempts - 1:
                 delay = _retry_delay(attempt)
                 yield {"_retry": retry_notice(err_msg, attempt, max_attempts, delay)}
                 _interruptible_sleep(delay)
                 continue
             yield {"_error": err_msg}
-        except ConnectionRefusedError as e:
-            raise_if_interrupted()
-            _cb_record_failure(provider)
-            yield {
-                "_error": format_transport_error(
-                    e, proxy=proxy, connect_timeout=_CONN_TIMEOUT
-                )
-            }
         except ssl.SSLError as e:
             raise_if_interrupted()
             yield {"_error": f"SSL error: {e}"}
             return
-        except ConnectionError as e:
+        except (ConnectionError, OSError) as e:
             raise_if_interrupted()
-            _cb_record_failure(provider)
-            yield {"_error": str(e)}
-            return
-        except OSError as e:
-            raise_if_interrupted()
-            _cb_record_failure(provider)
-            err_msg = format_transport_error(e, proxy=proxy, connect_timeout=_CONN_TIMEOUT)
-            if attempt < max_attempts - 1:
+            retryable = is_retryable_transport_error(e)
+            if retryable:
+                _cb_record_failure(provider)
+            err_msg = format_transport_error(
+                e,
+                proxy=proxy,
+                connect_timeout=int(policy.connect_timeout_seconds),
+            )
+            if partial_emitted:
+                yield {"_partial_end": True, "_error": err_msg}
+                return
+            if retryable and attempt < max_attempts - 1:
                 delay = _retry_delay(attempt)
                 yield {"_retry": retry_notice(err_msg, attempt, max_attempts, delay)}
                 _interruptible_sleep(delay)
                 continue
             yield {"_error": err_msg}
+            return
         except KeyboardInterrupt:
             raise  # Propagate cleanly; finally handles conn cleanup.
         except Exception as e:
             raise_if_interrupted()
             yield {
                 "_error": format_transport_error(
-                    e, proxy=proxy, connect_timeout=_CONN_TIMEOUT
+                    e,
+                    proxy=proxy,
+                    connect_timeout=int(policy.connect_timeout_seconds),
                 )
             }
             return
@@ -582,9 +628,15 @@ def call_once(
     max_attempts = policy.max_attempts
 
     for attempt in range(max_attempts):
+        if not _cb_allow(base_url):
+            return "", f"circuit open: {base_url}"
         conn: http.client.HTTPConnection | None = None
         try:
-            conn, path = _open_connection(base_url, proxy, timeout=_CONN_TIMEOUT)
+            conn, path = _open_connection(
+                base_url,
+                proxy,
+                timeout=policy.connect_timeout_seconds,
+            )
 
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             if api_fmt == "anthropic":
@@ -597,16 +649,19 @@ def call_once(
                 }
             conn.request("POST", path, body=body, headers=hdrs)
             if conn.sock:
-                conn.sock.settimeout(_NONSTREAM_TIMEOUT)
+                conn.sock.settimeout(policy.nonstream_timeout_seconds)
 
             resp = conn.getresponse()
             raw  = resp.read()
 
             if is_retryable_http_status(resp.status) and attempt < max_attempts - 1:
+                _cb_record_failure(base_url)
                 _interruptible_sleep(_retry_delay(attempt, resp.headers.get("Retry-After"), retry_after_max=policy.retry_after_cap_seconds))
                 continue
             if resp.status != 200:
                 return "", format_http_error(resp.status, raw[:600])
+
+            _cb_record_success(base_url)
 
             if api_fmt == "anthropic":
                 return _anthropic_parse_response(raw)
@@ -617,16 +672,23 @@ def call_once(
                 _interruptible_sleep(_retry_delay(attempt))
                 continue
             return "", (
-                f"Request timeout ({_NONSTREAM_TIMEOUT}s): provider did not finish "
+                f"Request timeout ({policy.nonstream_timeout_seconds:g}s): provider did not finish "
                 "the non-streaming response. Check network/proxy or switch provider."
             )
         except ssl.SSLError as e:
             return "", f"SSL error: {e}"
         except (ConnectionError, OSError) as e:
-            if attempt < max_attempts - 1:
+            retryable = is_retryable_transport_error(e)
+            if retryable:
+                _cb_record_failure(base_url)
+            if retryable and attempt < max_attempts - 1:
                 _interruptible_sleep(_retry_delay(attempt))
                 continue
-            return "", format_transport_error(e, proxy=proxy, connect_timeout=_CONN_TIMEOUT)
+            return "", format_transport_error(
+                e,
+                proxy=proxy,
+                connect_timeout=int(policy.connect_timeout_seconds),
+            )
         except Exception as e:
             return "", format_transport_error(e, proxy=proxy, connect_timeout=_CONN_TIMEOUT)
         finally:

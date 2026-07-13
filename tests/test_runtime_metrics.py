@@ -22,6 +22,10 @@ def test_runtime_metrics_records_usage_retries_tools_and_failures():
     metrics.record_failure_class("Timeout")
     metrics.record_failure_class("Timeout")
     metrics.record_failure_class("")
+    metrics.record_circuit_probe()
+    metrics.record_circuit_rejection()
+    metrics.record_circuit_success()
+    metrics.record_circuit_failure()
 
     snapshot = metrics.snapshot()
     assert snapshot.turn_tool_calls == 2
@@ -34,6 +38,10 @@ def test_runtime_metrics_records_usage_retries_tools_and_failures():
     assert snapshot.total_tokens == 8
     assert snapshot.turn_failure_classes == {"Timeout": 2}
     assert snapshot.total_failure_classes == {"Timeout": 2}
+    assert snapshot.total_circuit_probes == 1
+    assert snapshot.total_circuit_rejections == 1
+    assert snapshot.total_circuit_successes == 1
+    assert snapshot.total_circuit_failures == 1
 
 
 def test_runtime_metrics_reset_turn_keeps_session_totals():
