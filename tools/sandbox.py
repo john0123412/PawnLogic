@@ -12,6 +12,7 @@ WSL performance optimizations:
 import os, signal, sys, re, subprocess, tempfile
 from pathlib import Path
 from config import SANDBOX_LANGS
+from core.host_process import HostProcessRunner, HostProcessRequest
 from core.state import runtime_config
 from utils.ansi import c, YELLOW, RED
 
@@ -201,6 +202,17 @@ def tool_run_code(a: dict) -> str:
     use_venv     = bool(a.get("use_venv", False))
     install_deps = a.get("install_deps", "").strip()
     cwd          = a.get("cwd") or _get_cwd()
+
+    # Policy enforcement: check before spawning any subprocess.
+    runner = HostProcessRunner()
+    request = HostProcessRequest(
+        command=f"run_code({language})",
+        cwd=Path(cwd),
+        timeout_seconds=float(timeout),
+    )
+    outcome = runner.run(request)
+    if outcome.returncode == -1 and ("Denied" in outcome.output or "Requires confirmation" in outcome.output):
+        return f"ERROR: {outcome.output}"
 
     if language not in SANDBOX_LANGS:
         return (f"ERROR: unsupported language '{language}'.\n"
