@@ -102,16 +102,16 @@ class TestValidateProviderDefinition:
         with pytest.raises(ValueError, match="requires an api_key_env"):
             validate_provider_definition("test", {"base_url": "https://x.com"})
 
-    def test_unknown_format_defaults_to_openai(self) -> None:
-        defn = validate_provider_definition(
-            "test",
-            {
-                "base_url": "https://x.com",
-                "api_key_env": "K",
-                "api_format": "graphql",
-            },
-        )
-        assert defn.api_format == "openai"
+    def test_unknown_format_rejected(self) -> None:
+        with pytest.raises(ValueError, match="unsupported api_format"):
+            validate_provider_definition(
+                "test",
+                {
+                    "base_url": "https://x.com",
+                    "api_key_env": "K",
+                    "api_format": "graphql",
+                },
+            )
 
     def test_definition_is_frozen(self) -> None:
         defn = validate_provider_definition(
