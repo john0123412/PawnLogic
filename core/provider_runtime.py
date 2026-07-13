@@ -303,7 +303,12 @@ async def fetch_models(
                     resp.raise_for_status()
                 except httpx.HTTPStatusError as exc:
                     return [], format_http_error(exc.response.status_code, exc.response.text), stats
-                body = resp.json()
+                try:
+                    body = resp.json()
+                except ValueError:
+                    return [], f"Provider returned invalid JSON from {models_url}.", stats
+                if not isinstance(body, dict):
+                    return [], f"Provider returned non-object JSON from {models_url}.", stats
                 all_data.extend(body.get("data", []))
                 if not body.get("has_more"):
                     break

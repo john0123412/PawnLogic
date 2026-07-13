@@ -9,6 +9,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+VALID_API_FORMATS = frozenset({"openai", "anthropic"})
+
 
 @dataclass(frozen=True)
 class ProviderDefinition:
@@ -46,6 +48,7 @@ def validate_provider_definition(
     """Validate provider name and configuration before any persistence.
 
     Raises ValueError with a user-facing message on validation failure.
+    Unknown api_format values are rejected instead of silently falling back.
     """
     if not name or not name.strip():
         raise ValueError("Provider name cannot be empty.")
@@ -59,8 +62,11 @@ def validate_provider_definition(
         raise ValueError(f"Provider '{name}' requires an api_key_env.")
 
     api_format = str(config.get("api_format", "openai")).strip()
-    if api_format not in ("openai", "anthropic"):
-        api_format = "openai"
+    if api_format not in VALID_API_FORMATS:
+        raise ValueError(
+            f"Provider '{name}' has unsupported api_format '{api_format}'. "
+            f"Supported: {', '.join(sorted(VALID_API_FORMATS))}."
+        )
 
     return ProviderDefinition(
         name=name,

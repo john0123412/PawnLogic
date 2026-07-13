@@ -439,14 +439,24 @@ async def _provider_test(session, model_alias: str = "") -> None:
 
 def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str = "openai") -> bool:
     """Non-interactive: /provider add <alias> <base_url> <ENV_KEY> [anthropic]."""
+    from core.provider_transport import validate_provider_definition
+
     if alias in PROVIDERS:
         _print(c(YELLOW, f"  ⚠ Provider '{alias}' already exists; config will be overwritten."))
-    fmt = api_format if api_format in ("openai", "anthropic") else "openai"
+    try:
+        validate_provider_definition(alias, {
+            "base_url": base_url,
+            "api_key_env": env_key,
+            "api_format": api_format,
+        })
+    except ValueError as exc:
+        _print(c(YELLOW, f"  ⚠ {exc}"))
+        return False
     prov_cfg = {
         "base_url":    base_url,
         "api_key_env": env_key,
         "label":       f"Custom ({alias})",
-        "api_format":  fmt,
+        "api_format":  api_format,
         "active":      False,
     }
     provider_config.save_custom_provider(alias, prov_cfg, {})
