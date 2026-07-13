@@ -623,8 +623,6 @@ def first_run_wizard() -> str | None:
     Triggered when no usable API key exists. It guides provider selection and
     returns the model alias to enable for this run.
     """
-    from config.providers import save_custom_provider
-
     print("\n" + "═" * 56)
     print("  Welcome to PawnLogic. No API configuration was detected.")
     print("  First run requires one AI endpoint. This usually takes about a minute.")
@@ -727,7 +725,8 @@ def first_run_wizard() -> str | None:
 
     if choice["custom"]:
         # Store structural config in custom_providers.json without the key.
-        save_custom_provider(
+        from core.provider_runtime import save_provider_with_rollback
+        ok, save_err = save_provider_with_rollback(
             name=alias,
             prov_cfg={
                 "base_url": base_url,
@@ -745,6 +744,8 @@ def first_run_wizard() -> str | None:
                 }
             },
         )
+        if not ok:
+            print(f"\n✗ Failed to save provider config: {save_err}")
 
     # Reload .env so the current process can use the key immediately.
     try:
