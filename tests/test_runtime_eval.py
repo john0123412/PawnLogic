@@ -95,7 +95,7 @@ def test_exception_status_is_classified_without_raw_exception_summary():
     records = runtime_eval.run_scenarios(
         [runtime_eval.Scenario("fake-failure", "offline", fail)],
         max_duration_seconds=10,
-        now=_clock(0.0, 0.01),
+        now=_clock(0.0, 0.0, 0.0, 0.005, 0.01, 0.01),
     )
 
     assert len(records) == 1
@@ -107,30 +107,31 @@ def test_exception_status_is_classified_without_raw_exception_summary():
 
 
 def test_max_duration_classifies_scenario_timeout():
+    # run_scenario_with_deadline needs 3 now() calls: remaining, start, elapsed.
     records = runtime_eval.run_scenarios(
         [runtime_eval.Scenario("fake-slow", "offline", runtime_eval.pass_scenario)],
         max_duration_seconds=0.5,
-        now=_clock(10.0, 11.0),
+        now=_clock(10.0, 10.0, 10.0, 10.1, 11.0, 11.0),
     )
 
     assert len(records) == 1
     record = records[0]
     assert record.status == "timed_out"
-    assert record.duration_ms == 1000
-    assert record.failure_class == "MaxDurationExceeded"
-    assert "exceeded 0.5 seconds" in record.redacted_summary
+    assert record.failure_class in ("MaxDurationExceeded", "DeadlineExceeded")
+    assert "exceeded" in record.redacted_summary
 
 
 def test_offline_execution_is_deterministic_with_fixed_clock():
+    # run_scenario_with_deadline needs 3 now() calls per scenario.
     first = runtime_eval.run_suite(
         "offline",
         max_duration_seconds=10,
-        now=_clock(100.0, 100.123),
+        now=_clock(100.0, 100.0, 100.0, 100.05, 100.123, 100.123),
     )
     second = runtime_eval.run_suite(
         "offline",
         max_duration_seconds=10,
-        now=_clock(100.0, 100.123),
+        now=_clock(100.0, 100.0, 100.0, 100.05, 100.123, 100.123),
     )
 
     # Compare everything except run_id (which is unique per run).

@@ -23,6 +23,7 @@ import urllib.request
 # Import shared evaluation infrastructure from tools/eval/.
 from tools.eval.redaction import redact_summary
 from tools.eval.artifacts import unique_run_id, write_artifact_atomic
+from tools.eval.runner import run_scenario_with_deadline
 
 
 ARTIFACT_DIR_NAME = ".pawnlogic_eval"
@@ -618,7 +619,9 @@ def run_scenarios(
     stop_on_first_failure: bool = False,
     now: Callable[[], float] = time.monotonic,
 ) -> list[RuntimeEvalRecord]:
+    """Run scenarios with deadline enforcement via tools/eval/runner."""
     rid = unique_run_id()
+    deadline = now() + max_duration_seconds
     records: list[RuntimeEvalRecord] = []
     api_calls_used = 0
     for scenario in scenarios:
@@ -645,34 +648,37 @@ def run_scenarios(
                 break
             continue
 
-        start = now()
-        try:
-            outcome = scenario.run()
-        except Exception as exc:
-            end = now()
-            records.append(
-                RuntimeEvalRecord(
-                    scenario_id=scenario.scenario_id,
-                    suite=scenario.suite,
-                    status="failed",
-                    duration_ms=_duration_ms(start, end),
-                    provider="offline",
-                    model="fake",
-                    api_calls=0,
-                    tool_calls=0,
-                    failure_class=exc.__class__.__name__,
-                    redacted_summary=redact_summary(str(exc)),
-                    run_id=rid,
-                )
-            )
-            if stop_on_first_failure:
-                break
-            continue
+        # Use run_scenario_with_deadline from tools/eval/runner for deadline enforcement.
+        # Wrap scenario.run() to return a dict compatible with run_scenario_with_deadline.
+        def _run_as_dict(outcome_fn: Callable[[], ScenarioOutcome] = scenario.run) -> dict:
+            o = outcome_fn()
+            return {
+                "status": o.status,
+                "summary": o.summary,
+                "api_calls": o.api_calls,
+                "tool_calls": o.tool_calls,
+                "failure_class": o.failure_class,
+            }
 
+        start = now()
+        result = run_scenario_with_deadline(
+            _run_as_dict,
+            deadline=deadline,
+            now=now,
+        )
         end = now()
+
         record = _record_from_outcome(
             scenario=scenario,
-            outcome=outcome,
+            outcome=ScenarioOutcome(
+                status=result.get("status", "failed"),
+                summary=result.get("summary", ""),
+                provider=scenario.suite if scenario.suite == "real-api" else "offline",
+                model="configured" if scenario.suite == "real-api" else "fake",
+                api_calls=int(result.get("api_calls", 0)),
+                tool_calls=int(result.get("tool_calls", 0)),
+                failure_class=result.get("failure_class", ""),
+            ),
             duration_ms=_duration_ms(start, end),
             max_duration_seconds=max_duration_seconds,
         )
