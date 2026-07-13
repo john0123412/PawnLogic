@@ -17,19 +17,30 @@ class EvalBudget:
     max_api_calls: int
 
 
+SCHEMA_VERSION = 1
+
+
 @dataclass(frozen=True)
 class RuntimeEvalRecord:
-    """Single evaluation scenario result for artifact persistence."""
+    """Single evaluation scenario result for artifact persistence.
 
-    schema_version: int
-    run_id: str
-    scenario_id: str
-    status: str
-    duration_ms: int
-    api_calls: int
-    tool_calls: int
-    failure_class: str
-    redacted_summary: str
+    Canonical record definition used by both tools.eval and tools.runtime_eval.
+    The suite, provider, and model fields are compatibility extensions for the
+    CLI facade.
+    """
+
+    schema_version: int = SCHEMA_VERSION
+    run_id: str = ""
+    scenario_id: str = ""
+    status: str = "pending"
+    duration_ms: int = 0
+    api_calls: int = 0
+    tool_calls: int = 0
+    failure_class: str = ""
+    redacted_summary: str = ""
+    suite: str = ""
+    provider: str = "offline"
+    model: str = "fake"
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -42,4 +53,7 @@ class RuntimeEvalRecord:
             "tool_calls": self.tool_calls,
             "failure_class": self.failure_class,
             "redacted_summary": self.redacted_summary,
+            "suite": self.suite,
+            "provider": self.provider,
+            "model": self.model,
         }

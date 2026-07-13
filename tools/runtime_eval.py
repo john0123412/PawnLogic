@@ -99,39 +99,10 @@ class Scenario:
     expected_api_calls: int = 0
 
 
-SCHEMA_VERSION = 1
-
-
-@dataclass(frozen=True)
-class RuntimeEvalRecord:
-    scenario_id: str
-    suite: str
-    status: str
-    duration_ms: int
-    provider: str
-    model: str
-    api_calls: int
-    tool_calls: int
-    failure_class: str
-    redacted_summary: str
-    schema_version: int = SCHEMA_VERSION
-    run_id: str = ""
-
-    def to_json(self) -> dict[str, object]:
-        return {
-            "schema_version": self.schema_version,
-            "run_id": self.run_id,
-            "scenario_id": self.scenario_id,
-            "suite": self.suite,
-            "status": self.status,
-            "duration_ms": self.duration_ms,
-            "provider": self.provider,
-            "model": self.model,
-            "api_calls": self.api_calls,
-            "tool_calls": self.tool_calls,
-            "failure_class": self.failure_class,
-            "redacted_summary": self.redacted_summary,
-        }
+# Canonical RuntimeEvalRecord from tools.eval.contracts.
+# Import as a compatibility alias so existing callers importing
+# runtime_eval.RuntimeEvalRecord continue to work.
+from tools.eval.contracts import RuntimeEvalRecord
 
 
 def pass_scenario() -> ScenarioOutcome:
