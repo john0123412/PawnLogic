@@ -38,6 +38,8 @@ __pycache__/
 .thought
 .pawnlogic_index/
 .pawnlogic_eval/
+.codex_goals/
+.agent-work/
 
 # --- Editors and IDEs (JetBrains/VS Code) ---
 .idea/
