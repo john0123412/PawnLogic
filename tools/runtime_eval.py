@@ -6,11 +6,9 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from functools import partial
 import http.server
 import importlib.util
-import json
 import os
 from pathlib import Path
 import re
@@ -24,7 +22,7 @@ import urllib.request
 
 # Import shared evaluation infrastructure from tools/eval/.
 from tools.eval.redaction import redact_summary
-from tools.eval.artifacts import unique_run_id
+from tools.eval.artifacts import unique_run_id, write_artifact_atomic
 
 
 ARTIFACT_DIR_NAME = ".pawnlogic_eval"
@@ -133,12 +131,6 @@ class RuntimeEvalRecord:
             "failure_class": self.failure_class,
             "redacted_summary": self.redacted_summary,
         }
-
-
-def redact_summary(summary: str) -> str:
-    """Redact local paths and secret-shaped values before artifact persistence."""
-    summary = SECRET_RE.sub("[REDACTED_SECRET]", summary)
-    return LOCAL_PATH_RE.sub("[REDACTED_PATH]", summary)
 
 
 def pass_scenario() -> ScenarioOutcome:
@@ -738,26 +730,12 @@ def write_artifact(
     output_dir: Path,
     suite: str,
 ) -> Path:
-    """Write evaluation records atomically using tools/eval/artifacts."""
-    import contextlib
+    """Write evaluation records atomically.
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    target = output_dir / f"{stamp}-{suite}.jsonl"
-
-    fd, tmp_path = tempfile.mkstemp(
-        dir=str(output_dir), suffix=".tmp", prefix=f"{suite}-"
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            for record in records:
-                handle.write(json.dumps(record.to_json(), sort_keys=True) + "\n")
-        os.replace(tmp_path, target)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_path)
-        raise
-    return target
+    Compatibility wrapper over tools/eval/artifacts.write_artifact_atomic.
+    Uses the same temp-file-then-rename logic for atomic writes.
+    """
+    return write_artifact_atomic(records, output_dir=output_dir, suite=suite)
 
 
 def build_parser() -> argparse.ArgumentParser:
