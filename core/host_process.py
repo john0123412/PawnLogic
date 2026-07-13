@@ -11,6 +11,7 @@ import contextlib
 import os
 import signal
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -97,8 +98,20 @@ def _terminate_process_group(proc: subprocess.Popen, timeout: float = 5.0) -> No
             proc.wait(timeout=2.0)
 
 
+# Type for authorization callback: receives the decision, returns True to proceed.
+AuthorizationCallback = Callable[[OperationDecision], bool]
+
+
+def _default_authorizer(decision: OperationDecision) -> bool:
+    """Default authorizer: always denies CONFIRM."""
+    return False
+
+
 class HostProcessRunner:
     """Run host processes with policy enforcement and cleanup."""
+
+    def __init__(self, authorizer: AuthorizationCallback | None = None) -> None:
+        self._authorizer = authorizer or _default_authorizer
 
     def run(self, request: HostProcessRequest) -> ProcessOutcome:
         """Execute a host process request.
@@ -123,14 +136,13 @@ class HostProcessRunner:
                     output=f"Requires confirmation (non-interactive): {decision.reason}",
                     timed_out=False,
                 )
-            # In interactive mode, authorization must be obtained by the caller
-            # before calling run(). If we reach here without authorization,
-            # fail closed.
-            return ProcessOutcome(
-                returncode=-1,
-                output=f"Requires confirmation: {decision.reason}",
-                timed_out=False,
-            )
+            # Interactive mode: require explicit authorization via callback.
+            if not self._authorizer(decision):
+                return ProcessOutcome(
+                    returncode=-1,
+                    output=f"Denied: confirmation not granted for: {decision.reason}",
+                    timed_out=False,
+                )
 
         env = scrub_environment()
         proc = None
@@ -186,3 +198,22 @@ class HostProcessRunner:
                 output=f"Process failed: {exc}",
                 timed_out=False,
             )
+
+
+def run_with_policy(
+    command: str,
+    cwd: Path,
+    timeout_seconds: float,
+    *,
+    interactive: bool = False,
+    authorizer: AuthorizationCallback | None = None,
+) -> ProcessOutcome:
+    """Convenience function to run a command with policy enforcement."""
+    runner = HostProcessRunner(authorizer=authorizer)
+    request = HostProcessRequest(
+        command=command,
+        cwd=cwd,
+        timeout_seconds=timeout_seconds,
+        interactive=interactive,
+    )
+    return runner.run(request)
