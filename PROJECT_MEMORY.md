@@ -261,9 +261,9 @@ For broad code changes:
 - Host, Docker, browser, MCP, and CTF execution paths can drift around the
   shared trust and Operation Policy Interfaces.
 - Provider mutation ordering, format-specific fetch headers, and stream versus
-  non-stream retry classification can diverge. PR #54 fixed fetch headers;
-  transactional persistence, malformed-response handling, and legacy wizard
-  cleanup remain in PR 5B.
+  non-stream retry classification can diverge. PRs #54 and #57 fixed fetch
+  headers, transactional persistence, malformed-response handling, and legacy
+  wizard routing. Eligibility centralization and doc sync remain.
 - Runtime evaluation must enforce real deadlines and measured budgets; a fake
   pass scenario is not evidence for the path named by a suite.
 - Provider visibility drift between CLI, TUI, completions, and runtime fetch.
