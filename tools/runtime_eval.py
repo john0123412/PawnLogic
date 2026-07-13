@@ -22,6 +22,10 @@ import threading
 import time
 import urllib.request
 
+# Import shared evaluation infrastructure from tools/eval/.
+from tools.eval.redaction import redact_summary
+from tools.eval.artifacts import unique_run_id
+
 
 ARTIFACT_DIR_NAME = ".pawnlogic_eval"
 REAL_API_GATE_ENV = "PAWNLOGIC_REAL_API_SMOKE"
@@ -50,6 +54,7 @@ PROVIDER_KEY_NAMES = (
     "ZHIPU_API_KEY",
     "XAI_API_KEY",
 )
+# Backward-compatible aliases for callers that import these from runtime_eval.
 SECRET_RE = re.compile(
     r"sk-ant-[A-Za-z0-9_-]{20,}|"
     r"sk-(proj-|svcacct-|live-)?[A-Za-z0-9_-]{20,}|"
@@ -95,6 +100,9 @@ class Scenario:
     expected_api_calls: int = 0
 
 
+SCHEMA_VERSION = 1
+
+
 @dataclass(frozen=True)
 class RuntimeEvalRecord:
     scenario_id: str
@@ -107,9 +115,13 @@ class RuntimeEvalRecord:
     tool_calls: int
     failure_class: str
     redacted_summary: str
+    schema_version: int = SCHEMA_VERSION
+    run_id: str = ""
 
     def to_json(self) -> dict[str, object]:
         return {
+            "schema_version": self.schema_version,
+            "run_id": self.run_id,
             "scenario_id": self.scenario_id,
             "suite": self.suite,
             "status": self.status,
@@ -614,6 +626,7 @@ def run_scenarios(
     stop_on_first_failure: bool = False,
     now: Callable[[], float] = time.monotonic,
 ) -> list[RuntimeEvalRecord]:
+    rid = unique_run_id()
     records: list[RuntimeEvalRecord] = []
     api_calls_used = 0
     for scenario in scenarios:
@@ -633,6 +646,7 @@ def run_scenarios(
                         "Scenario was not run because it would exceed "
                         f"--max-api-calls={max_api_calls}."
                     ),
+                    run_id=rid,
                 )
             )
             if stop_on_first_failure:
@@ -656,6 +670,7 @@ def run_scenarios(
                     tool_calls=0,
                     failure_class=exc.__class__.__name__,
                     redacted_summary=redact_summary(str(exc)),
+                    run_id=rid,
                 )
             )
             if stop_on_first_failure:
@@ -668,6 +683,21 @@ def run_scenarios(
             outcome=outcome,
             duration_ms=_duration_ms(start, end),
             max_duration_seconds=max_duration_seconds,
+        )
+        # Attach run_id to the record.
+        record = RuntimeEvalRecord(
+            scenario_id=record.scenario_id,
+            suite=record.suite,
+            status=record.status,
+            duration_ms=record.duration_ms,
+            provider=record.provider,
+            model=record.model,
+            api_calls=record.api_calls,
+            tool_calls=record.tool_calls,
+            failure_class=record.failure_class,
+            redacted_summary=record.redacted_summary,
+            schema_version=record.schema_version,
+            run_id=rid,
         )
         records.append(record)
         api_calls_used += record.api_calls
@@ -708,13 +738,26 @@ def write_artifact(
     output_dir: Path,
     suite: str,
 ) -> Path:
+    """Write evaluation records atomically using tools/eval/artifacts."""
+    import contextlib
+
     output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    path = output_dir / f"{stamp}-{suite}.jsonl"
-    with path.open("w", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(record.to_json(), sort_keys=True) + "\n")
-    return path
+    target = output_dir / f"{stamp}-{suite}.jsonl"
+
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(output_dir), suffix=".tmp", prefix=f"{suite}-"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record.to_json(), sort_keys=True) + "\n")
+        os.replace(tmp_path, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+    return target
 
 
 def build_parser() -> argparse.ArgumentParser:

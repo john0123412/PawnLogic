@@ -11,6 +11,8 @@ from tools import runtime_eval
 
 
 EXPECTED_RECORD_KEYS = {
+    "schema_version",
+    "run_id",
     "scenario_id",
     "suite",
     "status",
@@ -131,7 +133,11 @@ def test_offline_execution_is_deterministic_with_fixed_clock():
         now=_clock(100.0, 100.123),
     )
 
-    assert [record.to_json() for record in first] == [record.to_json() for record in second]
+    # Compare everything except run_id (which is unique per run).
+    def _comparable(records):
+        return [{k: v for k, v in r.to_json().items() if k != "run_id"} for r in records]
+
+    assert _comparable(first) == _comparable(second)
 
 
 def test_all_supported_suites_have_harness_only_fake_scenarios():
