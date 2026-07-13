@@ -224,3 +224,110 @@ def test_provider_runtime_record_sync_time_logs_and_preserves_malformed_json(
 
     assert path.read_text(encoding="utf-8") == "{bad json"
     assert "Failed to update provider sync time" in logged[0]
+
+
+def test_save_provider_with_rollback_rolls_back_on_persistence_failure(monkeypatch):
+    """save_provider_with_rollback must revert live registry if disk write fails."""
+    from config.providers import PROVIDERS
+
+    original_providers = dict(PROVIDERS)
+
+    def fail_save(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(provider_runtime.provider_config, "save_custom_provider", fail_save)
+
+    ok, err = provider_runtime.save_provider_with_rollback(
+        "relay",
+        {"base_url": "https://x.com/v1", "api_key_env": "K", "api_format": "openai"},
+        {},
+    )
+
+    assert ok is False
+    assert "disk full" in err
+    # Live registry must not have been modified.
+    assert original_providers == PROVIDERS
+
+
+def test_fetch_models_rejects_non_list_data_field(monkeypatch):
+    """fetch_models must reject responses where 'data' is not a list."""
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def get(self, _url, headers=None):
+            class Resp:
+                status_code = 200
+                text = ""
+
+                def raise_for_status(self_):
+                    return None
+
+                def json(self_):
+                    return {"data": "not-a-list"}
+
+            return Resp()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: FakeClient())
+
+    candidates, err, _stats = asyncio.run(
+        provider_runtime.fetch_models("https://api.example.com/v1", "key", "openai")
+    )
+
+    assert candidates == []
+    assert "invalid" in err.lower() or "data" in err.lower()
+
+
+def test_fetch_models_skips_entries_with_missing_id(monkeypatch):
+    """fetch_models must skip model entries that have no 'id' field."""
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": [
+                    {"id": "gpt-5.4-mini"},
+                    {"no_id_field": True},
+                    {"id": ""},
+                    {"id": "relay-chat"},
+                ],
+                "has_more": False,
+            }
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, _exc_type, _exc, _tb):
+            return False
+
+        async def get(self, _url, headers=None):
+            return FakeResponse()
+
+    async def fake_filter(_base_url, _api_key, candidates, _api_format="openai"):
+        return candidates, 0
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda timeout: FakeClient())
+    monkeypatch.setattr(provider_runtime, "filter_supported_chat_models", fake_filter)
+
+    candidates, err, _stats = asyncio.run(
+        provider_runtime.fetch_models("https://api.example.com/v1", "test-key", "openai")
+    )
+
+    assert err == ""
+    model_ids = [mid for mid, _cfg in candidates]
+    assert "gpt-5.4-mini" in model_ids
+    assert "relay-chat" in model_ids
+    # Entries with missing or empty id must be skipped.
+    assert len(model_ids) == 2

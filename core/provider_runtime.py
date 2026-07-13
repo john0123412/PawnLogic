@@ -84,6 +84,27 @@ def sync_models_to_runtime() -> None:
     init_providers(force=True)
 
 
+def save_provider_with_rollback(
+    name: str,
+    prov_cfg: dict,
+    models_cfg: dict,
+    *,
+    replace_models: bool = False,
+) -> tuple[bool, str]:
+    """Persist a custom provider to disk, then update live registries.
+
+    If disk persistence fails, live PROVIDERS/MODELS remain unchanged.
+    Returns (ok, error_message).
+    """
+    try:
+        provider_config.save_custom_provider(name, prov_cfg, models_cfg, replace_models=replace_models)
+    except Exception as exc:
+        return False, f"Failed to save provider config: {exc}"
+    # Only update live registries after successful persistence.
+    provider_config.register_provider(name, prov_cfg)
+    return True, ""
+
+
 def set_active(provider_name: str, active: bool) -> tuple[bool, str]:
     """Set provider visibility for model selection."""
     if provider_name not in PROVIDERS:
@@ -309,7 +330,10 @@ async def fetch_models(
                     return [], f"Provider returned invalid JSON from {models_url}.", stats
                 if not isinstance(body, dict):
                     return [], f"Provider returned non-object JSON from {models_url}.", stats
-                all_data.extend(body.get("data", []))
+                data = body.get("data", [])
+                if not isinstance(data, list):
+                    return [], f"Provider returned non-list 'data' field from {models_url}.", stats
+                all_data.extend(data)
                 if not body.get("has_more"):
                     break
                 cursor = body.get("next_cursor") or body.get("next_page")
@@ -324,6 +348,9 @@ async def fetch_models(
     stats["returned"] = len(all_data)
     candidates = []
     for item in all_data:
+        if not isinstance(item, dict):
+            stats["hidden_by_name"] += 1
+            continue
         model_id = item.get("id", "")
         if not model_id or not model_is_chat_candidate(model_id):
             stats["hidden_by_name"] += 1

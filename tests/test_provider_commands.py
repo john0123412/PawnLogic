@@ -730,10 +730,11 @@ def test_provider_tui_model_selector_load_close_exits_after_save(monkeypatch):
     saved = {"called": False}
     exited = {"called": False}
 
-    def fake_save_custom_provider(*_args, **_kwargs):
+    def fake_save_provider_with_rollback(*_args, **_kwargs):
         saved["called"] = True
+        return True, ""
 
-    monkeypatch.setattr(provider_tui, "save_custom_provider", fake_save_custom_provider)
+    monkeypatch.setattr("core.provider_runtime.save_provider_with_rollback", fake_save_provider_with_rollback)
     monkeypatch.setattr(provider_tui, "_record_sync_time", lambda _pname: None)
     monkeypatch.setattr(provider_tui, "_sync_models_to_runtime", lambda: None)
     monkeypatch.setattr(app, "exit", lambda *args, **kwargs: exited.__setitem__("called", True))
@@ -766,12 +767,13 @@ def test_provider_tui_save_models_prefixes_builtin_alias_collisions(monkeypatch)
     )
     saved = {}
 
-    def fake_save_custom_provider(name, provider_cfg, models_cfg, replace_models=False):
+    def fake_save_provider_with_rollback(name, provider_cfg, models_cfg, replace_models=False):
         saved["name"] = name
         saved["models_cfg"] = models_cfg
         saved["replace_models"] = replace_models
+        return True, ""
 
-    monkeypatch.setattr(provider_tui, "save_custom_provider", fake_save_custom_provider)
+    monkeypatch.setattr("core.provider_runtime.save_provider_with_rollback", fake_save_provider_with_rollback)
     monkeypatch.setattr(provider_tui, "_record_sync_time", lambda _pname: None)
     monkeypatch.setattr(provider_tui, "_sync_models_to_runtime", lambda: None)
 
@@ -902,14 +904,15 @@ def test_provider_tui_add_wizard_saves_without_testing_connection(monkeypatch):
         saved["env_var"] = env_var
         saved["key"] = key
 
-    def fake_save_custom_provider(name, provider_cfg, models_cfg):
+    def fake_save_provider_with_rollback(name, provider_cfg, models_cfg):
         saved["name"] = name
         saved["provider_cfg"] = provider_cfg
         saved["models_cfg"] = models_cfg
+        return True, ""
 
     monkeypatch.setattr(provider_tui, "_test_connection", fail_if_called)
     monkeypatch.setattr(provider_tui, "_save_key_to_env", fake_save_key_to_env)
-    monkeypatch.setattr(provider_tui, "save_custom_provider", fake_save_custom_provider)
+    monkeypatch.setattr("core.provider_runtime.save_provider_with_rollback", fake_save_provider_with_rollback)
     monkeypatch.setattr(provider_tui, "init_providers", lambda force=False: None)
 
     try:
@@ -1093,17 +1096,18 @@ def test_provider_add_cli_fetches_without_nested_event_loop(monkeypatch):
 
     saved = {}
 
-    def fake_save_custom_provider(name, provider_cfg, models_cfg):
+    def fake_save_provider_with_rollback(name, provider_cfg, models_cfg, **_kw):
         saved["name"] = name
         saved["provider_cfg"] = provider_cfg
         saved["models_cfg"] = models_cfg
+        return True, ""
 
     fetch = AsyncMock()
     monkeypatch.setattr(provider_cmd, "_provider_fetch", fetch)
     monkeypatch.setattr(provider_cmd, "_provider_add", lambda: None)
     monkeypatch.setattr(provider_cmd, "_provider_list", lambda: None)
     monkeypatch.setattr(provider_cmd, "_provider_test", lambda _session, _arg: None)
-    monkeypatch.setattr(provider_config, "save_custom_provider", fake_save_custom_provider)
+    monkeypatch.setattr("core.provider_runtime.save_provider_with_rollback", fake_save_provider_with_rollback)
     monkeypatch.setattr(provider_config, "init_providers", lambda force=False: None)
 
     try:

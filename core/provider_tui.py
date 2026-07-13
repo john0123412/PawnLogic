@@ -19,9 +19,9 @@ from prompt_toolkit.formatted_text import StyleAndTextTuples
 
 from config.providers import (
     PROVIDERS, MODELS, CUSTOM_PROVIDERS_PATH,
-    init_providers, save_custom_provider, remove_custom_provider,
+    init_providers, remove_custom_provider,
     is_provider_active,
-    register_provider, remove_provider, remove_model, remove_models_for_provider,
+    remove_provider, remove_model, remove_models_for_provider,
 )
 from core.provider_runtime import (
     candidate_save_alias as _candidate_save_alias,
@@ -951,7 +951,14 @@ class ProviderTUI:
                     alias_changes.append((mid, alias))
                 models_cfg[alias] = {**cfg, "provider": pname}
         prov_cfg = PROVIDERS.get(pname, {})
-        save_custom_provider(pname, prov_cfg, models_cfg, replace_models=True)
+        from core.provider_runtime import save_provider_with_rollback
+        ok, save_err = save_provider_with_rollback(pname, prov_cfg, models_cfg, replace_models=True)
+        if not ok:
+            self._detail_status = f"❌ Save failed: {save_err}"
+            self._detail_status_style = "class:error"
+            if self._app:
+                self._app.invalidate()
+            return
         _record_sync_time(pname)
         _sync_models_to_runtime()
         self._detail_status = f"✅ Loaded {len(models_cfg)} model(s)."
@@ -977,8 +984,13 @@ class ProviderTUI:
         prov_cfg = {"base_url": url, "api_key_env": env_var,
                     "label": f"Custom ({name})", "api_format": fmt,
                     "active": False}
-        save_custom_provider(name, prov_cfg, {})
-        register_provider(name, prov_cfg)
+        from core.provider_runtime import save_provider_with_rollback
+        ok, save_err = save_provider_with_rollback(name, prov_cfg, {})
+        if not ok:
+            self._wiz_error = f"Save failed: {save_err}"
+            if self._app:
+                self._app.invalidate()
+            return
         init_providers(force=True)
         self._panel = "main"
         if self._app:
@@ -1107,8 +1119,13 @@ class ProviderTUI:
         prov_cfg = {"base_url": url, "api_key_env": env_var,
                     "label": f"Custom ({name})", "api_format": fmt,
                     "active": False}
-        save_custom_provider(name, prov_cfg, {})
-        register_provider(name, prov_cfg)
+        from core.provider_runtime import save_provider_with_rollback
+        ok, save_err = save_provider_with_rollback(name, prov_cfg, {})
+        if not ok:
+            self._wiz_error = f"Save failed: {save_err}"
+            if self._app:
+                self._app.invalidate()
+            return
         init_providers(force=True)
         self._wiz_status = "✅ Saved inactive. Activate it from the detail panel to show models in /model."
         self._wiz_status_style = "class:success"

@@ -44,7 +44,7 @@ from config import (
     CUSTOM_PROVIDERS_PATH, MODELS, PROVIDERS,
     get_api_format, list_vision_models,
     is_provider_active,
-    remove_custom_provider, save_custom_provider,
+    remove_custom_provider,
     validate_api_key,
 )
 from config.paths import VERSION
@@ -353,8 +353,11 @@ def _provider_add() -> None:
         "api_format":  api_format,
     }
 
-    save_custom_provider(name, prov_cfg, {})
-    provider_config.register_provider(name, prov_cfg)
+    from core.provider_runtime import save_provider_with_rollback
+    ok, save_err = save_provider_with_rollback(name, prov_cfg, {})
+    if not ok:
+        _print(c(RED, f"\n  ✗ Failed to save provider: {save_err}"))
+        return
 
     _print(c(GREEN, f"\n  ✓ Provider '{name}' added."))
     _print(c(GRAY,  f"    Format: {api_format}"))
@@ -459,8 +462,11 @@ def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str =
         "api_format":  api_format,
         "active":      False,
     }
-    provider_config.save_custom_provider(alias, prov_cfg, {})
-    provider_config.register_provider(alias, prov_cfg)
+    from core.provider_runtime import save_provider_with_rollback
+    ok, save_err = save_provider_with_rollback(alias, prov_cfg, {})
+    if not ok:
+        _print(c(RED, f"  ✗ {save_err}"))
+        return False
     provider_config.init_providers(force=True)
     _print(c(GREEN, f"  ✓ Provider registered. Make sure {env_key} is configured in .env."))
     _print(c(CYAN, f"  To show it in /model, run /provider activate {alias}."))
@@ -625,7 +631,11 @@ async def _provider_fetch(alias: str) -> None:
         for mid, cfg in candidates
         if mid in set(chosen_ids)
     }
-    provider_config.save_custom_provider(alias, PROVIDERS[alias], models_cfg, replace_models=True)
+    from core.provider_runtime import save_provider_with_rollback
+    ok, save_err = save_provider_with_rollback(alias, PROVIDERS[alias], models_cfg, replace_models=True)
+    if not ok:
+        _print(c(RED, f"  ✗ Failed to save models: {save_err}"))
+        return
     provider_config.init_providers(force=True)
 
     _print(c(GREEN, f"  ✓ Registered {len(models_cfg)} models."))
