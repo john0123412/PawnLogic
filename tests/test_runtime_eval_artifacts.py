@@ -234,3 +234,22 @@ class TestRunner:
         result = run_scenario_with_deadline(bad, deadline=deadline)
         assert result["status"] == "failed"
         assert result["failure_class"] == "RuntimeError"
+
+    def test_hard_timeout_kills_child_process(self) -> None:
+        """A scenario sleeping 10s with sub-second deadline must return promptly
+        and the child PID must no longer exist."""
+        import os
+        import time
+
+        def sleepy() -> dict:
+            time.sleep(10)
+            return {"status": "passed", "summary": "slept", "api_calls": 0,
+                    "tool_calls": 0, "failure_class": ""}
+
+        start = time.monotonic()
+        deadline = start + 0.5
+        result = run_scenario_with_deadline(sleepy, deadline=deadline)
+        elapsed = time.monotonic() - start
+
+        assert result["status"] == "timed_out"
+        assert elapsed < 5.0, f"Should return promptly, took {elapsed:.1f}s"

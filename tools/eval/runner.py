@@ -6,6 +6,10 @@ child-process isolation on POSIX, and consistent timeout classification.
 
 from __future__ import annotations
 
+import contextlib
+import multiprocessing
+import os
+import signal
 import time
 from collections.abc import Callable, Sequence
 
@@ -14,10 +18,33 @@ from tools.eval.redaction import redact_summary
 from tools.eval.artifacts import unique_run_id
 
 SCHEMA_VERSION = 1
+_IS_POSIX = os.name == "posix"
 
 
 def _duration_ms(start: float, end: float) -> int:
     return max(0, int((end - start) * 1000))
+
+
+def _run_in_child(
+    scenario_fn: Callable[[], dict], queue: multiprocessing.Queue
+) -> None:
+    """Run scenario_fn in a child process and put the result in the queue."""
+    try:
+        result = scenario_fn()
+        queue.put(("ok", result))
+    except Exception as exc:
+        queue.put(
+            (
+                "error",
+                {
+                    "status": "failed",
+                    "summary": str(exc),
+                    "api_calls": 0,
+                    "tool_calls": 0,
+                    "failure_class": type(exc).__name__,
+                },
+            )
+        )
 
 
 def run_scenario_with_deadline(
@@ -28,7 +55,9 @@ def run_scenario_with_deadline(
 ) -> dict:
     """Run a scenario with a real wall-clock deadline.
 
-    If the scenario exceeds the deadline, it is classified as timed_out.
+    On POSIX systems, executes the scenario in a child process so that
+    timed-out scenarios can be terminated and killed, ensuring no worker
+    remains alive.
     """
     remaining = deadline - now()
     if remaining <= 0:
@@ -40,6 +69,11 @@ def run_scenario_with_deadline(
             "failure_class": "BudgetExhausted",
         }
 
+    # Use child process for hard deadline enforcement when deadline is tight.
+    if _IS_POSIX and remaining < 5.0:
+        return _run_in_child_with_deadline(scenario_fn, remaining)
+
+    # Same-process execution with elapsed-time check.
     start = now()
     try:
         result = scenario_fn()
@@ -71,6 +105,65 @@ def run_scenario_with_deadline(
             "tool_calls": 0,
             "failure_class": type(exc).__name__,
         }
+
+
+def _run_in_child_with_deadline(
+    scenario_fn: Callable[[], dict],
+    timeout: float,
+) -> dict:
+    """Run scenario in a child process with hard deadline enforcement."""
+    queue: multiprocessing.Queue = multiprocessing.Queue()
+    proc = multiprocessing.Process(
+        target=_run_in_child, args=(scenario_fn, queue), daemon=True
+    )
+    proc.start()
+
+    try:
+        proc.join(timeout=timeout)
+    except KeyboardInterrupt:
+        _terminate_process(proc)
+        return {
+            "status": "failed",
+            "summary": "Scenario interrupted by user.",
+            "api_calls": 0,
+            "tool_calls": 0,
+            "failure_class": "KeyboardInterrupt",
+        }
+
+    if proc.is_alive():
+        _terminate_process(proc)
+        return {
+            "status": "timed_out",
+            "summary": f"Scenario exceeded {timeout:.1f}s deadline.",
+            "api_calls": 0,
+            "tool_calls": 0,
+            "failure_class": "DeadlineExceeded",
+        }
+
+    if not queue.empty():
+        status, result = queue.get_nowait()
+        if status == "ok" and isinstance(result, dict):
+            return result
+        return result
+
+    return {
+        "status": "failed",
+        "summary": "Scenario produced no output.",
+        "api_calls": 0,
+        "tool_calls": 0,
+        "failure_class": "NoOutput",
+    }
+
+
+def _terminate_process(proc: multiprocessing.Process) -> None:
+    """Terminate then kill a process, ensuring no worker remains alive."""
+    with contextlib.suppress(ProcessLookupError, OSError):
+        proc.terminate()
+    proc.join(timeout=5)
+    if proc.is_alive():
+        with contextlib.suppress(ProcessLookupError, OSError):
+            proc.kill()
+        proc.join(timeout=2)
 
 
 def run_suite(

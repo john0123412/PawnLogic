@@ -107,11 +107,16 @@ def test_exception_status_is_classified_without_raw_exception_summary():
 
 
 def test_max_duration_classifies_scenario_timeout():
-    # run_scenario_with_deadline needs 3 now() calls: remaining, start, elapsed.
+    # Use a slow scenario that sleeps to exceed the deadline.
+    import time
+
+    def slow_scenario() -> runtime_eval.ScenarioOutcome:
+        time.sleep(2)
+        return runtime_eval.pass_scenario()
+
     records = runtime_eval.run_scenarios(
-        [runtime_eval.Scenario("fake-slow", "offline", runtime_eval.pass_scenario)],
-        max_duration_seconds=0.5,
-        now=_clock(10.0, 10.0, 10.0, 10.1, 11.0, 11.0),
+        [runtime_eval.Scenario("fake-slow", "offline", slow_scenario)],
+        max_duration_seconds=0.1,
     )
 
     assert len(records) == 1
