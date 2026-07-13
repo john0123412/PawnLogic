@@ -7,7 +7,9 @@ environment scrubbing, and process-group cleanup.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,12 +40,18 @@ class ProcessOutcome:
     timed_out: bool
 
 
+# Non-secret config vars that must survive scrubbing.
+_NON_SECRET_SUFFIXES = ("_URL", "_HOST", "_PORT", "_MODE", "_HOME", "_DIR")
+_NON_SECRET_EXACT = {"PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "LC_ALL"}
+
+
 def scrub_environment(env: dict[str, str] | None = None) -> dict[str, str]:
-    """Return a copy of env with sensitive variables removed."""
+    """Return a copy of env with sensitive variables removed.
+
+    Preserves non-secret runtime config like URLs, hosts, ports, and mode flags.
+    """
     env = dict(os.environ) if env is None else dict(env)
-    # Remove variables that could leak secrets to child processes.
     sensitive_prefixes = (
-        "PAWNLOGIC_",
         "OPENAI_",
         "ANTHROPIC_",
         "DEEPSEEK_",
@@ -62,9 +70,10 @@ def scrub_environment(env: dict[str, str] | None = None) -> dict[str, str]:
         "GITLAB_",
     )
     for key in list(env.keys()):
+        if key in _NON_SECRET_EXACT:
+            continue
         if any(key.startswith(prefix) for prefix in sensitive_prefixes):
-            # Keep non-secret config vars.
-            if key.endswith(("_URL", "_HOST", "_PORT", "_MODE")):
+            if key.endswith(_NON_SECRET_SUFFIXES):
                 continue
             env.pop(key, None)
     return env
@@ -75,16 +84,31 @@ def classify_host_process(request: HostProcessRequest) -> OperationDecision:
     return classify_shell_command(request.command, cwd=str(request.cwd))
 
 
+def _terminate_process_group(proc: subprocess.Popen, timeout: float = 5.0) -> None:
+    """Terminate a process group, then kill if it doesn't exit."""
+    with contextlib.suppress(ProcessLookupError, OSError):
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError, OSError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=2.0)
+
+
 class HostProcessRunner:
     """Run host processes with policy enforcement and cleanup."""
 
     def run(self, request: HostProcessRequest) -> ProcessOutcome:
         """Execute a host process request.
 
-        Enforces operation policy, scrubs environment, and ensures
-        process-group cleanup on timeout or interruption.
+        Enforces operation policy with distinct ALLOW/CONFIRM/DENY handling.
+        CONFIRM requires explicit authorization; non-interactive mode fails closed.
+        Uses process-group terminate + bounded kill on timeout.
         """
         decision = classify_host_process(request)
+
         if decision.action == OperationAction.DENY:
             return ProcessOutcome(
                 returncode=-1,
@@ -92,36 +116,71 @@ class HostProcessRunner:
                 timed_out=False,
             )
 
+        if decision.action == OperationAction.CONFIRM:
+            if not request.interactive:
+                return ProcessOutcome(
+                    returncode=-1,
+                    output=f"Requires confirmation (non-interactive): {decision.reason}",
+                    timed_out=False,
+                )
+            # In interactive mode, authorization must be obtained by the caller
+            # before calling run(). If we reach here without authorization,
+            # fail closed.
+            return ProcessOutcome(
+                returncode=-1,
+                output=f"Requires confirmation: {decision.reason}",
+                timed_out=False,
+            )
+
         env = scrub_environment()
+        proc = None
         try:
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 request.command,
                 shell=True,
                 cwd=str(request.cwd),
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=request.timeout_seconds,
                 env=env,
                 start_new_session=True,  # Process group for cleanup.
             )
+            stdout, stderr = proc.communicate(timeout=request.timeout_seconds)
             return ProcessOutcome(
-                returncode=result.returncode,
-                output=result.stdout + result.stderr,
+                returncode=proc.returncode,
+                output=stdout + stderr,
                 timed_out=False,
             )
         except subprocess.TimeoutExpired:
+            if proc is not None:
+                _terminate_process_group(proc)
+                # Collect any partial output.
+                try:
+                    stdout, stderr = proc.communicate(timeout=1)
+                    partial = stdout + stderr
+                except Exception:
+                    partial = ""
+                return ProcessOutcome(
+                    returncode=-1,
+                    output=f"Process timed out after {request.timeout_seconds}s. {partial}".strip(),
+                    timed_out=True,
+                )
             return ProcessOutcome(
                 returncode=-1,
                 output=f"Process timed out after {request.timeout_seconds}s.",
                 timed_out=True,
             )
         except KeyboardInterrupt:
+            if proc is not None:
+                _terminate_process_group(proc)
             return ProcessOutcome(
                 returncode=-1,
                 output="Process interrupted by user.",
                 timed_out=False,
             )
         except Exception as exc:
+            if proc is not None:
+                _terminate_process_group(proc)
             return ProcessOutcome(
                 returncode=-1,
                 output=f"Process failed: {exc}",

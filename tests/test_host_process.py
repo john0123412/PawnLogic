@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 from core.host_process import (
     HostProcessRequest,
@@ -10,6 +11,7 @@ from core.host_process import (
     classify_host_process,
     scrub_environment,
 )
+from core.operation_policy import OperationAction, OperationDecision
 
 
 class TestScrubEnvironment:
@@ -35,6 +37,12 @@ class TestScrubEnvironment:
         env = {"PATH": "/usr/bin", "HOME": "/home/user", "USER": "test"}
         result = scrub_environment(env)
         assert result == env
+
+    def test_keeps_pawnlogic_home(self) -> None:
+        env = {"PAWNLOGIC_HOME": "/home/user/.pawnlogic", "OPENAI_API_KEY": "secret"}
+        result = scrub_environment(env)
+        assert "PAWNLOGIC_HOME" in result  # _HOME suffix is non-secret config
+        assert "OPENAI_API_KEY" not in result
 
 
 class TestClassifyHostProcess:
@@ -117,3 +125,96 @@ class TestHostProcessRunner:
         )
         outcome = runner.run(request)
         assert outcome.returncode == 0
+
+    def test_confirm_non_interactive_fails_closed(self, tmp_path: Path) -> None:
+        """CONFIRM in non-interactive mode must fail closed."""
+        runner = HostProcessRunner()
+
+        decision = OperationDecision(
+            action=OperationAction.CONFIRM,
+            risk="medium",
+            reason="test confirmation",
+            matched_rule="test",
+            redacted_command="test",
+        )
+
+        with patch("core.host_process.classify_shell_command", return_value=decision):
+            request = HostProcessRequest(
+                command="test command",
+                cwd=tmp_path,
+                timeout_seconds=10.0,
+                interactive=False,
+            )
+            outcome = runner.run(request)
+            assert outcome.returncode == -1
+            assert "Requires confirmation" in outcome.output
+            assert "non-interactive" in outcome.output
+
+    def test_confirm_interactive_fails_without_authorization(
+        self, tmp_path: Path
+    ) -> None:
+        """CONFIRM in interactive mode must fail without explicit authorization."""
+        runner = HostProcessRunner()
+
+        decision = OperationDecision(
+            action=OperationAction.CONFIRM,
+            risk="medium",
+            reason="test confirmation",
+            matched_rule="test",
+            redacted_command="test",
+        )
+
+        with patch("core.host_process.classify_shell_command", return_value=decision):
+            request = HostProcessRequest(
+                command="test command",
+                cwd=tmp_path,
+                timeout_seconds=10.0,
+                interactive=True,
+            )
+            outcome = runner.run(request)
+            assert outcome.returncode == -1
+            assert "Requires confirmation" in outcome.output
+
+    def test_allow_executes(self, tmp_path: Path) -> None:
+        """ALLOW must execute the command."""
+        runner = HostProcessRunner()
+
+        decision = OperationDecision(
+            action=OperationAction.ALLOW,
+            risk="low",
+            reason="safe command",
+            matched_rule="test",
+            redacted_command="echo hello",
+        )
+
+        with patch("core.host_process.classify_shell_command", return_value=decision):
+            request = HostProcessRequest(
+                command="echo hello",
+                cwd=tmp_path,
+                timeout_seconds=10.0,
+            )
+            outcome = runner.run(request)
+            assert outcome.returncode == 0
+            assert "hello" in outcome.output
+
+    def test_deny_blocks_execution(self, tmp_path: Path) -> None:
+        """DENY must block execution."""
+        runner = HostProcessRunner()
+
+        decision = OperationDecision(
+            action=OperationAction.DENY,
+            risk="high",
+            reason="dangerous command",
+            matched_rule="test",
+            redacted_command="rm -rf /",
+        )
+
+        with patch("core.host_process.classify_shell_command", return_value=decision):
+            request = HostProcessRequest(
+                command="rm -rf /",
+                cwd=tmp_path,
+                timeout_seconds=10.0,
+            )
+            outcome = runner.run(request)
+            assert outcome.returncode == -1
+            assert "Denied" in outcome.output
