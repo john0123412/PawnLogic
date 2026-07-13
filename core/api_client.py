@@ -31,6 +31,7 @@ from core.api_errors import (
     is_retryable_http_status,
     retry_notice,
 )
+from core.api_retry import RetryPolicy, retry_policy_from_env
 from core.interrupts import clear_cancel_callback, raise_if_interrupted, set_cancel_callback
 from core import provider_streams
 from core.provider_runtime import maybe_warn_insecure_provider
@@ -60,7 +61,13 @@ def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
     return max(min_value, min(max_value, value))
 
 
+# Load retry policy at request start, not module import.
 _RETRY_MAX = _env_int("PAWNLOGIC_API_RETRY_MAX", 3, 1, 8)
+
+
+def get_retry_policy() -> RetryPolicy:
+    """Load the retry policy from environment at request start."""
+    return retry_policy_from_env()
 
 
 def _cb_get(provider: str) -> dict:
