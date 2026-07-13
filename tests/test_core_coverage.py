@@ -472,7 +472,7 @@ def test_api_client_stream_request_honors_retry_after(monkeypatch):
     monkeypatch.setattr(
         api_client,
         "_retry_delay",
-        lambda attempt, retry_after=None: retry_calls.append((attempt, retry_after)) or 0.25,
+        lambda attempt, retry_after=None, **_kw: retry_calls.append((attempt, retry_after)) or 0.25,
     )
     monkeypatch.setattr(api_client, "_interruptible_sleep", lambda seconds: sleeps.append(seconds))
 

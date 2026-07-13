@@ -379,7 +379,11 @@ def stream_request(
 
     proxy = _detect_proxy()
 
-    for attempt in range(_RETRY_MAX):
+    # Load retry policy at request start.
+    policy = get_retry_policy()
+    max_attempts = policy.max_attempts
+
+    for attempt in range(max_attempts):
         raise_if_interrupted()
         # Circuit-breaker check.
         if not _cb_allow(provider):
@@ -415,12 +419,12 @@ def stream_request(
                 _cb_record_failure(provider)
                 err_body = resp.read(600)
                 err_msg = format_http_error(resp.status, err_body)
-                if attempt >= _RETRY_MAX - 1:
+                if attempt >= max_attempts - 1:
                     yield {"_error": err_msg}
                     return
                 retry_after = resp.headers.get("Retry-After")
-                delay = _retry_delay(attempt, retry_after)
-                yield {"_retry": retry_notice(err_msg, attempt, _RETRY_MAX, delay)}
+                delay = _retry_delay(attempt, retry_after, retry_after_max=policy.retry_after_cap_seconds)
+                yield {"_retry": retry_notice(err_msg, attempt, max_attempts, delay)}
                 _interruptible_sleep(delay)
                 continue
 
@@ -446,9 +450,9 @@ def stream_request(
                 proxy=proxy,
                 connect_timeout=_CONN_TIMEOUT,
             )
-            if attempt < _RETRY_MAX - 1:
+            if attempt < max_attempts - 1:
                 delay = _retry_delay(attempt)
-                yield {"_retry": retry_notice(err_msg, attempt, _RETRY_MAX, delay)}
+                yield {"_retry": retry_notice(err_msg, attempt, max_attempts, delay)}
                 _interruptible_sleep(delay)
                 continue
             yield {"_error": err_msg}
@@ -473,9 +477,9 @@ def stream_request(
             raise_if_interrupted()
             _cb_record_failure(provider)
             err_msg = format_transport_error(e, proxy=proxy, connect_timeout=_CONN_TIMEOUT)
-            if attempt < _RETRY_MAX - 1:
+            if attempt < max_attempts - 1:
                 delay = _retry_delay(attempt)
-                yield {"_retry": retry_notice(err_msg, attempt, _RETRY_MAX, delay)}
+                yield {"_retry": retry_notice(err_msg, attempt, max_attempts, delay)}
                 _interruptible_sleep(delay)
                 continue
             yield {"_error": err_msg}
@@ -573,7 +577,11 @@ def call_once(
 
     maybe_warn_insecure_provider(base_url)
 
-    for attempt in range(_RETRY_MAX):
+    # Load retry policy at request start.
+    policy = get_retry_policy()
+    max_attempts = policy.max_attempts
+
+    for attempt in range(max_attempts):
         conn: http.client.HTTPConnection | None = None
         try:
             conn, path = _open_connection(base_url, proxy, timeout=_CONN_TIMEOUT)
@@ -594,8 +602,8 @@ def call_once(
             resp = conn.getresponse()
             raw  = resp.read()
 
-            if is_retryable_http_status(resp.status) and attempt < _RETRY_MAX - 1:
-                _interruptible_sleep(_retry_delay(attempt, resp.headers.get("Retry-After")))
+            if is_retryable_http_status(resp.status) and attempt < max_attempts - 1:
+                _interruptible_sleep(_retry_delay(attempt, resp.headers.get("Retry-After"), retry_after_max=policy.retry_after_cap_seconds))
                 continue
             if resp.status != 200:
                 return "", format_http_error(resp.status, raw[:600])
@@ -605,7 +613,7 @@ def call_once(
             return _parse_openai_nonstream_text(raw)
 
         except socket.timeout:
-            if attempt < _RETRY_MAX - 1:
+            if attempt < max_attempts - 1:
                 _interruptible_sleep(_retry_delay(attempt))
                 continue
             return "", (
@@ -615,7 +623,7 @@ def call_once(
         except ssl.SSLError as e:
             return "", f"SSL error: {e}"
         except (ConnectionError, OSError) as e:
-            if attempt < _RETRY_MAX - 1:
+            if attempt < max_attempts - 1:
                 _interruptible_sleep(_retry_delay(attempt))
                 continue
             return "", format_transport_error(e, proxy=proxy, connect_timeout=_CONN_TIMEOUT)
