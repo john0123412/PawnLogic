@@ -94,6 +94,9 @@ These contracts are more important than local refactoring convenience:
 - `config/providers.py` defines provider metadata and model registry defaults.
 - `core/provider_runtime.py` owns shared provider operations such as connection
   testing, fetching models, saving keys, and activation.
+- `core/provider_transport.py` owns format-specific HTTP headers, provider
+  definition validation, and the `ProviderDefinition` dataclass used before any
+  disk or registry mutation.
 - `core/commands/provider.py` owns `/provider` and `/model` command semantics.
 - `core/provider_tui.py` owns provider TUI input, paste, focus, and confirmation
   behavior.
@@ -255,12 +258,12 @@ For broad code changes:
 
 ## Known Risks To Recheck Often
 
-- Runtime path checks must use canonical active-root containment rather than
-  string prefixes or process-global Workspace roots.
 - Host, Docker, browser, MCP, and CTF execution paths can drift around the
   shared trust and Operation Policy Interfaces.
 - Provider mutation ordering, format-specific fetch headers, and stream versus
-  non-stream retry classification can diverge.
+  non-stream retry classification can diverge. PR #54 fixed fetch headers;
+  transactional persistence, malformed-response handling, and legacy wizard
+  cleanup remain in PR 5B.
 - Runtime evaluation must enforce real deadlines and measured budgets; a fake
   pass scenario is not evidence for the path named by a suite.
 - Provider visibility drift between CLI, TUI, completions, and runtime fetch.
