@@ -9,6 +9,7 @@ from core.host_process import (
     HostProcessRequest,
     HostProcessRunner,
     classify_host_process,
+    run_with_policy,
     scrub_environment,
 )
 from core.operation_policy import OperationAction, OperationDecision
@@ -154,7 +155,7 @@ class TestHostProcessRunner:
         self, tmp_path: Path
     ) -> None:
         """CONFIRM in interactive mode must fail without explicit authorization."""
-        runner = HostProcessRunner()
+        runner = HostProcessRunner()  # Default authorizer denies.
 
         decision = OperationDecision(
             action=OperationAction.CONFIRM,
@@ -173,7 +174,38 @@ class TestHostProcessRunner:
             )
             outcome = runner.run(request)
             assert outcome.returncode == -1
-            assert "Requires confirmation" in outcome.output
+            assert "confirmation not granted" in outcome.output
+
+    def test_confirm_interactive_executes_with_authorizer(
+        self, tmp_path: Path
+    ) -> None:
+        """CONFIRM in interactive mode executes when authorizer grants."""
+        runner = HostProcessRunner(authorizer=lambda d: True)
+
+        decision = OperationDecision(
+            action=OperationAction.CONFIRM,
+            risk="medium",
+            reason="test confirmation",
+            matched_rule="test",
+            redacted_command="echo authorized",
+        )
+
+        with patch("core.host_process.classify_shell_command", return_value=decision):
+            request = HostProcessRequest(
+                command="echo authorized",
+                cwd=tmp_path,
+                timeout_seconds=10.0,
+                interactive=True,
+            )
+            outcome = runner.run(request)
+            assert outcome.returncode == 0
+            assert "authorized" in outcome.output
+
+    def test_run_with_policy_convenience(self, tmp_path: Path) -> None:
+        """run_with_policy convenience function works."""
+        outcome = run_with_policy("echo hello", tmp_path, 10.0)
+        assert outcome.returncode == 0
+        assert "hello" in outcome.output
 
     def test_allow_executes(self, tmp_path: Path) -> None:
         """ALLOW must execute the command."""
