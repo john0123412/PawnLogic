@@ -8,6 +8,7 @@ tools/pwn_chain.py - CTF / Pwn toolchain.
 import re, shlex, shutil, subprocess, tempfile, os
 from collections import OrderedDict
 from pathlib import Path
+from core.host_process import HostProcessRunner, HostProcessRequest
 from config import scrub_sensitive_env
 from utils.ansi import c, YELLOW, MAGENTA, GRAY, GREEN, RED
 from tools.file_ops import _run, _check_read, _session_cwd, _get_shell_env
@@ -695,10 +696,22 @@ def tool_pwn_timed_debug(a: dict) -> str:
         return "ERROR: 'command' parameter is required. Example: 'nc target.ctf.site 1337'"
 
     # Security checks.
-    from tools.file_ops import DANGEROUS_PATTERNS, _session_cwd
+    from config.security import DANGEROUS_PATTERNS
+    from tools.file_ops import _session_cwd
     for pat in DANGEROUS_PATTERNS:
         if _re.search(pat, command):
             return f"SECURITY BLOCK: dangerous command pattern '{pat}'"
+
+    # Policy enforcement: check before spawning any subprocess.
+    runner = HostProcessRunner()
+    request = HostProcessRequest(
+        command=command,
+        cwd=Path(_session_cwd[0]),
+        timeout_seconds=float(time_limit_sec),
+    )
+    outcome = runner.run(request)
+    if outcome.returncode == -1 and ("Denied" in outcome.output or "Requires confirmation" in outcome.output):
+        return f"ERROR: {outcome.output}"
 
     print(c(MAGENTA, f"  [timed-debug] $ {command[:100]}"))
     print(c(GRAY,    f"  Time limit: {time_limit_sec}s  Inputs: {len(inputs)}  Poll interval: {poll_interval}s"))
