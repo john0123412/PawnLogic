@@ -71,7 +71,10 @@ def test_provider_runtime_fetch_models_builds_candidates_and_stats(monkeypatch):
             return False
 
         async def get(self, _url, headers):
-            assert headers == {"Authorization": "Bearer test-key"}
+            assert headers == {
+                "Authorization": "Bearer test-key",
+                "content-type": "application/json",
+            }
             return FakeResponse()
 
     async def fake_filter(_base_url, _api_key, candidates, _api_format="openai"):
@@ -125,7 +128,10 @@ def test_provider_runtime_fetch_filters_non_chat_models_before_probe(monkeypatch
             return False
 
         async def get(self, _url, headers):
-            assert headers == {"Authorization": "Bearer test-key"}
+            assert headers == {
+                "Authorization": "Bearer test-key",
+                "content-type": "application/json",
+            }
             return FakeResponse()
 
     seen_candidate_ids: list[str] = []

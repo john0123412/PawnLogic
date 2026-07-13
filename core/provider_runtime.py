@@ -24,6 +24,7 @@ from config.providers import (
 from core.api_errors import format_http_error, format_transport_error
 from core.file_store import atomic_write_text, ensure_private_dir
 from core.logger import logger
+from core.provider_transport import provider_headers
 from core.state import state as _runtime_state
 from core.trust import TrustBoundaryKind, trust_notice_for_boundary
 
@@ -292,11 +293,12 @@ async def fetch_models(
     maybe_warn_insecure_provider(models_url)
     all_data: list = []
     stats = {"returned": 0, "hidden_by_name": 0, "hidden_by_probe": 0, "selectable": 0}
+    headers = provider_headers(api_format, api_key)
     url: str | None = f"{models_url}?limit=200"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             while url:
-                resp = await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+                resp = await client.get(url, headers=headers)
                 try:
                     resp.raise_for_status()
                 except httpx.HTTPStatusError as exc:
