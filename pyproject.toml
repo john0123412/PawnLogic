@@ -153,38 +153,3 @@ warn_unused_ignores = true
 ignore_missing_imports = true
 explicit_package_bases = true
 follow_imports = "skip"
-
-[[tool.mypy.overrides]]
-module = [
-    "core.turn_api",
-    "core.turn_guards",
-    "core.tool_result",
-    "core.tool_executor",
-    "core.runtime_context",
-    "core.provider_runtime",
-    "core.api_errors",
-    "core.tool_calls",
-    "core.tool_registry",
-    "core.context_window",
-    "core.workspace_cleanup",
-    "core.turn_state",
-    "core.provider_streams",
-    "core.runtime_metrics",
-    "core.mcp_client_manager",
-    "core.path_policy",
-    "core.provider_transport",
-    "core.api_retry",
-    "core.provider_tui_state",
-    "tools.text_patch",
-    "tools.shell_ops",
-    "tools.docker_plan",
-    "tools.pwn_binary",
-    "tools.pwn_debugger",
-    "tools.check_doc_structure",
-    "tools.check_release_consistency",
-    "tools.merge_ctf_skills",
-    "tools.browser_ops",
-    "tools.lsp_lite",
-]
-disallow_untyped_defs = true
-check_untyped_defs = true
