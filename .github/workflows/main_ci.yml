@@ -53,6 +53,9 @@ jobs:
       - name: Release consistency check
         run: python tools/check_release_consistency.py
 
+      - name: Architecture budget check
+        run: python tools/check_architecture_budget.py
+
   # ── Documentation guard: structure, consistency, and language policy ──
   docs-guard:
     name: "📖 Docs Guard"
@@ -77,6 +80,11 @@ jobs:
 
       - name: Repository language policy
         run: python -m pytest tests/test_repository_language_policy.py -q --timeout=60
+
+      - name: Build and check code index freshness
+        run: |
+          python tools/code_index.py build
+          python tools/code_index.py check
 
   # ── Typed island checks: keep scope narrow and fail fast ─────────────
   typecheck:
@@ -121,11 +129,20 @@ jobs:
             core/path_policy.py \
             core/provider_transport.py \
             core/api_retry.py \
+            core/provider_tui_state.py \
+            core/session_tool_loop.py \
+            core/session_snapshot.py \
+            core/message_history.py \
             tools/check_doc_structure.py \
             tools/check_release_consistency.py \
             tools/merge_ctf_skills.py \
             tools/browser_ops.py \
-            tools/lsp_lite.py
+            tools/lsp_lite.py \
+            tools/text_patch.py \
+            tools/shell_ops.py \
+            tools/docker_plan.py \
+            tools/pwn_binary.py \
+            tools/pwn_debugger.py
 
   # ── Fast feedback tests for normal development ─────────────────────
   test-fast:
@@ -172,7 +189,17 @@ jobs:
       - name: Run fast tests
         run: |
           set -o pipefail
-          pytest tests/ -v --tb=short --timeout=60 --ignore=tests/test_e2e.py -m "not slow and not e2e and not packaging" 2>&1 | tee pytest-fast-3.11.log
+          pytest tests/ -v --tb=short --timeout=60 --ignore=tests/test_e2e.py -m "not slow and not e2e and not packaging" \
+            --cov=pawnlogic --cov=core --cov=tools --cov=config --cov=utils \
+            --cov-report=term-missing --cov-report=xml:coverage.xml 2>&1 | tee pytest-fast-3.11.log
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 7
 
       - name: Run offline runtime evaluation
         run: |

@@ -30,6 +30,7 @@ import time
 import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from config import BROWSER_CONFIG, WORKSPACE_DIR
 from core.path_policy import resolve_within
@@ -92,7 +93,7 @@ def _validate_browser_url(url: str) -> tuple[str | None, list[str]]:
     return validate_fetch_url(url)
 
 
-def _get_page():
+def _get_page() -> Any | None:
     """Get or create a Patchright browser page lazily."""
     global _browser, _context, _page, _browser_error
 
@@ -128,7 +129,7 @@ def _get_page():
             return None
 
 
-def _ensure_page_url(url: str):
+def _ensure_page_url(url: str) -> None:
     """Ensure the Patchright page has navigated to the target URL."""
     global _current_url
     err, warnings = _validate_browser_url(url)
@@ -152,7 +153,7 @@ def _ensure_page_url(url: str):
         pass  # Navigation failure should not block screenshots that may still have content.
 
 
-def _get_stealthy_fetcher():
+def _get_stealthy_fetcher() -> Any | None:
     """Get or create a StealthyFetcher instance.
     StealthyFetcher.configure() warms global Camoufox state to avoid first-fetch cold-start timeouts.
     """
@@ -174,7 +175,9 @@ def _get_stealthy_fetcher():
         return _stealthy_fetcher
 
 
-def _retry_fetch(fetcher, url: str, timeout_ms: int, max_retries: int = 3):
+def _retry_fetch(
+    fetcher: Any, url: str, timeout_ms: int, max_retries: int = 3
+) -> Any:
     """Retry fetches with increasing delays for timeout failures.
     Delay sequence: 2s, 5s, 10s.
     """

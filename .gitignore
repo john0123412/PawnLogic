@@ -63,6 +63,7 @@ Thumbs.db
 .ruff_cache/
 htmlcov/
 .coverage
+coverage.xml
 
 # --- History and backups (avoid committing filter-repo or manual backups) ---
 *.gitbackup-*

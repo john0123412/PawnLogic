@@ -18,12 +18,12 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.request
 
 # Import shared evaluation infrastructure from tools/eval/.
 from tools.eval.redaction import redact_summary
 from tools.eval.artifacts import unique_run_id, write_artifact_atomic
 from tools.eval.runner import run_scenario_with_deadline
+from tools.eval.scenarios import run_offline_replay, run_registry_tools, run_soak
 
 
 ARTIFACT_DIR_NAME = ".pawnlogic_eval"
@@ -110,34 +110,22 @@ def pass_scenario() -> ScenarioOutcome:
 
 
 def _offline_replay_scenario() -> ScenarioOutcome:
-    """Replay scenario that exercises redaction and artifact logic."""
+    """Replay provider fixtures through production stream parsers."""
     fixtures_dir = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "provider_streams"
-    openai_fixture = fixtures_dir / "openai_text_basic.jsonl"
-    anthropic_fixture = fixtures_dir / "anthropic_text_basic.jsonl"
+    return ScenarioOutcome(**run_offline_replay(fixtures_dir))
 
-    if not openai_fixture.exists() or not anthropic_fixture.exists():
-        return ScenarioOutcome(
-            status="skipped",
-            summary="Replay fixtures not found.",
-            failure_class="FixturesMissing",
-        )
 
-    # Exercise redaction on fixture content.
-    openai_lines = openai_fixture.read_text().strip().splitlines()
-    anthropic_lines = anthropic_fixture.read_text().strip().splitlines()
+def _registry_tools_scenario() -> ScenarioOutcome:
+    return ScenarioOutcome(**run_registry_tools())
 
-    total_lines = len(openai_lines) + len(anthropic_lines)
-    summary = f"Replayed {len(openai_lines)} OpenAI + {len(anthropic_lines)} Anthropic events ({total_lines} total)."
 
-    # Exercise redaction on a summary with sensitive data.
-    redacted = redact_summary(summary)
-    assert "[REDACTED_" not in redacted  # No sensitive data in fixtures.
-
+def _soak_scenario(max_duration_seconds: float) -> ScenarioOutcome:
+    fixtures_dir = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "provider_streams"
     return ScenarioOutcome(
-        status="passed",
-        summary=redacted,
-        api_calls=0,
-        tool_calls=total_lines,
+        **run_soak(
+            fixtures_dir,
+            max_duration_seconds=max_duration_seconds,
+        )
     )
 
 
@@ -263,6 +251,7 @@ def _real_api_smoke_scenario(
     *,
     env: dict[str, str],
     max_duration_seconds: float,
+    max_api_calls: int,
     source_env_path: Path | None,
     command_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> ScenarioOutcome:
@@ -279,6 +268,7 @@ def _real_api_smoke_scenario(
         run_env.update(env)
         run_env["PAWNLOGIC_HOME"] = str(real_api_home)
         run_env["MCP_ENABLED"] = "false"
+        run_env["PAWNLOGIC_API_RETRY_MAX"] = str(max(1, max_api_calls))
         run_env.pop("PAWNLOGIC_TEST_MODE", None)
         result = command_runner(
             [
@@ -298,13 +288,15 @@ def _real_api_smoke_scenario(
         )
 
     summary = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
+    retry_events = summary.count("Retrying in")
+    observed_calls = min(max_api_calls, 1 + retry_events)
     if result.returncode != 0:
         return ScenarioOutcome(
             status="failed",
             summary=summary or f"Real API smoke exited {result.returncode}.",
             provider="real-api",
             model="configured",
-            api_calls=1,
+            api_calls=observed_calls,
             failure_class="RealApiSmokeFailed",
         )
     return ScenarioOutcome(
@@ -312,7 +304,7 @@ def _real_api_smoke_scenario(
         summary=summary or "Real API smoke passed.",
         provider="real-api",
         model="configured",
-        api_calls=1,
+        api_calls=observed_calls,
     )
 
 
@@ -430,11 +422,11 @@ def _browser_local_static_scenario() -> ScenarioOutcome:
             thread = threading.Thread(target=httpd.serve_forever, daemon=True)
             thread.start()
             port = httpd.server_address[1]
-            with urllib.request.urlopen(
-                f"http://127.0.0.1:{port}/index.html",
-                timeout=5,
-            ) as response:
-                body = response.read().decode("utf-8", errors="ignore")
+            from tools import browser_ops
+
+            body = browser_ops.tool_web_navigate(
+                {"url": f"http://127.0.0.1:{port}/index.html", "timeout": 5}
+            )
     except Exception as exc:
         return ScenarioOutcome(
             status="failed",
@@ -449,7 +441,7 @@ def _browser_local_static_scenario() -> ScenarioOutcome:
         if thread is not None:
             thread.join(timeout=5)
 
-    if "pawnlogic-browser-ok" not in body:
+    if "OK: navigated" not in body or "PawnLogic" not in body:
         return ScenarioOutcome(
             status="failed",
             summary="Browser local static smoke did not retrieve the expected page.",
@@ -458,7 +450,7 @@ def _browser_local_static_scenario() -> ScenarioOutcome:
         )
     return ScenarioOutcome(
         status="passed",
-        summary="Validated browser dependency gate with a local static HTML server.",
+        summary="Validated the production browser navigation handler against local static HTML.",
         tool_calls=1,
     )
 
@@ -536,6 +528,7 @@ def scenarios_for_suite(
     *,
     env: dict[str, str] | None = None,
     max_duration_seconds: float = 60.0,
+    max_api_calls: int = 1,
     source_env_path: Path | None = None,
     command_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> list[Scenario]:
@@ -558,6 +551,7 @@ def scenarios_for_suite(
                 lambda: _real_api_smoke_scenario(
                     env=scenario_env,
                     max_duration_seconds=max_duration_seconds,
+                    max_api_calls=max_api_calls,
                     source_env_path=source_env_path,
                     command_runner=command_runner,
                 ),
@@ -565,7 +559,7 @@ def scenarios_for_suite(
             )
         ]
     if suite == "tools":
-        return [Scenario("tools.local_smoke", suite, _tools_local_smoke_scenario)]
+        return [Scenario("tools.registry_smoke", suite, _registry_tools_scenario)]
     if suite == "docker":
         return [Scenario("docker.local_smoke", suite, _docker_local_smoke_scenario)]
     if suite == "browser":
@@ -579,11 +573,14 @@ def scenarios_for_suite(
             )
         ]
     if suite == "offline":
-        return [
-            Scenario("offline.replay", suite, _offline_replay_scenario),
-            Scenario(f"{suite}.harness_smoke", suite, pass_scenario),
-        ]
-    return [Scenario(f"{suite}.harness_smoke", suite, pass_scenario)]
+        return [Scenario("offline.replay", suite, _offline_replay_scenario)]
+    return [
+        Scenario(
+            "soak.deterministic",
+            suite,
+            lambda: _soak_scenario(max_duration_seconds),
+        )
+    ]
 
 
 def _duration_ms(start: float, end: float) -> int:
@@ -728,6 +725,7 @@ def run_suite(
             suite,
             env=env,
             max_duration_seconds=max_duration_seconds,
+            max_api_calls=max_api_calls,
             source_env_path=source_env_path,
             command_runner=command_runner,
         ),

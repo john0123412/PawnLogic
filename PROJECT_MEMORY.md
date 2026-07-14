@@ -179,12 +179,22 @@ These contracts are more important than local refactoring convenience:
   are unavailable; when available, they stay local by using no-network Docker
   execution with workspace-bound mounts, a local static HTML server, and local
   binary tooling only. CI runs only the offline runtime evaluation suite.
+- `tools/eval/scenarios/` owns production-parser replay, Registry-backed safe
+  tool smoke, and deterministic resource-growth soak workloads. Provider replay
+  fixtures cover text, usage, tool calls, retry notices, malformed events, and
+  partial-stream interruption without network access.
 - `tools/merge_ctf_skills.py` is a maintenance helper for optional CTF skills.
+- `tools/codex_goal_run.sh` is the bounded unattended-maintenance entry point.
+  It requires a clean feature branch, confines artifacts to ignored local
+  roots, stores a redacted manifest and heartbeat, and keeps real API,
+  dependency installation, and remote Git capabilities independently gated.
 - `THIRD_PARTY_NOTICES.md` records redistribution decisions for third-party
   skill content.
 - `tests/test_runtime_eval.py` protects the runtime evaluation artifact
   contract, redaction, deterministic fake scenarios, real API gating, spend
   guards, safe tool smoke, and timeout classification.
+- `tests/test_codex_goal_run.py` uses fake executables and temporary Git
+  repositories; it must never launch a real Codex process during pytest.
 - `tests/test_workspace_cleanup.py`,
   `tests/test_merge_ctf_skills.py`, and packaging tests protect these flows.
 
@@ -199,6 +209,20 @@ These contracts are more important than local refactoring convenience:
 - `tools/check_release_consistency.py` enforces release version consistency.
 - `tests/test_repository_language_policy.py` enforces that Chinese text appears
   only in tracked files whose stem ends with `_zh-CN`.
+- `tools/check_architecture_budget.py` records per-file line and complexity
+  regression ceilings for the largest runtime modules. CI fails when a budgeted
+  file exceeds its ceiling.
+- `tools/code_index.py check` validates that the local code index is fresh
+  against current source file hashes.
+- `docs/MODULE_MAP.md` maps each major module to its Interface, Implementation,
+  Seam, Adapter, owning tests, and invariants.
+- `docs/agents/` contains progressive-disclosure agent docs for issue tracking,
+  triage labels, and domain context pointers.
+- `docs/adr/` contains accepted Architecture Decision Records for RuntimeContext,
+  ProviderRuntime, Provider streams, Tool trust, runtime evaluation artifacts,
+  and Skill Pack packaging.
+- `docs/plans/INDEX.md` identifies exactly one active release plan and lists
+  completed plans.
 
 ## Completed Iteration: 0.2.2 Runtime Evaluation And Architecture Slimming
 

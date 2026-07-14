@@ -408,6 +408,53 @@ def command_refs(root: Path, query: str) -> int:
     return 0
 
 
+def command_check(root: Path) -> int:
+    """Check index freshness against current source files."""
+    meta_file = meta_path(root)
+    if not meta_file.exists():
+        print("No index metadata found. Run: python tools/code_index.py build")
+        return 1
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    stored_files: dict[str, str] = meta.get("files", {})
+    current_files = iter_source_files(root)
+    current_rels = {_rel(root, p): p for p in current_files}
+
+    stale: list[str] = []
+    missing: list[str] = []
+    new_files: list[str] = []
+
+    for rel_path, stored_hash in sorted(stored_files.items()):
+        if rel_path not in current_rels:
+            missing.append(rel_path)
+            continue
+        current_hash = _sha256(current_rels[rel_path])
+        if current_hash != stored_hash:
+            stale.append(rel_path)
+
+    for rel_path in sorted(current_rels):
+        if rel_path not in stored_files:
+            new_files.append(rel_path)
+
+    if not stale and not missing and not new_files:
+        print(f"Index is fresh ({len(stored_files)} files).")
+        return 0
+
+    if stale:
+        print(f"Stale ({len(stale)} files changed):")
+        for f in stale:
+            print(f"  {f}")
+    if missing:
+        print(f"Deleted ({len(missing)} files):")
+        for f in missing:
+            print(f"  {f}")
+    if new_files:
+        print(f"New ({len(new_files)} files not indexed):")
+        for f in new_files:
+            print(f"  {f}")
+    print("\nRun: python tools/code_index.py build")
+    return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build and query PawnLogic's local developer code index.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -422,6 +469,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     refs = subparsers.add_parser("refs", help="Find references to a function, class, method, or attribute.")
     refs.add_argument("name")
+
+    subparsers.add_parser("check", help="Validate index freshness against current source files.")
     return parser
 
 
@@ -436,6 +485,8 @@ def main(argv: list[str] | None = None) -> int:
         return command_symbol(root, args.name)
     if args.command == "refs":
         return command_refs(root, args.name)
+    if args.command == "check":
+        return command_check(root)
     raise SystemExit(f"Unknown command: {args.command}")
 
 

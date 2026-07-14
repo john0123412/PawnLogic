@@ -1,174 +1,194 @@
 #!/usr/bin/env bash
-# tools/codex_goal_run.sh - Safe WSL2 Codex goal runner.
-#
-# Maintainer-only helper for running Codex goals with:
-# - One-run lock with PID and timestamps
-# - Manifest and heartbeat logging
-# - Bounded wall-clock time
-# - Signal-safe cleanup
-# - Safe artifact roots
-#
-# Usage:
-#   tools/codex_goal_run.sh --goal "fix the bug" --max-wall-seconds 300
-#
-# Options:
-#   --goal TEXT              Goal description (required)
-#   --branch NAME            Feature branch (must not be main)
-#   --max-wall-seconds N     Maximum wall-clock time in seconds (default 600)
-#   --output-dir DIR         Output directory (default .codex_goals/)
-#   --real-api               Enable real API calls (requires --max-api-calls)
-#   --max-api-calls N        Maximum API calls (required with --real-api)
-#   --install-deps           Install dependencies before running
-#   --help                   Show this help
-
+# Bounded maintainer runner for one non-interactive Codex goal.
 set -euo pipefail
 
-# ── Defaults ──────────────────────────────────────────────────────────────────
 GOAL=""
-BRANCH=""
+GOAL_FILE=""
+EXPECTED_BRANCH=""
 MAX_WALL_SECONDS=600
-OUTPUT_DIR=".codex_goals"
+OUTPUT_BASE=".codex_goals"
 REAL_API=false
 MAX_API_CALLS=0
 INSTALL_DEPS=false
+ALLOW_REMOTE=false
+CODEX_BIN="${CODEX_BIN:-codex}"
 
-# ── Parse arguments ──────────────────────────────────────────────────────────
+usage() {
+    cat <<'EOF'
+Usage: tools/codex_goal_run.sh --goal TEXT [options]
+  --goal TEXT              Goal passed to `codex exec`
+  --goal-file PATH         Read the goal from a repository-local file
+  --branch NAME            Require the current feature branch to match
+  --max-wall-seconds N     Wall-clock limit (default: 600)
+  --output-dir DIR         Base under .codex_goals/ or .agent-work/
+  --real-api               Permit paid API smoke with a positive call cap
+  --max-api-calls N        Maximum paid smoke calls
+  --install-deps           Permit the agent to install project dependencies
+  --allow-remote           Permit the agent to push or create PRs
+  --help                   Show this help
+EOF
+}
+
+need_value() {
+    [[ $# -ge 2 && -n "$2" ]] || { echo "Error: $1 requires a value" >&2; exit 2; }
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --goal) GOAL="$2"; shift 2 ;;
-        --branch) BRANCH="$2"; shift 2 ;;
-        --max-wall-seconds) MAX_WALL_SECONDS="$2"; shift 2 ;;
-        --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
+        --goal) need_value "$@"; GOAL="$2"; shift 2 ;;
+        --goal-file) need_value "$@"; GOAL_FILE="$2"; shift 2 ;;
+        --branch) need_value "$@"; EXPECTED_BRANCH="$2"; shift 2 ;;
+        --max-wall-seconds) need_value "$@"; MAX_WALL_SECONDS="$2"; shift 2 ;;
+        --output-dir) need_value "$@"; OUTPUT_BASE="$2"; shift 2 ;;
         --real-api) REAL_API=true; shift ;;
-        --max-api-calls) MAX_API_CALLS="$2"; shift 2 ;;
+        --max-api-calls) need_value "$@"; MAX_API_CALLS="$2"; shift 2 ;;
         --install-deps) INSTALL_DEPS=true; shift ;;
-        --help)
-            head -25 "$0" | tail -20
-            exit 0
-            ;;
-        *) echo "Unknown option: $1"; exit 1 ;;
+        --allow-remote) ALLOW_REMOTE=true; shift ;;
+        --help) usage; exit 0 ;;
+        *) echo "Error: unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
 
-# ── Validate ─────────────────────────────────────────────────────────────────
-if [[ -z "$GOAL" ]]; then
-    echo "Error: --goal is required"
-    exit 1
-fi
+[[ "$MAX_WALL_SECONDS" =~ ^[1-9][0-9]*$ ]] || { echo "Error: --max-wall-seconds must be positive" >&2; exit 2; }
+[[ "$MAX_API_CALLS" =~ ^[0-9]+$ ]] || { echo "Error: --max-api-calls must be non-negative" >&2; exit 2; }
+[[ -z "$GOAL" || -z "$GOAL_FILE" ]] || { echo "Error: choose --goal or --goal-file" >&2; exit 2; }
 
-CURRENT_BRANCH="$(git branch --show-current 2>/dev/null || echo "")"
-if [[ "$CURRENT_BRANCH" == "main" || "$CURRENT_BRANCH" == "master" ]]; then
-    echo "Error: refuse to run on main branch. Create a feature branch first."
-    exit 1
-fi
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "Error: not inside a Git repository" >&2; exit 2; }
+cd "$REPO_ROOT"
+CURRENT_BRANCH="$(git branch --show-current)"
+[[ -n "$CURRENT_BRANCH" && "$CURRENT_BRANCH" != "main" && "$CURRENT_BRANCH" != "master" ]] || {
+    echo "Error: refuse to run on main/master or detached HEAD" >&2; exit 2;
+}
+[[ -z "$EXPECTED_BRANCH" || "$CURRENT_BRANCH" == "$EXPECTED_BRANCH" ]] || {
+    echo "Error: current branch does not match --branch" >&2; exit 2;
+}
+[[ -z "$(git status --porcelain --untracked-files=all)" ]] || {
+    echo "Error: working tree must be clean before an automated goal run" >&2; exit 2;
+}
 
+if [[ -n "$GOAL_FILE" ]]; then
+    GOAL_PATH="$(realpath -e "$GOAL_FILE" 2>/dev/null)" || { echo "Error: goal file does not exist" >&2; exit 2; }
+    [[ "$GOAL_PATH" == "$REPO_ROOT"/* ]] || { echo "Error: goal file must stay inside the repository" >&2; exit 2; }
+    GOAL="$(<"$GOAL_PATH")"
+fi
+[[ -n "$GOAL" ]] || { echo "Error: --goal or --goal-file is required" >&2; exit 2; }
 if [[ "$REAL_API" == true && "$MAX_API_CALLS" -le 0 ]]; then
-    echo "Error: --real-api requires --max-api-calls > 0"
-    exit 1
+    echo "Error: --real-api requires --max-api-calls > 0" >&2
+    exit 2
 fi
 
-# ── Setup ────────────────────────────────────────────────────────────────────
-mkdir -p "$OUTPUT_DIR"
-LOCK_FILE="$OUTPUT_DIR/.lock"
-MANIFEST="$OUTPUT_DIR/manifest.json"
-HEARTBEAT="$OUTPUT_DIR/heartbeat.log"
-PID_FILE="$OUTPUT_DIR/.pid"
+OUTPUT_BASE="$(python3 - "$OUTPUT_BASE" <<'PY'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).resolve())
+PY
+)"
+case "$OUTPUT_BASE" in
+    "$REPO_ROOT/.codex_goals"|"$REPO_ROOT/.codex_goals/"*|"$REPO_ROOT/.agent-work"|"$REPO_ROOT/.agent-work/"*) ;;
+    *) echo "Error: output must stay under .codex_goals/ or .agent-work/" >&2; exit 2 ;;
+esac
+mkdir -p "$OUTPUT_BASE"
+command -v "$CODEX_BIN" >/dev/null 2>&1 || { echo "Error: Codex executable not found" >&2; exit 127; }
 
-# ── Lock ─────────────────────────────────────────────────────────────────────
-if [[ -f "$LOCK_FILE" ]]; then
-    LOCK_PID="$(cat "$LOCK_FILE" 2>/dev/null || echo "")"
-    if [[ -n "$LOCK_PID" ]] && kill -0 "$LOCK_PID" 2>/dev/null; then
-        echo "Error: another run is active (PID $LOCK_PID)"
-        exit 1
-    fi
-    echo "Warning: stale lock found, removing"
-    rm -f "$LOCK_FILE"
-fi
-
-echo $$ > "$LOCK_FILE"
-echo $$ > "$PID_FILE"
-
-# ── Cleanup on exit ─────────────────────────────────────────────────────────
-cleanup() {
-    rm -f "$LOCK_FILE" "$PID_FILE"
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Cleanup complete" >> "$HEARTBEAT"
-}
-trap cleanup EXIT
-
-# ── Manifest ─────────────────────────────────────────────────────────────────
+LOCK_DIR="$OUTPUT_BASE/.run-lock"
+mkdir "$LOCK_DIR" 2>/dev/null || { echo "Error: another goal run is active" >&2; exit 3; }
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+RUN_DIR="$OUTPUT_BASE/$RUN_ID"
+mkdir -p "$RUN_DIR"
+MANIFEST="$RUN_DIR/manifest.json"
+HEARTBEAT="$RUN_DIR/heartbeat.log"
+RUN_LOG="$RUN_DIR/codex.log"
 START_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-cat > "$MANIFEST" <<EOF
-{
-    "goal": "$GOAL",
-    "branch": "$CURRENT_BRANCH",
-    "start_time": "$START_TIME",
-    "max_wall_seconds": $MAX_WALL_SECONDS,
-    "pid": $$,
-    "real_api": $REAL_API,
-    "max_api_calls": $MAX_API_CALLS
+COMMIT="$(git rev-parse HEAD)"
+CHILD_PID=""
+HEARTBEAT_PID=""
+
+write_manifest() {
+    local end_time="${1:-}" exit_status="${2:-null}"
+    START_TIME="$START_TIME" END_TIME="$end_time" EXIT_STATUS="$exit_status" \
+    CURRENT_BRANCH="$CURRENT_BRANCH" COMMIT="$COMMIT" RUN_ID="$RUN_ID" \
+    MAX_WALL_SECONDS="$MAX_WALL_SECONDS" REAL_API="$REAL_API" \
+    MAX_API_CALLS="$MAX_API_CALLS" INSTALL_DEPS="$INSTALL_DEPS" \
+    ALLOW_REMOTE="$ALLOW_REMOTE" GOAL="$GOAL" python3 - "$MANIFEST" <<'PY'
+import hashlib, json, os, sys
+status = os.environ["EXIT_STATUS"]
+payload = {
+    "schema_version": 1,
+    "run_id": os.environ["RUN_ID"],
+    "pid": os.getppid(),
+    "branch": os.environ["CURRENT_BRANCH"],
+    "commit": os.environ["COMMIT"],
+    "start_time": os.environ["START_TIME"],
+    "end_time": os.environ["END_TIME"] or None,
+    "exit_status": None if status == "null" else int(status),
+    "max_wall_seconds": int(os.environ["MAX_WALL_SECONDS"]),
+    "real_api": os.environ["REAL_API"] == "true",
+    "max_api_calls": int(os.environ["MAX_API_CALLS"]),
+    "install_deps": os.environ["INSTALL_DEPS"] == "true",
+    "allow_remote": os.environ["ALLOW_REMOTE"] == "true",
+    "goal_sha256": hashlib.sha256(os.environ["GOAL"].encode()).hexdigest(),
 }
-EOF
+with open(sys.argv[1] + ".tmp", "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+os.replace(sys.argv[1] + ".tmp", sys.argv[1])
+PY
+}
 
-echo "[$START_TIME] Starting goal: $GOAL" >> "$HEARTBEAT"
-echo "[$START_TIME] Branch: $CURRENT_BRANCH, PID: $$" >> "$HEARTBEAT"
-echo "[$START_TIME] Max wall: ${MAX_WALL_SECONDS}s" >> "$HEARTBEAT"
+cleanup() {
+    local status=$?
+    trap - EXIT INT TERM
+    [[ -z "$HEARTBEAT_PID" ]] || kill "$HEARTBEAT_PID" 2>/dev/null || true
+    if [[ -n "$CHILD_PID" ]] && kill -0 "$CHILD_PID" 2>/dev/null; then
+        kill -INT -- "-$CHILD_PID" 2>/dev/null || kill -INT "$CHILD_PID" 2>/dev/null || true
+        sleep 2
+        kill -KILL -- "-$CHILD_PID" 2>/dev/null || kill -KILL "$CHILD_PID" 2>/dev/null || true
+    fi
+    local end_time
+    end_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    write_manifest "$end_time" "$status"
+    printf '[%s] exit_status=%s\n' "$end_time" "$status" >> "$HEARTBEAT"
+    rm -rf "$LOCK_DIR"
+    exit "$status"
+}
+trap cleanup EXIT INT TERM
 
-# ── Heartbeat (background) ──────────────────────────────────────────────────
-heartbeat_loop() {
+write_manifest
+printf '[%s] started branch=%s commit=%s pid=%s\n' "$START_TIME" "$CURRENT_BRANCH" "$COMMIT" "$$" > "$HEARTBEAT"
+(
     while true; do
         sleep 30
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] heartbeat" >> "$HEARTBEAT"
+        printf '[%s] heartbeat\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$HEARTBEAT"
     done
-}
-heartbeat_loop &
+) >/dev/null 2>&1 &
 HEARTBEAT_PID=$!
 
-# ── Kill heartbeat on exit ──────────────────────────────────────────────────
-cleanup_full() {
-    kill "$HEARTBEAT_PID" 2>/dev/null || true
-    cleanup
-}
-trap cleanup_full EXIT
+export PAWNLOGIC_REAL_API_SMOKE="$REAL_API"
+export PAWNLOGIC_EVAL_MAX_API_CALLS="$MAX_API_CALLS"
+export PAWNLOGIC_AGENT_INSTALL_DEPS="$INSTALL_DEPS"
+export PAWNLOGIC_AGENT_ALLOW_REMOTE="$ALLOW_REMOTE"
 
-# ── Main execution with timeout ─────────────────────────────────────────────
-echo "========================================="
-echo "  Goal: $GOAL"
-echo "  Branch: $CURRENT_BRANCH"
-echo "  Max wall: ${MAX_WALL_SECONDS}s"
-echo "  Output: $OUTPUT_DIR"
-echo "========================================="
-
-# Run with timeout.
-EXIT_CODE=0
-timeout "$MAX_WALL_SECONDS" bash -c "
-    echo 'Running Codex goal...'
-    # This is where the actual Codex run would happen.
-    # For now, just simulate work.
-    echo 'Goal execution placeholder'
-" || EXIT_CODE=$?
-
-if [[ $EXIT_CODE -eq 124 ]]; then
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Timed out after ${MAX_WALL_SECONDS}s" >> "$HEARTBEAT"
-    echo "Error: goal timed out after ${MAX_WALL_SECONDS}s"
-    EXIT_CODE=1
+set +e
+if command -v setsid >/dev/null 2>&1; then
+    setsid "$CODEX_BIN" exec "$GOAL" >"$RUN_LOG" 2>&1 &
+else
+    "$CODEX_BIN" exec "$GOAL" >"$RUN_LOG" 2>&1 &
 fi
-
-END_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-echo "[$END_TIME] Completed with exit code $EXIT_CODE" >> "$HEARTBEAT"
-
-# Update manifest with result.
-cat > "$MANIFEST" <<EOF
-{
-    "goal": "$GOAL",
-    "branch": "$CURRENT_BRANCH",
-    "start_time": "$START_TIME",
-    "end_time": "$END_TIME",
-    "max_wall_seconds": $MAX_WALL_SECONDS,
-    "pid": $$,
-    "real_api": $REAL_API,
-    "max_api_calls": $MAX_API_CALLS,
-    "exit_code": $EXIT_CODE
-}
-EOF
-
-exit $EXIT_CODE
+CHILD_PID=$!
+timeout --signal=INT --kill-after=10 "$MAX_WALL_SECONDS" tail --pid="$CHILD_PID" -f /dev/null
+TIMEOUT_STATUS=$?
+if [[ "$TIMEOUT_STATUS" -eq 124 || "$TIMEOUT_STATUS" -eq 137 ]]; then
+    kill -INT -- "-$CHILD_PID" 2>/dev/null || kill -INT "$CHILD_PID" 2>/dev/null || true
+    timeout 10 tail --pid="$CHILD_PID" -f /dev/null >/dev/null 2>&1 || true
+    kill -KILL -- "-$CHILD_PID" 2>/dev/null || kill -KILL "$CHILD_PID" 2>/dev/null || true
+    wait "$CHILD_PID" 2>/dev/null || true
+    CHILD_PID=""
+    set -e
+    echo "Error: goal exceeded ${MAX_WALL_SECONDS}s" >&2
+    exit 124
+fi
+wait "$CHILD_PID"
+EXIT_STATUS=$?
+set -e
+CHILD_PID=""
+exit "$EXIT_STATUS"

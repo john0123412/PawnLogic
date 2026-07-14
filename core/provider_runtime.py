@@ -7,6 +7,7 @@ import datetime
 import json
 import os
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from config.paths import PAWNLOGIC_HOME
@@ -23,6 +24,7 @@ from config.providers import (
 )
 from core.api_errors import _retry_delay, format_http_error, format_transport_error
 from core.api_retry import (
+    RetryPolicy,
     is_retryable_http_status,
     is_retryable_transport_error,
     retry_policy_from_env,
@@ -45,7 +47,9 @@ _WARNED_HTTP_PROVIDER_URLS: set[str] = set()
 load_custom_providers = init_providers
 
 
-async def _request_with_retry(request, *, policy):
+async def _request_with_retry(
+    request: Callable[[], Awaitable[Any]], *, policy: RetryPolicy
+) -> Any:
     """Execute one provider request with the shared pre-response retry policy."""
     last_error: Exception | None = None
     for attempt in range(policy.max_attempts):
@@ -80,7 +84,9 @@ def _user_mode() -> bool:
     return bool(_runtime_state.user_mode)
 
 
-def maybe_warn_insecure_provider(base_url: str, *, emit=print) -> None:
+def maybe_warn_insecure_provider(
+    base_url: str, *, emit: Callable[[str], None] = print
+) -> None:
     url = str(base_url or "").strip()
     if not url.startswith("http://") or url in _WARNED_HTTP_PROVIDER_URLS:
         return
@@ -180,7 +186,7 @@ def normalize_base_url(raw: str, api_format: str = "openai") -> str:
     return raw + "/v1" + suffix
 
 
-def connection_result_from_response(resp, ms: int) -> tuple[bool, str, int]:
+def connection_result_from_response(resp: Any, ms: int) -> tuple[bool, str, int]:
     if 200 <= resp.status_code < 300:
         try:
             resp.json()
@@ -261,7 +267,9 @@ def model_rejection_reason(response_text: str) -> str:
     return ""
 
 
-async def probe_openai_chat_model(client, endpoint: str, api_key: str, model_id: str) -> tuple[bool, str]:
+async def probe_openai_chat_model(
+    client: Any, endpoint: str, api_key: str, model_id: str
+) -> tuple[bool, str]:
     payload = {
         "model": model_id,
         "max_tokens": 1,
@@ -375,8 +383,13 @@ async def fetch_models(
     try:
         async with httpx.AsyncClient(timeout=policy.nonstream_timeout_seconds) as client:
             while url:
+                request_url = url
+
+                async def fetch_page(request_url: str = request_url) -> Any:
+                    return await client.get(request_url, headers=headers)
+
                 resp = await _request_with_retry(
-                    lambda url=url: client.get(url, headers=headers),
+                    fetch_page,
                     policy=policy,
                 )
                 try:

@@ -159,14 +159,33 @@ def test_tools_suite_runs_safe_local_tool_smoke():
 
     assert len(records) == 1
     record = records[0]
-    assert record.scenario_id == "tools.local_smoke"
+    assert record.scenario_id == "tools.registry_smoke"
     assert record.status == "passed"
     assert record.provider == "offline"
     assert record.api_calls == 0
-    assert record.tool_calls >= 5
+    assert record.tool_calls == 3
     assert record.failure_class == ""
-    assert "safe file ops" in record.redacted_summary
-    assert "plain HTTP warning" in record.redacted_summary
+    assert "Tool Registry" in record.redacted_summary
+
+
+def test_offline_replay_exercises_provider_delta_classes():
+    records = runtime_eval.run_suite("offline", max_duration_seconds=30, max_api_calls=0)
+
+    assert len(records) == 1
+    assert records[0].status == "passed"
+    assert records[0].api_calls == 0
+    assert records[0].tool_calls >= 8
+    assert "interruption coverage" in records[0].redacted_summary
+
+
+def test_soak_tracks_resource_growth_with_total_budget():
+    records = runtime_eval.run_suite("soak", max_duration_seconds=30, max_api_calls=0)
+
+    assert len(records) == 1
+    assert records[0].scenario_id == "soak.deterministic"
+    assert records[0].status == "passed"
+    assert records[0].tool_calls == 25
+    assert "thread growth" in records[0].redacted_summary
 
 
 def test_optional_dynamic_suites_do_not_use_harness_fake_fallback():
@@ -237,14 +256,21 @@ def test_browser_suite_skips_cleanly_when_dependencies_are_unavailable(monkeypat
 
 
 def test_browser_suite_uses_local_static_html_server(monkeypatch):
+    from tools import browser_ops
+
     monkeypatch.setattr(runtime_eval, "_browser_dependencies_available", lambda: True)
+    monkeypatch.setattr(
+        browser_ops,
+        "tool_web_navigate",
+        lambda _args: "OK: navigated to loopback\n  Title: PawnLogic",
+    )
 
     records = runtime_eval.run_suite("browser", max_duration_seconds=30)
 
     assert len(records) == 1
     assert records[0].status == "passed"
     assert records[0].tool_calls == 1
-    assert "local static HTML server" in records[0].redacted_summary
+    assert "production browser navigation handler" in records[0].redacted_summary
     assert "127.0.0.1" not in records[0].redacted_summary
 
 

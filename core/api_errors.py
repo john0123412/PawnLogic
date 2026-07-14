@@ -120,7 +120,7 @@ def _retry_delay(
     attempt: int,
     retry_after: str | None = None,
     *,
-    retry_after_max: int | None = None,
+    retry_after_max: float | None = None,
 ) -> float:
     """Return retry delay for an attempt index, honoring bounded Retry-After."""
     cap = retry_after_max_from_env() if retry_after_max is None else retry_after_max
