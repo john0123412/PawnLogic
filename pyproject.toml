@@ -176,6 +176,8 @@ module = [
     "core.api_retry",
     "core.provider_tui_state",
     "core.session_tool_loop",
+    "core.session_snapshot",
+    "core.message_history",
     "tools.text_patch",
     "tools.shell_ops",
     "tools.docker_plan",

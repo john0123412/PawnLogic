@@ -1721,7 +1721,7 @@ class AgentSession:
                 _asst_msg["reasoning_content"] = reasoning_buf
             self.messages.append(_asst_msg)
             self._print_turn_summary()
-            self._autosave()
+            self._autosave(turn_status="completed")
             return False
 
         # thinking-mode fix: persist reasoning_content with the assistant
@@ -2261,7 +2261,7 @@ class AgentSession:
                 turn_state.update_tools(current_tools)
 
             except KeyboardInterrupt:
-                self._autosave()
+                self._autosave(turn_status="interrupted")
                 raise TurnInterrupted()
 
         print(c(RED, f"\n[Reached max_iter={turn_state.max_iter}; use /mid, /deep, or /iter <n> to raise it]"))
@@ -2270,19 +2270,20 @@ class AgentSession:
             self.model_alias, self.session_id[:8], turn_state.max_iter,
         )
         self._print_turn_summary()
-        self._autosave()
+        self._autosave(turn_status="failed")
 
     # ── Per-turn usage summary ───────────────────────────
     def _print_turn_summary(self):
         """Print token and tool-call summary after each turn."""
-        pt = self._turn_prompt_tokens
-        ct = self._turn_completion_tokens
-        tt = self._turn_tool_calls
+        snapshot = self._runtime_metrics_snapshot()
+        pt = snapshot.turn_prompt_tokens
+        ct = snapshot.turn_completion_tokens
+        tt = snapshot.turn_tool_calls
         if pt + ct + tt == 0:
             return   # nothing to show (no usage data from this provider)
-        tot_pt = self.total_prompt_tokens
-        tot_ct = self.total_completion_tokens
-        tot_tt = self.total_tool_calls
+        tot_pt = snapshot.total_prompt_tokens
+        tot_ct = snapshot.total_completion_tokens
+        tot_tt = snapshot.total_tool_calls
         if _user_mode():
             cum = (f"  cum:↑{tot_pt:,}↓{tot_ct:,}🔧{tot_tt}"
                    if tot_pt != pt or tot_tt != tt else "")
@@ -2306,30 +2307,36 @@ class AgentSession:
             print(c(GRAY, "\n".join(lines)))
 
     # Background async autosave.
-    def _autosave(self):
-        # Turn count increments on every call, regardless of success, interrupt,
-        # or max_iter exhaustion. _maybe_autoname requires at least 2 turns.
-        self._turn_count += 1
-        self._runtime_metrics.record_turn_completed()
-        msgs_snapshot = [dict(m) for m in self.messages]
-        sid, model_alias, cwd, workspace_dir, cfg_snap = (
-            self.session_id, self.model_alias, self.cwd, self.workspace_dir,
-            dict(_dynamic_config())
+    def _autosave(self, *, turn_status: str | None = None):
+        if turn_status == "completed":
+            self._turn_count += 1
+            self._runtime_metrics.record_turn_completed()
+        elif turn_status == "interrupted":
+            self._runtime_metrics.record_turn_interrupted()
+        elif turn_status == "failed":
+            self._runtime_metrics.record_turn_failed()
+        self._runtime_metrics.record_autosave()
+        from core.session_snapshot import SessionSnapshot
+        snapshot = SessionSnapshot.capture(
+            session_id=self.session_id,
+            model_alias=self.model_alias,
+            messages=self.messages,
+            cwd=self.cwd,
+            workspace_dir=self.workspace_dir,
+            config=dict(_dynamic_config()),
         )
+        msgs_snapshot = list(snapshot.messages)
+        sid = snapshot.session_id
         def _do():
             if not self._save_lock.acquire(blocking=False): return
             try:
-                from core.memory import upsert_session, save_messages
-                upsert_session(
-                    sid, "", model_alias, cwd, cfg_snap,
-                    workspace_dir=workspace_dir,
-                )
-                save_messages(sid, msgs_snapshot)
+                from core.persistence import save_snapshot
+                save_snapshot(snapshot)
             except Exception as _autosave_exc:
                 # Log autosave failures instead of silently dropping them.
                 logger.error(
                     "Autosave failed | session={} model={} exc={!r}",
-                    sid[:8], model_alias, _autosave_exc,
+                    sid[:8], snapshot.model_alias, _autosave_exc,
                 )
             finally:
                 self._save_lock.release()

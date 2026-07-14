@@ -90,6 +90,12 @@ These contracts are more important than local refactoring convenience:
   decisions, PLAN correction timing, and explicit internal tool outcomes.
 - `core/tool_executor.py` owns single-call execution and failure envelopes;
   public tool message dictionaries remain compatibility contracts.
+- `core/session_snapshot.py` is the immutable save/load contract used by both
+  manual save and autosave; `core/message_history.py` owns dangling Tool Call
+  repair without importing session runtime code.
+- `core/persistence.py` is the SQLite adapter for `SessionSnapshot`.
+- `core/runtime_metrics.py` is the sole owner of completed, interrupted,
+  failed, autosaved, usage, retry, tool, and failure-class counters.
 - `core/runtime_context.py` owns session runtime state such as cwd, workspace,
   sink, debug mode, user mode, and dynamic config.
 - `core/runtime_metrics.py` owns internal metrics snapshots. Metrics are local
@@ -246,6 +252,8 @@ Current stable candidates and covered modules include:
 - `core/workspace_cleanup.py`
 - `core/turn_state.py`
 - `core/session_tool_loop.py`
+- `core/session_snapshot.py`
+- `core/message_history.py`
 - `core/provider_streams.py`
 - `core/runtime_metrics.py`
 - `core/mcp_client_manager.py`

@@ -18,6 +18,8 @@ from core.memory import (
 )
 from core.naming import stable_workspace_dir
 from core.runtime_context import RuntimeContext
+from core.message_history import repair_dangling_tool_calls
+from core.session_snapshot import SessionSnapshot
 from core.state import runtime_config, update_dynamic_config
 from tools.file_ops import sync_runtime_context
 from utils.ansi import c, CYAN, GRAY, YELLOW, DIM
@@ -50,20 +52,56 @@ except Exception:
 # Session save / load.
 # ════════════════════════════════════════════════════════
 
-def session_save(session, name: str = "") -> str:
-    """Write the current session to SQLite and return session_id."""
+def save_snapshot(snapshot: SessionSnapshot, *, name: str = "") -> None:
+    """Persist one immutable session snapshot through the SQLite adapter."""
     init_db()
     manual_name = name.strip()
     upsert_session(
-        session_id  = session.session_id,
+        session_id  = snapshot.session_id,
         name        = manual_name,
-        model       = session.model_alias,
-        cwd         = session.cwd,
-        config_dict = dynamic_config_snapshot(),
-        workspace_dir = getattr(session, "workspace_dir", ""),
+        model       = snapshot.model_alias,
+        cwd         = str(snapshot.runtime.get("cwd", "")),
+        config_dict = dict(snapshot.runtime.get("config", {})),
+        workspace_dir = str(snapshot.runtime.get("workspace_dir", "")),
         name_source = "manual" if manual_name else "",
     )
-    save_messages(session.session_id, session.messages)
+    save_messages(snapshot.session_id, list(snapshot.messages))
+
+
+def load_snapshot(session_id: str) -> SessionSnapshot | None:
+    """Load and repair one session snapshot from SQLite."""
+    full = get_session(session_id)
+    if not full:
+        return None
+    messages = load_messages(session_id)
+    repaired = repair_dangling_tool_calls(messages)
+    if len(repaired) != len(messages):
+        save_messages(session_id, repaired)
+    try:
+        config_dict = json.loads(full["config"])
+    except Exception:
+        config_dict = {}
+    return SessionSnapshot.capture(
+        session_id=session_id,
+        model_alias=full["model"],
+        messages=repaired,
+        cwd=full["cwd"],
+        workspace_dir=full["workspace_dir"] or "",
+        config=config_dict,
+    )
+
+
+def session_save(session, name: str = "") -> str:
+    """Write the current session through the shared snapshot interface."""
+    snapshot = SessionSnapshot.capture(
+        session_id=session.session_id,
+        model_alias=session.model_alias,
+        messages=session.messages,
+        cwd=session.cwd,
+        workspace_dir=getattr(session, "workspace_dir", ""),
+        config=dynamic_config_snapshot(),
+    )
+    save_snapshot(snapshot, name=name)
     return session.session_id
 
 def session_load(session, query: str) -> str:
@@ -83,24 +121,17 @@ def session_load(session, query: str) -> str:
 
     sid  = matched["id"]
     full = get_session(sid)
-    if not full:
+    snapshot = load_snapshot(sid)
+    if not full or snapshot is None:
         return f"ERROR: metadata for session {sid} is missing"
 
     # Restore messages.
-    msgs = load_messages(sid)
-    try:
-        from core.session import _drop_dangling_tool_call_messages
-        cleaned_msgs = _drop_dangling_tool_call_messages(msgs)
-        if len(cleaned_msgs) != len(msgs):
-            msgs = cleaned_msgs
-            save_messages(sid, msgs)
-    except Exception:
-        pass
+    msgs = list(snapshot.messages)
     session.messages.clear()
 
     # Normalize model alias. If the DB has a stale alias or the provider key is
     # not configured, fall back to DEFAULT_MODEL.
-    loaded_alias = full["model"]
+    loaded_alias = snapshot.model_alias
     if loaded_alias in MODELS:
         prov_key_env = PROVIDERS.get(MODELS[loaded_alias].get("provider", ""), {}).get("api_key_env", "")
         if prov_key_env and not os.getenv(prov_key_env, ""):
@@ -116,8 +147,8 @@ def session_load(session, query: str) -> str:
             f"falling back to default model '{DEFAULT_MODEL}'"))
         session.model_alias = DEFAULT_MODEL
 
-    session.cwd         = full["cwd"]
-    session.workspace_dir = full["workspace_dir"] or stable_workspace_dir(sid)
+    session.cwd = str(snapshot.runtime.get("cwd", ""))
+    session.workspace_dir = str(snapshot.runtime.get("workspace_dir", "")) or stable_workspace_dir(sid)
     if not full["workspace_dir"]:
         upsert_session(
             session_id=sid,
@@ -128,7 +159,7 @@ def session_load(session, query: str) -> str:
             workspace_dir=session.workspace_dir,
         )
     try:
-        cfg = json.loads(full["config"])
+        cfg = dict(snapshot.runtime.get("config", {}))
         update_dynamic_config(cfg)
     except Exception:
         pass
