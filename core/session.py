@@ -45,7 +45,8 @@ from core.context_window import (
     _trim_and_compact_context as _trim_and_compact_context,
 )
 from core.state import state as _runtime_state, runtime_config
-from core.runtime_context import RuntimeContext
+from core.runtime_context import RuntimeContext, current_runtime_context
+from core.output import runtime_print as print
 from core.runtime_metrics import RuntimeMetrics, RuntimeMetricsSnapshot
 from core.prompt_builder import build_session_prompt
 from core.tool_calls import extract_tool_calls
@@ -100,15 +101,24 @@ from core.logger import logger, audit_tool_call
 
 
 def _user_mode() -> bool:
+    context = current_runtime_context()
+    if context is not None:
+        return bool(context.user_mode)
     return bool(_runtime_state.user_mode)
 
 
 def _debug_mode() -> bool:
+    context = current_runtime_context()
+    if context is not None:
+        return bool(context.debug_mode)
     return bool(_runtime_state.debug_mode)
 
 
 def _dynamic_config() -> dict:
     """Return the currently loaded mutable runtime config via the runtime interface."""
+    context = current_runtime_context()
+    if context is not None:
+        return context.dynamic_config
     try:
         return runtime_config()
     except Exception:
@@ -914,7 +924,7 @@ class AgentSession:
             self.runtime_context = ctx
         else:
             ctx.update_paths(cwd=self.cwd, workspace_dir=self.workspace_dir)
-            ctx.sync_state_flags()
+        ctx.sync_legacy_state()
         sync_runtime_context(ctx)
 
     def _time_remaining(self) -> float:
@@ -2157,6 +2167,11 @@ class AgentSession:
 
     # Main turn loop.
     def run_turn(self, user_input: str):
+        self._sync_runtime_context()
+        with self.runtime_context.activate():
+            return self._run_turn_active(user_input)
+
+    def _run_turn_active(self, user_input: str):
         dynamic_cfg = self._prepare_turn(user_input)
         if dynamic_cfg is None:
             return

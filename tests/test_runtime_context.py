@@ -10,7 +10,7 @@ from core.state import (
     set_dynamic_config_value,
     state,
 )
-from core.runtime_context import RuntimeContext
+from core.runtime_context import RuntimeContext, current_runtime_context
 from tools import file_ops
 
 
@@ -53,6 +53,83 @@ def test_runtime_context_for_test_is_isolated(tmp_path):
     assert ctx.debug_mode is True
     assert ctx.user_mode is False
     assert ctx.dynamic_config is cfg
+
+
+def test_runtime_context_activation_isolates_mode_config_paths_and_sink(tmp_path):
+    first_sink = CaptureSink()
+    second_sink = CaptureSink()
+    first = RuntimeContext.for_test(
+        cwd=tmp_path / "first-cwd",
+        workspace_dir=tmp_path / "first-workspace",
+        sink=first_sink,
+        debug_mode=True,
+        user_mode=False,
+        dynamic_config={"max_iter": 11},
+    )
+    second = RuntimeContext.for_test(
+        cwd=tmp_path / "second-cwd",
+        workspace_dir=tmp_path / "second-workspace",
+        sink=second_sink,
+        debug_mode=False,
+        user_mode=True,
+        dynamic_config={"max_iter": 22},
+    )
+
+    with first.activate():
+        assert current_runtime_context() is first
+        assert runtime_config()["max_iter"] == 11
+        set_dynamic_config_value("max_iter", 12)
+        assert first.dynamic_config["max_iter"] == 12
+        assert second.dynamic_config["max_iter"] == 22
+
+        with second.activate():
+            assert current_runtime_context() is second
+            assert runtime_config()["max_iter"] == 22
+            set_dynamic_config_value("max_iter", 23)
+
+        assert current_runtime_context() is first
+        assert runtime_config()["max_iter"] == 12
+
+    assert first.cwd != second.cwd
+    assert first.workspace_dir != second.workspace_dir
+    assert first.sink is first_sink
+    assert second.sink is second_sink
+    assert first.debug_mode is True
+    assert second.debug_mode is False
+    assert second.dynamic_config["max_iter"] == 23
+
+
+def test_dispatch_uses_session_runtime_context_sink(tmp_path):
+    from core.commands import CommandContext, dispatch, register
+
+    sink = CaptureSink()
+
+    class FakeSession:
+        runtime_context = RuntimeContext.for_test(
+            cwd=tmp_path,
+            workspace_dir=tmp_path / "workspace",
+            sink=sink,
+        )
+
+    @register("/__runtime_context_sink_test")
+    async def _handler(ctx: CommandContext) -> None:
+        from core.commands._common import sink_print
+
+        assert current_runtime_context() is ctx.session.runtime_context
+        sink_print("context-owned output")
+
+    asyncio.run(
+        dispatch(
+            CommandContext(
+                verb="/__runtime_context_sink_test",
+                arg="",
+                arg2="",
+                session=FakeSession(),
+            )
+        )
+    )
+
+    assert sink.lines == ["context-owned output"]
 
 
 def test_dynamic_config_is_bound_to_runtime_state():

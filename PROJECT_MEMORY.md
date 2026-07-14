@@ -96,8 +96,13 @@ These contracts are more important than local refactoring convenience:
 - `core/persistence.py` is the SQLite adapter for `SessionSnapshot`.
 - `core/runtime_metrics.py` is the sole owner of completed, interrupted,
   failed, autosaved, usage, retry, tool, and failure-class counters.
-- `core/runtime_context.py` owns session runtime state such as cwd, workspace,
-  sink, debug mode, user mode, and dynamic config.
+- `core/runtime_context.py` is the authoritative session runtime-state owner for
+  cwd, workspace, sink, debug mode, user mode, and dynamic config. A
+  `contextvars` activation scope isolates sessions and async tasks; turn and
+  command execution activate their owning context.
+- `core.state`, `config` output flags, `tools.file_ops` path pointers, and the
+  command active sink are compatibility mirrors or fallbacks only. New runtime
+  writes go through `RuntimeContext`.
 - `core/runtime_metrics.py` owns internal metrics snapshots. Metrics are local
   runtime state only.
 - `tests/test_session_utils.py` and `tests/test_turn_guards.py` protect turn

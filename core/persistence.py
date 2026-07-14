@@ -177,7 +177,7 @@ def session_load(session, query: str) -> str:
         else:
             ctx.update_paths(cwd=session.cwd, workspace_dir=session.workspace_dir)
             ctx.dynamic_config = runtime_config()
-            ctx.sync_state_flags()
+            ctx.sync_legacy_state()
         sync_runtime_context(ctx)
     session._reset_system_prompt()
     session.messages.extend(msgs)

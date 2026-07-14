@@ -46,7 +46,15 @@ def bind_dynamic_config(config: MutableMapping[str, Any]) -> MutableMapping[str,
 
 
 def runtime_config() -> MutableMapping[str, Any]:
-    """Return the shared dynamic config mapping, binding config.DYNAMIC_CONFIG lazily."""
+    """Return the active context config or the legacy process-wide mapping."""
+    try:
+        from core.runtime_context import current_runtime_context
+
+        context = current_runtime_context()
+        if context is not None:
+            return context.dynamic_config
+    except Exception:
+        pass
     try:
         from config import DYNAMIC_CONFIG
         if state.dynamic_config is not DYNAMIC_CONFIG:
@@ -60,7 +68,7 @@ def update_dynamic_config(values: Mapping[str, Any]) -> MutableMapping[str, Any]
     """Update dynamic config through the runtime-state write path."""
     cfg = runtime_config()
     cfg.update(values)
-    _sync_dynamic_state_fields()
+    _sync_dynamic_state_fields(cfg)
     return cfg
 
 
@@ -68,7 +76,7 @@ def set_dynamic_config_value(key: str, value: Any) -> MutableMapping[str, Any]:
     """Set one dynamic config value through the runtime-state write path."""
     cfg = runtime_config()
     cfg[key] = value
-    _sync_dynamic_state_fields()
+    _sync_dynamic_state_fields(cfg)
     return cfg
 
 
@@ -83,7 +91,16 @@ def dynamic_config_snapshot() -> dict:
 
 
 def set_output_mode(*, debug_mode: bool, user_mode: bool | None = None, quiet_mode: bool | None = None) -> None:
-    """Set process output mode and refresh legacy config flags."""
+    """Set the active context mode and refresh compatibility globals."""
+    try:
+        from core.runtime_context import current_runtime_context
+
+        context = current_runtime_context()
+    except Exception:
+        context = None
+    if context is not None:
+        context.debug_mode = bool(debug_mode)
+        context.user_mode = (not context.debug_mode) if user_mode is None else bool(user_mode)
     state.debug_mode = bool(debug_mode)
     state.user_mode = (not state.debug_mode) if user_mode is None else bool(user_mode)
     if quiet_mode is not None:
@@ -96,8 +113,23 @@ def set_output_mode(*, debug_mode: bool, user_mode: bool | None = None, quiet_mo
         pass
 
 
-def _sync_dynamic_state_fields() -> None:
-    cfg = state.dynamic_config
+def mirror_runtime_context(context: Any) -> None:
+    """Mirror a RuntimeContext into globals retained for legacy call sites."""
+    state.debug_mode = bool(context.debug_mode)
+    state.user_mode = bool(context.user_mode)
+    state.dynamic_config = context.dynamic_config
+    _sync_dynamic_state_fields(context.dynamic_config)
+    try:
+        import config
+
+        config.USER_MODE = state.user_mode
+        config.QUIET_MODE = state.quiet_mode
+    except Exception:
+        pass
+
+
+def _sync_dynamic_state_fields(config: Mapping[str, Any] | None = None) -> None:
+    cfg = state.dynamic_config if config is None else config
     if "preferred_worker" in cfg:
         state.current_worker = str(cfg.get("preferred_worker") or "auto")
     if "time_budget_sec" in cfg:

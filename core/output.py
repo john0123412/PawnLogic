@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import sys
+import builtins
 from typing import Any
 
 
@@ -84,4 +85,24 @@ class JsonSink:
         sys.stdout.flush()
 
 
-__all__ = ["HumanSink", "JsonSink"]
+def runtime_print(
+    *args: Any,
+    sep: str = " ",
+    end: str = "\n",
+    flush: bool = False,
+) -> None:
+    """Print through the active RuntimeContext sink when one is bound."""
+    from core.runtime_context import current_runtime_context
+
+    context = current_runtime_context()
+    if context is None or context.sink is None:
+        builtins.print(*args, sep=sep, end=end, flush=flush)
+        return
+    text = sep.join(str(arg) for arg in args)
+    if end == "\n":
+        context.sink.print(text)
+    else:
+        context.sink.write(text + end)
+
+
+__all__ = ["HumanSink", "JsonSink", "runtime_print"]

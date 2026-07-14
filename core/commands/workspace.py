@@ -216,7 +216,7 @@ async def cmd_cd(ctx: CommandContext) -> None:
                     cwd=session.cwd,
                     workspace_dir=getattr(session, "workspace_dir", ctx.workspace_dir),
                 )
-                ctx.sync_state_flags()
+                ctx.sync_legacy_state()
             sync_runtime_context(ctx)
         session._reset_system_prompt()
         state_exists = (Path(session.cwd) / STATE_FILENAME).exists()

@@ -99,13 +99,18 @@ def swap_active_sink(sink: Any) -> Any:
 
 
 def get_active_sink() -> Any:
-    """Return the current sink, or a freshly-built HumanSink if none was set.
+    """Return the context sink, compatibility sink, or a new HumanSink.
 
     Falling back to HumanSink keeps unit tests and ad-hoc scripts that
     construct CommandContext directly working without explicit setup.
     """
+    from core.runtime_context import current_runtime_context
+
     if _active_sink is not None:
         return _active_sink
+    context = current_runtime_context()
+    if context is not None and context.sink is not None:
+        return context.sink
     from core.output import HumanSink
     return HumanSink()
 
