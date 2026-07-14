@@ -69,6 +69,11 @@ def test_static_trust_notices_match_existing_user_facing_text():
 
 def test_named_trust_boundaries_match_stable_categories_and_text():
     expected = {
+        TrustBoundaryKind.LOCAL: (
+            TrustLevel.LOCAL,
+            "  [Trust Boundary] Local read-only tool. "
+            "No host shell, network, or destructive side effects.",
+        ),
         TrustBoundaryKind.HOST_SHELL: (
             TrustLevel.HOST_SHELL,
             "  [Trust Boundary] run_shell executes on the host shell. "
