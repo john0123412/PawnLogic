@@ -447,10 +447,24 @@ PawnLogic/
 └── skills/              # Source-checkout skill packs (not shipped in PyPI wheels)
 ```
 
-The 0.2.0 consolidation path keeps public CLI, provider visibility, stream
+The 0.2.3 consolidation path keeps public CLI, provider visibility, stream
 delta dictionaries, tool result messages, and reasoning persistence stable while
 moving runtime details into internal modules:
 
+- `core/path_policy.py` enforces canonical path containment for workspace
+  traversal, symlink escapes, and hostile filename prevention.
+- `core/host_process.py` centralizes host-process trust enforcement through one
+  Operation Policy decision and environment-scrubbing module.
+- `core/provider_transport.py` validates provider definitions and uses
+  format-specific headers before any disk or registry mutation.
+- `core/api_retry.py` loads retry and circuit-breaker policy at request start
+  with bounded validation and half-open probe lease.
+- `core/session_tool_loop.py` owns deterministic tool-batch ordering, guard
+  decisions, and explicit internal tool outcomes.
+- `core/session_snapshot.py` and `core/message_history.py` are the single
+  persistence interface for manual save, autosave, and dangling-message repair.
+- `core/runtime_context.py` is the authoritative per-session runtime-state owner
+  with `contextvars` activation scope.
 - `core/turn_state.py` keeps per-turn loop state out of the public session and
   persistence contracts.
 - `core/provider_streams.py` isolates OpenAI-compatible and Anthropic stream

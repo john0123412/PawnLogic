@@ -11,7 +11,7 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.2.2**.
+CTF-oriented toolchain. The current public release is **0.2.3**.
 
 ## System Requirements
 
@@ -97,23 +97,31 @@ Use `pawn --debug` or `/mode` when you need detailed diagnostics.
 
 ## What's New
 
-Version 0.2.2 makes runtime debugging more repeatable while preserving the
-0.2.1 public contracts:
+Version 0.2.3 closes safety gaps, makes custom providers recover predictably,
+and deepens runtime modules while preserving the 0.2.2 public contracts:
 
-- A local runtime evaluation harness now writes redacted JSONL artifacts for
-  deterministic offline checks, safe tool smoke, bounded real API smoke, and
-  optional Docker/browser/CTF suites.
-- Real API smoke remains opt-in and bounded by local API-call and duration
-  budgets; raw provider keys are not printed or persisted.
-- CLI transcript checks cover core slash-command output for `/help`, `/mode`,
-  `/provider list`, `/model`, and `/exit`.
-- CI now runs the offline runtime evaluation suite in the fast Python 3.11
-  path and uploads redacted runtime evaluation artifacts.
-- Provider retry behavior is configurable with `PAWNLOGIC_API_RETRY_MAX` and
-  `PAWNLOGIC_API_RETRY_AFTER_MAX` while keeping existing defaults.
-- API payload/header construction moved into a smaller internal module without
-  changing CLI syntax, provider visibility, stream delta dicts, tool result
-  shape, or `reasoning_content` persistence.
+- Canonical path containment prevents workspace traversal, symlink escapes, and
+  hostile MCP server-name injection through `core/path_policy.py`.
+- Centralized host-process trust enforcement gives host shell, code-execution,
+  and pwn debugger subprocesses shared Operation Policy decisions. Docker
+  network/destructive actions and delegate capabilities remain explicitly gated,
+  while browser access keeps its dedicated network trust warning.
+- Transactional provider mutations validate name, URL, format, and definition
+  metadata before writing keys; on write failure, disk and memory stay unchanged.
+  Format-specific headers (OpenAI bearer, Anthropic x-api-key) are used
+  consistently across test, fetch, stream, and non-stream paths.
+- Unified retry and circuit-breaker policy loads at request start with bounded
+  validation, retries only when no partial response has been emitted, and gives
+  half-open state a single probe lease.
+- Runtime evaluation enforces real deadlines through child-process termination,
+  produces schema-versioned atomic JSONL artifacts, and runs offline replay
+  scenarios with provider stream fixtures without network access.
+- Bounded codex goal runner provides maintainer-only unattended work with
+  locking, manifest, heartbeat, wall-clock timeout, and explicit capability
+  gates.
+- Module ownership splits isolate CLI startup/REPL, provider TUI state, tool
+  implementations, session persistence, runtime context, and runtime metrics
+  behind tested internal interfaces.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
