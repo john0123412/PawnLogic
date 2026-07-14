@@ -723,7 +723,9 @@ def tool_install_package(a: dict) -> str:
 
 def docker_prune_resources() -> str:
     """
-    Remove stopped containers and dangling images; return freed space in MB.
+    Remove stopped PawnLogic-managed containers and dangling images.
+    Only cleans resources with the 'pawn=true' label to avoid touching
+    user-managed containers. Returns freed space in MB.
     """
     client = _get_docker_client()
     if not client:
@@ -734,9 +736,11 @@ def docker_prune_resources() -> str:
     deleted_images = []
     errors = []
 
-    # Remove stopped containers.
+    # Remove only PawnLogic-managed stopped containers.
     try:
-        container_result = client.containers.prune()
+        container_result = client.containers.prune(
+            filters={"label": "pawn=true"}
+        )
         freed_bytes += container_result.get("SpaceReclaimed", 0)
         deleted_containers = container_result.get("ContainersDeleted") or []
     except Exception as e:

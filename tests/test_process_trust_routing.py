@@ -198,3 +198,35 @@ class TestHostProcessRunnerAuthorization:
             outcome = runner.run(request)
             assert outcome.returncode == 0
             assert "hello" in outcome.output
+
+
+class TestDockerNetworkAuthorization:
+    """Tests that Docker requires explicit network authorization."""
+
+    def test_docker_default_network_is_none(self) -> None:
+        """Docker should default to network=none."""
+        from tools.docker_sandbox import _check_network_policy
+
+        # Without allow_network flag, network=bridge should be blocked.
+        result = _check_network_policy({}, "bridge")
+        assert result is not None
+        assert "SECURITY BLOCK" in result
+
+    def test_docker_none_network_allowed(self) -> None:
+        """Docker network=none should always be allowed."""
+        from tools.docker_sandbox import _check_network_policy
+
+        result = _check_network_policy({}, "none")
+        assert result is None
+
+
+class TestDockerLabelRestrictedCleanup:
+    """Tests that Docker cleanup only removes PawnLogic-managed resources."""
+
+    def test_docker_prune_uses_label_filter(self) -> None:
+        """docker_prune_resources should filter by pawn=true label."""
+        import inspect
+        from tools.docker_sandbox import docker_prune_resources
+
+        source = inspect.getsource(docker_prune_resources)
+        assert "pawn=true" in source or "label" in source

@@ -271,6 +271,38 @@ def test_api_client_sse_sanitizer_and_circuit_breaker(monkeypatch):
     kept = api_client._sanitize_messages_for_model(raw_messages, "ds-v4-flash")
     assert kept[0]["reasoning_content"] == "keep only for reasoning models"
 
+
+def test_circuit_half_open_grants_exactly_one_probe(monkeypatch):
+    from core import api_client
+
+    provider = "https://half-open.example"
+    monkeypatch.setattr(api_client, "_CB_RESET_SEC", 0)
+    api_client._CIRCUIT_BREAKERS[provider] = {
+        "state": "open",
+        "failures": api_client._CB_TRIP_AT,
+        "opened_at": 0.0,
+        "probe_in_flight": False,
+    }
+
+    assert api_client._cb_allow(provider) is True
+    assert api_client._cb_allow(provider) is False
+    api_client._cb_record_failure(provider)
+    assert api_client._CIRCUIT_BREAKERS[provider]["state"] == "open"
+
+
+def test_request_timeouts_are_loaded_at_each_request(monkeypatch):
+    from core import api_client
+
+    monkeypatch.setenv("PAWNLOGIC_API_CONNECT_TIMEOUT", "37")
+    monkeypatch.setenv("PAWNLOGIC_API_READ_TIMEOUT", "41")
+    monkeypatch.setenv("PAWNLOGIC_API_NONSTREAM_TIMEOUT", "43")
+
+    policy = api_client.get_retry_policy()
+
+    assert policy.connect_timeout_seconds == 37
+    assert policy.read_timeout_seconds == 41
+    assert policy.nonstream_timeout_seconds == 43
+
     provider = "unit-provider"
     api_client._CIRCUIT_BREAKERS.clear()
     for _ in range(api_client._CB_TRIP_AT):
@@ -472,7 +504,7 @@ def test_api_client_stream_request_honors_retry_after(monkeypatch):
     monkeypatch.setattr(
         api_client,
         "_retry_delay",
-        lambda attempt, retry_after=None: retry_calls.append((attempt, retry_after)) or 0.25,
+        lambda attempt, retry_after=None, **_kw: retry_calls.append((attempt, retry_after)) or 0.25,
     )
     monkeypatch.setattr(api_client, "_interruptible_sleep", lambda seconds: sleeps.append(seconds))
 

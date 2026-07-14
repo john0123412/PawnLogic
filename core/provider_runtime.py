@@ -21,7 +21,12 @@ from config.providers import (
     is_chat_model_candidate,
     models_url_from_base_url,
 )
-from core.api_errors import format_http_error, format_transport_error
+from core.api_errors import _retry_delay, format_http_error, format_transport_error
+from core.api_retry import (
+    is_retryable_http_status,
+    is_retryable_transport_error,
+    retry_policy_from_env,
+)
 from core.file_store import atomic_write_text, ensure_private_dir
 from core.logger import logger
 from core.provider_transport import provider_headers
@@ -38,6 +43,37 @@ UNSUPPORTED_MODEL_MARKERS = (
 REASONING_KEYWORDS = ("mimo", "deepseek", "qwq")
 _WARNED_HTTP_PROVIDER_URLS: set[str] = set()
 load_custom_providers = init_providers
+
+
+async def _request_with_retry(request, *, policy):
+    """Execute one provider request with the shared pre-response retry policy."""
+    last_error: Exception | None = None
+    for attempt in range(policy.max_attempts):
+        try:
+            response = await request()
+        except Exception as exc:
+            last_error = exc
+            if not is_retryable_transport_error(exc) or attempt >= policy.max_attempts - 1:
+                raise
+            await asyncio.sleep(_retry_delay(attempt))
+            continue
+        if (
+            is_retryable_http_status(response.status_code)
+            and attempt < policy.max_attempts - 1
+        ):
+            retry_after = response.headers.get("Retry-After")
+            await asyncio.sleep(
+                _retry_delay(
+                    attempt,
+                    retry_after,
+                    retry_after_max=policy.retry_after_cap_seconds,
+                )
+            )
+            continue
+        return response
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("provider request exhausted without a response")
 
 
 def _user_mode() -> bool:
@@ -267,6 +303,7 @@ async def test_connection(
     import httpx
 
     t0 = time.monotonic()
+    policy = retry_policy_from_env()
     if not api_key:
         return False, "API key is not configured.", 0
     if not model_id:
@@ -287,14 +324,17 @@ async def test_connection(
     else:
         headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(endpoint, json=payload, headers=headers)
+        async with httpx.AsyncClient(timeout=policy.nonstream_timeout_seconds) as client:
+            resp = await _request_with_retry(
+                lambda: client.post(endpoint, json=payload, headers=headers),
+                policy=policy,
+            )
         ms = int((time.monotonic() - t0) * 1000)
         return connection_result_from_response(resp, ms)
     except httpx.TimeoutException:
         return (
             False,
-            "Connection timeout: provider did not respond within 10s.",
+            f"Connection timeout: provider did not respond within {policy.nonstream_timeout_seconds:g}s.",
             int((time.monotonic() - t0) * 1000),
         )
     except httpx.HTTPError as exc:
@@ -310,6 +350,7 @@ async def fetch_models(
 ) -> tuple[list[tuple[str, dict]], str, dict]:
     import httpx
 
+    policy = retry_policy_from_env()
     models_url = models_url_from_base_url(base_url)
     maybe_warn_insecure_provider(models_url)
     all_data: list = []
@@ -317,9 +358,12 @@ async def fetch_models(
     headers = provider_headers(api_format, api_key)
     url: str | None = f"{models_url}?limit=200"
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=policy.nonstream_timeout_seconds) as client:
             while url:
-                resp = await client.get(url, headers=headers)
+                resp = await _request_with_retry(
+                    lambda url=url: client.get(url, headers=headers),
+                    policy=policy,
+                )
                 try:
                     resp.raise_for_status()
                 except httpx.HTTPStatusError as exc:
@@ -339,7 +383,10 @@ async def fetch_models(
                 cursor = body.get("next_cursor") or body.get("next_page")
                 url = f"{models_url}?limit=200&after={cursor}" if cursor else None
     except httpx.TimeoutException:
-        return [], "Connection timeout: provider did not return /v1/models within 15s.", stats
+        return [], (
+            "Connection timeout: provider did not return /v1/models within "
+            f"{policy.nonstream_timeout_seconds:g}s."
+        ), stats
     except httpx.HTTPError as exc:
         return [], format_transport_error(exc), stats
     except Exception as exc:

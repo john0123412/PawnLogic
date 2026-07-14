@@ -22,6 +22,10 @@ class RuntimeMetricsSnapshot:
     total_tool_latency_ms: int = 0
     turn_provider_retries: int = 0
     total_provider_retries: int = 0
+    total_circuit_probes: int = 0
+    total_circuit_rejections: int = 0
+    total_circuit_successes: int = 0
+    total_circuit_failures: int = 0
     turn_prompt_tokens: int = 0
     turn_completion_tokens: int = 0
     total_prompt_tokens: int = 0
@@ -51,6 +55,10 @@ class RuntimeMetrics:
     total_tool_latency_ms: int = 0
     turn_provider_retries: int = 0
     total_provider_retries: int = 0
+    total_circuit_probes: int = 0
+    total_circuit_rejections: int = 0
+    total_circuit_successes: int = 0
+    total_circuit_failures: int = 0
     turn_prompt_tokens: int = 0
     turn_completion_tokens: int = 0
     total_prompt_tokens: int = 0
@@ -85,6 +93,18 @@ class RuntimeMetrics:
         self.turn_provider_retries += count
         self.total_provider_retries += count
 
+    def record_circuit_probe(self) -> None:
+        self.total_circuit_probes += 1
+
+    def record_circuit_rejection(self) -> None:
+        self.total_circuit_rejections += 1
+
+    def record_circuit_success(self) -> None:
+        self.total_circuit_successes += 1
+
+    def record_circuit_failure(self) -> None:
+        self.total_circuit_failures += 1
+
     def record_tool_call(self, *, elapsed_ms: int = 0) -> None:
         """Record one executed tool call and its elapsed time."""
         self.turn_tool_calls += 1
@@ -110,6 +130,10 @@ class RuntimeMetrics:
             total_tool_latency_ms=self.total_tool_latency_ms,
             turn_provider_retries=self.turn_provider_retries,
             total_provider_retries=self.total_provider_retries,
+            total_circuit_probes=self.total_circuit_probes,
+            total_circuit_rejections=self.total_circuit_rejections,
+            total_circuit_successes=self.total_circuit_successes,
+            total_circuit_failures=self.total_circuit_failures,
             turn_prompt_tokens=self.turn_prompt_tokens,
             turn_completion_tokens=self.turn_completion_tokens,
             total_prompt_tokens=self.total_prompt_tokens,

@@ -1,5 +1,8 @@
 """Tests for shared provider API error formatting."""
 
+import socket
+import ssl
+
 from core.api_errors import (
     _retry_delay,
     format_http_error,
@@ -8,6 +11,7 @@ from core.api_errors import (
     retry_after_max_from_env,
     retry_notice,
 )
+from core.api_retry import is_retryable_transport_error
 
 
 def test_format_http_error_covers_common_provider_statuses():
@@ -46,6 +50,23 @@ def test_retryable_http_status_policy_is_explicit():
 
     assert all(is_retryable_http_status(status) for status in retryable)
     assert not any(is_retryable_http_status(status) for status in non_retryable)
+
+
+def test_transport_retry_classification_is_shared_and_fail_closed():
+    retryable = [
+        socket.gaierror("dns"),
+        ConnectionRefusedError("refused"),
+        ConnectionResetError("reset"),
+        TimeoutError("slow"),
+    ]
+    non_retryable = [
+        ssl.SSLCertVerificationError("bad cert"),
+        ValueError("malformed URL"),
+        TypeError("invalid payload"),
+    ]
+
+    assert all(is_retryable_transport_error(exc) for exc in retryable)
+    assert not any(is_retryable_transport_error(exc) for exc in non_retryable)
 
 
 def test_retry_delay_honors_bounded_retry_after():
