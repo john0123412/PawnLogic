@@ -133,11 +133,8 @@ def test_eval_debug_mode_exception_keeps_traceback(monkeypatch, capsys):
 
 
 def test_tool_call_display_hides_argument_preview_until_debug(capsys):
-    import json
-
     from core.session import AgentSession
     from core.tool_executor import (
-        ToolExecutionOutcome,
         ToolExecutionResult,
         ToolFailureRecordResult,
         ToolFailurePrecheckResult,
@@ -166,33 +163,12 @@ def test_tool_call_display_hides_argument_preview_until_debug(capsys):
         def process(self, **_kwargs):
             return ProcessedToolResult(content="ok")
 
-    def _fake_execute_one_tool_call(
-        i, tc, *, iteration, max_iter, tool_executor, result_processor, current_tools
-    ):
-        from core.state import state as _st
-        name = tc["name"]
-        fn_args = json.loads(tc.get("args", "{}"))
-        preview = str(fn_args)[:80]
-        if _st.debug_mode:
-            print(f"  🔧 {name}({preview})")
-        else:
-            print(f"  Working with {name}...")
-        result = tool_executor.execute_handler(
-            tool_call_id=tc["id"],
-            tool_name=name,
-            arguments=fn_args,
-        )
-        outcome = ToolExecutionOutcome(status="success", content=result.content)
-        return current_tools, outcome
-
     session = SimpleNamespace(
         current_phase="RECON",
         messages=[],
         _runtime_metrics=FakeMetrics(),
         _tool_execution_context=lambda _iteration: None,
         _record_tool_metrics=lambda **_kwargs: None,
-        _inject_plan_missing_signal=lambda: None,
-        _execute_one_tool_call=_fake_execute_one_tool_call,
         session_id="session123",
         model_alias="ds-v4-flash",
         workspace_dir="",
