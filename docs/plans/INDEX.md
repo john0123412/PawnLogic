@@ -5,9 +5,8 @@
 
 ## Active Plan
 
-| Version | Plan | Status |
-|---------|------|--------|
-| 0.2.3 | [0.2.3-autonomous-runtime-reliability-deepening.md](0.2.3-autonomous-runtime-reliability-deepening.md) | In progress |
+There is no active release plan. The next iteration must register its plan here
+before implementation begins.
 
 There is exactly one active plan at a time. When the active plan is completed
 and its release is published, it moves to Completed below.
@@ -16,6 +15,7 @@ and its release is published, it moves to Completed below.
 
 | Version | Plan | Release |
 |---------|------|---------|
+| 0.2.3 | [0.2.3-autonomous-runtime-reliability-deepening.md](0.2.3-autonomous-runtime-reliability-deepening.md) | v0.2.3 |
 | 0.2.2 | [0.2.2-runtime-evaluation-architecture-slimming.md](0.2.2-runtime-evaluation-architecture-slimming.md) | v0.2.2 |
 | 0.2.1 | [0.2.1-post-release-stabilization.md](0.2.1-post-release-stabilization.md) | v0.2.1 |
 | 0.2.0 | [0.2.0-consolidation-release.md](0.2.0-consolidation-release.md) | v0.2.0 |

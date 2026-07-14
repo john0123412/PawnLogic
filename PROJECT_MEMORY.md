@@ -11,14 +11,13 @@ release history.
 
 ## Current Release State
 
-- Current public release: `0.2.2`.
-- Prepared release candidate: `0.2.3` (not yet tagged or published to PyPI).
+- Current public release: `0.2.3`.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Latest published tag: `v0.2.2`.
+- Latest published tag: `v0.2.3`.
 - Most recent completed plan:
-  `docs/plans/0.2.2-runtime-evaluation-architecture-slimming.md`.
-- Active plan:
   `docs/plans/0.2.3-autonomous-runtime-reliability-deepening.md`.
+- Active plan: none. Register the next iteration in `docs/plans/INDEX.md`
+  before implementation begins.
 - Local release artifacts such as `dist/`, `build/`, and `*.egg-info/` should
   not remain after release validation unless a maintainer explicitly asks to
   keep them.
@@ -249,7 +248,7 @@ The iteration preserved public CLI syntax, provider visibility rules, public
 stream delta dict schema, tool result message shape, assistant message shape,
 and `reasoning_content` persistence.
 
-## Active Iteration: 0.2.3 Autonomous Runtime Reliability And Deepening
+## Completed Iteration: 0.2.3 Autonomous Runtime Reliability And Deepening
 
 The 0.2.3 iteration closed confirmed safety and release-gate gaps, deepened
 runtime modules, improved custom Provider transaction/retry behavior, made
@@ -257,11 +256,10 @@ runtime evaluation enforce real budgets and exercise real local paths, restored
 bounded WSL2 Codex automation, and reduced large-file ownership hotspots without
 changing public runtime contracts.
 
-The release candidate is prepared on branch `release/0.2.3-prep`. Use
+The release was published as `v0.2.3` on 2026-07-14. Use
 `docs/plans/0.2.3-autonomous-runtime-reliability-deepening.md` for PR order,
 Interface definitions, targeted tests, CI monitoring, stop conditions, and the
-separate release-authorization gate. Remote validation, merge, tag, PyPI
-publish, and GitHub Release steps remain pending maintainer authorization.
+complete release evidence.
 
 ## Typed Island
 
