@@ -86,6 +86,10 @@ These contracts are more important than local refactoring convenience:
 
 - `core/session.py` owns the main turn loop and session orchestration.
 - `core/turn_state.py` is an internal per-turn state snapshot, not a public API.
+- `core/session_tool_loop.py` owns deterministic tool-batch ordering, guard
+  decisions, PLAN correction timing, and explicit internal tool outcomes.
+- `core/tool_executor.py` owns single-call execution and failure envelopes;
+  public tool message dictionaries remain compatibility contracts.
 - `core/runtime_context.py` owns session runtime state such as cwd, workspace,
   sink, debug mode, user mode, and dynamic config.
 - `core/runtime_metrics.py` owns internal metrics snapshots. Metrics are local
@@ -241,6 +245,7 @@ Current stable candidates and covered modules include:
 - `core/context_window.py`
 - `core/workspace_cleanup.py`
 - `core/turn_state.py`
+- `core/session_tool_loop.py`
 - `core/provider_streams.py`
 - `core/runtime_metrics.py`
 - `core/mcp_client_manager.py`

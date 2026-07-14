@@ -175,6 +175,7 @@ module = [
     "core.provider_transport",
     "core.api_retry",
     "core.provider_tui_state",
+    "core.session_tool_loop",
     "tools.text_patch",
     "tools.shell_ops",
     "tools.docker_plan",

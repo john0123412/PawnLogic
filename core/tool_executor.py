@@ -42,6 +42,16 @@ class ToolExecutionResult:
     error_type: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def outcome(self) -> ToolExecutionOutcome:
+        """Return the explicit internal outcome without changing message shape."""
+        return ToolExecutionOutcome(
+            status="success" if self.audit_ok else "failed",
+            content=self.content,
+            error_type=self.error_type or None,
+            side_effect=bool(self.metadata.get("side_effect", False)),
+        )
+
     def tool_message(self) -> dict[str, str]:
         """Return the chat message shape expected by provider APIs."""
         return {
@@ -49,6 +59,16 @@ class ToolExecutionResult:
             "tool_call_id": self.tool_call_id,
             "content": self.content,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ToolExecutionOutcome:
+    """Stable internal success/failure contract for one tool execution."""
+
+    status: str
+    content: str
+    error_type: str | None = None
+    side_effect: bool = False
 
 
 @dataclass(slots=True)
@@ -418,6 +438,7 @@ __all__ = [
     "SEMANTIC_FAILURE_SIGNALS",
     "PhaseSwitchResult",
     "ToolExecutionContext",
+    "ToolExecutionOutcome",
     "ToolExecutionResult",
     "ToolExecutor",
     "ToolFailurePrecheckResult",
