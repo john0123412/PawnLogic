@@ -337,6 +337,7 @@ def tool_run_code_docker(a: dict) -> str:
                 cpu_period=100000,
                 cpu_quota=50000,
                 pids_limit=256,
+                labels={"pawn": "true", "pawn_name": "run_code_docker"},
                 detach=True,
                 stderr=True,
                 stdout=True,

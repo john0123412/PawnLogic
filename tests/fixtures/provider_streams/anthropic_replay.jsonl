@@ -1,0 +1,4 @@
+{"format":"anthropic","kind":"text","event":"content_block_delta","payload":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}}
+{"format":"anthropic","kind":"usage","event":"message_delta","payload":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}}
+{"format":"anthropic","kind":"tool_call","event":"content_block_start","payload":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool_fixture","name":"list_dir"}}}
+{"format":"anthropic","kind":"tool_call","event":"content_block_delta","payload":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}}

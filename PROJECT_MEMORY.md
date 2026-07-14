@@ -179,6 +179,10 @@ These contracts are more important than local refactoring convenience:
   are unavailable; when available, they stay local by using no-network Docker
   execution with workspace-bound mounts, a local static HTML server, and local
   binary tooling only. CI runs only the offline runtime evaluation suite.
+- `tools/eval/scenarios/` owns production-parser replay, Registry-backed safe
+  tool smoke, and deterministic resource-growth soak workloads. Provider replay
+  fixtures cover text, usage, tool calls, retry notices, malformed events, and
+  partial-stream interruption without network access.
 - `tools/merge_ctf_skills.py` is a maintenance helper for optional CTF skills.
 - `THIRD_PARTY_NOTICES.md` records redistribution decisions for third-party
   skill content.

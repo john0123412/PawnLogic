@@ -1,0 +1,6 @@
+{"format":"openai","kind":"text","payload":{"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}}
+{"format":"openai","kind":"usage","payload":{"usage":{"prompt_tokens":3,"completion_tokens":1},"choices":[]}}
+{"format":"openai","kind":"tool_call","payload":{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_fixture","function":{"name":"list_dir","arguments":"{}"}}]},"finish_reason":null}]}}
+{"format":"openai","kind":"retry","payload":{"_retry":"fixture retry"}}
+{"format":"openai","kind":"malformed","raw":"{\"choices\":[{\"delta\":{\"content\":\"recovered\"},}],}"}
+{"format":"openai","kind":"interruption","partial_text":"partial","error":"connection reset"}
