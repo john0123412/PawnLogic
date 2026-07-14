@@ -5,51 +5,32 @@ tools/pwn_chain.py - CTF / Pwn toolchain.
   pwn_one_gadget - one_gadget execve trampoline search
 """
 
-import re, shlex, shutil, subprocess, tempfile, os
-from collections import OrderedDict
+import re, shutil, subprocess, tempfile, os
 from pathlib import Path
 from core.host_process import HostProcessRunner, HostProcessRequest
 from config import scrub_sensitive_env
 from utils.ansi import c, YELLOW, MAGENTA, GRAY, GREEN, RED
 from tools.file_ops import _run, _check_read, _session_cwd, _get_shell_env
+from tools.pwn_binary import ElfAnalysisCache, cyclic_result, shell_quote
+from tools.pwn_debugger import build_gdb_plan
 
 # ELF analysis cache, keyed by (path, mtime), capped at 10 entries.
-_ELF_CACHE: OrderedDict[tuple, dict] = OrderedDict()
-_ELF_CACHE_MAX = 10
+_ELF_CACHE = ElfAnalysisCache(max_entries=10)
 _ADDR_RANGE_RE = re.compile(r"^(?:0x[0-9a-fA-F]+|[0-9]+)(?::(?:0x[0-9a-fA-F]+|[0-9]+))?$")
 
 
 def _q(value: str) -> str:
-    return shlex.quote(str(value))
+    return shell_quote(value)
 
 
 def _cache_get(path: str, slot: str) -> str | None:
     """Return cached string on hit, otherwise None."""
-    try:
-        mtime = os.path.getmtime(path)
-    except OSError:
-        return None
-    key = (os.path.abspath(path), mtime)
-    entry = _ELF_CACHE.get(key)
-    if entry and slot in entry:
-        _ELF_CACHE.move_to_end(key)
-        return entry[slot]
-    return None
+    return _ELF_CACHE.get(path, slot)
 
 
 def _cache_set(path: str, slot: str, value: str) -> None:
     """Write cache entry and evict the oldest item when over capacity."""
-    try:
-        mtime = os.path.getmtime(path)
-    except OSError:
-        return
-    key = (os.path.abspath(path), mtime)
-    if key not in _ELF_CACHE:
-        _ELF_CACHE[key] = {}
-        if len(_ELF_CACHE) > _ELF_CACHE_MAX:
-            _ELF_CACHE.popitem(last=False)
-    _ELF_CACHE[key][slot] = value
-    _ELF_CACHE.move_to_end(key)
+    _ELF_CACHE.set(path, slot, value)
 
 # ════════════════════════════════════════════════════════
 # pwn_env: environment completeness check.
@@ -212,46 +193,7 @@ def tool_pwn_rop(a: dict) -> str:
 # ════════════════════════════════════════════════════════
 
 def tool_pwn_cyclic(a: dict) -> str:
-    action   = a["action"]
-    alphabet = b"abcdefghijklmnopqrstuvwxyz"; k = 4
-
-    def _debruijn():
-        arr = [0] * k * len(alphabet); seq = []
-        def db(t, p):
-            if t > k:
-                if k % p == 0: seq.extend(arr[1:p+1])
-            else:
-                arr[t] = arr[t-p]; db(t+1, p)
-                for j in range(arr[t-p]+1, len(alphabet)):
-                    arr[t] = j; db(t+1, t)
-        db(1,1)
-        return bytes(alphabet[i] for i in seq)
-
-    pat = _debruijn()
-
-    def gen(n=200):
-        out = b""
-        while len(out) < n: out += pat
-        return out[:n].decode("latin-1")
-
-    def find(val_str):
-        val_str = val_str.strip()
-        try:
-            raw = bytes.fromhex(val_str[2:]) if val_str.startswith("0x") else val_str.encode("latin-1")[:k]
-        except Exception as e: return f"ERROR: {e}"
-        big = b""
-        while len(big) < 8192: big += pat
-        for i in range(len(big)-k+1):
-            if big[i:i+k] == raw:      return f"Offset (little-endian): {i}  (hex: {raw.hex()})"
-            if big[i:i+k] == raw[::-1]: return f"Offset (big-endian): {i}"
-        return f"'{val_str}' not found. Check format, e.g. 0x61616161 or aaab."
-
-    if action == "gen":   return f"Cyclic ({a.get('length',200)} bytes):\n{gen(int(a.get('length',200)))}"
-    if action == "find":
-        val = a.get("value","")
-        if not val: return "ERROR: find requires 'value'"
-        return find(val)
-    return "ERROR: action = gen | find"
+    return cyclic_result(a)
 
 # ════════════════════════════════════════════════════════
 # pwn_disasm
@@ -337,10 +279,10 @@ def tool_pwn_debug(a: dict) -> str:
     # Interactive mode delegates to tool_run_interactive.
     if interactive_mode:
         from tools.file_ops import tool_run_interactive
-        bp_cmds = []
-        for bp in breakpoints:
-            bp_cmds.append(f"b *{bp}\n" if (bp.startswith("0x") or bp.isdigit()) else f"b {bp}\n")
-        gdb_inputs = bp_cmds + [f"{cmd}\n" for cmd in commands] + ["quit\n"]
+        gdb_inputs = list(build_gdb_plan(
+            breakpoints=breakpoints,
+            commands=commands,
+        ).interactive_inputs)
         if a.get("inputs"):
             gdb_inputs = list(a["inputs"]) + gdb_inputs
         gdb_opts = "" if use_pwndbg else "-nx "
@@ -351,25 +293,6 @@ def tool_pwn_debug(a: dict) -> str:
             "inputs":  gdb_inputs,
             "timeout": timeout,
         })
-
-    # Build GDB script.
-    script_lines = ["set pagination off", "set confirm off", "set debuginfod enabled off"]
-
-    # pwndbg support.
-    if use_pwndbg:
-        pwndbg_init = os.path.expanduser("~/.gdbinit.pwndbg")
-        gdbinit     = os.path.expanduser("~/.gdbinit")
-        if os.path.exists(pwndbg_init):
-            script_lines.insert(0, f"source {pwndbg_init}")
-        elif os.path.exists(gdbinit):
-            pass
-
-    # Set breakpoints.
-    for bp in breakpoints:
-        if bp.startswith("0x") or bp.isdigit():
-            script_lines.append(f"b *{bp}")
-        else:
-            script_lines.append(f"b {bp}")
 
     # Write input_data to a temporary file.
     tmp_input = None
@@ -385,15 +308,15 @@ def tool_pwn_debug(a: dict) -> str:
         tmp_input  = tmp.name
         input_file = tmp_input
 
-    # run command.
-    if input_file:
-        script_lines.append(f"run < '{input_file}'")
-    else:
-        script_lines.append("run")
-
-    # Debug commands after breakpoint.
-    script_lines.extend(commands)
-    script_lines.append("quit")
+    script_lines = list(build_gdb_plan(
+        breakpoints=breakpoints,
+        commands=commands,
+        input_file=input_file,
+    ).script_lines)
+    if use_pwndbg:
+        pwndbg_init = os.path.expanduser("~/.gdbinit.pwndbg")
+        if os.path.exists(pwndbg_init):
+            script_lines.insert(0, f"source {pwndbg_init}")
 
     # Write GDB script file.
     with tempfile.NamedTemporaryFile(mode="w", delete=False,

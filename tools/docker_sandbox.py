@@ -21,6 +21,7 @@ import os, re, tempfile
 from config import DANGEROUS_PATTERNS, READ_BLACKLIST, WORKSPACE_DIR
 from core.state import state as _runtime_state, runtime_config
 from core.trust import TrustBoundaryKind, trust_notice_for_boundary
+from tools.docker_plan import build_docker_execution_plan
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN, MAGENTA, BOLD
 
 # ════════════════════════════════════════════════════════
@@ -234,66 +235,23 @@ def tool_run_code_docker(a: dict) -> str:
     -------
     str: execution result (stdout + stderr) plus container cleanup status.
     """
-    language     = a.get("language", "python").lower().strip()
     code         = a.get("code", "")
-    raw_image    = a.get("image", "")
-    timeout      = int(a.get("timeout", 30))
     mount_files  = a.get("mount_files", {})
-    network      = (a.get("network", "none") or "none").strip().lower()
     stdin_data   = a.get("stdin", "")
-    install_deps = a.get("install_deps", "").strip()
-
-    if not code:
-        return "ERROR: code parameter is required"
-
-    # Security checks.
-    err = _check_docker_cmd(code)
-    if err:
-        return err
-    err = _check_network_policy(a, network)
-    if err:
-        return err
-
-    # Language -> file extension + execution command.
-    _LANG_MAP = {
-        "python":     (".py",  "python3 /code/main.py"),
-        "c":          (".c",   "gcc -O0 -g /code/main.c -o /code/main -lm && /code/main"),
-        "cpp":        (".cpp", "g++ -O0 -g -std=c++17 /code/main.cpp -o /code/main && /code/main"),
-        "bash":       (".sh",  "bash /code/main.sh"),
-        "javascript": (".js",  "node /code/main.js"),
-        "rust":       (".rs",  "rustc /code/main.rs -o /code/main && /code/main"),
-        "go":         (".go",  "cd /code && go run main.go"),
-        "java":       (".java", "cd /code && javac Main.java && java -cp . Main"),
-    }
-
-    if language not in _LANG_MAP:
-        return f"ERROR: unsupported language '{language}'. Supported: {', '.join(_LANG_MAP.keys())}"
-
-    ext, run_cmd = _LANG_MAP[language]
-
-    # Smart image selection when no explicit image is provided.
-    _LANG_IMAGE_MAP = {
-        "python":     "python",
-        "c":          "gcc",
-        "cpp":        "gcc",
-        "bash":       "ubuntu22",
-        "javascript": "ubuntu22",
-        "rust":       "ubuntu22",
-        "go":         "ubuntu22",
-        "java":       "ubuntu22",
-    }
-    if raw_image:
-        image_name = _resolve_image(raw_image)
-    else:
-        image_name = _resolve_image(_LANG_IMAGE_MAP.get(language, "pwndocker"))
-
-    # Python dependency installation.
-    if language == "python" and install_deps:
-        pkgs = install_deps.split()
-        invalid = [pkg for pkg in pkgs if not _PKG_NAME_RE.fullmatch(pkg)]
-        if invalid:
-            return "ERROR: invalid Python package name(s): " + ", ".join(invalid)
-        run_cmd = f"pip install {' '.join(pkgs)} -q && {run_cmd}"
+    plan, error = build_docker_execution_plan(
+        a,
+        resolve_image=_resolve_image,
+        network_error=_check_network_policy,
+        command_error=_check_docker_cmd,
+    )
+    if error or plan is None:
+        return error or "ERROR: invalid Docker execution plan"
+    language = plan.language
+    timeout = plan.timeout_seconds
+    network = plan.network
+    ext = plan.extension
+    run_cmd = plan.command
+    image_name = plan.image
 
     client = _get_docker_client()
     if not client:

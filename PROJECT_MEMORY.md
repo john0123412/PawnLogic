@@ -136,8 +136,15 @@ These contracts are more important than local refactoring convenience:
 - `core/trust.py` and `core/operation_policy.py` own trust-boundary categories,
   notices, and command-risk policy.
 - `tools/file_ops.py` owns workspace-bound file operations.
+- `tools/text_patch.py` owns SEARCH/REPLACE matching and diagnostics;
+  `tools/file_ops.py` keeps the public `patch_file` adapter.
+- `tools/shell_ops.py` owns host-shell authorization orchestration.
 - `tools/sandbox.py` owns host shell execution policy integration.
 - `tools/docker_sandbox.py` owns Docker execution boundaries.
+- `tools/docker_plan.py` validates pure Docker execution plans before SDK use.
+- `tools/pwn_binary.py` owns pure/cached binary helpers, while
+  `tools/pwn_debugger.py` owns GDB script planning; `tools/pwn_chain.py` keeps
+  public tool adapters.
 - `tools/browser_ops.py` owns browser automation operations and recovery paths.
 - `tests/test_trust.py`, `tests/test_operation_policy.py`,
   `tests/test_run_shell_policy.py`, and `tests/test_docker_policy.py` protect
