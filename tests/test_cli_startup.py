@@ -170,6 +170,7 @@ def test_tool_call_display_hides_argument_preview_until_debug(capsys):
         i, tc, *, iteration, max_iter, tool_executor, result_processor, current_tools
     ):
         from core.state import state as _st
+
         name = tc["name"]
         fn_args = json.loads(tc.get("args", "{}"))
         preview = str(fn_args)[:80]

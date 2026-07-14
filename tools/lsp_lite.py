@@ -14,6 +14,7 @@ Design notes:
 """
 
 import ast, os, re, subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from config import scrub_sensitive_env
 from utils.ansi import c, BLUE
@@ -161,7 +162,7 @@ def _grep_refs(symbol: str, root: str, max_results: int = 30) -> list[dict]:
 # Walk workspace
 # ════════════════════════════════════════════════════════
 
-def _walk_files(root: str):
+def _walk_files(root: str) -> Iterator[str]:
     """Yield file paths, skipping ignored directories."""
     for dirpath, dirnames, filenames in os.walk(root):
         # prune skip dirs in-place
