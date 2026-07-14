@@ -154,6 +154,21 @@ def set_active(provider_name: str, active: bool) -> tuple[bool, str]:
     return True, f"Provider is now {state}."
 
 
+def delete_custom_provider(provider_name: str) -> tuple[bool, str]:
+    """Remove a custom provider from persistence and live registries."""
+    if provider_name in ALWAYS_ACTIVE or provider_name not in PROVIDERS:
+        return False, f"Provider cannot be removed: {provider_name}"
+    try:
+        if not provider_config.remove_custom_provider(provider_name):
+            return False, f"Failed to remove provider config: {provider_name}"
+        provider_config.remove_provider(provider_name)
+        provider_config.remove_models_for_provider(provider_name)
+    except Exception as exc:
+        init_providers(force=True)
+        return False, f"Failed to remove provider: {exc}"
+    return True, ""
+
+
 def normalize_base_url(raw: str, api_format: str = "openai") -> str:
     """Build the actual chat endpoint from a stored provider URL."""
     raw = raw.rstrip("/")

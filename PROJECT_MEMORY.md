@@ -102,8 +102,11 @@ These contracts are more important than local refactoring convenience:
   definition validation, and the `ProviderDefinition` dataclass used before any
   disk or registry mutation.
 - `core/commands/provider.py` owns `/provider` and `/model` command semantics.
-- `core/provider_tui.py` owns provider TUI input, paste, focus, and confirmation
-  behavior.
+- `core/provider_tui.py` adapts prompt-toolkit rendering and key bindings.
+- `core/provider_tui_state.py` owns deterministic panel, cursor, dialog,
+  wizard, search, selection, and status transitions without IO.
+- `core/provider_runtime.py` is the shared mutation boundary for CLI and TUI
+  provider changes.
 - `tests/test_provider_commands.py` is the main provider visibility and command
   regression suite.
 - `tests/test_provider_runtime.py` protects shared provider operation behavior.
