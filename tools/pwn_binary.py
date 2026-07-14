@@ -39,6 +39,10 @@ class ElfAnalysisCache:
         self._entries[key][slot] = value
         self._entries.move_to_end(key)
 
+    def clear(self) -> None:
+        """Remove all cached entries."""
+        self._entries.clear()
+
 
 def cyclic_result(args: dict) -> str:
     alphabet = b"abcdefghijklmnopqrstuvwxyz"

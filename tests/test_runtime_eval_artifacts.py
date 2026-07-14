@@ -313,7 +313,6 @@ class TestRunner:
     def test_hard_timeout_kills_child_process(self) -> None:
         """A scenario sleeping 10s with sub-second deadline must return promptly
         and the child PID must no longer exist."""
-        import os
         import time
 
         def sleepy() -> dict:
