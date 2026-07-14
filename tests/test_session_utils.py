@@ -342,9 +342,11 @@ def _make_session():
         s.cwd = "/tmp"
         s.workspace_dir = "/tmp/test_ws"
         from core.runtime_context import RuntimeContext
+        from config import DYNAMIC_CONFIG
         s.runtime_context = RuntimeContext.for_test(
             cwd=s.cwd,
             workspace_dir=s.workspace_dir,
+            dynamic_config=DYNAMIC_CONFIG,
         )
         s.current_phase = "RECON"
         s._history_summary = ""
@@ -704,7 +706,7 @@ def test_run_turn_preserves_tool_result_order(monkeypatch):
 
 def test_run_turn_tool_exception_appends_error_result(monkeypatch):
     s, session_mod = _prepare_run_turn_session(monkeypatch)
-    monkeypatch.setattr(session_mod._runtime_state, "user_mode", False)
+    s.runtime_context.set_output_mode(debug_mode=True, user_mode=False)
 
     def broken_tool(_args):
         raise ValueError("bad tool args")

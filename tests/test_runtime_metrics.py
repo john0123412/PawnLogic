@@ -47,6 +47,9 @@ def test_runtime_metrics_records_usage_retries_tools_and_failures():
 def test_runtime_metrics_reset_turn_keeps_session_totals():
     metrics = RuntimeMetrics()
     metrics.record_turn_completed()
+    metrics.record_turn_interrupted()
+    metrics.record_turn_failed()
+    metrics.record_autosave()
     metrics.record_usage(prompt_tokens=1, completion_tokens=2)
     metrics.record_provider_retries(1)
     metrics.record_tool_call(elapsed_ms=9)
@@ -56,6 +59,10 @@ def test_runtime_metrics_reset_turn_keeps_session_totals():
     snapshot = metrics.snapshot()
 
     assert snapshot.turn_count == 1
+    assert snapshot.completed_turns == 1
+    assert snapshot.interrupted_turns == 1
+    assert snapshot.failed_turns == 1
+    assert snapshot.autosaved_turns == 1
     assert snapshot.turn_tool_calls == 0
     assert snapshot.turn_tool_latency_ms == 0
     assert snapshot.turn_provider_retries == 0

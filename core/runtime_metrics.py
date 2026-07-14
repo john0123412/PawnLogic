@@ -16,6 +16,10 @@ class RuntimeMetricsSnapshot:
     """Immutable copy of internal session runtime metrics."""
 
     turn_count: int = 0
+    completed_turns: int = 0
+    interrupted_turns: int = 0
+    failed_turns: int = 0
+    autosaved_turns: int = 0
     turn_tool_calls: int = 0
     total_tool_calls: int = 0
     turn_tool_latency_ms: int = 0
@@ -49,6 +53,10 @@ class RuntimeMetrics:
     """Mutable internal counters for an agent session."""
 
     turn_count: int = 0
+    completed_turns: int = 0
+    interrupted_turns: int = 0
+    failed_turns: int = 0
+    autosaved_turns: int = 0
     turn_tool_calls: int = 0
     total_tool_calls: int = 0
     turn_tool_latency_ms: int = 0
@@ -78,6 +86,16 @@ class RuntimeMetrics:
     def record_turn_completed(self) -> None:
         """Record that a run_turn lifecycle reached autosave."""
         self.turn_count += 1
+        self.completed_turns += 1
+
+    def record_turn_interrupted(self) -> None:
+        self.interrupted_turns += 1
+
+    def record_turn_failed(self) -> None:
+        self.failed_turns += 1
+
+    def record_autosave(self) -> None:
+        self.autosaved_turns += 1
 
     def record_usage(self, *, prompt_tokens: int = 0, completion_tokens: int = 0) -> None:
         """Record provider token usage for the current turn and session."""
@@ -124,6 +142,10 @@ class RuntimeMetrics:
         """Return an immutable copy of current counters."""
         return RuntimeMetricsSnapshot(
             turn_count=self.turn_count,
+            completed_turns=self.completed_turns,
+            interrupted_turns=self.interrupted_turns,
+            failed_turns=self.failed_turns,
+            autosaved_turns=self.autosaved_turns,
             turn_tool_calls=self.turn_tool_calls,
             total_tool_calls=self.total_tool_calls,
             turn_tool_latency_ms=self.turn_tool_latency_ms,

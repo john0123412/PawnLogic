@@ -169,9 +169,11 @@ async def cmd_state(ctx: CommandContext) -> None:
 @register("/stats")
 async def cmd_stats(ctx: CommandContext) -> None:
     session = ctx.session
-    pt = session.total_prompt_tokens
-    ct = session.total_completion_tokens
-    tt = session.total_tool_calls
+    snapshot_reader = getattr(session, "_runtime_metrics_snapshot", None)
+    snapshot = snapshot_reader() if callable(snapshot_reader) else None
+    pt = snapshot.total_prompt_tokens if snapshot else session.total_prompt_tokens
+    ct = snapshot.total_completion_tokens if snapshot else session.total_completion_tokens
+    tt = snapshot.total_tool_calls if snapshot else session.total_tool_calls
     tot = pt + ct
     est_usd = tot / 1_000_000 * 1.50
     if tot + tt == 0:

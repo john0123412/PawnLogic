@@ -35,6 +35,12 @@ only write path for those pointers is `sync_runtime_context(ctx)`.
 Slash command directory changes, Workspace swaps, and session loading update the
 session RuntimeContext first, then synchronize compatibility pointers.
 
+The active context is scoped with `contextvars`, so concurrent tests and future
+async tasks can select independent mode, config, paths, and output sinks without
+mutating each other's authoritative state. Turn execution and command dispatch
+activate the owning session context. Output and dynamic-config helpers consult
+that context first.
+
 ## Consequences
 
 Runtime state now has a named interface that tests can construct with
@@ -44,5 +50,15 @@ Older call sites remain compatible because file tools still expose the legacy
 pointers. New code should avoid direct mutation of those pointers and update the
 session RuntimeContext instead.
 
-The remaining module-level compatibility pointers are transitional. They should
-not gain new independent state.
+The remaining process globals are one-way compatibility mirrors:
+
+- `core.state.state` mirrors the active mode and dynamic config for legacy
+  imports.
+- `config.USER_MODE` and `config.QUIET_MODE` mirror output-mode compatibility
+  flags.
+- `tools.file_ops._session_cwd` and `_session_workspace_dir` mirror active paths.
+- `core.commands._common._active_sink` remains a startup fallback when no
+  RuntimeContext is active.
+
+New runtime code must not write independent state to these mirrors. It updates
+the owning RuntimeContext, then uses the documented synchronization boundary.

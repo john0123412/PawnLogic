@@ -86,8 +86,23 @@ These contracts are more important than local refactoring convenience:
 
 - `core/session.py` owns the main turn loop and session orchestration.
 - `core/turn_state.py` is an internal per-turn state snapshot, not a public API.
-- `core/runtime_context.py` owns session runtime state such as cwd, workspace,
-  sink, debug mode, user mode, and dynamic config.
+- `core/session_tool_loop.py` owns deterministic tool-batch ordering, guard
+  decisions, PLAN correction timing, and explicit internal tool outcomes.
+- `core/tool_executor.py` owns single-call execution and failure envelopes;
+  public tool message dictionaries remain compatibility contracts.
+- `core/session_snapshot.py` is the immutable save/load contract used by both
+  manual save and autosave; `core/message_history.py` owns dangling Tool Call
+  repair without importing session runtime code.
+- `core/persistence.py` is the SQLite adapter for `SessionSnapshot`.
+- `core/runtime_metrics.py` is the sole owner of completed, interrupted,
+  failed, autosaved, usage, retry, tool, and failure-class counters.
+- `core/runtime_context.py` is the authoritative session runtime-state owner for
+  cwd, workspace, sink, debug mode, user mode, and dynamic config. A
+  `contextvars` activation scope isolates sessions and async tasks; turn and
+  command execution activate their owning context.
+- `core.state`, `config` output flags, `tools.file_ops` path pointers, and the
+  command active sink are compatibility mirrors or fallbacks only. New runtime
+  writes go through `RuntimeContext`.
 - `core/runtime_metrics.py` owns internal metrics snapshots. Metrics are local
   runtime state only.
 - `tests/test_session_utils.py` and `tests/test_turn_guards.py` protect turn
@@ -241,6 +256,9 @@ Current stable candidates and covered modules include:
 - `core/context_window.py`
 - `core/workspace_cleanup.py`
 - `core/turn_state.py`
+- `core/session_tool_loop.py`
+- `core/session_snapshot.py`
+- `core/message_history.py`
 - `core/provider_streams.py`
 - `core/runtime_metrics.py`
 - `core/mcp_client_manager.py`

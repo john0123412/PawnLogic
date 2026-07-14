@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from config import DYNAMIC_CONFIG
 from core.state import runtime_config
+from core.message_history import repair_dangling_tool_calls
 
 
 def _dynamic_config() -> dict:
@@ -77,31 +78,4 @@ def _trim_and_compact_context(msgs: list) -> int:
 
 def _drop_dangling_tool_call_messages(msgs: list) -> list:
     """Return a copy without assistant tool calls that lack matching tool output."""
-    cleaned: list = []
-    i = 0
-    while i < len(msgs):
-        msg = msgs[i]
-        calls = msg.get("tool_calls") or []
-        if msg.get("role") != "assistant" or not calls:
-            cleaned.append(msg)
-            i += 1
-            continue
-
-        expected_ids = [
-            call.get("id")
-            for call in calls
-            if isinstance(call, dict) and call.get("id")
-        ]
-        j = i + 1
-        actual_ids: list[str] = []
-        while j < len(msgs) and msgs[j].get("role") == "tool":
-            tool_call_id = msgs[j].get("tool_call_id")
-            if tool_call_id:
-                actual_ids.append(tool_call_id)
-            j += 1
-
-        if expected_ids and all(call_id in actual_ids for call_id in expected_ids):
-            cleaned.append(msg)
-            cleaned.extend(msgs[i + 1:j])
-        i = j
-    return cleaned
+    return repair_dangling_tool_calls(msgs)

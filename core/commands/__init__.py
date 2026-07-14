@@ -29,9 +29,8 @@ class CommandContext:
         arg2:    Remainder of the line after `arg` (may be empty).
         session: The active AgentSession instance.
         sink:    Output sink (HumanSink or JsonSink). If left as None,
-                 `dispatch()` will inject the process-wide active sink
-                 from `core.commands._common.get_active_sink()` before
-                 invoking the handler.
+                 `dispatch()` uses the session RuntimeContext sink first,
+                 then the process-wide compatibility fallback.
     """
     verb: str
     arg: str
@@ -72,26 +71,32 @@ async def dispatch(ctx: CommandContext) -> Any:
     If unknown, prints a friendly error consistent with the legacy
     behavior and returns None.
 
-    If `ctx.sink` is None, the process-wide active sink (set once by
-    main() at startup) is injected so handlers can rely on it.
+    The owning session RuntimeContext is active while the handler runs. If
+    `ctx.sink` is None, its sink is preferred over the process-wide fallback.
     """
-    if ctx.sink is None:
-        from core.commands._common import get_active_sink
-        ctx.sink = get_active_sink()
+    from contextlib import nullcontext
 
-    handler = COMMANDS.get(ctx.verb)
-    if handler is not None:
-        from core.commands._common import set_active_sink, swap_active_sink
-        old_sink = swap_active_sink(ctx.sink)
-        try:
-            return await handler(ctx)
-        finally:
-            set_active_sink(old_sink)
+    runtime_context = getattr(ctx.session, "runtime_context", None)
+    activation = runtime_context.activate() if runtime_context is not None else nullcontext()
 
-    # Unknown verb - match legacy behavior of printing a hint.
-    from utils.ansi import c, GRAY
-    ctx.sink.print(c(GRAY, f"  Unknown command '{ctx.verb}'. Type /help."))
-    return None
+    with activation:
+        if ctx.sink is None:
+            from core.commands._common import get_active_sink
+            ctx.sink = get_active_sink()
+
+        handler = COMMANDS.get(ctx.verb)
+        if handler is not None:
+            from core.commands._common import set_active_sink, swap_active_sink
+            old_sink = swap_active_sink(ctx.sink)
+            try:
+                return await handler(ctx)
+            finally:
+                set_active_sink(old_sink)
+
+        # Unknown verb - match legacy behavior of printing a hint.
+        from utils.ansi import c, GRAY
+        ctx.sink.print(c(GRAY, f"  Unknown command '{ctx.verb}'. Type /help."))
+        return None
 
 
 # ────────────────────────────────────────────────────────
