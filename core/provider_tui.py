@@ -5,7 +5,7 @@ All UI text in English. API Keys never displayed in plain text.
 """
 from __future__ import annotations
 import asyncio, json, os
-from typing import Optional
+from typing import ClassVar, Optional
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.key_binding import KeyBindings
@@ -19,10 +19,11 @@ from prompt_toolkit.formatted_text import StyleAndTextTuples
 
 from config.providers import (
     PROVIDERS, MODELS, CUSTOM_PROVIDERS_PATH,
-    init_providers, remove_custom_provider,
+    init_providers,
     is_provider_active,
-    remove_provider, remove_model, remove_models_for_provider,
+    remove_model,
 )
+from core.provider_tui_state import ProviderTUIState
 from core.provider_runtime import (
     candidate_save_alias as _candidate_save_alias,
     connection_result_from_response as _connection_result_from_response,
@@ -42,6 +43,7 @@ from core.provider_runtime import (
     set_active as _runtime_set_active,
     sync_models_to_runtime as _sync_models_to_runtime,
     test_connection as _test_connection,
+    delete_custom_provider as _delete_custom_provider,
 )
 from core.file_store import atomic_write_text
 from core.logger import logger
@@ -133,7 +135,42 @@ def _last_synced(pname: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ProviderTUI:
+    _STATE_ATTRS: ClassVar[dict[str, str]] = {
+        "_panel": "panel", "_main_cursor": "main_cursor",
+        "_detail_provider": "detail_provider", "_detail_cursor": "detail_cursor",
+        "_detail_status": "detail_status", "_detail_status_style": "detail_status_style",
+        "_detail_key_active": "detail_key_active", "_dialog": "dialog",
+        "_dialog_cursor": "dialog_cursor", "_wiz_fields_pending": "wiz_fields_pending",
+        "_wiz_fields": "wiz_fields", "_wiz_focus": "wiz_focus",
+        "_wiz_fmt_open": "wiz_fmt_open", "_wiz_fmt_cursor": "wiz_fmt_cursor",
+        "_wiz_error": "wiz_error", "_wiz_status": "wiz_status",
+        "_wiz_status_style": "wiz_status_style", "_ms_all": "model_all",
+        "_ms_selected": "model_selected", "_ms_manual": "model_manual",
+        "_ms_cursor": "model_cursor", "_ms_viewport": "model_viewport",
+        "_ms_provider": "model_provider", "_ms_caller": "model_caller",
+        "_ms_error": "model_error", "_ms_search": "model_search",
+        "_ms_search_focus": "model_search_focus", "_ms_filter_cache": "model_filter_cache",
+        "_ms_notice": "model_notice", "_ms_save_exit": "model_save_exit",
+        "_mm_models": "manage_models", "_mm_cursor": "manage_cursor",
+        "_mm_provider": "manage_provider", "_mm_status": "manage_status",
+        "_mm_status_style": "manage_status_style",
+    }
+
+    def __getattr__(self, name: str):
+        target = self._STATE_ATTRS.get(name)
+        if target is not None and "_state" in self.__dict__:
+            return getattr(self._state, target)
+        raise AttributeError(name)
+
+    def __setattr__(self, name: str, value) -> None:
+        target = self._STATE_ATTRS.get(name)
+        if target is not None and "_state" in self.__dict__:
+            setattr(self._state, target, value)
+            return
+        object.__setattr__(self, name, value)
+
     def __init__(self):
+        self._state = ProviderTUIState()
         self._app: Optional[Application] = None
         self._panel: str = "main"
         # main
@@ -191,26 +228,15 @@ class ProviderTUI:
 
     def _ms_filtered(self) -> list[tuple[str, dict]]:
         """Return entries filtered by search string. Result cached per search query."""
-        q = self._ms_search.strip().lower()
-        if not q:
-            return self._ms_all
-        if not hasattr(self, "_ms_filter_cache") or self._ms_filter_cache[0] != q:
-            self._ms_filter_cache = (q, [(mid, cfg) for mid, cfg in self._ms_all if q in mid.lower()])
-        return self._ms_filter_cache[1]
+        return self._state.filtered_models()
 
     def _sync_model_search_from_input(self) -> None:
         self._ms_search = self._ms_search_ta.text
 
     def _reset_wizard(self) -> None:
-        self._wiz_fields = ["", "", "openai", ""]
+        self._state.reset_wizard()
         for field in self._wiz_inputs:
             field.text = ""
-        self._wiz_focus = 0
-        self._wiz_fmt_open = False
-        self._wiz_fmt_cursor = 0
-        self._wiz_error = ""
-        self._wiz_status = ""
-        self._wiz_status_style = ""
 
     def _sync_wizard_fields_from_inputs(self) -> None:
         self._wiz_fields[0] = self._wiz_inputs[0].text.strip()
@@ -898,9 +924,11 @@ class ProviderTUI:
         pname = self._detail_provider
         if pname in _BUILTIN:
             return
-        remove_custom_provider(pname)
-        remove_provider(pname)
-        remove_models_for_provider(pname)
+        ok, error = _delete_custom_provider(pname)
+        if not ok:
+            self._detail_status = f"✗ {error}"
+            self._detail_status_style = "class:error"
+            return
         rows = self._provider_rows()
         self._main_cursor = min(self._main_cursor, max(0, len(rows) - 1))
         self._panel = "main"
@@ -932,9 +960,7 @@ class ProviderTUI:
             if self._app:
                 self._app.exit()
             return
-        self._panel = self._ms_caller
-        self._detail_status = "Model sync cancelled."
-        self._detail_status_style = "class:warning"
+        self._state.cancel_model_selection()
         if self._app:
             self._app.layout = self._build_layout()
             self._app.invalidate()
@@ -1040,20 +1066,16 @@ class ProviderTUI:
             for a, m in _model_items_snapshot()
             if m.get("provider") == pname
         }
-        self._ms_all = candidates
-        self._ms_selected = {mid for mid, _ in candidates if mid in existing}
-        self._ms_notice = _format_model_sync_notice(
-            stats,
-            _model_alias_changes(pname, candidates),
+        self._state.begin_model_selection(
+            provider=pname,
+            caller=caller,
+            candidates=candidates,
+            existing_ids=existing,
+            notices=_format_model_sync_notice(
+                stats,
+                _model_alias_changes(pname, candidates),
+            ),
         )
-        # do NOT pre-select all — user must choose
-        self._ms_manual = []
-        self._ms_cursor = 0; self._ms_viewport = 0
-        self._ms_provider = pname; self._ms_caller = caller
-        self._ms_error = ""; self._ms_search = ""; self._ms_search_focus = False
-        self._ms_save_exit = False
-        self._detail_status = ""
-        self._panel = "models"
         if self._app:
             self._app.layout = self._build_layout()
             self._app.invalidate()

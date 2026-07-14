@@ -1,0 +1,4 @@
+{"choices": [{"delta": {"content": "Hello"}, "finish_reason": null}]}
+{"choices": [{"delta": {"content": " world"}, "finish_reason": null}]}
+{"choices": [{"delta": {}, "finish_reason": "stop"}]}
+{"usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}}

@@ -1387,7 +1387,7 @@ def test_tool_registry_skips_empty_name_and_schema_only_handler():
         assert "" not in tool_map
         assert not any(s.get("function", {}).get("name") == "" for s in schemas)
         assert "pytest_schema_only_tool" not in tool_map
-        assert any(s.get("function", {}).get("name") == "pytest_schema_only_tool" for s in schemas)
+        assert not any(s.get("function", {}).get("name") == "pytest_schema_only_tool" for s in schemas)
     finally:
         session_mod._TOOL_REGISTRY.unregister("pytest_schema_only_tool")
         session_mod._refresh_legacy_tool_globals()

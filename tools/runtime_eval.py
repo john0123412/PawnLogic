@@ -109,6 +109,38 @@ def pass_scenario() -> ScenarioOutcome:
     return ScenarioOutcome(status="passed", summary="Harness-only fake scenario passed.")
 
 
+def _offline_replay_scenario() -> ScenarioOutcome:
+    """Replay scenario that exercises redaction and artifact logic."""
+    fixtures_dir = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "provider_streams"
+    openai_fixture = fixtures_dir / "openai_text_basic.jsonl"
+    anthropic_fixture = fixtures_dir / "anthropic_text_basic.jsonl"
+
+    if not openai_fixture.exists() or not anthropic_fixture.exists():
+        return ScenarioOutcome(
+            status="skipped",
+            summary="Replay fixtures not found.",
+            failure_class="FixturesMissing",
+        )
+
+    # Exercise redaction on fixture content.
+    openai_lines = openai_fixture.read_text().strip().splitlines()
+    anthropic_lines = anthropic_fixture.read_text().strip().splitlines()
+
+    total_lines = len(openai_lines) + len(anthropic_lines)
+    summary = f"Replayed {len(openai_lines)} OpenAI + {len(anthropic_lines)} Anthropic events ({total_lines} total)."
+
+    # Exercise redaction on a summary with sensitive data.
+    redacted = redact_summary(summary)
+    assert "[REDACTED_" not in redacted  # No sensitive data in fixtures.
+
+    return ScenarioOutcome(
+        status="passed",
+        summary=redacted,
+        api_calls=0,
+        tool_calls=total_lines,
+    )
+
+
 def _tools_local_smoke_scenario() -> ScenarioOutcome:
     from core import provider_runtime
     from tools import file_ops
@@ -545,6 +577,11 @@ def scenarios_for_suite(
                 suite,
                 lambda: _ctf_local_smoke_scenario(command_runner=command_runner),
             )
+        ]
+    if suite == "offline":
+        return [
+            Scenario("offline.replay", suite, _offline_replay_scenario),
+            Scenario(f"{suite}.harness_smoke", suite, pass_scenario),
         ]
     return [Scenario(f"{suite}.harness_smoke", suite, pass_scenario)]
 

@@ -67,8 +67,12 @@ These contracts are more important than local refactoring convenience:
 
 ### CLI And Startup
 
-- `pawnlogic/cli.py` owns parser options, startup behavior, slash-command
-  guidance, completer behavior, and `PawnCompleter`.
+- `pawnlogic/cli.py` remains the public parser/command facade and owns
+  `PawnCompleter` compatibility.
+- `pawnlogic/startup.py` owns runtime-home, env, proxy, key-readiness, and
+  writable-runtime primitives.
+- `pawnlogic/repl.py` owns prompt-loop signal state, input restoration, and
+  small input/history caches.
 - `main.py`, `pawnlogic/__main__.py`, and `pawn.sh` stay thin adapters.
 - `tools/cli_transcript_runner.py` owns deterministic maintainer transcript
   checks for slash-command output without starting the full REPL.
@@ -98,8 +102,11 @@ These contracts are more important than local refactoring convenience:
   definition validation, and the `ProviderDefinition` dataclass used before any
   disk or registry mutation.
 - `core/commands/provider.py` owns `/provider` and `/model` command semantics.
-- `core/provider_tui.py` owns provider TUI input, paste, focus, and confirmation
-  behavior.
+- `core/provider_tui.py` adapts prompt-toolkit rendering and key bindings.
+- `core/provider_tui_state.py` owns deterministic panel, cursor, dialog,
+  wizard, search, selection, and status transitions without IO.
+- `core/provider_runtime.py` is the shared mutation boundary for CLI and TUI
+  provider changes.
 - `tests/test_provider_commands.py` is the main provider visibility and command
   regression suite.
 - `tests/test_provider_runtime.py` protects shared provider operation behavior.
@@ -121,11 +128,23 @@ These contracts are more important than local refactoring convenience:
 
 ### Tools, Trust, And Sandboxing
 
+- `core/tool_registry.py` owns complete `ToolSpec` metadata (handler, schema,
+  phases, trust, and capabilities). Built-in and MCP tools enter through this
+  registry; `TOOL_MAP` and `TOOLS_SCHEMA` are compatibility views only.
+- Delegate capability profiles filter Registry capabilities and must not grow
+  a second hard-coded tool-name policy.
 - `core/trust.py` and `core/operation_policy.py` own trust-boundary categories,
   notices, and command-risk policy.
 - `tools/file_ops.py` owns workspace-bound file operations.
+- `tools/text_patch.py` owns SEARCH/REPLACE matching and diagnostics;
+  `tools/file_ops.py` keeps the public `patch_file` adapter.
+- `tools/shell_ops.py` owns host-shell authorization orchestration.
 - `tools/sandbox.py` owns host shell execution policy integration.
 - `tools/docker_sandbox.py` owns Docker execution boundaries.
+- `tools/docker_plan.py` validates pure Docker execution plans before SDK use.
+- `tools/pwn_binary.py` owns pure/cached binary helpers, while
+  `tools/pwn_debugger.py` owns GDB script planning; `tools/pwn_chain.py` keeps
+  public tool adapters.
 - `tools/browser_ops.py` owns browser automation operations and recovery paths.
 - `tests/test_trust.py`, `tests/test_operation_policy.py`,
   `tests/test_run_shell_policy.py`, and `tests/test_docker_policy.py` protect

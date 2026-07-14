@@ -23,6 +23,7 @@ _PREFIX = "  [Trust Boundary] "
 class TrustLevel(str, Enum):
     """The permission surface a tool touches when it runs on the local host."""
 
+    LOCAL = "local"  # safe local read/config operations
     HOST_SHELL = "host_shell"  # arbitrary host command execution
     CONTAINER_EXEC = "container_exec"  # arbitrary shell inside a container
     NETWORK = "network"  # outbound network access
@@ -34,6 +35,7 @@ class TrustLevel(str, Enum):
 class TrustBoundaryKind(str, Enum):
     """Stable internal names for tool trust-boundary categories."""
 
+    LOCAL = "local"
     HOST_SHELL = "host_shell"
     CONTAINER_EXEC = "container_exec"
     BROWSER_NETWORK = "browser_network"
@@ -59,6 +61,11 @@ class TrustBoundary:
 # Canonical static boundaries. Message text is kept identical to the strings
 # that were previously inlined at each call site.
 TRUST_BOUNDARIES: dict[TrustBoundaryKind, TrustBoundary] = {
+    TrustBoundaryKind.LOCAL: TrustBoundary(
+        TrustBoundaryKind.LOCAL,
+        TrustLevel.LOCAL,
+        "Local read-only tool. No host shell, network, or destructive side effects.",
+    ),
     TrustBoundaryKind.HOST_SHELL: TrustBoundary(
         TrustBoundaryKind.HOST_SHELL,
         TrustLevel.HOST_SHELL,

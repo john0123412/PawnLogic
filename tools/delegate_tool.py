@@ -103,36 +103,47 @@ def _select_worker_model(current_model: str = DEFAULT_MODEL) -> str:
 # sub-agent regardless of profile (no nested delegation).
 # ════════════════════════════════════════════════════════
 
-# Tools that execute code / shell / containers.
-_SHELL_TOOLS = frozenset({
-    "run_shell", "run_code", "run_interactive",
-    "run_code_docker", "pwn_container",
-    "tool_install_package", "docker_prune_resources",
-})
-# Tools that mutate the filesystem or repository.
-_MUTATING_TOOLS = frozenset({
-    "write_file", "patch_file", "git_op",
-})
-
 CAPABILITY_PROFILES = ("inherited", "read_only", "no_shell", "custom")
 
 
-def tool_allowed(name: str, profile: str, allowlist=None) -> bool:
+def tool_allowed(
+    name: str,
+    profile: str,
+    allowlist=None,
+    *,
+    capabilities: frozenset[str] = frozenset(),
+) -> bool:
     """Return whether a sub-agent under ``profile`` may use tool ``name``."""
     if name == "delegate_task":
         return False  # never allow nested delegation
     if profile == "read_only":
-        return name not in _SHELL_TOOLS and name not in _MUTATING_TOOLS
+        return not capabilities.intersection({"shell", "mutating", "destructive"})
     if profile == "no_shell":
-        return name not in _SHELL_TOOLS
+        return "shell" not in capabilities
     if profile == "custom":
         return name in set(allowlist or ())
     return True  # inherited (default)
 
 
-def resolve_allowed_tools(profile: str, all_tool_names, allowlist=None) -> set[str]:
+def resolve_allowed_tools(
+    profile: str,
+    all_tool_names,
+    allowlist=None,
+    *,
+    capabilities_by_name=None,
+) -> set[str]:
     """Return the subset of ``all_tool_names`` permitted under ``profile``."""
-    return {n for n in all_tool_names if tool_allowed(n, profile, allowlist)}
+    capability_map = capabilities_by_name or {}
+    return {
+        name
+        for name in all_tool_names
+        if tool_allowed(
+            name,
+            profile,
+            allowlist,
+            capabilities=frozenset(capability_map.get(name, ())),
+        )
+    }
 
 
 # ════════════════════════════════════════════════════════
@@ -147,6 +158,11 @@ def _tool_map():
 def _tools_schema():
     from core.session import _tool_schema_snapshot
     return _tool_schema_snapshot()
+
+
+def _tool_capabilities():
+    from core.session import _tool_specs_snapshot
+    return {spec.name: spec.capabilities for spec in _tool_specs_snapshot()}
 
 
 def _make_sub_executor(handler_lookup):
@@ -237,7 +253,12 @@ class _SubAgentSession:
         # Snapshot the registry once for a consistent view, then apply the
         # capability profile to both the advertised schema and the executable map.
         snapshot_map = _tool_map()
-        allowed      = resolve_allowed_tools(self.capability, snapshot_map, self.allowlist)
+        allowed      = resolve_allowed_tools(
+            self.capability,
+            snapshot_map,
+            self.allowlist,
+            capabilities_by_name=_tool_capabilities(),
+        )
         tools_sch    = [s for s in _tools_schema()
                         if s.get("function", {}).get("name") in allowed]
         handler_map  = {n: h for n, h in snapshot_map.items() if n in allowed}

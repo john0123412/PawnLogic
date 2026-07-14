@@ -22,12 +22,13 @@ from core.trust import TrustBoundaryKind, trust_notice_for_boundary
 from utils.ansi import c, YELLOW, BLUE, GRAY
 from core.logger import logger
 from core.operation_policy import (
-    OperationAction,
     audit_operation_decision,
     classify_shell_command,
     is_confirmation_available,
     prompt_for_confirmation,
 )
+from tools.shell_ops import authorize_shell_operation
+from tools.text_patch import apply_patch_blocks as _text_apply_patch_blocks
 
 # Current session cwd/workspace references.
 _session_cwd = [os.getcwd()]
@@ -194,88 +195,16 @@ def _format_policy_block(decision) -> str:
 
 
 def _run_operation_policy(cmd: str, work_dir: str, *, operation_type: str):
-    decision = classify_shell_command(
+    return authorize_shell_operation(
         cmd,
-        cwd=work_dir,
+        work_dir,
         workspace_dir=_session_workspace_dir[0] or work_dir,
-    )
-    interactive = is_confirmation_available()
-
-    if decision.action == OperationAction.ALLOW:
-        audit_operation_decision(
-            decision,
-            operation_type=operation_type,
-            cwd=work_dir,
-            interactive=interactive,
-        )
-        return True, decision
-
-    if decision.action == OperationAction.DENY:
-        audit_operation_decision(
-            decision,
-            operation_type=operation_type,
-            cwd=work_dir,
-            interactive=interactive,
-        )
-        logger.warning(
-            "[{}] operation policy denied command | risk={} rule={} cmd={!r}",
-            operation_type,
-            decision.risk.value,
-            decision.matched_rule,
-            decision.redacted_command,
-        )
-        return False, decision
-
-    if not interactive:
-        denied = decision.with_action(
-            OperationAction.DENY,
-            reason=(
-                decision.reason
-                + " Confirmation unavailable in non-interactive or --eval mode."
-            ),
-            matched_rule=f"confirmation_unavailable:{decision.matched_rule}",
-        )
-        audit_operation_decision(
-            denied,
-            operation_type=operation_type,
-            cwd=work_dir,
-            interactive=False,
-        )
-        logger.warning(
-            "[{}] operation policy failed closed | risk={} rule={} cmd={!r}",
-            operation_type,
-            denied.risk.value,
-            denied.matched_rule,
-            denied.redacted_command,
-        )
-        return False, denied
-
-    try:
-        confirmed = prompt_for_confirmation(decision)
-    except Exception:
-        confirmed = False
-
-    if not confirmed:
-        denied = decision.with_action(
-            OperationAction.DENY,
-            reason=decision.reason + " User did not confirm the operation.",
-            matched_rule=f"user_denied:{decision.matched_rule}",
-        )
-        audit_operation_decision(
-            denied,
-            operation_type=operation_type,
-            cwd=work_dir,
-            interactive=True,
-        )
-        return False, denied
-
-    audit_operation_decision(
-        decision,
         operation_type=operation_type,
-        cwd=work_dir,
-        interactive=True,
+        interactive=is_confirmation_available(),
+        confirmer=prompt_for_confirmation,
+        classifier=classify_shell_command,
+        auditor=audit_operation_decision,
     )
-    return True, decision
 
 
 def _run(cmd: str, timeout: int = 15, cwd: str = None, env=None) -> str:
@@ -471,264 +400,16 @@ def tool_write_file(a: dict) -> str:
 #   - Missing SEARCH content returns detailed diagnostics instead of failing silently.
 # ════════════════════════════════════════════════════════
 
-# Regex for SEARCH/REPLACE blocks.
-_PATCH_BLOCK_RE = re.compile(
-    r'<<<<<<+\s*SEARCH\s*\n'   # <<<<<<< SEARCH
-    r'(.*?)'                    # SEARCH content
-    r'=======+\s*\n'            # =======
-    r'(.*?)'                    # REPLACE content
-    r'>>>>>>>+\s*REPLACE',      # >>>>>>> REPLACE
-    re.DOTALL
-)
-
-
-def _normalize_indent(text: str) -> str:
-    """
-    Remove shared leading indentation for indentation-tolerant comparison.
-    Relative indentation levels are preserved.
-    """
-    lines = text.splitlines()
-    non_empty = [l for l in lines if l.strip()]
-    if not non_empty:
-        return text
-    min_indent = min(len(l) - len(l.lstrip()) for l in non_empty)
-    return "\n".join(l[min_indent:] if len(l) >= min_indent else l for l in lines)
-
-
-def _find_search_in_file(
-    file_lines: list[str],
-    search_text: str,
-    indent_tolerance: int = 4,
-) -> tuple[int, int] | None:
-    """
-    Find the line range matching search_text in file_lines.
-    Returns (start_line_idx, end_line_idx_exclusive), or None.
-
-    Matching strategy:
-      1. Exact string match.
-      2. Match ignoring trailing whitespace.
-      3. Indentation-tolerant match.
-    """
-    file_text  = "".join(file_lines)
-    search_stripped = search_text.rstrip("\n")
-
-    # Strategy 1: exact match.
-    if search_stripped in file_text:
-        pos   = file_text.find(search_stripped)
-        start = file_text[:pos].count("\n")
-        end   = start + search_stripped.count("\n") + 1
-        return start, end
-
-    # Strategy 2: ignore trailing whitespace.
-    search_lines = [l.rstrip() for l in search_stripped.splitlines()]
-    file_rstripped = [l.rstrip() for l in file_lines]
-
-    n = len(search_lines)
-    for i in range(len(file_rstripped) - n + 1):
-        if file_rstripped[i:i+n] == search_lines:
-            return i, i + n
-
-    # Strategy 3: indentation tolerance.
-    search_norm = _normalize_indent(search_stripped).splitlines()
-    for i in range(len(file_lines) - n + 1):
-        window = "".join(file_lines[i:i+n])
-        window_norm = _normalize_indent(window.rstrip("\n")).splitlines()
-        if len(window_norm) == len(search_norm):
-            if [l.rstrip() for l in window_norm] == [l.rstrip() for l in search_norm]:
-                return i, i + n
-
-    return None
-
-
-def _line_similarity(a: str, b: str) -> float:
-    """
-    Return character-level line similarity (0.0-1.0) using difflib ratio.
-    Empty-vs-nonempty lines return 0.0.
-    """
-    a, b = a.strip(), b.strip()
-    if not a and not b:
-        return 1.0
-    if not a or not b:
-        return 0.0
-    return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
-
-
-def _diagnose_mismatch(search_line: str, file_line: str, file_lineno: int) -> str:
-    """
-    Generate a short human-readable reason for a mismatched SEARCH/file line.
-    Checks indentation, trailing whitespace, and CRLF/LF differences.
-    """
-    hints = []
-    s_raw, f_raw = search_line, file_line
-
-    # Indentation difference.
-    s_indent = len(s_raw) - len(s_raw.lstrip())
-    f_indent = len(f_raw) - len(f_raw.lstrip())
-    if s_indent != f_indent:
-        hints.append(
-            f"indentation mismatch: your SEARCH has {s_indent} leading spaces, "
-            f"file line {file_lineno} has {f_indent}"
-        )
-
-    # CRLF
-    if s_raw.endswith("\r") or f_raw.endswith("\r"):
-        hints.append("possible CRLF/LF line-ending mismatch")
-
-    # Trailing whitespace.
-    if s_raw.rstrip() != f_raw.rstrip() and s_raw.strip() == f_raw.strip():
-        hints.append("trailing whitespace difference only")
-
-    # General fallback.
-    if not hints:
-        hints.append("content differs — copy the exact file content into SEARCH")
-
-    return "; ".join(hints)
-
-
-def _best_match_context(
-    file_lines: list[str],
-    search_text: str,
-    context_radius: int = 3,
-) -> str:
-    """
-    Build a per-line similarity report when exact/fuzzy matching fails.
-
-    Example output:
-      Your SEARCH line 1 is 90% similar to file line 145.
-        Hint: indentation mismatch (4 vs 0 spaces). Please fix.
-      Your SEARCH line 2 is 100% similar to file line 146.
-      ...
-      --- File context around line 145 ---
-         L143:     old_code()
-      >>> L145:     def target_func(self):
-         L146:         pass
-    """
-    search_lines = search_text.rstrip("\n").splitlines()
-    if not search_lines:
-        return "  (SEARCH block is empty; cannot locate content)"
-
-    n_file = len(file_lines)
-    if n_file == 0:
-        return "  (file is empty)"
-
-    n_search = len(search_lines)
-
-    # Step 1: find the most similar file line for each SEARCH line.
-    per_line_best: list[tuple[int, float]] = []  # (file_line_idx, score)
-    for s_line in search_lines:
-        best_idx   = 0
-        best_score = -1.0
-        for f_idx, f_line in enumerate(file_lines):
-            score = _line_similarity(s_line, f_line)
-            if score > best_score:
-                best_score = score
-                best_idx   = f_idx
-        per_line_best.append((best_idx, best_score))
-
-    # Step 2: emit per-line diagnostics.
-    diag_lines = ["  [Per-line similarity report]"]
-    for si, (s_line) in enumerate(search_lines):
-        f_idx, score = per_line_best[si]
-        pct = int(score * 100)
-        file_lineno = f_idx + 1  # 1-indexed
-
-        diag_lines.append(
-            f"  Your SEARCH line {si+1} is {pct}% similar to file line {file_lineno}."
-        )
-        if score < 1.0:
-            hint = _diagnose_mismatch(s_line, file_lines[f_idx], file_lineno)
-            diag_lines.append(f"    Hint: {hint}.")
-
-    # Step 3: show file context around the first line's best match.
-    anchor_idx = per_line_best[0][0]
-    s = max(0, anchor_idx - context_radius)
-    e = min(n_file, anchor_idx + max(n_search, context_radius) + 1)
-
-    diag_lines.append(f"\n  [File context around line {anchor_idx+1}]")
-    for i in range(s, e):
-        marker = ">>>" if i == anchor_idx else "   "
-        diag_lines.append(f"  {marker} L{i+1:5d}: {file_lines[i].rstrip()}")
-
-    return "\n".join(diag_lines)
-
-
 def _apply_patch_blocks(path: str, patch_blocks_text: str) -> str:
     """
     Parse and apply SEARCH/REPLACE blocks in order.
     """
-    blocks = _PATCH_BLOCK_RE.findall(patch_blocks_text)
-    if not blocks:
-        return (
-            "ERROR: no valid SEARCH/REPLACE blocks found in patch_blocks.\n"
-            "Use this exact format:\n"
-            "<<<<<<< SEARCH\n<original code>\n=======\n<new code>\n>>>>>>> REPLACE"
-        )
-
-    resolved, err = _resolve_write_path(path)
-    if err: return err
-    ok, reason = _check_write(resolved)
-    if not ok: return reason
-
-    p = Path(resolved).expanduser()
-    if not p.exists():
-        return f"ERROR: file does not exist: {path}"
-
-    try:
-        original_text = p.read_text(encoding="utf-8")
-    except Exception as e:
-        return f"ERROR: failed to read file: {e}"
-
-    file_lines = original_text.splitlines(keepends=True)
-    applied    = 0
-    errors     = []
-
-    for block_idx, (search_raw, replace_raw) in enumerate(blocks):
-        search_text  = search_raw
-        replace_text = replace_raw
-
-        if not search_text.strip():
-            errors.append(f"Block {block_idx+1}: SEARCH block is empty; skipped.")
-            continue
-
-        result = _find_search_in_file(file_lines, search_text)
-        if result is None:
-            # Detailed failure: SEARCH preview plus per-line similarity diagnostics.
-            search_preview = "\n".join(
-                f"  {i+1}: {l.rstrip()}"
-                for i, l in enumerate(search_text.splitlines()[:5])
-            )
-            file_context = _best_match_context(file_lines, search_text)
-            errors.append(
-                f"Block {block_idx+1}: SEARCH content was not found in the file.\n"
-                f"  --- Your SEARCH (first 5 lines) ---\n{search_preview}\n"
-                f"  --- Similarity diagnostics and file context ---\n{file_context}\n"
-                f"  Fix: adjust SEARCH indentation, line endings, or content using the hints above, then retry."
-            )
-            continue
-
-        start_idx, end_idx = result
-        # Preserve line-oriented replacement behavior.
-        if replace_text and not replace_text.endswith("\n"):
-            replace_text += "\n"
-        replace_lines = replace_text.splitlines(keepends=True)
-
-        file_lines = file_lines[:start_idx] + replace_lines + file_lines[end_idx:]
-        applied += 1
-
-    if not applied and errors:
-        return "ERROR: all SEARCH/REPLACE blocks failed:\n" + "\n".join(errors)
-
-    try:
-        p.write_text("".join(file_lines), encoding="utf-8")
-    except Exception as e:
-        return f"ERROR: failed to write file: {e}"
-
-    result_lines = [f"OK: applied {applied}/{len(blocks)} SEARCH/REPLACE blocks to {path}"]
-    if errors:
-        result_lines.append(f"WARNING: {len(errors)} blocks failed:")
-        result_lines.extend(errors)
-    return "\n".join(result_lines)
-
+    return _text_apply_patch_blocks(
+        path,
+        patch_blocks_text,
+        resolve_write_path=_resolve_write_path,
+        check_write=_check_write,
+    )
 
 def tool_patch_file(a: dict) -> str:
     """

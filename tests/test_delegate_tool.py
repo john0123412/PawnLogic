@@ -23,6 +23,14 @@ _ALL_TOOLS = [
     "run_interactive",
     "delegate_task",
 ]
+_CAPABILITIES = {
+    "write_file": {"mutating"},
+    "patch_file": {"mutating"},
+    "git_op": {"mutating"},
+    "run_shell": {"shell"},
+    "run_code": {"shell"},
+    "run_interactive": {"shell"},
+}
 
 
 # ── capability profiles ──────────────────────────────────────────────
@@ -35,7 +43,9 @@ def test_inherited_profile_keeps_all_but_delegate():
 
 
 def test_read_only_profile_excludes_shell_and_writes():
-    allowed = resolve_allowed_tools("read_only", _ALL_TOOLS)
+    allowed = resolve_allowed_tools(
+        "read_only", _ALL_TOOLS, capabilities_by_name=_CAPABILITIES
+    )
     for denied in ("run_shell", "run_code", "write_file", "patch_file", "git_op"):
         assert denied not in allowed
     for kept in ("read_file", "list_dir", "find_files", "web_search"):
@@ -43,7 +53,9 @@ def test_read_only_profile_excludes_shell_and_writes():
 
 
 def test_no_shell_profile_excludes_only_execution():
-    allowed = resolve_allowed_tools("no_shell", _ALL_TOOLS)
+    allowed = resolve_allowed_tools(
+        "no_shell", _ALL_TOOLS, capabilities_by_name=_CAPABILITIES
+    )
     assert "run_shell" not in allowed
     assert "run_code" not in allowed
     # Writes are still permitted under no_shell.
