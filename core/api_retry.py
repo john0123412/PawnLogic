@@ -73,9 +73,7 @@ def is_retryable_transport_error(exc: BaseException) -> bool:
             return True
         if type(current).__name__ in _RETRYABLE_EXCEPTION_NAMES:
             message = str(current).lower()
-            if "certificate" in message or "ssl" in message:
-                return False
-            return True
+            return not ("certificate" in message or "ssl" in message)
         current = current.__cause__ or current.__context__
     return False
 
