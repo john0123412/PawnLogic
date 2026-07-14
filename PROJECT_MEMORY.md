@@ -12,8 +12,7 @@ release history.
 ## Current Release State
 
 - Current public release: `0.2.2`.
-- Prepared release candidate: `0.2.3` (local commit only; not yet pushed,
-  tagged, or published to PyPI).
+- Prepared release candidate: `0.2.3` (not yet tagged or published to PyPI).
 - Runtime version source of truth: `config/paths.py:VERSION`.
 - Latest published tag: `v0.2.2`.
 - Most recent completed plan:
@@ -258,11 +257,11 @@ runtime evaluation enforce real budgets and exercise real local paths, restored
 bounded WSL2 Codex automation, and reduced large-file ownership hotspots without
 changing public runtime contracts.
 
-The release candidate is prepared locally on branch `release/0.2.3-prep`. Use
+The release candidate is prepared on branch `release/0.2.3-prep`. Use
 `docs/plans/0.2.3-autonomous-runtime-reliability-deepening.md` for PR order,
 Interface definitions, targeted tests, CI monitoring, stop conditions, and the
-separate release-authorization gate. Push, CI, merge, tag, PyPI publish, and
-GitHub Release steps remain pending maintainer authorization.
+separate release-authorization gate. Remote validation, merge, tag, PyPI
+publish, and GitHub Release steps remain pending maintainer authorization.
 
 ## Typed Island
 

@@ -15,8 +15,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   traversal, symlink escapes, and hostile MCP server-name injection.
 - Added centralized host-process trust enforcement through `core/host_process.py`
   with `HostProcessRunner`, `HostProcessRequest`, and `ProcessOutcome` dataclasses
-  so every shell/process path goes through one Operation Decision and
-  environment-scrubbing module.
+  so host code execution and debugger subprocesses share one Operation Decision
+  and environment-scrubbing module.
 - Added transactional provider mutations through `core/provider_transport.py` with
   `ProviderDefinition`, format-specific headers, and validated definitions before
   any disk or registry write; on write failure, disk and memory stay unchanged.
@@ -40,9 +40,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added `SessionSnapshot` and `MessageHistory` in `core/session_snapshot.py` and
   `core/message_history.py` as the single persistence interface for manual save,
   autosave, and dangling-message repair.
-- Added `RuntimeContext` as the authoritative per-session runtime-state owner with
-  `contextvars` activation scope; legacy globals remain synchronized compatibility
-  mirrors only.
+- Added `contextvars` activation scopes to the existing `RuntimeContext`, making
+  it the authoritative per-session runtime-state owner; legacy globals remain
+  synchronized compatibility mirrors only.
 - Added `ToolSpec` with handler, schema, phases, trust, and capabilities metadata
   in the Tool Registry so built-in and MCP tools share one Registry seam.
 - Added per-file line and complexity architecture budgets in
@@ -54,16 +54,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - Browser screenshot and MCP binary asset paths now use canonical path resolution
   and safe filename sanitization instead of string-prefix checks.
-- Host shell, Docker, web, pwn, and delegate tool paths now route through the
-  shared Operation Policy with explicit network and destructive authorization.
+- Host shell, code-execution, and pwn debugger subprocesses now share Operation
+  Policy decisions; Docker network/destructive actions and delegate capabilities
+  remain explicitly gated, while browser access keeps its dedicated network
+  trust warning.
 - Docker cleanup is restricted to PawnLogic-labelled containers and resources;
   unscoped global prune is no longer called.
 - Provider fetch now uses format-specific headers (OpenAI bearer, Anthropic
   x-api-key) instead of reusing OpenAI headers for all formats.
 - Provider mutation now validates name, URL, format, and definition metadata
   before writing API keys; invalid providers are rejected early.
-- Provider runtime errors for malformed JSON and model entries are now stable
-  `ProviderRuntime` error types.
+- Provider runtime failures for malformed JSON and model entries now return
+  stable user-facing errors instead of propagating parser or type failures.
 - Retry policy is now loaded at request start with bounded validation instead of
   being captured at module import time.
 - DNS, refused, reset, timeout, and retryable HTTP failures are retried only when
@@ -93,7 +95,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - Fixed browser screenshot paths that could escape the workspace through
-  absolute or traversal paths from hostile server names.
+  absolute or traversal filenames.
 - Fixed MCP binary asset filenames that could contain path separators from
   unsanitized server names.
 - Fixed host process and Docker operations that bypassed the shared Operation

@@ -102,9 +102,10 @@ and deepens runtime modules while preserving the 0.2.2 public contracts:
 
 - Canonical path containment prevents workspace traversal, symlink escapes, and
   hostile MCP server-name injection through `core/path_policy.py`.
-- Centralized host-process trust enforcement routes every shell, Docker, web,
-  pwn, and delegate path through one Operation Policy module with explicit
-  network and destructive authorization.
+- Centralized host-process trust enforcement gives host shell, code-execution,
+  and pwn debugger subprocesses shared Operation Policy decisions. Docker
+  network/destructive actions and delegate capabilities remain explicitly gated,
+  while browser access keeps its dedicated network trust warning.
 - Transactional provider mutations validate name, URL, format, and definition
   metadata before writing keys; on write failure, disk and memory stay unchanged.
   Format-specific headers (OpenAI bearer, Anthropic x-api-key) are used

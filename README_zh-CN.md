@@ -90,7 +90,7 @@ python -m pawnlogic --help
 0.2.3 关闭了安全缺口，让自定义 Provider 可预测地恢复，并深化了 runtime 模块，同时保持 0.2.2 的公开 contract 不变：
 
 - Canonical path containment 通过 `core/path_policy.py` 防止 workspace 遍历、symlink 逃逸和恶意 MCP server-name 注入。
-- 集中式 host-process trust enforcement 将每个 shell、Docker、web、pwn 和 delegate 路径路由到一个 Operation Policy 模块，具有显式 network 和 destructive 授权。
+- 集中式 host-process trust enforcement 让 host shell、code-execution 和 pwn debugger 子进程共享 Operation Policy decision。Docker network/destructive action 和 delegate capability 仍有显式 gate，browser access 则保留独立的 network trust warning。
 - Transactional provider mutation 在写入 key 之前验证 name、URL、format 和 definition metadata；写入失败时，disk 和 memory 保持不变。Format-specific header（OpenAI bearer、Anthropic x-api-key）在 test、fetch、stream 和 non-stream 路径中一致使用。
 - 统一 retry 和 circuit-breaker policy 在请求开始时加载，具有 bounded validation，仅在没有 partial response 被发出时重试，并给 half-open 状态一个 single probe lease。
 - Runtime evaluation 通过 child-process termination 强制执行 real deadline，产生 schema-versioned atomic JSONL artifact，并在没有网络访问的情况下运行带有 provider stream fixture 的 offline replay scenario。
