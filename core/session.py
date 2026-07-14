@@ -59,7 +59,8 @@ from core.tool_result import (
     ToolResultProcessor,
     compact_redundant_tool_error_messages,
 )
-from core.tool_registry import ToolRegistry
+from core.tool_registry import ToolRegistry, ToolSpec
+from core.trust import TrustBoundaryKind
 from core.tool_routing import select_phase_tools
 from core.turn_api import TurnApiResult, consume_model_stream
 from core.turn_state import TurnState
@@ -81,7 +82,7 @@ from core.gsa import load_relevant_skills, bump_skill, sink_failure_to_gsa  # â˜
 
 from tools.file_ops  import (tool_read_file, tool_read_file_lines, tool_write_file,
                               tool_patch_file, tool_list_dir, tool_find_files,
-                              tool_run_shell, sync_runtime_context,
+                              tool_run_shell, tool_run_interactive, sync_runtime_context,
                               FILE_SCHEMAS)
 from core.naming import (
     stable_workspace_dir, should_name_session, generate_session_name,
@@ -120,6 +121,10 @@ def _tool_schema_snapshot() -> list[dict]:
 
 def _tool_map_snapshot() -> dict[str, callable]:
     return _TOOL_REGISTRY.snapshot_map()
+
+
+def _tool_specs_snapshot() -> tuple[ToolSpec, ...]:
+    return _TOOL_REGISTRY.snapshot_specs()
 
 
 def _refresh_legacy_tool_globals() -> None:
@@ -213,6 +218,7 @@ _BASE_TOOL_MAP: dict = {
     "list_dir":            tool_list_dir,
     "find_files":          tool_find_files,
     "run_shell":           tool_run_shell,
+    "run_interactive":     tool_run_interactive,
     "web_search":          tool_web_search,
     "fetch_url":           tool_fetch_url,
     "git_op":              tool_git_op,
@@ -262,8 +268,57 @@ if tool_check_service:
 _TOOL_REGISTRY.set_schemas(
     FILE_SCHEMAS + WEB_SCHEMAS + SANDBOX_SCHEMAS
     + PWN_SCHEMAS + VISION_SCHEMAS + DOCKER_SCHEMAS
-    + BROWSER_SCHEMAS + RECON_SCHEMAS
+    + BROWSER_SCHEMAS + RECON_SCHEMAS,
+    phase_map=AGENT_PHASES,
 )
+
+_SHELL_CAPABILITY_TOOLS = frozenset({
+    "run_shell", "run_interactive", "run_code", "pwn_debug",
+    "pwn_timed_debug", "pwn_container", "run_code_docker",
+    "tool_install_package", "docker_prune_resources",
+})
+_MUTATING_CAPABILITY_TOOLS = frozenset({
+    "write_file", "patch_file", "git_op", "web_click", "web_type",
+    "web_select", "web_navigate", "pwn_container", "run_code_docker",
+    "tool_install_package", "docker_prune_resources",
+})
+_NETWORK_CAPABILITY_TOOLS = frozenset({
+    "web_search", "fetch_url", "web_fetch", "web_click", "web_screenshot",
+    "web_select", "web_type", "web_navigate", "check_service",
+})
+_CONTAINER_CAPABILITY_TOOLS = frozenset({
+    "pwn_container", "run_code_docker", "tool_install_package",
+    "docker_prune_resources",
+})
+
+
+def _builtin_tool_metadata(name: str) -> tuple[TrustBoundaryKind, frozenset[str]]:
+    capabilities = {"read"}
+    trust = TrustBoundaryKind.LOCAL
+    if name in _SHELL_CAPABILITY_TOOLS:
+        capabilities.add("shell")
+        trust = TrustBoundaryKind.HOST_SHELL
+    if name in _MUTATING_CAPABILITY_TOOLS:
+        capabilities.add("mutating")
+    if name in _NETWORK_CAPABILITY_TOOLS:
+        capabilities.add("network")
+        trust = TrustBoundaryKind.BROWSER_NETWORK
+    if name in _CONTAINER_CAPABILITY_TOOLS:
+        capabilities.add("container")
+        trust = TrustBoundaryKind.CONTAINER_EXEC
+    return trust, frozenset(capabilities)
+
+
+for _registered_spec in _TOOL_REGISTRY.snapshot_specs():
+    _trust, _capabilities = _builtin_tool_metadata(_registered_spec.name)
+    _TOOL_REGISTRY.register(ToolSpec(
+        name=_registered_spec.name,
+        handler=_registered_spec.handler,
+        schema=_registered_spec.schema,
+        phases=_registered_spec.phases,
+        trust=_trust,
+        capabilities=_capabilities,
+    ))
 # Legacy compatibility exports. New registration paths should use _TOOL_REGISTRY.
 TOOL_MAP: dict = {}
 TOOLS_SCHEMA: list = []
@@ -305,10 +360,10 @@ _SWITCH_PHASE_SCHEMA = {
     },
 }
 
-_TOOL_REGISTRY.register("switch_phase", lambda a: (
+_TOOL_REGISTRY.register(ToolSpec("switch_phase", lambda a: (
     f"[switch_phase] Phase switch request received; target: {a.get('phase', '?')}. "
     "This message should not appear; run_turn should intercept it."
-), _SWITCH_PHASE_SCHEMA)
+), _SWITCH_PHASE_SCHEMA, frozenset({"*"})))
 
 # bump_skill tool: GSA feedback loop.
 def tool_bump_skill(args: dict) -> str:
@@ -349,7 +404,10 @@ _BUMP_SKILL_SCHEMA = {
     },
 }
 
-_TOOL_REGISTRY.register("bump_skill", tool_bump_skill, _BUMP_SKILL_SCHEMA)
+_TOOL_REGISTRY.register(ToolSpec(
+    "bump_skill", tool_bump_skill, _BUMP_SKILL_SCHEMA,
+    frozenset({"GENERAL", "WEB_PEN"}), capabilities=frozenset({"mutating"}),
+))
 
 # P0: audit_payload tool for defensive auditing.
 # Dangerous tools that require audit.
@@ -406,7 +464,10 @@ _AUDIT_PAYLOAD_SCHEMA = {
     },
 }
 
-_TOOL_REGISTRY.register("audit_payload", tool_audit_payload, _AUDIT_PAYLOAD_SCHEMA)
+_TOOL_REGISTRY.register(ToolSpec(
+    "audit_payload", tool_audit_payload, _AUDIT_PAYLOAD_SCHEMA,
+    frozenset({"*"}), capabilities=frozenset({"read"}),
+))
 
 # P6: search_skills tool for automated exploit-chain retrieval.
 def tool_search_skills(args: dict) -> str:
@@ -468,12 +529,19 @@ _SEARCH_SKILLS_SCHEMA = {
     },
 }
 
-_TOOL_REGISTRY.register("search_skills", tool_search_skills, _SEARCH_SKILLS_SCHEMA)
+_TOOL_REGISTRY.register(ToolSpec(
+    "search_skills", tool_search_skills, _SEARCH_SKILLS_SCHEMA,
+    frozenset({"RECON", "GENERAL", "WEB_PEN"}), capabilities=frozenset({"read"}),
+))
 
 def _try_load_delegate():
     try:
         from tools.delegate_tool import tool_delegate_task, DELEGATE_SCHEMA
-        _TOOL_REGISTRY.register("delegate_task", tool_delegate_task, DELEGATE_SCHEMA)
+        _TOOL_REGISTRY.register(ToolSpec(
+            "delegate_task", tool_delegate_task, DELEGATE_SCHEMA,
+            frozenset({"*"}), TrustBoundaryKind.DELEGATE,
+            frozenset({"delegate", "mutating"}),
+        ))
     except ImportError:
         pass
 
@@ -501,14 +569,25 @@ def attach_external_mcp_tools() -> None:
     if mgr is None:
         return
 
-    # 1. Tool tables: update / extend for transparent main-loop consumption.
-    for name, handler in mgr.build_pawnlogic_handlers().items():
-        _TOOL_REGISTRY.register(name, handler)
+    # 1. Adapt complete MCP definitions at the same registry seam as built-ins.
+    handlers = mgr.build_pawnlogic_handlers()
+    phase_mapping = mgr.get_phase_mapping()
     for schema in mgr.build_pawnlogic_schemas():
         name = schema.get("function", {}).get("name")
-        if not name:
+        handler = handlers.get(name) if name else None
+        if not name or handler is None:
             continue
-        _TOOL_REGISTRY.register(name, _TOOL_REGISTRY.get_handler(name), schema)
+        phase = phase_mapping.get(name, "GENERAL")
+        if phase not in AGENT_PHASES:
+            phase = "GENERAL"
+        _TOOL_REGISTRY.register(ToolSpec(
+            name=name,
+            handler=handler,
+            schema=schema,
+            phases=frozenset({phase}),
+            trust=TrustBoundaryKind.BROWSER_NETWORK,
+            capabilities=frozenset({"external", "network"}),
+        ))
     _refresh_legacy_tool_globals()
 
     # 2. Phase ownership: expose external tools in configured phase lists.

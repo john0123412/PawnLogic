@@ -1,6 +1,9 @@
 """Tests for the ToolRegistry class (the single tool registration interface)."""
 
-from core.tool_registry import ToolRegistry
+import pytest
+
+from core.tool_registry import ToolRegistry, ToolSpec
+from core.trust import TrustBoundaryKind
 
 
 def _schema(name: str) -> dict:
@@ -24,12 +27,11 @@ def test_register_ignores_empty_name():
     assert reg.snapshot_schemas() == []
 
 
-def test_register_schema_only_handler_is_not_executable():
+def test_register_schema_only_handler_is_not_advertised():
     reg = ToolRegistry()
     reg.register("schema_only", None, _schema("schema_only"))
-    # Advertised in schemas but absent from the executable map.
     assert "schema_only" not in reg.snapshot_map()
-    assert any(s["function"]["name"] == "schema_only" for s in reg.snapshot_schemas())
+    assert reg.snapshot_schemas() == []
 
 
 def test_register_none_schema_leaves_existing_schema():
@@ -80,8 +82,46 @@ def test_snapshot_schemas_is_fresh_list():
 
 def test_set_schemas_bulk_registers_by_function_name():
     reg = ToolRegistry()
+    reg.register("a", lambda _a: "a")
+    reg.register("b", lambda _a: "b")
     reg.set_schemas(
         [_schema("a"), _schema("b"), {"type": "function", "function": {"name": ""}}]
     )
     names = {s["function"]["name"] for s in reg.snapshot_schemas()}
     assert names == {"a", "b"}
+
+
+def test_tool_spec_registers_metadata_atomically():
+    reg = ToolRegistry()
+    spec = ToolSpec(
+        name="alpha",
+        handler=lambda _args: "ok",
+        schema=_schema("alpha"),
+        phases=frozenset({"RECON"}),
+        trust=TrustBoundaryKind.LOCAL,
+        capabilities=frozenset({"read"}),
+    )
+    reg.register(spec)
+
+    assert reg.get_spec("alpha") is spec
+    assert reg.visible_specs("RECON") == (spec,)
+    assert reg.visible_specs("GENERAL") == ()
+    assert reg.get_capabilities("alpha") == frozenset({"read"})
+
+
+def test_tool_spec_rejects_mismatched_schema_name_without_mutation():
+    reg = ToolRegistry()
+    with pytest.raises(ValueError, match="does not match"):
+        ToolSpec("alpha", lambda _args: "ok", _schema("beta"))
+    assert reg.snapshot_map() == {}
+
+
+def test_register_many_validates_duplicates_before_mutation():
+    reg = ToolRegistry()
+    specs = [
+        ToolSpec("alpha", lambda _args: "one", _schema("alpha")),
+        ToolSpec("alpha", lambda _args: "two", _schema("alpha")),
+    ]
+    with pytest.raises(ValueError, match="duplicate"):
+        reg.register_many(specs)
+    assert reg.snapshot_map() == {}

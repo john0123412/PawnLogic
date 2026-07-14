@@ -34,6 +34,7 @@ class TrustLevel(str, Enum):
 class TrustBoundaryKind(str, Enum):
     """Stable internal names for tool trust-boundary categories."""
 
+    LOCAL = "local"
     HOST_SHELL = "host_shell"
     CONTAINER_EXEC = "container_exec"
     BROWSER_NETWORK = "browser_network"

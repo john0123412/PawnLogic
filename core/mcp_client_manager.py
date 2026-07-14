@@ -176,7 +176,7 @@ def _resolve_roots() -> list[Path]:
     return roots
 
 
-async def _roots_cb(_context) -> "ListRootsResult":
+async def _roots_cb(_context: object) -> "ListRootsResult":
     if ListRootsResult is None or Root is None:
         raise RuntimeError("MCP root types are unavailable")
     return ListRootsResult(

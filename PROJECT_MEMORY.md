@@ -121,6 +121,11 @@ These contracts are more important than local refactoring convenience:
 
 ### Tools, Trust, And Sandboxing
 
+- `core/tool_registry.py` owns complete `ToolSpec` metadata (handler, schema,
+  phases, trust, and capabilities). Built-in and MCP tools enter through this
+  registry; `TOOL_MAP` and `TOOLS_SCHEMA` are compatibility views only.
+- Delegate capability profiles filter Registry capabilities and must not grow
+  a second hard-coded tool-name policy.
 - `core/trust.py` and `core/operation_policy.py` own trust-boundary categories,
   notices, and command-risk policy.
 - `tools/file_ops.py` owns workspace-bound file operations.
