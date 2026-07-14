@@ -362,6 +362,15 @@ git commit -m "<type>: <summary>"
 - If the task requires remote delivery after branch validation, push the target
   branch and confirm the new remote HEAD in the final report.
 
+## Bounded Codex Goal Runner
+
+`tools/codex_goal_run.sh` is the maintainer-only entry point for unattended
+`codex exec` work. It requires a clean feature branch, stores artifacts only
+under ignored `.codex_goals/` or `.agent-work/`, and enforces one-run locking
+and a wall-clock timeout. Paid API smoke, dependency installation, and remote
+Git operations require separate explicit flags. See
+`docs/codex-wsl2-automation.md` for recovery and cleanup.
+
 ## Release And PyPI Publishing Rules
 
 - Version release work must start on a new remote test branch such as

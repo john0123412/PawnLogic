@@ -184,11 +184,17 @@ These contracts are more important than local refactoring convenience:
   fixtures cover text, usage, tool calls, retry notices, malformed events, and
   partial-stream interruption without network access.
 - `tools/merge_ctf_skills.py` is a maintenance helper for optional CTF skills.
+- `tools/codex_goal_run.sh` is the bounded unattended-maintenance entry point.
+  It requires a clean feature branch, confines artifacts to ignored local
+  roots, stores a redacted manifest and heartbeat, and keeps real API,
+  dependency installation, and remote Git capabilities independently gated.
 - `THIRD_PARTY_NOTICES.md` records redistribution decisions for third-party
   skill content.
 - `tests/test_runtime_eval.py` protects the runtime evaluation artifact
   contract, redaction, deterministic fake scenarios, real API gating, spend
   guards, safe tool smoke, and timeout classification.
+- `tests/test_codex_goal_run.py` uses fake executables and temporary Git
+  repositories; it must never launch a real Codex process during pytest.
 - `tests/test_workspace_cleanup.py`,
   `tests/test_merge_ctf_skills.py`, and packaging tests protect these flows.
 
