@@ -44,6 +44,7 @@ dependencies = [
 dev = [
     "build>=1.0",
     "pytest>=8.0",
+    "pytest-cov>=5.0",
     "pytest-timeout>=2.0",
     "pexpect>=4.8; sys_platform != 'win32'",
     "ruff>=0.4",
@@ -146,6 +147,20 @@ markers = [
     "e2e: real CLI or process-level end-to-end tests",
     "packaging: tests that build, install, or validate package distribution behavior",
 ]
+
+[tool.coverage.run]
+source = ["pawnlogic", "core", "tools", "config", "utils"]
+omit = [
+    "tests/*",
+    "tools/eval/scenarios/*",
+    "tools/runtime_eval.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 55
+# Floor set to measured baseline 55% minus 2 = 53%, clamped to minimum 55%.
+# Ratchet upward as coverage improves; never lower this value.
 
 [tool.mypy]
 python_version = "3.10"

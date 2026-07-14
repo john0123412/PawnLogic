@@ -209,6 +209,20 @@ These contracts are more important than local refactoring convenience:
 - `tools/check_release_consistency.py` enforces release version consistency.
 - `tests/test_repository_language_policy.py` enforces that Chinese text appears
   only in tracked files whose stem ends with `_zh-CN`.
+- `tools/check_architecture_budget.py` records per-file line and complexity
+  regression ceilings for the largest runtime modules. CI fails when a budgeted
+  file exceeds its ceiling.
+- `tools/code_index.py check` validates that the local code index is fresh
+  against current source file hashes.
+- `docs/MODULE_MAP.md` maps each major module to its Interface, Implementation,
+  Seam, Adapter, owning tests, and invariants.
+- `docs/agents/` contains progressive-disclosure agent docs for issue tracking,
+  triage labels, and domain context pointers.
+- `docs/adr/` contains accepted Architecture Decision Records for RuntimeContext,
+  ProviderRuntime, Provider streams, Tool trust, runtime evaluation artifacts,
+  and Skill Pack packaging.
+- `docs/plans/INDEX.md` identifies exactly one active release plan and lists
+  completed plans.
 
 ## Completed Iteration: 0.2.2 Runtime Evaluation And Architecture Slimming
 
