@@ -12,6 +12,8 @@ release history.
 ## Current Release State
 
 - Current public release: `0.2.2`.
+- Prepared release candidate: `0.2.3` (local commit only; not yet pushed,
+  tagged, or published to PyPI).
 - Runtime version source of truth: `config/paths.py:VERSION`.
 - Latest published tag: `v0.2.2`.
 - Most recent completed plan:
@@ -250,15 +252,17 @@ and `reasoning_content` persistence.
 
 ## Active Iteration: 0.2.3 Autonomous Runtime Reliability And Deepening
 
-The active iteration closes confirmed safety and release-gate gaps before
-deepening runtime Modules. It then improves custom Provider transaction/retry
-behavior, makes runtime evaluation enforce real budgets and exercise real local
-paths, restores bounded WSL2 Codex automation, and reduces large-file ownership
-hotspots without changing public runtime contracts.
+The 0.2.3 iteration closed confirmed safety and release-gate gaps, deepened
+runtime modules, improved custom Provider transaction/retry behavior, made
+runtime evaluation enforce real budgets and exercise real local paths, restored
+bounded WSL2 Codex automation, and reduced large-file ownership hotspots without
+changing public runtime contracts.
 
-Use `docs/plans/0.2.3-autonomous-runtime-reliability-deepening.md` for PR order,
+The release candidate is prepared locally on branch `release/0.2.3-prep`. Use
+`docs/plans/0.2.3-autonomous-runtime-reliability-deepening.md` for PR order,
 Interface definitions, targeted tests, CI monitoring, stop conditions, and the
-separate release-authorization gate.
+separate release-authorization gate. Push, CI, merge, tag, PyPI publish, and
+GitHub Release steps remain pending maintainer authorization.
 
 ## Typed Island
 

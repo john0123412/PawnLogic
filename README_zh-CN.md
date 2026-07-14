@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.2.2**。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.2.3**。
 
 ## 系统要求
 
@@ -87,14 +87,15 @@ python -m pawnlogic --help
 
 ## 新特性
 
-0.2.2 让 runtime debugging 更可重复，同时保持 0.2.1 的公开 contract 不变：
+0.2.3 关闭了安全缺口，让自定义 Provider 可预测地恢复，并深化了 runtime 模块，同时保持 0.2.2 的公开 contract 不变：
 
-- 本地 runtime evaluation harness 现在会为 deterministic offline check、safe tool smoke、bounded real API smoke，以及可选 Docker/browser/CTF suite 写入已脱敏的 JSONL artifact。
-- Real API smoke 仍是 opt-in，并受本地 API call 和 duration budget 限制；原始 Provider key 不会被打印或持久化。
-- CLI transcript check 覆盖 `/help`、`/mode`、`/provider list`、`/model` 和 `/exit` 的核心 slash-command 输出。
-- CI 现在会在 Python 3.11 fast path 中运行 offline runtime evaluation suite，并上传已脱敏的 runtime evaluation artifact。
-- Provider retry 行为可通过 `PAWNLOGIC_API_RETRY_MAX` 和 `PAWNLOGIC_API_RETRY_AFTER_MAX` 配置，同时保持现有默认值。
-- API payload/header 构建已移动到更小的内部模块，不改变 CLI syntax、Provider visibility、stream delta dict、tool result shape 或 `reasoning_content` persistence。
+- Canonical path containment 通过 `core/path_policy.py` 防止 workspace 遍历、symlink 逃逸和恶意 MCP server-name 注入。
+- 集中式 host-process trust enforcement 将每个 shell、Docker、web、pwn 和 delegate 路径路由到一个 Operation Policy 模块，具有显式 network 和 destructive 授权。
+- Transactional provider mutation 在写入 key 之前验证 name、URL、format 和 definition metadata；写入失败时，disk 和 memory 保持不变。Format-specific header（OpenAI bearer、Anthropic x-api-key）在 test、fetch、stream 和 non-stream 路径中一致使用。
+- 统一 retry 和 circuit-breaker policy 在请求开始时加载，具有 bounded validation，仅在没有 partial response 被发出时重试，并给 half-open 状态一个 single probe lease。
+- Runtime evaluation 通过 child-process termination 强制执行 real deadline，产生 schema-versioned atomic JSONL artifact，并在没有网络访问的情况下运行带有 provider stream fixture 的 offline replay scenario。
+- Bounded codex goal runner 为 maintainer-only unattended work 提供 locking、manifest、heartbeat、wall-clock timeout 和显式 capability gate。
+- Module ownership split 将 CLI startup/REPL、provider TUI state、tool implementation、session persistence、runtime context 和 runtime metrics 隔离到经过测试的 internal interface 后面。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 

@@ -416,8 +416,15 @@ PawnLogic/
 └── skills/              # 源码 checkout 技能包（不随 PyPI wheel 发布）
 ```
 
-0.2.0 consolidation 路线会保持公开 CLI、Provider 可见性、stream delta dict、tool result message 和 reasoning 持久化稳定，同时把运行时细节移动到内部模块：
+0.2.3 consolidation 路线会保持公开 CLI、Provider 可见性、stream delta dict、tool result message 和 reasoning 持久化稳定，同时把运行时细节移动到内部模块：
 
+- `core/path_policy.py` 强制 canonical path containment，防止 workspace 遍历、symlink 逃逸和恶意 filename 注入。
+- `core/host_process.py` 通过一个 Operation Policy decision 和 environment-scrubbing 模块集中 host-process trust enforcement。
+- `core/provider_transport.py` 在任何 disk 或 registry mutation 之前验证 provider definition 并使用 format-specific header。
+- `core/api_retry.py` 在请求开始时加载 retry 和 circuit-breaker policy，具有 bounded validation 和 half-open probe lease。
+- `core/session_tool_loop.py` 负责 deterministic tool-batch ordering、guard decision 和显式 internal tool outcome。
+- `core/session_snapshot.py` 和 `core/message_history.py` 是 manual save、autosave 和 dangling-message repair 的单一持久化接口。
+- `core/runtime_context.py` 是 authoritative per-session runtime-state owner，具有 `contextvars` activation scope。
 - `core/turn_state.py` 让每轮 loop 状态不进入公开 session 和持久化契约。
 - `core/provider_streams.py` 将 OpenAI-compatible 和 Anthropic stream reader 隔离在现有 `stream_request()` delta dict 输出之后。
 - `core/runtime_metrics.py` 记录内部 turn、retry、token、tool latency 和 failure-class snapshot，不新增 telemetry，也不改变默认输出。

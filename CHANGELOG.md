@@ -7,6 +7,133 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-14
+
+### Added
+- Added canonical path containment through `core/path_policy.py` with
+  `resolve_within()` and `safe_filename_fragment()` to prevent workspace
+  traversal, symlink escapes, and hostile MCP server-name injection.
+- Added centralized host-process trust enforcement through `core/host_process.py`
+  with `HostProcessRunner`, `HostProcessRequest`, and `ProcessOutcome` dataclasses
+  so every shell/process path goes through one Operation Decision and
+  environment-scrubbing module.
+- Added transactional provider mutations through `core/provider_transport.py` with
+  `ProviderDefinition`, format-specific headers, and validated definitions before
+  any disk or registry write; on write failure, disk and memory stay unchanged.
+- Added unified retry and circuit-breaker policy through `core/api_retry.py` with
+  `RetryPolicy` dataclass loaded at request start, shared HTTP/transport
+  classification, half-open probe lease, and configurable
+  `PAWNLOGIC_API_RETRY_MAX` / `PAWNLOGIC_API_RETRY_AFTER_MAX` environment
+  controls.
+- Added authoritative runtime evaluation core with child-process deadlines,
+  atomic artifact replacement, schema-versioned JSONL records, and redacted
+  summaries in `tools/eval/`.
+- Added offline replay scenarios with provider stream fixtures covering text,
+  usage, tool-call, retry, malformed-event, and partial-stream interruption
+  without network access.
+- Added bounded codex goal runner (`tools/codex_goal_run.sh`) with one-run
+  locking, manifest, heartbeat, checkpoint, wall-clock timeout, and explicit
+  capability gates for maintainer-only unattended work.
+- Added explicit `ToolExecutionOutcome` and `TurnToolLoop` in
+  `core/session_tool_loop.py` for deterministic tool-batch ordering, guard
+  decisions, Plan correction timing, and internal tool outcomes.
+- Added `SessionSnapshot` and `MessageHistory` in `core/session_snapshot.py` and
+  `core/message_history.py` as the single persistence interface for manual save,
+  autosave, and dangling-message repair.
+- Added `RuntimeContext` as the authoritative per-session runtime-state owner with
+  `contextvars` activation scope; legacy globals remain synchronized compatibility
+  mirrors only.
+- Added `ToolSpec` with handler, schema, phases, trust, and capabilities metadata
+  in the Tool Registry so built-in and MCP tools share one Registry seam.
+- Added per-file line and complexity architecture budgets in
+  `tools/check_architecture_budget.py` with CI regression ceilings.
+- Added code-index freshness validation, module map, plan index, and
+  progressive-disclosure agent docs for issue tracking, triage labels, and domain
+  context.
+
+### Changed
+- Browser screenshot and MCP binary asset paths now use canonical path resolution
+  and safe filename sanitization instead of string-prefix checks.
+- Host shell, Docker, web, pwn, and delegate tool paths now route through the
+  shared Operation Policy with explicit network and destructive authorization.
+- Docker cleanup is restricted to PawnLogic-labelled containers and resources;
+  unscoped global prune is no longer called.
+- Provider fetch now uses format-specific headers (OpenAI bearer, Anthropic
+  x-api-key) instead of reusing OpenAI headers for all formats.
+- Provider mutation now validates name, URL, format, and definition metadata
+  before writing API keys; invalid providers are rejected early.
+- Provider runtime errors for malformed JSON and model entries are now stable
+  `ProviderRuntime` error types.
+- Retry policy is now loaded at request start with bounded validation instead of
+  being captured at module import time.
+- DNS, refused, reset, timeout, and retryable HTTP failures are retried only when
+  no partial response has been emitted; malformed URLs, certificate errors, auth
+  errors, unsupported models, and payload errors are not retried.
+- Circuit-breaker half-open state now has a single probe lease; success is marked
+  only after response consumption completes.
+- Runtime evaluation now enforces real deadlines through child-process termination
+  instead of post-return classification; `subprocess.TimeoutExpired` is classified
+  as `timed_out` consistently.
+- Runtime evaluation artifacts now include schema version, unique run ID,
+  monotonic timing, and atomic file replacement; fields are allowlisted and raw
+  provider output is never stored.
+- CLI startup and REPL ownership split into `pawnlogic/startup.py` and
+  `pawnlogic/repl.py` while keeping `pawnlogic/cli.py` as the public facade.
+- Provider TUI state transitions moved into typed, deterministic
+  `ProviderTUIState` methods with no disk or network side effects; all mutations
+  route through `ProviderRuntime`.
+- Tool implementations split by ownership: `tools/text_patch.py` for
+  SEARCH/REPLACE, `tools/shell_ops.py` for host shell orchestration,
+  `tools/docker_plan.py` for Docker plan validation,
+  `tools/pwn_binary.py` for pure binary helpers, and `tools/pwn_debugger.py` for
+  GDB script planning.
+- `RuntimeMetrics` is now the sole counter owner for completed, interrupted,
+  failed, autosaved, usage, retry, tool, and failure-class counters.
+- `/stats`, Turn summaries, and eval read immutable metrics snapshots.
+
+### Fixed
+- Fixed browser screenshot paths that could escape the workspace through
+  absolute or traversal paths from hostile server names.
+- Fixed MCP binary asset filenames that could contain path separators from
+  unsanitized server names.
+- Fixed host process and Docker operations that bypassed the shared Operation
+  Policy or lacked explicit network/destructive authorization.
+- Fixed Anthropic-format model fetch that used OpenAI bearer headers instead of
+  `x-api-key`.
+- Fixed provider mutation that could persist keys before metadata validation,
+  leaving invalid entries on disk.
+- Fixed streaming and non-streaming retry classification that differed; retry
+  and timeouts are now captured at request start with bounded validation.
+- Fixed runtime eval that classified timeouts after a scenario returned instead
+  of enforcing a real deadline through child-process termination.
+- Fixed runtime eval artifact filenames that could collide when created in the
+  same second.
+
+### Tests
+- Added path containment tests for traversal, symlink, sibling-prefix, and
+  hostile server-name scenarios.
+- Added host-process trust enforcement tests for spawn-before-policy regression,
+  Docker network authorization, and label-restricted cleanup.
+- Added provider transaction tests for Anthropic fetch headers, invalid response
+  shapes, invalid URL save ordering, malformed custom-provider recovery, and TUI
+  write rollback.
+- Added retry policy tests for DNS/refused/reset/timeout classification,
+  partial-stream no-retry, half-open probe lease, and configurable environment
+  controls.
+- Added runtime evaluation tests for negative/zero budgets, hard timeouts,
+  duplicate filenames, interrupted writes, unknown statuses, and redaction
+  variants.
+- Added tool registry tests for atomic handler/schema/phase/trust/capabilities
+  registration and delegate capability filtering.
+- Added turn tool loop tests for message ordering, Plan corrections, phase
+  switches, concurrency truncation, interrupts, audits, metrics, and autosave
+  timing.
+- Added session persistence tests for manual save, autosave, load, dangling
+  message repair, pinned messages, and `reasoning_content` handling.
+- Added runtime context tests for two isolated contexts with independent mode,
+  config, cwd, workspace, and output sink.
+- Full local non-E2E test suite: 878 passed.
+
 ## [0.2.2] - 2026-07-07
 
 ### Added
