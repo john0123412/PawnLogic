@@ -67,8 +67,12 @@ These contracts are more important than local refactoring convenience:
 
 ### CLI And Startup
 
-- `pawnlogic/cli.py` owns parser options, startup behavior, slash-command
-  guidance, completer behavior, and `PawnCompleter`.
+- `pawnlogic/cli.py` remains the public parser/command facade and owns
+  `PawnCompleter` compatibility.
+- `pawnlogic/startup.py` owns runtime-home, env, proxy, key-readiness, and
+  writable-runtime primitives.
+- `pawnlogic/repl.py` owns prompt-loop signal state, input restoration, and
+  small input/history caches.
 - `main.py`, `pawnlogic/__main__.py`, and `pawn.sh` stay thin adapters.
 - `tools/cli_transcript_runner.py` owns deterministic maintainer transcript
   checks for slash-command output without starting the full REPL.

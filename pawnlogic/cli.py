@@ -5,7 +5,22 @@ PawnLogic CLI.
 Multi-provider runtime, vision support, SQLite persistence, CoT guidance,
 GSA skill archive, spec-driven execution, and GSD project state.
 """
-import os, sys, shutil, argparse, time, asyncio, traceback, signal
+import os, sys, shutil, argparse, asyncio, traceback, signal
+from pawnlogic.repl import (
+    ReplSignalState,
+    read_text_cache as _read_text_cache,
+    restore_last_input_buffer as _restore_last_input_buffer,
+    safe_write_history,
+    terminal_notice,
+    write_text_cache as _write_text_cache,
+)
+from pawnlogic.startup import (
+    default_pawnlogic_home as _default_pawnlogic_home,
+    ensure_runtime_dir_writable,
+    has_any_api_key,
+    install_proxy as _install_proxy,
+    manual_load_env as _manual_load_env,
+)
 
 if sys.version_info < (3, 10):
     print(
@@ -89,30 +104,8 @@ except Exception as _e:
 
 async def _terminal_notice(text: str) -> None:
     """Print a REPL notice without being erased by prompt_toolkit repainting."""
-    if _HAS_PROMPT_TOOLKIT and _pt_run_in_terminal:
-        await _pt_run_in_terminal(lambda: print(text))
-    else:
-        print(text)
-
-
-def _restore_last_input_buffer(buffer, last_input: str, state: dict[str, str]) -> bool:
-    """Restore the last submitted input while preserving current unsent text."""
-    if not last_input:
-        return False
-
-    current = getattr(buffer, "text", "")
-    alternate = state.get("alternate", "")
-    if current == last_input and alternate:
-        target = alternate
-        state["alternate"] = last_input
-    else:
-        if current and current != last_input:
-            state["alternate"] = current
-        target = last_input
-
-    buffer.text = target
-    buffer.cursor_position = len(target)
-    return True
+    runner = _pt_run_in_terminal if _HAS_PROMPT_TOOLKIT else None
+    await terminal_notice(text, runner)
 
 try:
     from rich.console import Console as _RichConsole
@@ -135,32 +128,6 @@ except Exception as _e:
     _RICH_IMPORT_ERROR = str(_e)
     _rich_console = None
 
-def _default_pawnlogic_home() -> Path:
-    raw = os.environ.get("PAWNLOGIC_HOME")
-    if raw:
-        return Path(raw).expanduser()
-    try:
-        home = Path.home()
-    except Exception:
-        home = Path(os.environ.get("TMPDIR") or "/tmp")
-    return (home / ".pawnlogic").expanduser()
-
-
-def _manual_load_env(path: Path) -> None:
-    try:
-        for raw_line in path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            if key:
-                os.environ.setdefault(key, value)
-    except Exception as exc:
-        print(f"\033[93m  ⚠ Failed to read {path}: {exc}\033[0m", file=sys.stderr)
-
-
 # Load .env at startup before importing config.
 _PAWNLOGIC_DIR = _default_pawnlogic_home()
 _ENV_PATH = _PAWNLOGIC_DIR / ".env"
@@ -176,9 +143,6 @@ except ImportError:
             file=sys.stderr,
         )
         _manual_load_env(_ENV_PATH)
-
-# Proxy initialization runs first.
-import urllib.request
 
 ENV_TEMPLATE = """# PawnLogic .env template.
 #
@@ -260,18 +224,6 @@ def _ensure_runtime_templates(runtime_dir: Path) -> None:
         if not path.exists():
             path.write_text(content, encoding="utf-8")
 
-
-def _install_proxy():
-    hp  = os.environ.get("HTTP_PROXY")  or os.environ.get("http_proxy")
-    hsp = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-    if hp or hsp:
-        h = {}
-        if hp:  h["http"]  = hp
-        if hsp: h["https"] = hsp
-        urllib.request.install_opener(
-            urllib.request.build_opener(urllib.request.ProxyHandler(h)))
-        return hsp or hp
-    return None
 
 PROXY_STATUS = _install_proxy()
 
@@ -434,28 +386,7 @@ async def handle_slash(cmd: str, session: AgentSession):
 
 def _safe_write_history(path: str) -> None:
     """Write the readline history file without surfacing non-critical errors."""
-    try:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        readline.write_history_file(path)
-    except Exception:
-        pass
-
-
-def _read_text_cache(path: Path) -> str:
-    """Read a small UTF-8 text cache file, returning empty on any failure."""
-    try:
-        return path.read_text(encoding="utf-8").strip()
-    except Exception:
-        return ""
-
-
-def _write_text_cache(path: Path, text: str) -> None:
-    """Write a small UTF-8 text cache file, ignoring non-critical failures."""
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text.strip() + "\n", encoding="utf-8")
-    except Exception:
-        pass
+    safe_write_history(readline, path)
 
 
 # ════════════════════════════════════════════════════════
@@ -606,13 +537,7 @@ def _has_any_api_key() -> bool:
     during startup, so built-in and custom providers are handled uniformly
     without provider-name special cases.
     """
-    from config.providers import init_providers
-    init_providers()
-    return any(
-        os.getenv(p["api_key_env"], "") not in ("", "YOUR_API_KEY_HERE")
-        for p in PROVIDERS.values()
-        if p.get("api_key_env")
-    )
+    return has_any_api_key(PROVIDERS)
 
 
 
@@ -804,11 +729,7 @@ def _prompt_startup_resume(session: AgentSession) -> bool:
 
 
 def _ensure_runtime_dir_writable(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-    probe = path / ".write_test"
-    with open(probe, "w", encoding="utf-8") as f:
-        f.write("ok")
-    probe.unlink(missing_ok=True)
+    ensure_runtime_dir_writable(path)
     _ensure_runtime_templates(path)
 
 
@@ -1404,13 +1325,10 @@ async def main():
 
     # Main loop.
     _re_edit_default = ""     # after Ctrl+C, previous user text becomes prompt default
-    _last_sigint_time = 0.0   # double Ctrl+C exit timer
-    _sigint_pending   = False # first Ctrl+C seen; waiting for confirmation
-    _pending_last_input_restore = False
+    _signal_state = ReplSignalState()
 
     def _restore_last_input_on_sigtstp(_signum, _frame):
-        nonlocal _pending_last_input_restore
-        _pending_last_input_restore = True
+        _signal_state.request_last_input_restore()
 
     _previous_sigtstp = None
     try:
@@ -1421,8 +1339,7 @@ async def main():
 
     while True:
         try:
-            if _pending_last_input_restore:
-                _pending_last_input_restore = False
+            if _signal_state.consume_last_input_restore():
                 _cached_input = _read_text_cache(_last_input_path)
                 if _cached_input:
                     _re_edit_default = _cached_input
@@ -1455,7 +1372,7 @@ async def main():
                 raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ") + _label).strip()
 
             _re_edit_default = ""    # clear after consuming it
-            _sigint_pending  = False # successful input resets double-Ctrl+C state
+            _signal_state.submitted()
             if not raw:
                 continue
             if raw.startswith("/"):
@@ -1485,7 +1402,7 @@ async def main():
                 removed, last_text = session.undo(1)
                 session._autosave()
                 _re_edit_default = last_text or raw
-                _sigint_pending = False
+                _signal_state.submitted()
                 if removed:
                     print(c(YELLOW, "  [interrupted] Turn rolled back; edit and press Enter to retry."))
                 else:
@@ -1495,12 +1412,9 @@ async def main():
             # Idle input state: Ctrl+C only arms the double-press exit flow.
             # Turn rollback is handled exclusively by the in-flight
             # TurnInterrupted branch around session.run_turn().
-            _now = time.monotonic()
-            if _sigint_pending and (_now - _last_sigint_time < 5.0):
+            if _signal_state.interrupt_requests_exit():
                 await _terminal_notice("\n  Goodbye! 👋")
                 break
-            _last_sigint_time = _now
-            _sigint_pending   = True
             await _terminal_notice("\n  [confirm] Press Ctrl+C again within 5s to exit. Current input is unchanged.")
             continue
         except EOFError:
