@@ -7,7 +7,7 @@
 
 | Version | Plan | Status |
 |---------|------|--------|
-| 0.3.0 | [0.3.0-extensible-agent-platform-and-security-distribution.md](0.3.0-extensible-agent-platform-and-security-distribution.md) | Active; PR 1 opened as [#79](https://github.com/john0123412/PawnLogic/pull/79) |
+| 0.3.0 | [0.3.0-extensible-agent-platform-and-security-distribution.md](0.3.0-extensible-agent-platform-and-security-distribution.md) | Active; core PRs #79-#89 merged into `main`. Remaining scope is the external `pawnlogic-security` and `pawnlogic-ui` distributions, concurrency two, and the authorized version bump and release. |
 
 There is exactly one active plan at a time. When the active plan is completed
 and its release is published, it moves to Completed below.
