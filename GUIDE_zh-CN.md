@@ -239,6 +239,19 @@ skill-pack manifest 只是运行时发现元数据，本身不授权再分发。
 已启用名称持久化在 `~/.pawnlogic/extensions/enabled.json`。PawnLogic 会在暴露 Tool
 或命令之前验证兼容性和全部贡献名称。单个 Extension 失败不会阻断 core 正常启动。
 
+### Network Policy
+
+Web fetch 与 browser navigation 只接受 HTTP(S) target。PawnLogic 会拒绝 URL
+内嵌 credential、cloud metadata/internal host，以及 loopback、link-local、
+multicast、unspecified 或 reserved address。Private-network target 必须经过
+真实的 host 交互确认；模型生成的工具参数不能授予该权限。非交互执行会 fail closed。
+
+每个 HTTP redirect 和 browser final URL 都会重新评估。已确认的 private target
+只会直接访问，不会发送给远程 Jina Reader 服务。Docker `bridge`/`host` 网络和
+legacy `uvx mcp-server-fetch` 启动使用独立的 capability-only gate：
+`allow_network` / `PAWNLOGIC_DOCKER_ALLOW_NETWORK`，以及
+`allow_network_install` / `PAWNLOGIC_MCP_ALLOW_NETWORK_INSTALL`。
+
 ### MCP 工具接入
 
 pip 或一行安装脚本用户，PawnLogic 启动时会在 `~/.pawnlogic/` 下生成可编辑模板：

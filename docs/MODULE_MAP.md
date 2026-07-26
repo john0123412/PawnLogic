@@ -17,6 +17,7 @@
 | `core/tool_registry.py` | Capability Interface | `ToolRegistry.register()` / `visible_specs()` | `test_tool_registry.py` | Handler, schema, phase, trust, capabilities registered atomically. No tool without handler. |
 | `core/extension_contracts.py` | Extension Interface | Frozen Extension values and lifecycle Protocols | `test_extensions.py` | Contracts import no discovery/startup logic. Contributions are typed and owner-attributed. |
 | `core/extensions.py` | Extension Runtime | `ExtensionManager` | `test_extensions.py` | Discovery never loads entry points. Enablement is explicit, transactional, persisted, and failure-isolated. |
+| `core/mcp_client_manager.py` | MCP process Adapter | `MCPClientManager`, `init_external_mcp()` | `test_mcp_client_manager.py`, `test_mcp_config.py`, `test_network_adapter_baseline.py` | Startup is failure-isolated. Legacy `uvx mcp-server-fetch` requires capability-only network-install authorization. |
 | `core/tool_executor.py` | Tool dispatch | `ToolExecutor` class | `test_tool_executor.py` | Dispatches to handler, records outcome, respects trust boundary. |
 | `core/tool_result.py` | Outcome shape | `ToolResult` dataclass | `test_tool_result.py` | Explicit status, content, error_type, side_effect flag. |
 
@@ -40,7 +41,8 @@
 | Module | Role | Interface | Tests | Invariants |
 |--------|------|-----------|-------|------------|
 | `core/trust.py` | Trust boundaries | `TrustBoundaryKind` enum | `test_trust.py` | Every named boundary has a standard notice and legacy level. |
-| `core/operation_policy.py` | Operation gating | `OperationPolicy` class | `test_operation_policy.py`, `test_run_shell_policy.py` | Network, destructive, and interactive operations require explicit authorization. |
+| `core/operation_policy.py` | Operation gating | `OperationPolicy` class | `test_operation_policy.py`, `test_run_shell_policy.py` | Host-shell destructive and interactive operations require explicit authorization. |
+| `core/network_policy.py` | Network authorization Interface | `NetworkPolicy.evaluate()`, `normalize_url()` | `test_network_policy.py`, `test_network_policy_baseline.py`, `test_network_adapter_baseline.py` | Normalize HTTP(S) targets; deny credentials, metadata, and special address ranges; private targets require explicit authorization; every redirect is re-evaluated; non-interactive confirmation fails closed. |
 | `core/path_policy.py` | Path containment | `resolve_within()`, `safe_filename_fragment()` | `test_security.py` | Canonical resolution + `relative_to()` containment. No symlink escapes. |
 | `core/host_process.py` | Process runner | `HostProcessRunner.run()` | `test_host_process.py` | Environment scrubbing, timeout, process-group cleanup. |
 
@@ -50,13 +52,15 @@
 |--------|------|-----------|-------|------------|
 | `tools/file_ops.py` | File operations | Tool handlers | `test_security.py` | Workspace-relative writes. Path containment enforced. |
 | `tools/shell_ops.py` | Shell orchestration | `run_shell()` | `test_run_shell_policy.py` | Delegates to shared `HostProcessRunner`. |
+| `tools/network_adapter.py` | Network host Adapter | `evaluate_network_url()`, `open_url_with_policy()`, `navigate_with_policy()` | `test_network_policy_baseline.py` | DNS and redirect checks enter the pure Network Policy; model arguments cannot self-authorize private targets. |
+| `tools/web_ops.py` | HTTP fetch Adapter | `tool_fetch_url()` | `test_network_policy_baseline.py`, `test_network_adapter_baseline.py` | Initial and redirect targets pass through `NetworkPolicy`; confirmed private targets bypass remote readers. |
 | `tools/text_patch.py` | Text patching | `apply_text_patch()` | `test_security.py` | Fuzzy SEARCH/REPLACE matching. |
-| `tools/docker_sandbox.py` | Docker operations | Tool handlers | `test_docker_policy.py` | Network=none by default. Labelled resources. No unscoped prune. |
+| `tools/docker_sandbox.py` | Docker operations | Tool handlers | `test_docker_policy.py`, `test_network_adapter_baseline.py` | Network=none by default. Bridge/host require capability-only authorization. Labelled resources. No unscoped prune. |
 | `tools/docker_plan.py` | Docker plans | `build_docker_plan()` | `test_docker_policy.py` | Plan validation separated from SDK calls. |
 | `tools/pwn_chain.py` | CTF chain | Tool handlers | `test_ctf_workflow.py` | Binary paths quoted. GDB init filtered. |
 | `tools/pwn_binary.py` | Binary analysis | `ElfAnalysisCache` | `test_ctf_workflow.py` | Pure binary/ROP/cyclic helpers. |
 | `tools/pwn_debugger.py` | Debugger ops | Tool handlers | `test_ctf_workflow.py` | GDB/interactive process logic. |
-| `tools/browser_ops.py` | Browser operations | Tool handlers | `test_browser_ops.py` | Loopback-only fixtures. Path containment for screenshots. |
+| `tools/browser_ops.py` | Browser Network Policy Adapter | Tool handlers | `test_browser_ops.py`, `test_network_policy_baseline.py` | Navigation requests and final destinations are policy-checked. Path containment for screenshots. |
 | `tools/delegate_tool.py` | Delegate tool | `delegate_tool_handler()` | `test_tool_executor.py` | Capability-based filtering. No bypass of host/network/destructive gates. |
 
 ## Evaluation
@@ -97,7 +101,7 @@ implementations already exist.
 |--------|--------------------|----------------|--------|
 | Extension Runtime | `ExtensionManager` over stable extension contracts | Python entry-point discovery Adapter; explicit enablement; transactional contribution registration | Core Module and CLI/command Adapters implemented |
 | Delegation Runtime | `AgentTask`, `AgentResult`, `DelegationPolicy`, `ModelRouter`, `DelegationExecutor` | Legacy `delegate_task` compatibility Adapter; Provider-backed execution Adapters | Contract accepted in ADR 0008; implementation pending |
-| Network Policy | One normalized network-operation authorization Interface | DNS, redirect, browser, web, MCP, and Docker caller Adapters | Planned |
+| Network Policy | `NetworkPolicy.evaluate()` over normalized `NetworkOperation` values | DNS resolver plus web, browser, MCP, and Docker caller Adapters | Core Module and caller Adapters implemented |
 | Knowledge Retrieval | Durable knowledge-record and retrieval Interface | SQLite source-of-truth Adapter; optional Redis cache/vector Adapter | Planned |
 | Agent Event | Typed event stream for conversations, tools, delegation, budgets, and evidence | CLI, NDJSON, and optional Streamlit rendering Adapters | Planned |
 

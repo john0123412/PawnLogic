@@ -12,13 +12,11 @@ Fetch fallback chain:
   3. Regex strip  original regex cleanup              zero-dependency fallback.
 """
 
-import ipaddress
 import json
 import os
 import random
 import re
 import shutil
-import socket
 import subprocess
 import urllib.error
 import urllib.parse
@@ -32,16 +30,22 @@ from core.git_security import (
 )
 from core.state import state as _runtime_state, runtime_config
 from core.trust import trust_notice
+from core.network_policy import NetworkAction
+from tools import network_adapter as _network_adapter
+from tools.network_adapter import (
+    NetworkPolicyBlocked as _NetworkPolicyBlocked,
+    confirm_network_decision as _confirm_network_decision,
+    decision_message as _decision_message,
+    evaluate_network_url,
+    open_url_with_policy as _open_url_with_policy,
+)
+
+socket = _network_adapter.socket
+_NetworkRedirectHandler = _network_adapter.NetworkRedirectHandler
 
 # Detect local tools.
 _has_pandoc = bool(shutil.which("pandoc"))
 _has_lynx   = bool(shutil.which("lynx"))
-_URL_ALLOWED_SCHEMES = {"http", "https"}
-_METADATA_HOSTS = {
-    "metadata.google.internal",
-    "metadata",
-    "metadata.aliyun.com",
-}
 _URL_POLICY_WARN_ON_PRIVATE = os.environ.get(
     "PAWNLOGIC_WARN_PRIVATE_NETWORK",
     "1",
@@ -52,112 +56,29 @@ def _user_mode() -> bool:
     return bool(_runtime_state.user_mode)
 
 
-def _is_private_ip(host: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return ip.is_private
+def validate_fetch_url(
+    url: str,
+    *,
+    arguments: dict | None = None,
+) -> tuple[str | None, list[str]]:
+    """Validate a URL through NetworkPolicy while preserving the old tuple API."""
+    check_arguments = arguments if arguments is not None else {"interactive": True}
+    decision = evaluate_network_url(
+        url,
+        arguments=check_arguments,
+        confirmation_available=True,
+    )
+    if decision.action == NetworkAction.DENY:
+        return _decision_message(decision), []
+    if decision.action == NetworkAction.CONFIRM:
+        if decision.rule == "private_network" and _URL_POLICY_WARN_ON_PRIVATE:
+            return None, [
+                f"Private network target requires confirmation: {decision.normalized_target}",
+                f"Target '{urllib.parse.urlsplit(decision.normalized_target).hostname}' resolves to a private network address; confirmation is required.",
+            ]
+        return None, []
+    return None, []
 
-
-def _is_loopback_ip(host: str) -> bool:
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
-def _is_link_local_ip(host: str) -> bool:
-    try:
-        return ipaddress.ip_address(host).is_link_local
-    except ValueError:
-        return False
-
-
-def _resolved_host_ips(host: str) -> list:
-    try:
-        ipaddress.ip_address(host)
-        return []
-    except ValueError:
-        pass
-
-    try:
-        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    except OSError:
-        return []
-
-    ips = []
-    for info in infos:
-        sockaddr = info[4]
-        if not sockaddr:
-            continue
-        try:
-            ips.append(ipaddress.ip_address(sockaddr[0]))
-        except ValueError:
-            continue
-    return ips
-
-
-def validate_fetch_url(url: str) -> tuple[str | None, list[str]]:
-    """
-    Validate a URL for fetch/browser tools.
-
-    Returns (error_message_or_none, warnings).
-    """
-    parsed = urllib.parse.urlparse(str(url).strip())
-    if parsed.scheme.lower() not in _URL_ALLOWED_SCHEMES:
-        return (
-            f"SECURITY BLOCK: unsupported URL scheme '{parsed.scheme or '(missing)'}'. "
-            "Only http:// and https:// are allowed.",
-            [],
-        )
-    if not parsed.netloc:
-        return "SECURITY BLOCK: URL must include a network location.", []
-
-    host = (parsed.hostname or "").strip().lower()
-    if not host:
-        return "SECURITY BLOCK: URL host is missing or invalid.", []
-
-    if host == "localhost" or host.endswith(".localhost") or _is_loopback_ip(host):
-        return (
-            f"SECURITY BLOCK: loopback target '{host}' is denied for web/browser tools by default.",
-            [],
-        )
-
-    if host in _METADATA_HOSTS or host.endswith(".internal"):
-        return (
-            f"SECURITY BLOCK: metadata/internal host '{host}' is denied for web/browser tools by default.",
-            [],
-        )
-
-    if _is_link_local_ip(host):
-        return (
-            f"SECURITY BLOCK: link-local target '{host}' is denied for web/browser tools by default.",
-            [],
-        )
-
-    resolved_ips = _resolved_host_ips(host)
-    if any(ip.is_loopback for ip in resolved_ips):
-        return (
-            f"SECURITY BLOCK: target '{host}' resolves to a loopback address; denied by default.",
-            [],
-        )
-    if any(ip.is_link_local for ip in resolved_ips):
-        return (
-            f"SECURITY BLOCK: target '{host}' resolves to a link-local address; denied by default.",
-            [],
-        )
-
-    warnings: list[str] = []
-    if _URL_POLICY_WARN_ON_PRIVATE and _is_private_ip(host):
-        warnings.append(
-            f"Private network target '{host}' is allowed, but this crosses the local trust boundary."
-        )
-    if _URL_POLICY_WARN_ON_PRIVATE and any(ip.is_private for ip in resolved_ips):
-        warnings.append(
-            f"Target '{host}' resolves to a private network address; this crosses the local trust boundary."
-        )
-    return None, warnings
 
 def _ua() -> str:
     """Return a random User-Agent."""
@@ -192,7 +113,7 @@ def _search_tavily(query: str) -> str | None:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with _open_url_with_policy(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
 
         results = data.get("results", [])
@@ -230,7 +151,7 @@ def _search_jina(query: str, max_chars: int = 4000) -> str | None:
                 "User-Agent": _ua(),
             },
         )
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with _open_url_with_policy(req, timeout=20) as resp:
             text = resp.read(600_000).decode("utf-8", errors="replace").strip()
 
         if not text or len(text) < 50:
@@ -258,7 +179,7 @@ def _search_ddg(query: str) -> str:
             "User-Agent": _ua(),
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         })
-        with urllib.request.urlopen(req, timeout=12) as resp:
+        with _open_url_with_policy(req, timeout=12) as resp:
             html = resp.read().decode("utf-8", errors="replace")
 
         snips  = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', html, re.DOTALL)
@@ -304,7 +225,11 @@ def tool_web_search(a: dict) -> str:
 
 # Jina Reader fetch.
 
-def _fetch_jina(url: str, max_chars: int) -> str | None:
+def _fetch_jina(
+    url: str,
+    max_chars: int,
+    arguments: dict | None = None,
+) -> str | None:
     """Fetch through Jina Reader and return Markdown, or None on failure."""
     jina_url = f"https://r.jina.ai/{url}"
     print(c(BLUE, f"  🌐 [Jina] {url[:70]}"))
@@ -314,7 +239,7 @@ def _fetch_jina(url: str, max_chars: int) -> str | None:
             "Accept": "text/markdown,text/plain,*/*",
             "X-Return-Format": "markdown",
         })
-        with urllib.request.urlopen(req, timeout=25) as resp:
+        with _open_url_with_policy(req, timeout=25, arguments=arguments) as resp:
             text = resp.read(600_000).decode("utf-8", errors="replace")
         text = text.strip()
         if not text or len(text) < 50:
@@ -372,16 +297,21 @@ def tool_fetch_url(a: dict) -> str:
     url       = a["url"]
     max_chars = int(a.get("max_chars", runtime_config()["fetch_max_chars"]))
     strategy  = a.get("strategy", "auto")   # auto | jina | pandoc | direct
-    err, warnings = validate_fetch_url(url)
-    if err:
-        return err
-    if warnings and _user_mode():
-        for warning in warnings:
-            print(c(YELLOW, trust_notice(warning)))
+    decision = evaluate_network_url(url, arguments=a)
+    if not _confirm_network_decision(decision, a):
+        return _decision_message(decision)
+    private_target = decision.rule in {
+        "private_network",
+        "private_network_authorized",
+    }
+    if decision.rule == "private_network_authorized" and _user_mode():
+        print(c(YELLOW, trust_notice(
+            f"Private network target authorized for this request: {decision.normalized_target}"
+        )))
 
     # 1. Jina Reader when auto or explicitly requested.
-    if strategy in ("auto", "jina"):
-        result = _fetch_jina(url, max_chars)
+    if strategy in ("auto", "jina") and not private_target:
+        result = _fetch_jina(url, max_chars, a)
         if result:
             return f"[Source: Jina Reader]\n{result}"
 
@@ -394,8 +324,15 @@ def tool_fetch_url(a: dict) -> str:
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Accept-Encoding": "identity",
         })
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with _open_url_with_policy(req, timeout=20, arguments=a) as resp:
+            final_url = resp.geturl() if hasattr(resp, "geturl") else None
+            if final_url and final_url != url:
+                final_decision = evaluate_network_url(final_url, arguments=a)
+                if not _confirm_network_decision(final_decision, a):
+                    return _decision_message(final_decision)
             raw_html = resp.read(600_000).decode("utf-8", errors="replace")
+    except _NetworkPolicyBlocked as e:
+        return str(e)
     except Exception as e:
         return f"Fetch failed: {e}"
 

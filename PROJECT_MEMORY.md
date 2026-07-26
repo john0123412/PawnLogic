@@ -65,6 +65,16 @@ These contracts are more important than local refactoring convenience:
   persistence rules must remain stable.
 - Runtime metrics must not introduce telemetry, network calls, secrets, or
   default terminal noise.
+- Web and browser HTTP(S) targets pass through the shared Network Policy:
+  credentials, metadata, and special address ranges are denied; private targets
+  require explicit authorization; redirects are re-evaluated; non-interactive
+  confirmation fails closed.
+- Model-provided Tool arguments are untrusted and cannot self-authorize a
+  private-network target. Confirmed private targets bypass remote reader
+  services.
+- Docker bridge/host networking and legacy `uvx mcp-server-fetch` startup use
+  capability-only authorization gates. Capability approval is not target
+  approval.
 - Third-party skill packs must not be included in wheels or sdists by default.
 - Proposed Extensions must remain disabled until explicitly enabled; installing
   a distribution is not authorization to load or execute it.
@@ -176,20 +186,32 @@ These contracts are more important than local refactoring convenience:
   a second hard-coded tool-name policy.
 - `core/trust.py` and `core/operation_policy.py` own trust-boundary categories,
   notices, and command-risk policy.
+- `core/network_policy.py` owns normalized HTTP(S) target decisions, injected
+  DNS-answer evaluation, redirect re-evaluation, private-target authorization,
+  special-address denial, and capability-only network gates.
 - `tools/file_ops.py` owns workspace-bound file operations.
 - `tools/text_patch.py` owns SEARCH/REPLACE matching and diagnostics;
   `tools/file_ops.py` keeps the public `patch_file` adapter.
 - `tools/shell_ops.py` owns host-shell authorization orchestration.
 - `tools/sandbox.py` owns host shell execution policy integration.
-- `tools/docker_sandbox.py` owns Docker execution boundaries.
+- `tools/network_adapter.py` owns DNS, redirect, browser-navigation, and host
+  confirmation adapters for the pure Network Policy.
+- `tools/web_ops.py` and `tools/browser_ops.py` adapt URL fetch and browser
+  operations without treating model-provided arguments as authorization.
+- `tools/docker_sandbox.py` owns Docker execution boundaries; bridge/host
+  networking enters Network Policy as an explicitly authorized capability.
 - `tools/docker_plan.py` validates pure Docker execution plans before SDK use.
 - `tools/pwn_binary.py` owns pure/cached binary helpers, while
   `tools/pwn_debugger.py` owns GDB script planning; `tools/pwn_chain.py` keeps
   public tool adapters.
-- `tools/browser_ops.py` owns browser automation operations and recovery paths.
+- `core/mcp_client_manager.py` owns MCP lifecycle and applies the
+  capability-only network-install gate to legacy `uvx mcp-server-fetch`
+  startup.
 - `tests/test_trust.py`, `tests/test_operation_policy.py`,
-  `tests/test_run_shell_policy.py`, and `tests/test_docker_policy.py` protect
-  trust boundary behavior.
+  `tests/test_run_shell_policy.py`, `tests/test_docker_policy.py`,
+  `tests/test_network_policy.py`, `tests/test_network_policy_baseline.py`, and
+  `tests/test_network_adapter_baseline.py` protect trust and network-policy
+  behavior.
 
 ### Workspace, Skills, And Maintenance
 
@@ -347,7 +369,9 @@ For broad code changes:
 ## Known Risks To Recheck Often
 
 - Host, Docker, browser, MCP, and CTF execution paths can drift around the
-  shared trust and Operation Policy Interfaces.
+  shared trust, Operation Policy, and Network Policy Interfaces. URL adapters
+  must re-evaluate DNS answers and redirects; capability-only approval must not
+  be treated as target approval.
 - Provider mutation ordering, format-specific fetch headers, and stream versus
   non-stream retry classification can diverge. PRs #54, #57 completed PR 5:
   fetch headers, transactional persistence, malformed-response handling, legacy

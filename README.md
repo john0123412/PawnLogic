@@ -214,6 +214,25 @@ executes real tools with the current user's permissions when you ask it to do
 so. Pattern filters, Docker boundaries, and capability profiles reduce
 accidents; they do not contain a determined attacker.
 
+Web fetches and browser navigation evaluate HTTP(S) targets through the shared
+Network Policy before use. URLs are normalized; embedded credentials,
+cloud-metadata/internal targets, and loopback, link-local, multicast,
+unspecified, or reserved addresses are denied. Private-network targets require
+explicit authorization, and non-interactive requests fail closed when
+confirmation would otherwise be required. Redirect destinations are normalized,
+resolved, and evaluated again before they are followed, including any
+target-scoped authorization. Model-generated Tool arguments cannot grant
+private-network authorization, and confirmed private targets bypass remote
+reader services.
+
+Docker `bridge`/`host` networking and legacy `uvx mcp-server-fetch` startup use
+capability-only authorization because no concrete URL is available at the gate.
+Authorize Docker networking with `allow_network=true` or
+`PAWNLOGIC_DOCKER_ALLOW_NETWORK=true`; authorize the legacy MCP network install
+with `allow_network_install=true` or
+`PAWNLOGIC_MCP_ALLOW_NETWORK_INSTALL=true`. These approvals grant only the
+named capability; they are not URL-target approvals.
+
 User-friendly mode prints explicit trust-boundary notices for host shell
 execution, Docker container exec, browser/network-capable tools, private
 network URL access, delegated sub-agents, and plaintext HTTP providers. Use

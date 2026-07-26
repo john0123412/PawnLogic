@@ -48,6 +48,8 @@ except ImportError:
     Root = None
 
 from core.logger import logger
+from core.network_policy import NetworkOperation, NetworkPolicy
+from core.operation_policy import OperationAction
 from config.paths import PAWNLOGIC_HOME
 from config.security import scrub_sensitive_env
 
@@ -197,11 +199,22 @@ def _server_skip_reason(name: str, conf: dict) -> str | None:
     if not _config_enabled(conf.get("enabled"), default=True):
         return "disabled by config (enabled=false)"
 
-    allow_network_install = (
+    explicit_authorization = (
         _config_truthy(conf.get("allow_network_install"))
         or _config_truthy(os.environ.get("PAWNLOGIC_MCP_ALLOW_NETWORK_INSTALL"))
     )
-    if _is_legacy_fetch_uvx(name, conf) and not allow_network_install:
+    if _is_legacy_fetch_uvx(name, conf):
+        decision = NetworkPolicy().evaluate(
+            NetworkOperation(
+                capability_only=True,
+                action="network_install",
+                explicit_authorization=explicit_authorization,
+                interactive=False,
+            )
+        )
+    else:
+        decision = None
+    if decision is not None and decision.action != OperationAction.ALLOW:
         return (
             "skipped legacy 'uvx mcp-server-fetch' startup because it may fetch "
             "from PyPI and block Pawn startup; use built-in fetch_url or set "
