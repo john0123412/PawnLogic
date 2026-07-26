@@ -107,6 +107,7 @@ def test_tool_spec_registers_metadata_atomically():
     assert reg.visible_specs("RECON") == (spec,)
     assert reg.visible_specs("GENERAL") == ()
     assert reg.get_capabilities("alpha") == frozenset({"read"})
+    assert reg.owner_of("alpha") == "builtin"
 
 
 def test_tool_spec_rejects_mismatched_schema_name_without_mutation():
@@ -125,3 +126,100 @@ def test_register_many_validates_duplicates_before_mutation():
     with pytest.raises(ValueError, match="duplicate"):
         reg.register_many(specs)
     assert reg.snapshot_map() == {}
+
+
+def test_register_many_owned_rejects_duplicate_names_without_mutation():
+    reg = ToolRegistry()
+    existing = ToolSpec("existing", lambda _args: "existing", _schema("existing"))
+    reg.register(existing)
+    before = reg.snapshot_specs()
+
+    specs = [
+        ToolSpec("alpha", lambda _args: "one", _schema("alpha")),
+        ToolSpec("alpha", lambda _args: "two", _schema("alpha")),
+    ]
+    with pytest.raises(ValueError, match="duplicate"):
+        reg.register_many_owned("extension", specs)
+
+    assert reg.snapshot_specs() == before
+    assert reg.owner_of("alpha") is None
+
+
+def test_register_many_owned_rejects_existing_tool_without_mutation():
+    reg = ToolRegistry()
+    original = ToolSpec("alpha", lambda _args: "original", _schema("alpha"))
+    reg.register_many_owned("first", [original])
+    before = reg.snapshot_specs()
+
+    new_tool = ToolSpec("new-tool", lambda _args: "new", _schema("new-tool"))
+    replacement = ToolSpec("alpha", lambda _args: "replacement", _schema("alpha"))
+    with pytest.raises(ValueError, match="already registered"):
+        reg.register_many_owned("second", [new_tool, replacement])
+
+    assert reg.snapshot_specs() == before
+    assert reg.get_spec("new-tool") is None
+    assert reg.get_handler("alpha")({}) == "original"
+    assert reg.owner_of("alpha") == "first"
+
+
+def test_register_many_owned_records_owner_and_preserves_registration_order():
+    reg = ToolRegistry()
+    first = ToolSpec("first", lambda _args: "first", _schema("first"))
+    second = ToolSpec("second", lambda _args: "second", _schema("second"))
+
+    reg.register_many_owned("extension", [first, second])
+
+    assert reg.snapshot_specs() == (first, second)
+    assert reg.snapshot_schemas() == [_schema("first"), _schema("second")]
+    assert reg.owner_of("first") == "extension"
+    assert reg.owner_of("second") == "extension"
+
+
+def test_unregister_owner_removes_only_owned_tools_and_keeps_order():
+    reg = ToolRegistry()
+    first = ToolSpec("first", lambda _args: "first", _schema("first"))
+    middle = ToolSpec("middle", lambda _args: "middle", _schema("middle"))
+    last = ToolSpec("last", lambda _args: "last", _schema("last"))
+    reg.register_many_owned("remove-me", [first])
+    reg.register_many_owned("keep-me", [middle])
+    reg.register_many_owned("remove-me", [last])
+
+    reg.unregister_owner("remove-me")
+
+    assert reg.snapshot_specs() == (middle,)
+    assert reg.get_handler("first") is None
+    assert reg.get_handler("last") is None
+    assert reg.owner_of("first") is None
+    assert reg.owner_of("last") is None
+    assert reg.owner_of("middle") == "keep-me"
+
+
+def test_legacy_registration_keeps_order_and_completes_with_builtin_owner():
+    reg = ToolRegistry()
+    reg.register("first", lambda _args: "first")
+    reg.register("second", lambda _args: "second")
+    reg.set_schemas([_schema("first"), _schema("second")])
+
+    assert [spec.name for spec in reg.snapshot_specs()] == ["first", "second"]
+    assert reg.owner_of("first") == "builtin"
+    assert reg.owner_of("second") == "builtin"
+
+
+def test_register_many_defaults_to_builtin_owner():
+    reg = ToolRegistry()
+    reg.register_many(
+        [ToolSpec("alpha", lambda _args: "alpha", _schema("alpha"))]
+    )
+
+    assert reg.owner_of("alpha") == "builtin"
+
+
+def test_legacy_update_preserves_existing_owner():
+    reg = ToolRegistry()
+    original = ToolSpec("alpha", lambda _args: "original", _schema("alpha"))
+    reg.register_many_owned("extension", [original])
+
+    reg.register("alpha", lambda _args: "updated")
+
+    assert reg.get_handler("alpha")({}) == "updated"
+    assert reg.owner_of("alpha") == "extension"

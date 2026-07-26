@@ -73,6 +73,10 @@ These contracts are more important than local refactoring convenience:
 - Proposed delegated-model requests are preferences routed by the host; user
   allowlists, Provider visibility, capability checks, and effective budgets
   remain authoritative.
+- The Extension Runtime uses `pawnlogic.extensions` package entry points.
+  Discovery reads metadata without loading Extension code; explicit enablement
+  owns validation, contribution registration, rollback, persisted state, and
+  shutdown.
 
 ## Architecture Map
 
@@ -157,6 +161,10 @@ These contracts are more important than local refactoring convenience:
 - `core/tool_registry.py` owns complete `ToolSpec` metadata (handler, schema,
   phases, trust, and capabilities). Built-in and MCP tools enter through this
   registry; `TOOL_MAP` and `TOOLS_SCHEMA` are compatibility views only.
+- `core/extension_contracts.py` is the stable Extension Interface.
+  `core/extensions.py` owns entry-point discovery and Extension lifecycle.
+  Tool and command registries record contribution owners and reject Extension
+  collisions before mutation.
 - Delegate capability profiles filter Registry capabilities and must not grow
   a second hard-coded tool-name policy.
 - `core/trust.py` and `core/operation_policy.py` own trust-boundary categories,

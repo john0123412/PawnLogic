@@ -41,6 +41,7 @@ class ToolRegistry:
         self._specs: dict[str, ToolSpec] = {}
         self._tool_map: dict[str, Handler] = {}
         self._pending_capabilities: dict[str, frozenset[str]] = {}
+        self._owners: dict[str, str] = {}
 
     def register(
         self,
@@ -97,27 +98,62 @@ class ToolRegistry:
             )
         )
 
-    def _register_spec(self, spec: ToolSpec) -> None:
+    def _register_spec(self, spec: ToolSpec, *, owner: str | None = None) -> None:
+        effective_owner = owner or self._owners.get(spec.name) or "builtin"
         self._specs[spec.name] = spec
         self._tool_map[spec.name] = spec.handler
         self._pending_capabilities.pop(spec.name, None)
+        self._owners[spec.name] = effective_owner
 
     def register_many(self, specs: Iterable[ToolSpec]) -> None:
-        """Validate a batch before changing the registry."""
+        """Register a built-in batch using the ownership-aware path."""
+        self.register_many_owned("builtin", specs)
+
+    def register_many_owned(self, owner: str, specs: Iterable[ToolSpec]) -> None:
+        """Register a complete ToolSpec batch for ``owner`` atomically.
+
+        The batch is rejected before mutation when it contains duplicate names
+        or collides with an existing registered or pending tool. Registration
+        order is the order supplied by ``specs``.
+        """
+        if not isinstance(owner, str):
+            raise TypeError("owner must be a string")
+        if not owner:
+            raise ValueError("owner cannot be empty")
         pending = tuple(specs)
+        for spec in pending:
+            if not isinstance(spec, ToolSpec):
+                raise TypeError("register_many_owned accepts ToolSpec values only")
         names = [spec.name for spec in pending]
         if len(names) != len(set(names)):
             raise ValueError("duplicate tool names in registration batch")
+        conflicts = [name for name in names if name in self._tool_map]
+        if conflicts:
+            raise ValueError(
+                "tool names already registered: " + ", ".join(conflicts)
+            )
         for spec in pending:
-            if not isinstance(spec, ToolSpec):
-                raise TypeError("register_many accepts ToolSpec values only")
-        for spec in pending:
-            self._register_spec(spec)
+            self._register_spec(spec, owner=owner)
 
     def unregister(self, name: str) -> None:
         self._specs.pop(name, None)
         self._tool_map.pop(name, None)
         self._pending_capabilities.pop(name, None)
+        self._owners.pop(name, None)
+
+    def unregister_owner(self, owner: str) -> None:
+        """Remove all complete tools owned by ``owner`` as one operation."""
+        if not isinstance(owner, str):
+            raise TypeError("owner must be a string")
+        if not owner:
+            raise ValueError("owner cannot be empty")
+        names = [name for name, registered_owner in self._owners.items() if registered_owner == owner]
+        for name in names:
+            self.unregister(name)
+
+    def owner_of(self, name: str) -> str | None:
+        """Return the owner of a completed ToolSpec, if registered."""
+        return self._owners.get(name)
 
     def get_handler(self, name: str) -> Handler | None:
         return self._tool_map.get(name)

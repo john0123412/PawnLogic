@@ -20,6 +20,7 @@ class RuntimeContext:
     debug_mode: bool
     user_mode: bool
     dynamic_config: MutableMapping[str, Any]
+    extension_manager: Any = None
 
     @classmethod
     def from_current(
