@@ -15,6 +15,8 @@
 | `core/message_history.py` | Message ordering | `MessageHistory` class | `test_session_utils.py` | Preserves assistant/tool message order, `reasoning_content`, pinned messages. |
 | `core/runtime_metrics.py` | Counter owner | `RuntimeMetrics` class | `test_runtime_metrics.py` | Sole owner of turn, tool, and API call counters. Snapshots are immutable. |
 | `core/tool_registry.py` | Capability Interface | `ToolRegistry.register()` / `visible_specs()` | `test_tool_registry.py` | Handler, schema, phase, trust, capabilities registered atomically. No tool without handler. |
+| `core/extension_contracts.py` | Extension Interface | Frozen Extension values and lifecycle Protocols | `test_extensions.py` | Contracts import no discovery/startup logic. Contributions are typed and owner-attributed. |
+| `core/extensions.py` | Extension Runtime | `ExtensionManager` | `test_extensions.py` | Discovery never loads entry points. Enablement is explicit, transactional, persisted, and failure-isolated. |
 | `core/tool_executor.py` | Tool dispatch | `ToolExecutor` class | `test_tool_executor.py` | Dispatches to handler, records outcome, respects trust boundary. |
 | `core/tool_result.py` | Outcome shape | `ToolResult` dataclass | `test_tool_result.py` | Explicit status, content, error_type, side_effect flag. |
 
@@ -90,7 +92,7 @@ implementations already exist.
 
 | Module | Intended Interface | Seam / Adapter | Status |
 |--------|--------------------|----------------|--------|
-| Extension Runtime | `ExtensionManager` over stable extension contracts | Python entry-point discovery Adapter; explicit enablement; transactional contribution registration | Contract accepted in ADR 0007; implementation pending |
+| Extension Runtime | `ExtensionManager` over stable extension contracts | Python entry-point discovery Adapter; explicit enablement; transactional contribution registration | Core Module implemented; startup/command Adapter pending |
 | Delegation Runtime | `AgentTask`, `AgentResult`, `DelegationPolicy`, `ModelRouter`, `DelegationExecutor` | Legacy `delegate_task` compatibility Adapter; Provider-backed execution Adapters | Contract accepted in ADR 0008; implementation pending |
 | Network Policy | One normalized network-operation authorization Interface | DNS, redirect, browser, web, MCP, and Docker caller Adapters | Planned |
 | Knowledge Retrieval | Durable knowledge-record and retrieval Interface | SQLite source-of-truth Adapter; optional Redis cache/vector Adapter | Planned |

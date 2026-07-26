@@ -16,6 +16,7 @@ Public API:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
 from typing import Any, Awaitable, Callable
 
 
@@ -44,6 +45,76 @@ class CommandContext:
 # ────────────────────────────────────────────────────────
 Handler = Callable[[CommandContext], Awaitable[Any]]
 COMMANDS: dict[str, Handler] = {}
+_COMMAND_OWNERS: dict[str, str] = {}
+
+
+def _normalize_verb(verb: str) -> str:
+    """Validate the canonical slash-command spelling."""
+    if not isinstance(verb, str) or not verb.startswith("/"):
+        raise ValueError(f"command verb must start with '/': {verb!r}")
+    return verb
+
+
+def register_owned_commands(
+    owner: str,
+    handlers: Mapping[str, Handler] | Iterable[tuple[str, Handler]],
+) -> None:
+    """Atomically register commands owned by ``owner``.
+
+    Registration validates the complete batch before changing ``COMMANDS``.
+    Existing commands, including built-ins, are never overwritten.  The
+    iterable form is intentional: it lets callers preserve declaration order
+    and lets the validation reject duplicate verbs within one batch.
+    """
+    if not isinstance(owner, str) or not owner:
+        raise ValueError("command owner must be a non-empty string")
+
+    if isinstance(handlers, Mapping):
+        entries = list(handlers.items())
+    else:
+        try:
+            entries = list(handlers)
+        except TypeError as exc:
+            raise TypeError("handlers must be a mapping or iterable of pairs") from exc
+
+    normalized: list[tuple[str, Handler]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, tuple) or len(entry) != 2:
+            raise TypeError("each command handler entry must be a (verb, handler) pair")
+        verb, handler = entry
+        verb = _normalize_verb(verb)
+        if verb in seen:
+            raise ValueError(f"duplicate command verb in batch: {verb}")
+        if verb in COMMANDS:
+            existing_owner = _COMMAND_OWNERS.get(verb, "unknown")
+            raise ValueError(
+                f"command verb already registered: {verb} (owner={existing_owner})"
+            )
+        if not callable(handler):
+            raise TypeError(f"command handler must be callable: {verb}")
+        seen.add(verb)
+        normalized.append((verb, handler))
+
+    for verb, handler in normalized:
+        COMMANDS[verb] = handler
+        _COMMAND_OWNERS[verb] = owner
+
+
+def unregister_owned_commands(owner: str) -> None:
+    """Remove only commands currently owned by ``owner``."""
+    if not isinstance(owner, str) or not owner:
+        raise ValueError("command owner must be a non-empty string")
+
+    for verb, command_owner_name in list(_COMMAND_OWNERS.items()):
+        if command_owner_name == owner:
+            COMMANDS.pop(verb, None)
+            _COMMAND_OWNERS.pop(verb, None)
+
+
+def command_owner(verb: str) -> str | None:
+    """Return the owner of a registered verb, or ``None`` when unknown."""
+    return _COMMAND_OWNERS.get(_normalize_verb(verb))
 
 
 def register(*verbs: str) -> Callable[[Handler], Handler]:
@@ -55,8 +126,7 @@ def register(*verbs: str) -> Callable[[Handler], Handler]:
             return EXIT_SENTINEL
     """
     def deco(fn: Handler) -> Handler:
-        for v in verbs:
-            COMMANDS[v] = fn
+        register_owned_commands("builtin", ((verb, fn) for verb in verbs))
         return fn
     return deco
 
@@ -115,6 +185,9 @@ from . import ctf  # noqa: E402, F401
 __all__ = [
     "CommandContext",
     "register",
+    "register_owned_commands",
+    "unregister_owned_commands",
+    "command_owner",
     "dispatch",
     "COMMANDS",
 ]
