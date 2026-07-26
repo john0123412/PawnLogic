@@ -9,7 +9,8 @@ from datetime import datetime
 from config import DEFAULT_MODEL, user_friendly_error
 from core.api_client import ensure_tool_call_id, stream_request
 from core.context_manager import ContextEnvelope
-from core.delegation import FailureRecord
+from core.agent_events import AgentEventKind
+from core.delegation import FailureRecord, publish_delegation_event
 from core.memory import _gen_id
 from core.state import runtime_config, state as _runtime_state
 from core.tool_executor import (
@@ -309,6 +310,17 @@ class SubAgentSession:
             self.completion_tokens += int(
                 api.usage.get("completion_tokens", 0)
             )
+            publish_delegation_event(
+                AgentEventKind.USAGE,
+                {
+                    "prompt_tokens": int(api.usage.get("prompt_tokens", 0)),
+                    "completion_tokens": int(
+                        api.usage.get("completion_tokens", 0)
+                    ),
+                    "source": "child",
+                },
+                child_agent_id=self.session_id,
+            )
             if not api.tool_calls:
                 return (
                     api.text.strip()
@@ -377,12 +389,23 @@ class SubAgentSession:
         self._tool_log.append(
             f"  [{iteration + 1}] {name}({list(arguments.keys())})"
         )
-        result = executor.execute_handler(
+        publish_delegation_event(
+            AgentEventKind.TOOL_STARTED,
+            {
+                "tool_call_id": tool_call["id"],
+                "tool_name": name,
+                "iteration": iteration,
+                "argument_keys": sorted(arguments),
+            },
+            child_agent_id=self.session_id,
+        )
+        execution = executor.execute_handler(
             tool_call_id=tool_call["id"],
             tool_name=name,
             fn_args=arguments,
             context=context,
-        ).content
+        )
+        result = execution.content
         limit = min(int(runtime_config()["tool_max_chars"]), 6000)
         if len(result) > limit:
             result = (
@@ -396,6 +419,19 @@ class SubAgentSession:
                 "tool_call_id": tool_call["id"],
                 "content": result,
             }
+        )
+        publish_delegation_event(
+            AgentEventKind.TOOL_RESULT,
+            {
+                "tool_call_id": tool_call["id"],
+                "tool_name": name,
+                "iteration": iteration,
+                "status": execution.outcome.status,
+                "error_type": execution.outcome.error_type,
+                "side_effect": execution.outcome.side_effect,
+                "output_chars": len(result),
+            },
+            child_agent_id=self.session_id,
         )
 
 

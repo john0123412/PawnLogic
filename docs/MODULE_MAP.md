@@ -21,6 +21,8 @@
 | `core/delegation_runtime.py` | Delegated execution | `SubAgentSession` | `test_delegate_tool.py`, `test_delegation_baseline.py` | Host safety instructions precede task instructions; Tool capabilities and call/token budgets are enforced. |
 | `core/knowledge.py` | Retrieval contracts and orchestration | `KnowledgeRecord`, `RetrievalHit`, `KnowledgeRetriever` | `test_knowledge.py` | SQLite content is authoritative; optional projections provide ranking only; stale or unavailable projections fall back without startup failure. |
 | `core/knowledge_sqlite.py` | Durable knowledge Adapter | `SQLiteKnowledgeAdapter` | `test_knowledge_memory_adapter.py` | Bounded FTS/keyword reads, revision-aware outbox events, and database-side rebuild enqueueing never materialize the full corpus. |
+| `core/agent_events.py` | Versioned Agent Event Interface | `AgentEvent`, `AgentEventPublisher` | `test_agent_events.py`, `test_agent_event_integration.py` | Events are immutable, recursively redacted, canonically serialized, and synchronously published outside persisted chat-message shapes. |
+| `core/session_events.py` | Main-session event Adapter | `SessionEventEmitter` | `test_agent_event_integration.py`, `test_session_utils.py` | Correlates Turn, retrieval, usage, Tool, and policy events; subscriber failures never stop Agent execution. |
 | `core/tool_registry.py` | Capability Interface | `ToolRegistry.register()` / `visible_specs()` | `test_tool_registry.py` | Handler, schema, phase, trust, capabilities registered atomically. No tool without handler. |
 | `core/extension_contracts.py` | Extension Interface | Frozen Extension values and lifecycle Protocols | `test_extensions.py` | Contracts import no discovery/startup logic. Contributions are typed and owner-attributed. |
 | `core/extensions.py` | Extension Runtime | `ExtensionManager` | `test_extensions.py` | Discovery never loads entry points. Enablement is explicit, transactional, persisted, and failure-isolated. |
@@ -111,7 +113,7 @@ implementations already exist.
 | Structured Context | `ContextManager`, `ContextState`, `ContextEnvelope` | Main-session provider view; host-owned delegated projection; legacy context-window Adapters | Core Module and main/delegation Adapters implemented |
 | Network Policy | `NetworkPolicy.evaluate()` over normalized `NetworkOperation` values | DNS resolver plus web, browser, MCP, and Docker caller Adapters | Core Module and caller Adapters implemented |
 | Knowledge Retrieval | Durable knowledge-record and retrieval Interface | SQLite source-of-truth Adapter; optional Redis cache/vector Adapter | Core Interface and SQLite Adapter implemented |
-| Agent Event | Typed event stream for conversations, tools, delegation, budgets, and evidence | CLI, NDJSON, and optional Streamlit rendering Adapters | Planned |
+| Agent Event | Typed event stream for conversations, tools, delegation, budgets, and evidence | CLI and NDJSON Adapters; optional Streamlit remains external | Core Interface and runtime Adapters implemented |
 
 The planned Interfaces must preserve these boundaries:
 

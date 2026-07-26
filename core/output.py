@@ -7,15 +7,21 @@ write through one of these sinks instead of calling `print()` directly,
 so the same code path can produce either ANSI prose for humans or
 JSON-Lines for scripts.
 
-Both sinks expose the same three methods:
+Both sinks preserve the original three methods:
     print(text)        — finalized text line for humans
     print_json(data)   — structured payload (always machine-readable)
     write(text)        — partial / streaming chunk, no implicit newline
+
+They also consume typed Agent Events through ``emit(event)``. Human output
+renders only user-facing text and error events; lifecycle and telemetry events
+remain silent. JSON output serializes the versioned event directly, without
+changing or wrapping the legacy records below.
 
 JsonSink emits one JSON object per call to stdout, NDJSON-style:
     {"type": "text",  "content": "..."}     # from print()
     {"type": "chunk", "content": "..."}     # from write()
     {"type": "json",  "data": {...}}        # from print_json()
+    {"type": "event", "data": {...}}         # from emit()
 
 This format keeps streaming and structured payloads on the same wire,
 so downstream consumers can `for line in stdout: json.loads(line)` and
@@ -24,10 +30,13 @@ demultiplex by the `type` field.
 
 from __future__ import annotations
 
+import builtins
 import json
 import sys
-import builtins
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from core.agent_events import AgentEvent
 
 
 # ────────────────────────────────────────────────────────
@@ -39,6 +48,23 @@ from typing import Any
 
 class HumanSink:
     """Default sink for interactive use: ANSI-colored prose to stdout."""
+
+    def emit(self, event: AgentEvent) -> None:
+        """Render the user-facing subset of a typed Agent Event.
+
+        Event payloads are rendered directly. Lifecycle and telemetry events
+        are intentionally silent so adopting events does not add terminal
+        diagnostics or require parsing existing ANSI-formatted output.
+        """
+        event_type = getattr(event.event_type, "value", event.event_type)
+        if event_type == "text.delta":
+            text = event.payload.get("text")
+            if isinstance(text, str):
+                self.write(text)
+        elif event_type == "error":
+            message = event.payload.get("message")
+            if isinstance(message, str):
+                self.print(message)
 
     def print(self, text: str) -> None:
         """Write a finalized line of human-readable text."""
@@ -65,6 +91,10 @@ class HumanSink:
 
 class JsonSink:
     """Machine-readable sink: emits one JSON object per call (NDJSON)."""
+
+    def emit(self, event: AgentEvent) -> None:
+        """Emit a versioned Agent Event inside the additive event record."""
+        self._emit({"type": "event", "data": event.to_dict()})
 
     def print(self, text: str) -> None:
         """Emit a finalized text line as `{"type": "text", "content": ...}`."""

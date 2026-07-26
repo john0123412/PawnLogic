@@ -70,6 +70,7 @@ from core.tool_executor import (
     resolve_tool_arguments,
 )
 from core.session_tool_loop import TurnToolLoop
+from core.session_events import SessionEventEmitter, render_turn_usage
 from core.tool_result import (
     ToolResultProcessor,
     compact_redundant_tool_error_messages,
@@ -926,6 +927,7 @@ class AgentSession:
             cwd=self.cwd,
             workspace_dir=self.workspace_dir,
         )
+        self._events = SessionEventEmitter(self.runtime_context, self.session_id)
         self._sync_runtime_context()
         self.current_phase = "RECON"   # initial MoE phase
         init_db()
@@ -972,8 +974,16 @@ class AgentSession:
         else:
             ctx.update_paths(cwd=self.cwd, workspace_dir=self.workspace_dir)
         ctx.context_provider = self._select_delegation_context
+        self._event_emitter().bind(ctx)
         ctx.sync_legacy_state()
         sync_runtime_context(ctx)
+
+    def _event_emitter(self) -> SessionEventEmitter:
+        events = getattr(self, "_events", None)
+        if events is None:
+            events = SessionEventEmitter(self.runtime_context, self.session_id)
+            self._events = events
+        return events
 
     def _time_remaining(self) -> float:
         """Return seconds remaining for the current turn; inf when budget is 0."""
@@ -1182,7 +1192,9 @@ class AgentSession:
             format_knowledge_for_prompt=format_knowledge_for_prompt,
             load_relevant_skills=load_relevant_skills,
             skill_scanner=_skill_scanner,
-            retrieve_knowledge=search_knowledge_records,
+            retrieve_knowledge=self._event_emitter().retrieval_adapter(
+                search_knowledge_records
+            ),
             format_retrieval_hits=format_retrieval_hits_for_prompt,
         )
         if result.loaded_skill_packs is not None:
@@ -1487,6 +1499,7 @@ class AgentSession:
             prompt_tokens=pt,
             completion_tokens=ct,
         )
+        self._event_emitter().usage(usage)
 
     def _record_tool_metrics(self, *, elapsed_ms: int = 0) -> None:
         self._turn_tool_calls += 1
@@ -1649,6 +1662,11 @@ class AgentSession:
         return text_buf, tc_buf, reasoning_buf
 
     def _prepare_turn(self, user_input: str) -> dict | None:
+        self._turn_prompt_tokens = 0
+        self._turn_completion_tokens = 0
+        self._turn_tool_calls = 0
+        self._runtime_metrics.reset_turn()
+        self._event_emitter().start_turn(self.model_alias, self.current_phase)
         self._reset_system_prompt(knowledge_query=user_input)
         self.messages.append({"role": "user", "content": user_input})
 
@@ -1663,16 +1681,11 @@ class AgentSession:
                 "API key missing | model={} required_env={}",
                 self.model_alias, env_name,
             )
+            self._event_emitter().finish("failed", self._runtime_metrics_snapshot())
             return None
 
         cfg = self.model
         print(c(cfg["color"] + BOLD, f"[{self.model_alias.upper()}]"), end=" ", flush=True)
-
-        # Reset per-turn accounting.
-        self._turn_prompt_tokens     = 0
-        self._turn_completion_tokens = 0
-        self._turn_tool_calls        = 0
-        self._runtime_metrics.reset_turn()
 
         dynamic_cfg = _dynamic_config()
         self._turn_start_time = time.monotonic()
@@ -1858,6 +1871,7 @@ class AgentSession:
         current_tools: list | None,
     ) -> tuple[list | None, ToolExecutionOutcome]:
         name = tc["name"]
+        self._event_emitter().tool_started(tc, iteration)
 
         fn_args = resolve_tool_arguments(tc)
         preview = preview_tool_arguments(fn_args)
@@ -2020,6 +2034,7 @@ class AgentSession:
                 capabilities.intersection({"mutating", "shell", "network", "container"})
             ),
         )
+        self._event_emitter().tool_result(tc, outcome, iteration)
         return current_tools, outcome
 
     def _inject_plan_missing_signal(self) -> None:
@@ -2262,6 +2277,7 @@ class AgentSession:
                     turn_state.iteration,
                 )
                 if model_response is None:
+                    self._event_emitter().finish("failed", self._runtime_metrics_snapshot())
                     return
                 text_buf, tc_buf, reasoning_buf = model_response
                 if is_empty_response(text_buf, tc_buf):
@@ -2288,11 +2304,13 @@ class AgentSession:
                 _plan_action, plan_rejected, _plan_signal_injected = self._apply_plan_guard(
                     text_buf, tc_buf, turn_state.plan_rejected, turn_state.iteration
                 )
+                self._event_emitter().plan_guard(_plan_action)
                 turn_state.replace_plan_rejected(plan_rejected)
                 if _plan_action == "hard":
                     # Hard stop after soft intercepts are exhausted.
                     if self.messages and self.messages[-1]["role"] == "user":
                         self.messages.pop()  # Remove the latest user message to keep context clean.
+                    self._event_emitter().finish("failed", self._runtime_metrics_snapshot())
                     return
 
                 # Module 1B: concurrent call truncation.
@@ -2326,36 +2344,11 @@ class AgentSession:
     # ── Per-turn usage summary ───────────────────────────
     def _print_turn_summary(self):
         """Print token and tool-call summary after each turn."""
-        snapshot = self._runtime_metrics_snapshot()
-        pt = snapshot.turn_prompt_tokens
-        ct = snapshot.turn_completion_tokens
-        tt = snapshot.turn_tool_calls
-        if pt + ct + tt == 0:
-            return   # nothing to show (no usage data from this provider)
-        tot_pt = snapshot.total_prompt_tokens
-        tot_ct = snapshot.total_completion_tokens
-        tot_tt = snapshot.total_tool_calls
-        if _user_mode():
-            cum = (f"  cum:↑{tot_pt:,}↓{tot_ct:,}🔧{tot_tt}"
-                   if tot_pt != pt or tot_tt != tt else "")
-            print(c(GRAY, f"  [↑{pt:,}tok ↓{ct:,}tok 🔧{tt}]{cum}"))
-        else:
-            total_turn = pt + ct
-            cum_total  = tot_pt + tot_ct
-            lines = [
-                "",
-                "  ┌─ Turn Usage ──────────────────────────────",
-                f"  │  Prompt tokens    : {pt:>8,}" +
-                (f"   (session: {tot_pt:,})" if tot_pt != pt else ""),
-                f"  │  Completion tokens: {ct:>8,}" +
-                (f"   (session: {tot_ct:,})" if tot_ct != ct else ""),
-                f"  │  Total this turn  : {total_turn:>8,}" +
-                (f"   (session: {cum_total:,})" if cum_total != total_turn else ""),
-                f"  │  Tool calls       : {tt:>8,}" +
-                (f"   (session: {tot_tt:,})" if tot_tt != tt else ""),
-                "  └───────────────────────────────────────────",
-            ]
-            print(c(GRAY, "\n".join(lines)))
+        render_turn_usage(
+            self._runtime_metrics_snapshot(),
+            user_mode=_user_mode(),
+            output=print,
+        )
 
     # Background async autosave.
     def _autosave(self, *, turn_status: str | None = None):
@@ -2366,6 +2359,8 @@ class AgentSession:
             self._runtime_metrics.record_turn_interrupted()
         elif turn_status == "failed":
             self._runtime_metrics.record_turn_failed()
+        if turn_status is not None:
+            self._event_emitter().finish(turn_status, self._runtime_metrics_snapshot())
         self._runtime_metrics.record_autosave()
         from core.session_snapshot import SessionSnapshot
         snapshot = SessionSnapshot.capture(

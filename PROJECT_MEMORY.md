@@ -111,6 +111,15 @@ These contracts are more important than local refactoring convenience:
 - Knowledge indexing uses revision-aware durable outbox events. Rebuild
   enqueueing runs inside SQLite with `INSERT ... SELECT`, so the process and an
   optional Redis projection never need the complete corpus in memory.
+- Agent Events use a versioned immutable `AgentEvent` contract and a
+  synchronous process-local publisher. RuntimeContext owns the stream;
+  main-session and delegated execution publish structural Turn, retrieval,
+  Tool, policy, usage, and delegation events without changing persisted
+  messages. Event payloads are recursively redacted before subscribers receive
+  them, and subscriber failures do not stop Agent execution.
+- Human output keeps its existing transcript. `JsonSink` keeps the existing
+  `text`, `chunk`, and `json` NDJSON records and adds a typed `event` record;
+  event transport does not require parsing ANSI output.
 - The Extension Runtime uses `pawnlogic.extensions` package entry points.
   Discovery reads metadata without loading Extension code; explicit enablement
   owns validation, contribution registration, rollback, persisted state, and
