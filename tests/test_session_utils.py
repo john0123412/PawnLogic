@@ -1420,6 +1420,8 @@ def test_attach_external_mcp_tools_skips_empty_schema_and_refreshes_legacy_globa
 
     monkeypatch.setattr(mcp_mod, "init_external_mcp", lambda: FakeManager())
     before_general = list(AGENT_PHASES.get("GENERAL", []))
+    before_specs = session_mod._tool_specs_snapshot()
+    before_names = [spec.name for spec in before_specs]
     try:
         session_mod.attach_external_mcp_tools()
 
@@ -1429,6 +1431,12 @@ def test_attach_external_mcp_tools_skips_empty_schema_and_refreshes_legacy_globa
         assert "" not in session_mod._tool_map_snapshot()
         assert not any(s.get("function", {}).get("name") == "" for s in session_mod._tool_schema_snapshot())
         assert "pytest_mcp_tool" in AGENT_PHASES["GENERAL"]
+        after_specs = session_mod._tool_specs_snapshot()
+        assert [spec.name for spec in after_specs[:-1]] == before_names
+        assert after_specs[-1].name == "pytest_mcp_tool"
+        assert after_specs[-1].phases == frozenset({"GENERAL"})
+        assert after_specs[-1].capabilities == frozenset({"external", "network"})
+        assert after_specs[-1].trust is session_mod.TrustBoundaryKind.BROWSER_NETWORK
     finally:
         session_mod._TOOL_REGISTRY.unregister("pytest_mcp_tool")
         session_mod._refresh_legacy_tool_globals()

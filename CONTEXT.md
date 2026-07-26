@@ -68,6 +68,59 @@ session prompt context.
 
 Skill Packs are runtime assets, not package data in PyPI distributions.
 
+## Planned 0.3.0 Terms
+
+The terms below are reserved by the proposed 0.3.0 architecture plan. They
+describe planned contracts and do not imply that the implementation already
+exists.
+
+### Extension
+
+An Extension is a separately distributed capability package discovered by the
+PawnLogic host. Installing an Extension makes its metadata discoverable;
+explicit enablement is required before its Tools, commands, prompt fragments,
+or runtime Adapters become available.
+
+Extensions must declare compatibility, trust, capabilities, and ownership of
+every contribution. A failed or disabled Extension must not leave partial
+contributions in the active runtime.
+
+### Agent Task
+
+An Agent Task is a structured delegated objective containing focused
+instructions, model requirements, selected context references, Tool
+capabilities, and execution budgets. The host validates the task before a
+delegated agent runs.
+
+The parent Agent may request a Model Alias, but the host Model Router makes the
+final selection under Provider visibility, user policy, capability, and budget
+rules.
+
+### Engagement Scope
+
+An Engagement Scope is the explicit authorization envelope for
+network-security work. It defines included and excluded targets, allowed action
+classes, budgets, evidence location, and expiry.
+
+Active network-security Tools must fail closed when no valid Engagement Scope
+contains the resolved target and requested action.
+
+### Knowledge Record
+
+A Knowledge Record is durable local information with a stable identity,
+content, source, provenance, and revision metadata. Retrieval indexes and
+caches may project Knowledge Records, but they are not the durable source of
+truth.
+
+### Agent Event
+
+An Agent Event is a versioned runtime observation such as text output, Tool
+lifecycle, retrieval evidence, policy decision, delegated-agent lifecycle,
+usage, error, or Turn completion.
+
+Human terminal, NDJSON, and future UI renderers are Output Adapters over Agent
+Events.
+
 ## Runtime State Terms
 
 ### RuntimeContext
