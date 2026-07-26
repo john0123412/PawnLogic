@@ -81,3 +81,26 @@
 | `pawnlogic/cli.py` | CLI facade | `run()`, `PawnCompleter` | `test_cli_startup.py`, `test_cli_transcripts.py` | Public entry point. Live model completions. |
 | `pawnlogic/startup.py` | Bootstrap | `setup_environment()` | `test_cli_startup.py` | First-run, env, debug mode. |
 | `pawnlogic/repl.py` | REPL loop | `run_repl()` | `test_cli_startup.py` | Signal handling, input restoration. |
+
+## Planned 0.3.0 Seams
+
+These Modules are approved design targets in the proposed 0.3.0 plan. They are
+listed here to reserve ownership boundaries, not to imply that the
+implementations already exist.
+
+| Module | Intended Interface | Seam / Adapter | Status |
+|--------|--------------------|----------------|--------|
+| Extension Runtime | `ExtensionManager` over stable extension contracts | Python entry-point discovery Adapter; explicit enablement; transactional contribution registration | Contract accepted in ADR 0007; implementation pending |
+| Delegation Runtime | `AgentTask`, `AgentResult`, `DelegationPolicy`, `ModelRouter`, `DelegationExecutor` | Legacy `delegate_task` compatibility Adapter; Provider-backed execution Adapters | Contract accepted in ADR 0008; implementation pending |
+| Network Policy | One normalized network-operation authorization Interface | DNS, redirect, browser, web, MCP, and Docker caller Adapters | Planned |
+| Knowledge Retrieval | Durable knowledge-record and retrieval Interface | SQLite source-of-truth Adapter; optional Redis cache/vector Adapter | Planned |
+| Agent Event | Typed event stream for conversations, tools, delegation, budgets, and evidence | CLI, NDJSON, and optional Streamlit rendering Adapters | Planned |
+
+The planned Interfaces must preserve these boundaries:
+
+- Extensions contribute capabilities through the host Interface; they do not
+  mutate private session globals.
+- Delegated agents request Models and Tools through host policy; prompts cannot
+  bypass user allowlists, budgets, trust boundaries, or Engagement Scope.
+- Redis remains an optional acceleration Adapter, never the only durable store.
+- Streamlit remains a separate UI Adapter and does not parse terminal output.

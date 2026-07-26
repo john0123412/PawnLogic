@@ -18,6 +18,12 @@ release history.
   `docs/plans/0.2.3-autonomous-runtime-reliability-deepening.md`.
 - Active plan: none. Register the next iteration in `docs/plans/INDEX.md`
   before implementation begins.
+- Proposed next iteration:
+  `docs/plans/0.3.0-extensible-agent-platform-and-security-distribution.md`.
+  It remains a candidate until the first implementation PR opens.
+- Local branch `work/0.3.0-contracts` contains the prepared PR 1 contract
+  artifacts: ADR 0007, ADR 0008, and focused characterization tests. They are
+  locally verified but not committed, pushed, or represented by an open PR.
 - Local release artifacts such as `dist/`, `build/`, and `*.egg-info/` should
   not remain after release validation unless a maintainer explicitly asks to
   keep them.
@@ -62,6 +68,13 @@ These contracts are more important than local refactoring convenience:
 - Runtime metrics must not introduce telemetry, network calls, secrets, or
   default terminal noise.
 - Third-party skill packs must not be included in wheels or sdists by default.
+- Proposed Extensions must remain disabled until explicitly enabled; installing
+  a distribution is not authorization to load or execute it.
+- Proposed network-security Tools require a valid Engagement Scope and shared
+  Operation/Network Policy authorization before active work.
+- Proposed delegated-model requests are preferences routed by the host; user
+  allowlists, Provider visibility, capability checks, and effective budgets
+  remain authoritative.
 
 ## Architecture Map
 
@@ -335,6 +348,18 @@ For broad code changes:
 - Tool trust notices drifting from operation policy behavior.
 - Runtime metrics accidentally persisting secrets or changing message shape.
 - Packaging accidentally including `skills/` content.
+- Extension discovery importing or enabling third-party code during ordinary
+  core startup.
+- Separately distributed security Tools bypassing shared Tool Registry,
+  Operation Policy, Network Policy, or Engagement Scope checks.
+- Delegated-agent prompt/model requests bypassing Provider visibility, user
+  allowlists, budgets, capability filtering, or host safety instructions.
+- Targeted pytest commands that combine `test_session_utils.py` with delegation
+  tests can inherit its collection-time `tools.delegate_tool` stub; run those
+  focused groups in separate pytest processes. Normal full-suite collection is
+  verified to pass.
+- Redis becoming a required or sole durable knowledge store instead of an
+  optional retrieval/index Adapter.
 - English and zh-CN docs drifting in structure or command examples.
 - Release prep editing version literals outside fixed locations.
 

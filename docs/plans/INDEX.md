@@ -11,6 +11,12 @@ before implementation begins.
 There is exactly one active plan at a time. When the active plan is completed
 and its release is published, it moves to Completed below.
 
+## Proposed Plans
+
+| Candidate | Plan | Status |
+|-----------|------|--------|
+| 0.3.0 | [0.3.0-extensible-agent-platform-and-security-distribution.md](0.3.0-extensible-agent-platform-and-security-distribution.md) | Audited proposal; activate when the first implementation PR opens |
+
 ## Completed Plans
 
 | Version | Plan | Release |
