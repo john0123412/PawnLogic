@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -97,6 +98,8 @@ def publish_delegation_started(
         AgentEventKind.DELEGATION_STARTED,
         {
             "status": "started",
+            "task_id": task.task_id,
+            "parent_task_id": task.parent_task_id,
             "model_alias": decision.model_alias,
             "routing_reason": decision.reason,
             "role": task.role,
@@ -113,6 +116,8 @@ def publish_delegation_result(result: Any, child_agent_id: str) -> None:
         AgentEventKind.DELEGATION_RESULT,
         {
             "status": result.status,
+            "task_id": result.task_id,
+            "parent_task_id": result.parent_task_id,
             "model_alias": result.model_alias,
             "routing_reason": result.routing_reason,
             "failure_codes": [failure.code for failure in result.failures],
@@ -181,6 +186,21 @@ def _optional_cost(value: object, field_name: str = "max_cost") -> float | None:
     return result
 
 
+def _deadline(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("deadline must be a number or None")
+    result = float(value)
+    if result < 0 or not math.isfinite(result):
+        raise ValueError("deadline must be finite and non-negative")
+    return result
+
+
+def _task_id() -> str:
+    return f"task_{uuid.uuid4().hex}"
+
+
 def _string_tuple(
     value: object,
     field_name: str,
@@ -231,6 +251,9 @@ class AgentTask:
     capability_profile: str = "inherited"
     allowed_tools: tuple[str, ...] = ()
     budget: AgentBudget = field(default_factory=AgentBudget)
+    task_id: str = field(default_factory=_task_id)
+    parent_task_id: str | None = None
+    deadline: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "objective", _text(self.objective, "objective"))
@@ -276,9 +299,22 @@ class AgentTask:
         )
         if not isinstance(self.budget, AgentBudget):
             raise TypeError("budget must be an AgentBudget")
+        object.__setattr__(
+            self,
+            "task_id",
+            _text(self.task_id, "task_id", max_length=_MAX_NAME_LENGTH),
+        )
+        object.__setattr__(
+            self,
+            "parent_task_id",
+            _optional_text(self.parent_task_id, "parent_task_id"),
+        )
+        object.__setattr__(self, "deadline", _deadline(self.deadline))
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "task_id": self.task_id,
+            "parent_task_id": self.parent_task_id,
             "objective": self.objective,
             "role": self.role,
             "instructions": self.instructions,
@@ -288,6 +324,7 @@ class AgentTask:
             "capability_profile": self.capability_profile,
             "allowed_tools": list(self.allowed_tools),
             "budget": self.budget.to_dict(),
+            "deadline": self.deadline,
         }
 
 
@@ -296,6 +333,7 @@ class AgentUsage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     tool_calls: int = 0
+    cost: float = 0.0
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -311,12 +349,17 @@ class AgentUsage:
         object.__setattr__(
             self, "tool_calls", _non_negative_int(self.tool_calls, "tool_calls")
         )
+        cost = _optional_cost(self.cost, "cost")
+        if cost is None:
+            raise TypeError("cost must be a number")
+        object.__setattr__(self, "cost", cost)
 
-    def to_dict(self) -> dict[str, int]:
+    def to_dict(self) -> dict[str, int | float]:
         return {
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "tool_calls": self.tool_calls,
+            "cost": self.cost,
         }
 
 
@@ -412,6 +455,8 @@ class AgentResult:
     evidence: tuple[EvidenceRef, ...] = ()
     failures: tuple[FailureRecord, ...] = ()
     usage: AgentUsage = field(default_factory=AgentUsage)
+    task_id: str | None = None
+    parent_task_id: str | None = None
 
     def __post_init__(self) -> None:
         status = _text(self.status, "status", max_length=_MAX_NAME_LENGTH)
@@ -446,6 +491,12 @@ class AgentResult:
         )
         if not isinstance(self.usage, AgentUsage):
             raise TypeError("usage must be an AgentUsage")
+        object.__setattr__(self, "task_id", _optional_text(self.task_id, "task_id"))
+        object.__setattr__(
+            self,
+            "parent_task_id",
+            _optional_text(self.parent_task_id, "parent_task_id"),
+        )
 
     @staticmethod
     def _typed_tuple(value: object, item_type: type, field_name: str) -> tuple:
@@ -458,6 +509,8 @@ class AgentResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "task_id": self.task_id,
+            "parent_task_id": self.parent_task_id,
             "status": self.status,
             "summary": self.summary,
             "model_alias": self.model_alias,

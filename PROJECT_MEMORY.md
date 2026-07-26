@@ -22,12 +22,14 @@ release history.
   [#79](https://github.com/john0123412/PawnLogic/pull/79) on 2026-07-26.
 - PR 1 contracts are recorded in commit `7ff8c27`: ADR 0007, ADR 0008, and
   focused delegation/MCP characterization tests.
-- Stacked draft PRs #80-#87 implement the Extension Runtime, Extension
+- Stacked draft PRs #80-#88 implement the Extension Runtime, Extension
   commands/startup, Network Policy, installed-layout security compatibility
   fixture, policy-driven Delegation Runtime, and Structured Context Manager.
   PR 11 adds bounded, provenance-aware knowledge retrieval with SQLite as the
   durable authority. PR 12 adds the versioned Agent Event Interface and is
-  open as [#87](https://github.com/john0123412/PawnLogic/pull/87).
+  open as [#87](https://github.com/john0123412/PawnLogic/pull/87). PR 14 adds
+  bounded serial multi-Agent orchestration and is open as
+  [#88](https://github.com/john0123412/PawnLogic/pull/88).
 - Local release artifacts such as `dist/`, `build/`, and `*.egg-info/` should
   not remain after release validation unless a maintainer explicitly asks to
   keep them.
@@ -103,6 +105,14 @@ These contracts are more important than local refactoring convenience:
 - Delegated context is resolved through the active host RuntimeContext.
   `none`, `minimal`, and `selected` cannot be forged by Tool arguments, and raw
   parent system messages/full history are not copied to child Providers.
+- Delegated tasks and results carry generated task IDs, optional parent task
+  IDs, deadlines, and structured token, Tool Call, and cost usage. The serial
+  orchestrator admits each task through an atomic shared budget claim and
+  supports cooperative cancellation without exposing executor exceptions.
+- Multi-Agent execution remains deterministic and serial. Requests for
+  concurrency above one fail closed until Workspace and RuntimeContext
+  isolation tests pass. A task graph remains deferred until two concrete
+  callers require it; `delegate_task` remains the compatibility Adapter.
 - Knowledge retrieval uses immutable `KnowledgeRecord`, `KnowledgeQuery`, and
   `RetrievalHit` contracts. `core/knowledge_sqlite.py` owns bounded FTS5 and
   keyword fallback over the authoritative SQLite corpus. Optional vector
@@ -176,6 +186,9 @@ These contracts are more important than local refactoring convenience:
   compatibility Adapters.
 - `core/delegation.py` owns immutable delegated task/result/usage/failure and
   model-policy contracts plus atomic policy persistence.
+- `core/agent_orchestrator.py` owns cooperative cancellation, atomic shared
+  budget claims, structured orchestration results, and the serial Delegation
+  Runtime executor seam.
 - `core/model_router.py` owns dynamic delegated-model eligibility and routing
   reasons. `core/delegation_runtime.py` owns the bounded child execution loop
   and Tool filtering. `tools/delegate_tool.py` remains the public compatibility
@@ -378,6 +391,8 @@ Current stable candidates and covered modules include:
 - `core/turn_state.py`
 - `core/session_tool_loop.py`
 - `core/session_snapshot.py`
+- `core/delegation.py`
+- `core/agent_orchestrator.py`
 - `core/message_history.py`
 - `core/provider_streams.py`
 - `core/runtime_metrics.py`

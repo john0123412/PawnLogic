@@ -268,6 +268,7 @@ def test_structured_task_routes_requested_model_and_returns_usage(monkeypatch):
     assert "Usage: prompt=12, completion=7, tools=0" in result
     assert '"artifacts": []' in result
     assert '"failures": []' in result
+    assert '"task_id": "task_' in result
 
 
 def test_rejected_model_request_never_constructs_subagent(monkeypatch):

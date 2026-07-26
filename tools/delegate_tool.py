@@ -315,6 +315,7 @@ def tool_delegate_task(a: dict) -> str:
         tool_calls=int(getattr(sub, "tool_calls", len(sub._tool_log))),
     )
     agent_result = AgentResult(
+        task_id=task.task_id, parent_task_id=task.parent_task_id,
         status=status,
         summary=result,
         model_alias=worker_model,
