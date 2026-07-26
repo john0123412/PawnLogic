@@ -223,6 +223,22 @@ git-backed skill pack 安装只接受 `https://`、`ssh://` 或
 之后，才可以从本仓库再分发第三方 CTF skill 内容。
 skill-pack manifest 只是运行时发现元数据，本身不授权再分发。
 
+### 可选 Extension
+
+已安装的 Python distribution 可以通过 `pawnlogic.extensions` entry-point group
+声明 Extension。发现阶段只读取包元数据，不导入 Extension 代码。安装并不授予执行权限，
+必须显式启用：
+
+```bash
+/extension list
+/extension status [name]
+/extension enable <name>
+/extension disable <name>
+```
+
+已启用名称持久化在 `~/.pawnlogic/extensions/enabled.json`。PawnLogic 会在暴露 Tool
+或命令之前验证兼容性和全部贡献名称。单个 Extension 失败不会阻断 core 正常启动。
+
 ### MCP 工具接入
 
 pip 或一行安装脚本用户，PawnLogic 启动时会在 `~/.pawnlogic/` 下生成可编辑模板：
@@ -310,6 +326,15 @@ MYRELAY_API_KEY=...
 | `/provider test <model>` | 测试连通性 |
 | `/keys` | 查看所有 Key 状态 |
 | `/setkey` | 重新运行 Key 配置向导 |
+
+### Extension 管理
+
+| 命令 | 说明 |
+|------|------|
+| `/extension list` | 在不加载禁用代码的情况下列出已安装 Extension |
+| `/extension status [name]` | 显示 Extension 生命周期和兼容状态 |
+| `/extension enable <name>` | 显式加载并启用已安装 Extension |
+| `/extension disable <name>` | 停止 Extension 并移除其贡献 |
 
 ### 会话持久化
 

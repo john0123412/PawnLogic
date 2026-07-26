@@ -180,6 +180,7 @@ from . import provider  # noqa: E402, F401
 from . import workspace  # noqa: E402, F401
 from . import tools  # noqa: E402, F401
 from . import ctf  # noqa: E402, F401
+from . import extensions  # noqa: E402, F401
 
 
 __all__ = [

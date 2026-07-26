@@ -245,6 +245,25 @@ upstream license, source URL, commit, and required notices have been recorded in
 Skill-pack manifests are runtime discovery metadata only; they do not authorize
 redistribution by themselves.
 
+### Optional Extensions
+
+Installed Python distributions may advertise an Extension through the
+`pawnlogic.extensions` entry-point group. Discovery reads package metadata
+without importing Extension code. Installation does not grant execution
+authority; enablement is explicit:
+
+```bash
+/extension list
+/extension status [name]
+/extension enable <name>
+/extension disable <name>
+```
+
+Enabled names are persisted under `~/.pawnlogic/extensions/enabled.json`.
+PawnLogic validates compatibility and all contribution names before exposing
+Tools or commands. A failing Extension is isolated and does not prevent normal
+core startup.
+
 ### MCP Tools
 
 For pip or one-line installer users, PawnLogic creates editable templates in
@@ -341,6 +360,15 @@ Check key status at runtime: `/keys`
 | `/provider test <model>` | Test connectivity |
 | `/keys` | Show all key status |
 | `/setkey` | Re-run key wizard |
+
+### Extension Management
+
+| Command | Description |
+|---------|-------------|
+| `/extension list` | List installed Extensions without loading disabled code |
+| `/extension status [name]` | Show Extension lifecycle and compatibility state |
+| `/extension enable <name>` | Explicitly load and enable an installed Extension |
+| `/extension disable <name>` | Stop an Extension and remove its contributions |
 
 ### Session Persistence
 

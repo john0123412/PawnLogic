@@ -47,3 +47,10 @@ def test_transcript_runner_keeps_unknown_command_user_visible(tmp_path):
 
     assert result.exit_requested is False
     assert "Unknown command '/__missing'. Type /help." in result.output
+
+
+def test_transcript_runner_exposes_extension_command_without_startup_manager(tmp_path):
+    result = run_transcript(["/extension"], cwd=tmp_path)
+
+    assert result.exit_requested is False
+    assert "Extension manager is unavailable" in result.output

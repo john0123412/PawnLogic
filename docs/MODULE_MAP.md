@@ -31,6 +31,7 @@
 | `core/api_client.py` | HTTP transport | `APIWrapper` class | `test_api_stream_helpers.py` | Stream and non-stream share classification. Timeout cap enforced. |
 | `core/api_errors.py` | Error formatting | `format_http_error()` | `test_api_errors.py` | User-friendly messages without tracebacks. Retryable status is explicit. |
 | `core/commands/provider.py` | Provider commands | `cmd_provider()`, `cmd_model()` | `test_provider_commands.py` | `_visible_models()` is the single eligibility helper. Active + configured key = visible. |
+| `core/commands/extensions.py` | Extension commands | `cmd_extension()` | `test_extension_commands.py`, `test_cli_transcripts.py` | Reads the manager from RuntimeContext. Commands never construct or bypass the Extension Runtime. |
 | `core/provider_tui.py` | Provider TUI | Rendering + key bindings | `test_provider_commands.py` | Thin rendering over `ProviderTUIState`. All mutations through `ProviderRuntime`. |
 | `core/provider_tui_state.py` | TUI state | `ProviderTUIState` class | `test_provider_tui_state.py` | Pure state transitions, no IO. Typed, deterministic methods. |
 
@@ -80,7 +81,9 @@
 
 | Module | Role | Interface | Tests | Invariants |
 |--------|------|-----------|-------|------------|
-| `pawnlogic/cli.py` | CLI facade | `run()`, `PawnCompleter` | `test_cli_startup.py`, `test_cli_transcripts.py` | Public entry point. Live model completions. |
+| `pawnlogic/cli.py` | CLI facade | `run()`, `PawnCompleter` | `test_cli_startup.py`, `test_cli_transcripts.py` | Public entry point. Live model and Extension completions; Extension startup failures remain non-fatal. |
+| `pawnlogic/extension_host.py` | Extension startup Adapter | `ExtensionHost` | `test_extension_host.py` | One process-level manager; persisted activation and shutdown failures are isolated. |
+| `pawnlogic/completion_sources.py` | Live completion merge | `merge_completion_sources()` | `test_completion_sources.py`, `test_provider_commands.py` | Static completion inputs are immutable; model and Extension sources are read live. |
 | `pawnlogic/startup.py` | Bootstrap | `setup_environment()` | `test_cli_startup.py` | First-run, env, debug mode. |
 | `pawnlogic/repl.py` | REPL loop | `run_repl()` | `test_cli_startup.py` | Signal handling, input restoration. |
 
@@ -92,7 +95,7 @@ implementations already exist.
 
 | Module | Intended Interface | Seam / Adapter | Status |
 |--------|--------------------|----------------|--------|
-| Extension Runtime | `ExtensionManager` over stable extension contracts | Python entry-point discovery Adapter; explicit enablement; transactional contribution registration | Core Module implemented; startup/command Adapter pending |
+| Extension Runtime | `ExtensionManager` over stable extension contracts | Python entry-point discovery Adapter; explicit enablement; transactional contribution registration | Core Module and CLI/command Adapters implemented |
 | Delegation Runtime | `AgentTask`, `AgentResult`, `DelegationPolicy`, `ModelRouter`, `DelegationExecutor` | Legacy `delegate_task` compatibility Adapter; Provider-backed execution Adapters | Contract accepted in ADR 0008; implementation pending |
 | Network Policy | One normalized network-operation authorization Interface | DNS, redirect, browser, web, MCP, and Docker caller Adapters | Planned |
 | Knowledge Retrieval | Durable knowledge-record and retrieval Interface | SQLite source-of-truth Adapter; optional Redis cache/vector Adapter | Planned |

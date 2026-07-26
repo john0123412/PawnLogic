@@ -1443,6 +1443,35 @@ def test_attach_external_mcp_tools_skips_empty_schema_and_refreshes_legacy_globa
         AGENT_PHASES["GENERAL"] = before_general
 
 
+def test_extension_tool_registry_exposes_owned_narrow_adapter():
+    from core.session import extension_tool_registry
+    from core.tool_registry import ToolSpec
+
+    registry = extension_tool_registry()
+    spec = ToolSpec(
+        name="pytest_extension_tool",
+        handler=lambda _args: "ok",
+        schema={
+            "type": "function",
+            "function": {
+                "name": "pytest_extension_tool",
+                "parameters": {"type": "object"},
+            },
+        },
+    )
+
+    assert not hasattr(registry, "_specs")
+    registry.register_many_owned("pytest-extension", [spec])
+    try:
+        assert registry.owner_of(spec.name) == "pytest-extension"
+        assert registry.get_spec(spec.name) is spec
+        assert spec in registry.snapshot_specs()
+    finally:
+        registry.unregister_owner("pytest-extension")
+
+    assert registry.get_spec(spec.name) is None
+
+
 def _load_real_sandbox_module():
     import importlib
     import tools
