@@ -22,11 +22,12 @@ release history.
   [#79](https://github.com/john0123412/PawnLogic/pull/79) on 2026-07-26.
 - PR 1 contracts are recorded in commit `7ff8c27`: ADR 0007, ADR 0008, and
   focused delegation/MCP characterization tests.
-- Stacked draft PRs #80-#85 implement the Extension Runtime, Extension
+- Stacked draft PRs #80-#86 implement the Extension Runtime, Extension
   commands/startup, Network Policy, installed-layout security compatibility
   fixture, policy-driven Delegation Runtime, and Structured Context Manager.
-  PR 10 is open as
-  [#85](https://github.com/john0123412/PawnLogic/pull/85).
+  PR 11 adds bounded, provenance-aware knowledge retrieval with SQLite as the
+  durable authority and is open as
+  [#86](https://github.com/john0123412/PawnLogic/pull/86).
 - Local release artifacts such as `dist/`, `build/`, and `*.egg-info/` should
   not remain after release validation unless a maintainer explicitly asks to
   keep them.
