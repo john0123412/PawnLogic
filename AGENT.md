@@ -362,6 +362,47 @@ git commit -m "<type>: <summary>"
 - If the task requires remote delivery after branch validation, push the target
   branch and confirm the new remote HEAD in the final report.
 
+## Merging A Stacked PR Chain
+
+GitHub does not reliably retarget a child pull request when its base branch is
+deleted. Merging a parent with `--delete-branch` first can close the child as
+`DIRTY` instead, and a closed pull request cannot be reopened while its base is
+missing and cannot have its base changed while it is closed. Recovering means
+pushing the deleted base back from a saved ref.
+
+Merge a stack in this order, one link at a time:
+
+1. Record a rollback ref for `main` and for every branch in the stack before
+   touching anything:
+
+   ```bash
+   git update-ref refs/backup/pre-merge-<name> "$(git rev-parse origin/<branch>)"
+   ```
+
+2. Retarget the child pull request onto `main` first:
+
+   ```bash
+   gh pr edit <child> --base main
+   ```
+
+3. Only then merge the parent and delete its branch:
+
+   ```bash
+   gh pr merge <parent> --merge --delete-branch
+   ```
+
+4. Confirm the child is still `OPEN` with `base=main` before moving to the next
+   link.
+
+Retargeting before merging means no pull request depends on a branch at the
+moment it is deleted. If a child is closed anyway, push its base branch back
+from `refs/backup/pre-merge-<name>`, reopen the pull request, retarget it, and
+delete the temporary branch again.
+
+Merging a stack does not validate the merged result. Run the full local suite
+and the guards against the merged branch itself, because each branch passing
+individually is not evidence for their combination.
+
 ## Bounded Codex Goal Runner
 
 `tools/codex_goal_run.sh` is the maintainer-only entry point for unattended

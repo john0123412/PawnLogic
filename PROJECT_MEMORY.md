@@ -19,7 +19,9 @@ release history.
 - Active plan:
   `docs/plans/0.3.0-extensible-agent-platform-and-security-distribution.md`.
   All eleven core PRs (#79-#89) were merged into `main` on 2026-07-26; every
-  `work/0.3.0-*` branch has been deleted. Merged `main` is `fc898fe`.
+  `work/0.3.0-*` branch has been deleted. `fc898fe` is the merge of the last
+  core PR (#89) and is the tip of the 0.3.0 core stack; later documentation
+  commits move `main` past it, so do not treat `fc898fe` as the current `main`.
 - PR 1 contracts are recorded in commit `7ff8c27`: ADR 0007, ADR 0008, and
   focused delegation/MCP characterization tests.
 - The merged 0.3.0 core delivers the Extension Runtime, Extension
@@ -41,9 +43,15 @@ release history.
 - CI trigger scope is a known past defect: `work/**` branches originally had
   neither a `push` nor a `pull_request` trigger, so stacked PRs reported no
   checks. Both triggers now exist, with `pull_request` alone covering branches
-  that have an open PR to avoid duplicate runs. `main` has no branch
-  protection and no ruleset, so passing checks are still not enforced at merge
-  time; this remains an open hardening risk.
+  that have an open PR to avoid duplicate runs.
+- `main` is protected by a single classic branch protection rule; there is no
+  ruleset, and a second governance system must not be added without retiring
+  this one. It requires a pull request, zero approvals, up-to-date branches,
+  conversation resolution, and four GitHub Actions checks: `🔍 Lint (ruff)`,
+  `📖 Docs Guard`, `🔎 Type Check (mypy)`, and `🧪 Fast Tests (Python 3.11)`.
+  Force pushes and deletions are denied and the rule applies to admins. Full
+  Matrix, Dynamic E2E, and the standalone translated-structure check are
+  deliberately not required, because normal pull requests skip or omit them.
 - The proposed independent `pawnlogic-security` distribution is not present in
   this repository. Its package implementation, TestPyPI install, and publish
   authorization remain external gates and must not be inferred from the core
