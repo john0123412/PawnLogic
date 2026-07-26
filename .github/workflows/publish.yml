@@ -30,9 +30,40 @@ permissions:
   contents: read
 
 jobs:
+  # ── Release source gate: a production tag must point at main ───────
+  # This job always runs so that workflow_dispatch dry-runs are not skipped
+  # by a skipped dependency; the check itself only applies to tag pushes.
+  verify-release-source:
+    name: "🔒 Verify release source"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0           # Need history to prove ancestry
+
+      - name: Tag commit must be on main
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          git fetch --no-tags --quiet origin \
+            +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Tag $GITHUB_REF_NAME points at $GITHUB_SHA, which is not"
+            echo "contained in origin/main. Production releases must be tagged"
+            echo "from a reviewed main commit."
+            exit 1
+          fi
+          echo "Tag commit $GITHUB_SHA is contained in origin/main."
+
+      - name: Source check not applicable
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: echo "Not a tag push; the release source check does not apply."
+
   # ── FIX #2: Run tests before publishing ────────────────────────────
   test-before-publish:
     name: "✅ Test before publish"
+    needs: verify-release-source
     runs-on: ubuntu-latest
     timeout-minutes: 10            # FIX #4
 
@@ -116,6 +147,10 @@ jobs:
     timeout-minutes: 10            # FIX #4
     permissions:
       contents: read
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      wheel: ${{ steps.identity.outputs.wheel }}
+      wheel_sha256: ${{ steps.identity.outputs.wheel_sha256 }}
 
     steps:
       - uses: actions/checkout@v6
@@ -149,6 +184,46 @@ jobs:
       # FIX #3: Validate package integrity before publishing.
       - name: Validate package (twine check)
         run: python3 -m twine check dist/*
+
+      # Pin exactly what this run built. The post-upload smoke compares the
+      # index copy against these hashes, so skip-existing cannot silently
+      # leave an older file in place and still report success.
+      - name: Record artifact identity
+        id: identity
+        run: |
+          version="$(python3 -c 'from config.paths import VERSION; print(VERSION)')"
+          wheel="pawnlogic-${version}-py3-none-any.whl"
+          sdist="pawnlogic-${version}.tar.gz"
+
+          for f in "$wheel" "$sdist"; do
+            if [ ! -f "dist/$f" ]; then
+              echo "Expected dist/$f was not built."
+              ls -la dist
+              exit 1
+            fi
+          done
+
+          found="$(find dist -maxdepth 1 -type f | wc -l)"
+          if [ "$found" -ne 2 ]; then
+            echo "Expected exactly 2 artifacts, found $found."
+            ls -la dist
+            exit 1
+          fi
+
+          sha256sum dist/* | tee dist-sha256.txt
+          {
+            echo "version=${version}"
+            echo "wheel=${wheel}"
+            echo "wheel_sha256=$(sha256sum "dist/$wheel" | cut -d' ' -f1)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact hashes
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-sha256
+          path: dist-sha256.txt
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload distributions
         uses: actions/upload-artifact@v7
@@ -225,6 +300,28 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
 
+  smoke-testpypi:
+    name: "🔬 TestPyPI install smoke"
+    needs: [build-distributions, publish-testpypi]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      EXPECTED_VERSION: ${{ needs.build-distributions.outputs.version }}
+      EXPECTED_WHEEL: ${{ needs.build-distributions.outputs.wheel }}
+      EXPECTED_SHA256: ${{ needs.build-distributions.outputs.wheel_sha256 }}
+      INDEX_URL: https://test.pypi.org/simple/
+
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - uses: actions/checkout@v6   # Needed for tools/release_install_smoke.sh
+
+      - name: Round-trip smoke
+        run: tools/release_install_smoke.sh
+
   publish-pypi:
     name: "🚀 Publish to PyPI"
     needs: build-distributions
@@ -248,9 +345,31 @@ jobs:
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
 
+  smoke-pypi:
+    name: "🔬 PyPI install smoke"
+    needs: [build-distributions, publish-pypi]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      EXPECTED_VERSION: ${{ needs.build-distributions.outputs.version }}
+      EXPECTED_WHEEL: ${{ needs.build-distributions.outputs.wheel }}
+      EXPECTED_SHA256: ${{ needs.build-distributions.outputs.wheel_sha256 }}
+      INDEX_URL: https://pypi.org/simple/
+
+    steps:
+      - uses: actions/checkout@v6   # Needed for tools/release_install_smoke.sh
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Round-trip smoke
+        run: tools/release_install_smoke.sh
+
   github-release:
     name: "🏷️ Create GitHub Release"
-    needs: publish-pypi
+    needs: smoke-pypi              # A release must not claim an uninstallable version
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
