@@ -272,6 +272,30 @@ def test_fresh_venv_pip_install_exposes_pawn_command(tmp_path):
         timeout=120,
     )
 
+    extension_metadata = subprocess.run(
+        [
+            str(py),
+            "-c",
+            (
+                "import json\n"
+                "from importlib import metadata\n"
+                "entry_points = metadata.entry_points("
+                "group='pawnlogic.extensions')\n"
+                "print(json.dumps([entry_point.name "
+                "for entry_point in entry_points]))"
+            ),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=15,
+    )
+    assert extension_metadata.returncode == 0, (
+        extension_metadata.stdout + extension_metadata.stderr
+    )
+    assert json.loads(extension_metadata.stdout) == []
+
     result = subprocess.run(
         [str(pawn), "--help"],
         text=True,
@@ -397,6 +421,8 @@ def test_built_wheel_does_not_ship_top_level_main_module(tmp_path):
     assert "main.py" not in names
     assert "pawnlogic/cli.py" in names
     assert "pawnlogic/__main__.py" in names
+    assert "pawnlogic_security.py" not in names
+    assert not any(name.startswith("pawnlogic_security/") for name in names)
     assert skill_file_count == 0
 
 
