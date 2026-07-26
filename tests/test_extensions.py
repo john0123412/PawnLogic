@@ -240,30 +240,77 @@ def test_command_conflict_is_rejected_without_removing_existing_owner(tmp_path):
     assert manager.command_snapshot()[0].name == "/shared"
 
 
-def test_command_registration_rolls_back_when_persistence_fails(tmp_path, monkeypatch):
+def test_enable_persistence_failure_rolls_back_all_contributions_and_preserves_state(
+    tmp_path,
+    monkeypatch,
+):
     adapter = _CommandAdapter()
-    extension = _Extension(
-        _manifest(),
-        ExtensionContributions(commands=(CommandContribution("/demo", lambda _ctx: "ok"),)),
+    existing = _Extension(
+        _manifest("existing"),
+        ExtensionContributions(
+            tools=(_tool("existing-tool"),),
+            commands=(CommandContribution("/existing", lambda _ctx: "existing"),),
+            phases=(PhaseContribution("EXISTING"),),
+            prompts=(PromptContribution("existing-prompt", "existing"),),
+        ),
     )
+    pending = _Extension(
+        _manifest("pending"),
+        ExtensionContributions(
+            tools=(_tool("pending-tool"),),
+            commands=(CommandContribution("/pending", lambda _ctx: "pending"),),
+            phases=(PhaseContribution("PENDING"),),
+            prompts=(PromptContribution("pending-prompt", "pending"),),
+        ),
+    )
+    registry = ToolRegistry()
     manager = _manager(
         tmp_path,
-        [_EntryPoint("demo", extension)],
+        [_EntryPoint("existing", existing), _EntryPoint("pending", pending)],
+        registry,
         command_register=adapter.register,
         command_unregister=adapter.unregister,
     )
-    monkeypatch.setattr(
-        manager,
-        "_write_enabled_names",
-        lambda _names: (_ for _ in ()).throw(OSError("disk full")),
-    )
+    assert manager.enable("existing").state is ExtensionState.ENABLED
+    original_enabled = {
+        status.name for status in manager.status() if status.enabled
+    }
+    original_persisted = json_names(manager.enabled_state_path)
+    original_tools = registry.snapshot_specs()
+    original_commands = manager.command_snapshot()
+    original_phases = manager.phase_snapshot()
+    original_prompts = manager.prompt_snapshot()
+    original_owners = manager.owner_snapshot()
+    original_adapter_state = dict(adapter.registered)
 
-    status = manager.enable("demo")
+    def fail_persistence(names):
+        assert names == {"existing", "pending"}
+        assert registry.get_spec("pending-tool") is not None
+        assert "/pending" in adapter.registered["pending"]
+        assert manager.command_snapshot()[-1].name == "/pending"
+        assert manager.phase_snapshot()[-1].name == "PENDING"
+        assert manager.prompt_snapshot()[-1].name == "pending-prompt"
+        raise OSError("disk full")
+
+    monkeypatch.setattr(manager, "_write_enabled_names", fail_persistence)
+
+    status = manager.enable("pending")
 
     assert status.state is ExtensionState.FAILED
-    assert "demo" not in adapter.registered
-    assert adapter.unregister_calls == ["demo"]
-    assert manager.command_snapshot() == ()
+    assert status.enabled is False
+    assert status.persisted_enabled is False
+    assert pending.stopped == 1
+    assert existing.stopped == 0
+    assert "disk full" in (status.error or "")
+    assert {item.name for item in manager.status() if item.enabled} == original_enabled
+    assert json_names(manager.enabled_state_path) == original_persisted
+    assert registry.snapshot_specs() == original_tools
+    assert manager.command_snapshot() == original_commands
+    assert manager.phase_snapshot() == original_phases
+    assert manager.prompt_snapshot() == original_prompts
+    assert manager.owner_snapshot() == original_owners
+    assert adapter.registered == original_adapter_state
+    assert adapter.unregister_calls == ["pending"]
 
 
 def test_shutdown_unregisters_command_contributions(tmp_path):
@@ -285,21 +332,6 @@ def test_shutdown_unregisters_command_contributions(tmp_path):
     assert "demo" not in adapter.registered
     assert adapter.unregister_calls == ["demo"]
     assert manager.command_snapshot() == ()
-
-
-def test_enable_failure_during_persistence_rolls_back_tools_and_calls_stop(tmp_path, monkeypatch):
-    extension = _Extension(_manifest(), ExtensionContributions(tools=(_tool("demo_tool"),)))
-    registry = ToolRegistry()
-    manager = _manager(tmp_path, [_EntryPoint("demo", extension)], registry)
-    monkeypatch.setattr(manager, "_write_enabled_names", lambda _names: (_ for _ in ()).throw(OSError("disk full")))
-
-    status = manager.enable("demo")
-
-    assert status.state is ExtensionState.FAILED
-    assert status.enabled is False
-    assert registry.get_spec("demo_tool") is None
-    assert extension.stopped == 1
-    assert "disk full" in (status.error or "")
 
 
 def test_persisted_enablement_is_visible_without_auto_loading(tmp_path):
