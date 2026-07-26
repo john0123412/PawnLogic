@@ -11,8 +11,14 @@ release history.
 
 ## Current Release State
 
-- Current public release: `0.2.3`.
+- Current public release: `0.2.3`. PyPI and the latest tag are still `v0.2.3`.
 - Runtime version source of truth: `config/paths.py:VERSION`.
+- `release/0.3.0-prep` is an unpublished release candidate. It is the only
+  branch where `VERSION` reads `0.3.0`; `main` still reads `0.2.3`. The bump is
+  deliberately early so the security distribution can be tested against a real
+  local core `0.3.0` wheel, because it declares `pawnlogic>=0.3,<0.4` and a
+  `0.2.3` host cannot satisfy that. Nothing is published until the release is
+  separately authorized.
 - Latest published tag: `v0.2.3`.
 - Most recent completed plan:
   `docs/plans/0.2.3-autonomous-runtime-reliability-deepening.md`.
@@ -37,9 +43,16 @@ release history.
   `twine check` passing and zero `skills/` entries.
 - Core release-preparation evidence is complete locally: fresh installs,
   all entry points, NDJSON automation, installed-layout Extension activation,
-  wheel/sdist build, `twine check`, and content inspection passed. The core
-  remains `0.2.3`; no tag or package upload was authorized. The version bump
-  and publish remain separate, explicitly authorized release steps.
+  wheel/sdist build, `twine check`, and content inspection passed. No tag or
+  package upload was authorized, and publishing remains a separate, explicitly
+  authorized release step.
+- Publishing is gated on more than a successful upload. A production tag must
+  point at a commit contained in `main`, the built artifacts are pinned by
+  hash, and `tools/release_install_smoke.sh` reinstalls the published
+  distribution from the index into a fresh environment to confirm the served
+  wheel matches the built wheel, the reported version is correct, and the
+  installed `pawn` console script runs. The GitHub Release waits on that smoke,
+  so `skip-existing` cannot leave a stale artifact and still report success.
 - CI trigger scope is a known past defect: `work/**` branches originally had
   neither a `push` nor a `pull_request` trigger, so stacked PRs reported no
   checks. Both triggers now exist, with `pull_request` alone covering branches
