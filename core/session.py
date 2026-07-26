@@ -85,14 +85,14 @@ from core.turn_guards import (
     is_empty_response,
 )
 from core.memory import (
-    init_db, _gen_id, search_knowledge, format_knowledge_for_prompt,
+    init_db, _gen_id, search_knowledge, search_knowledge_records, format_knowledge_for_prompt,
     update_session_naming,
     # P0: Failure Pattern DB
     write_failure, check_failure, count_failure,
     format_failures_for_prompt,
 )
 from core.gsa import load_relevant_skills, bump_skill, sink_failure_to_gsa  # ★ GSA
-
+from core.knowledge import format_retrieval_hits_for_prompt
 from tools.file_ops  import (tool_read_file, tool_read_file_lines, tool_write_file,
                               tool_patch_file, tool_list_dir, tool_find_files,
                               tool_run_shell, tool_run_interactive, sync_runtime_context,
@@ -1182,6 +1182,8 @@ class AgentSession:
             format_knowledge_for_prompt=format_knowledge_for_prompt,
             load_relevant_skills=load_relevant_skills,
             skill_scanner=_skill_scanner,
+            retrieve_knowledge=search_knowledge_records,
+            format_retrieval_hits=format_retrieval_hits_for_prompt,
         )
         if result.loaded_skill_packs is not None:
             self._loaded_skill_packs = result.loaded_skill_packs

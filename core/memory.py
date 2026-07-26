@@ -19,6 +19,11 @@ import sqlite3, json, re, os, hashlib, threading, time
 from datetime import datetime
 from config import DB_PATH
 from core.file_store import ensure_private_dir, ensure_private_file
+from core.knowledge import (
+    KnowledgeQuery, KnowledgeRetriever, RetrievalHit,
+    format_retrieval_hits_for_prompt,
+)
+from core.knowledge_sqlite import KNOWLEDGE_INDEX_VERSION, SQLiteKnowledgeAdapter
 from core.logger import logger
 
 # ════════════════════════════════════════════════════════
@@ -29,8 +34,6 @@ _tls = threading.local()
 SQLITE_BUSY_TIMEOUT_MS = 1000
 SQLITE_WRITE_RETRIES = 4
 SQLITE_WRITE_BACKOFF_SEC = (0.05, 0.1, 0.2, 0.4)
-
-
 def _is_retryable_write_error(exc: sqlite3.OperationalError) -> bool:
     msg = str(exc).lower()
     return "locked" in msg or "busy" in msg
@@ -94,6 +97,7 @@ def get_conn() -> sqlite3.Connection:
 
 def init_db():
     _create_core_tables()
+    init_knowledge_adapter()
     init_facts_table()
     init_failures_table()
 
@@ -769,50 +773,138 @@ def reset_incremental_tracker(session_id: str):
 # Knowledge CRUD + RAG
 # ════════════════════════════════════════════════════════
 
+def init_knowledge_adapter() -> None:
+    """Create the authoritative knowledge schema and optional-index outbox."""
+    _knowledge_adapter().init_schema()
+
+
+def _knowledge_adapter() -> SQLiteKnowledgeAdapter:
+    return SQLiteKnowledgeAdapter(get_conn, _now)
+
+
+def knowledge_retriever(
+    vector_adapter=None,
+    *,
+    expected_index_version: str = "",
+    expected_embedding_model: str = "",
+) -> KnowledgeRetriever:
+    """Build the shared retriever without requiring an optional vector service."""
+    return KnowledgeRetriever(
+        _knowledge_adapter(),
+        vector_adapter,
+        expected_index_version=expected_index_version,
+        expected_embedding_model=expected_embedding_model,
+    )
+
+
+def enqueue_knowledge_index(
+    record_id: str,
+    operation: str = "upsert",
+    index_version: str = KNOWLEDGE_INDEX_VERSION,
+    source_revision: str | None = None,
+) -> int:
+    """Queue one durable index projection operation."""
+    return _knowledge_adapter().enqueue(
+        record_id,
+        operation,
+        index_version,
+        source_revision,
+    )
+
+
+def upsert_knowledge_record(
+    *,
+    record_id: str,
+    namespace: str,
+    topic: str,
+    content: str,
+    tags: str = "",
+    source_type: str = "knowledge",
+    source_id: str = "",
+    source_revision: str = "1",
+    chunk_index: int = 0,
+    metadata: dict[str, str] | None = None,
+) -> str:
+    """Upsert a normalized durable knowledge record and queue index refresh."""
+    return _knowledge_adapter().upsert(
+        record_id=record_id,
+        namespace=namespace,
+        topic=topic,
+        content=content,
+        tags=tags,
+        source_type=source_type,
+        source_id=source_id,
+        source_revision=source_revision,
+        chunk_index=chunk_index,
+        metadata=metadata,
+    )
+
+
 def add_knowledge(topic: str, content: str, tags: str = "", source_session: str = "") -> int:
-    with get_conn() as conn:
-        cur = conn.execute("""
-            INSERT INTO knowledge (topic, content, tags, source_session, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        """, (topic, content, tags, source_session, _now()))
-        return cur.lastrowid
+    """Add a legacy knowledge row while populating normalized adapter fields."""
+    return _knowledge_adapter().add_legacy(topic, content, tags, source_session)
 
 def list_knowledge(limit: int = 30) -> list[sqlite3.Row]:
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT * FROM knowledge ORDER BY created_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+    return _knowledge_adapter().list_legacy(limit)
 
 def delete_knowledge(kid: int):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM knowledge WHERE id=?", (kid,))
+    _knowledge_adapter().delete_legacy(kid)
+
+
+def delete_knowledge_record(record_id: str) -> bool:
+    """Delete a normalized knowledge record and queue index deletion."""
+    return _knowledge_adapter().delete(record_id)
+
+
+def search_knowledge_records(
+    query: str,
+    *,
+    namespaces: tuple[str, ...] = (),
+    top_k: int = 5,
+    max_chars: int = 4000,
+) -> list[RetrievalHit]:
+    """Return bounded, provenance-rich SQLite keyword retrieval rows."""
+    request = KnowledgeQuery(
+        text=query,
+        namespaces=namespaces,
+        top_k=top_k,
+        max_chars=max_chars,
+    )
+    return list(knowledge_retriever().query(request))
 
 def search_knowledge(query: str, limit: int = 5) -> list[sqlite3.Row]:
-    keywords = list(set(re.findall(r'[a-zA-Z\u4e00-\u9fff]\w*', query.lower())))
-    if not keywords: return list_knowledge(limit)
-    # Use SQL LIKE to filter at the DB level instead of loading all rows
-    like_clauses = " OR ".join(
-        "(topic LIKE ? OR content LIKE ? OR tags LIKE ?)" for _ in keywords
+    return _knowledge_adapter().search_legacy(query, limit)
+
+def list_knowledge_index_outbox(limit: int = 100) -> list[dict]:
+    """List pending index operations in durable insertion order."""
+    return _knowledge_adapter().pending(limit)
+
+
+def ack_knowledge_index_outbox(entry_ids) -> int:
+    """Remove successfully projected outbox entries."""
+    return _knowledge_adapter().acknowledge(entry_ids)
+
+
+def fail_knowledge_index_outbox(entry_id: int, error: str) -> bool:
+    """Record a non-fatal indexing failure while retaining the operation."""
+    return _knowledge_adapter().fail(entry_id, error)
+
+
+def enqueue_knowledge_rebuild(
+    *,
+    namespace: str | None = None,
+    index_version: str = KNOWLEDGE_INDEX_VERSION,
+) -> int:
+    """Queue current durable records for an optional index rebuild."""
+    return _knowledge_adapter().enqueue_rebuild(
+        namespace=namespace,
+        index_version=index_version,
     )
-    params = []
-    for kw in keywords:
-        params.extend([f"%{kw}%", f"%{kw}%", f"%{kw}%"])
-    with get_conn() as conn:
-        rows = conn.execute(
-            f"SELECT * FROM knowledge WHERE {like_clauses} ORDER BY created_at DESC",
-            params,
-        ).fetchall()
-    # Score by keyword hit count for ranking
-    scored = []
-    for row in rows:
-        text  = (row["topic"] + " " + row["content"] + " " + (row["tags"] or "")).lower()
-        score = sum(1 for kw in keywords if kw in text)
-        if score > 0: scored.append((score, row))
-    scored.sort(key=lambda x: -x[0])
-    return [r for _, r in scored[:limit]]
 
 def format_knowledge_for_prompt(rows: list[sqlite3.Row]) -> str:
     if not rows: return ""
+    if isinstance(rows[0], RetrievalHit):
+        return format_retrieval_hits_for_prompt(rows)
     lines = ["[Persistent Knowledge — auto-loaded from your knowledge base]"]
     for r in rows:
         lines.append(f"• [{r['topic']}] {r['content']}")

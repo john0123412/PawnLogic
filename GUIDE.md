@@ -67,6 +67,12 @@
 - `/memorize [topic]` — AI summarizes conversation → saves to knowledge base
 - `/knowledge [query]` — search or list knowledge entries
 - `/forget <id>` — delete a knowledge entry
+- SQLite remains the durable source of truth; FTS5 search has a bounded
+  keyword fallback when FTS5 is unavailable.
+- Retrieved prompt references include provenance, are escaped and redacted,
+  and obey a total character budget.
+- Optional vector indexes are non-authoritative. Missing, stale, or unavailable
+  adapters fall back to SQLite without preventing startup or local retrieval.
 
 ---
 

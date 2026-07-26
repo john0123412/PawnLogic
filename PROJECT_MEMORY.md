@@ -102,6 +102,14 @@ These contracts are more important than local refactoring convenience:
 - Delegated context is resolved through the active host RuntimeContext.
   `none`, `minimal`, and `selected` cannot be forged by Tool arguments, and raw
   parent system messages/full history are not copied to child Providers.
+- Knowledge retrieval uses immutable `KnowledgeRecord`, `KnowledgeQuery`, and
+  `RetrievalHit` contracts. `core/knowledge_sqlite.py` owns bounded FTS5 and
+  keyword fallback over the authoritative SQLite corpus. Optional vector
+  projections can affect ranking only after record ID and revision hydration
+  from SQLite; absence, stale metadata, or outage remains non-fatal.
+- Knowledge indexing uses revision-aware durable outbox events. Rebuild
+  enqueueing runs inside SQLite with `INSERT ... SELECT`, so the process and an
+  optional Redis projection never need the complete corpus in memory.
 - The Extension Runtime uses `pawnlogic.extensions` package entry points.
   Discovery reads metadata without loading Extension code; explicit enablement
   owns validation, contribution registration, rollback, persisted state, and

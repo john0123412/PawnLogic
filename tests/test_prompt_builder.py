@@ -123,3 +123,20 @@ def test_build_session_prompt_preserves_loaded_packs_when_scanner_fails():
     assert "Local Skills" not in result.prompt
     scanner.match.assert_called_once_with("", top_k=3)
     scanner.format_for_prompt.assert_not_called()
+
+
+def test_build_session_prompt_prefers_structured_retrieval_seam():
+    retrieve = MagicMock(return_value=["bounded-hit"])
+    render = MagicMock(return_value="<knowledge_references />")
+
+    result, kwargs = _build_prompt(
+        knowledge_query="sqlite rag",
+        retrieve_knowledge=retrieve,
+        format_retrieval_hits=render,
+    )
+
+    assert "<knowledge_references />" in result.prompt
+    retrieve.assert_called_once_with("sqlite rag", top_k=3, max_chars=3_000)
+    render.assert_called_once_with(["bounded-hit"], max_chars=4_000)
+    kwargs["search_knowledge"].assert_not_called()
+    kwargs["format_knowledge_for_prompt"].assert_not_called()

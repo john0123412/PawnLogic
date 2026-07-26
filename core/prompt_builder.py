@@ -105,11 +105,21 @@ def build_session_prompt(
     format_knowledge_for_prompt: Callable[[Any], str],
     load_relevant_skills: Callable[..., tuple[str, str]],
     skill_scanner: Any,
+    retrieve_knowledge: Callable[..., Any] | None = None,
+    format_retrieval_hits: Callable[..., str] | None = None,
 ) -> PromptBuildResult:
     knowledge_block = ""
     if knowledge_query:
-        rows = search_knowledge(knowledge_query, limit=3)
-        knowledge_block = format_knowledge_for_prompt(rows)
+        if retrieve_knowledge is not None and format_retrieval_hits is not None:
+            hits = retrieve_knowledge(
+                knowledge_query,
+                top_k=3,
+                max_chars=3_000,
+            )
+            knowledge_block = format_retrieval_hits(hits, max_chars=4_000)
+        else:
+            rows = search_knowledge(knowledge_query, limit=3)
+            knowledge_block = format_knowledge_for_prompt(rows)
     state_block = load_state_md(cwd)
 
     loaded_skill_packs: list[Any] | None = None

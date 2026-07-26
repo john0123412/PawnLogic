@@ -60,6 +60,12 @@ Decay Algorithm Notes
 import re, json
 from datetime import datetime
 from config import GLOBAL_SKILLS_PATH
+from core.knowledge import (
+    KnowledgeQuery,
+    RetrievalBatch,
+    RetrievalHit,
+    stable_record_id,
+)
 
 # ════════════════════════════════════════════════════════
 # File initialization.
@@ -350,30 +356,14 @@ def _detect_conflicts(
 # Upgraded load_relevant_skills with decay scoring and conflict detection.
 # ════════════════════════════════════════════════════════
 
-def load_relevant_skills(
-    query: str,
-    top_k: int = 3,
-) -> tuple[str, str]:
-    """
-    Dynamically load the Top-K most relevant skill blocks from global_skills.md.
-
-    Improvements:
-      · Replaces global exponential decay with personalized FSRS power-law decay.
-      · High-hit skills keep a much longer half-life.
-      · SCORE_FLOOR keeps related old skills retrievable.
-      · Filtering is stricter than score > 0 for cleaner results.
-
-    Returns:
-      skills_markdown : joined Markdown for System Prompt injection
-      conflict_warning: non-empty when Case-series conflicts are detected
-    """
+def _rank_relevant_blocks(query: str, top_k: int) -> list[tuple[float, str, str]]:
     try:
         content = _ensure_file()
     except Exception:
-        return "", ""
+        return []
 
     if not content.strip():
-        return "", ""
+        return []
 
     # Split by "## " while preserving heading lines.
     raw_blocks = re.split(r'(?=^## )', content, flags=re.MULTILINE)
@@ -394,7 +384,7 @@ def load_relevant_skills(
         scored.append((score, title, block))
 
     if not scored:
-        return "", ""
+        return []
 
     scored.sort(key=lambda x: x[0], reverse=True)
     top = scored[:top_k]
@@ -404,6 +394,77 @@ def load_relevant_skills(
     filtered = [(s, t, b) for s, t, b in top if s >= threshold]
     if not filtered:
         filtered = [top[0]]
+    return filtered
+
+
+def search_gsa_hits(
+    query: str,
+    *,
+    top_k: int = 3,
+    max_chars: int = 4_000,
+) -> tuple[RetrievalHit, ...]:
+    """Return GSA experience blocks through the shared retrieval hit contract."""
+    if top_k <= 0 or max_chars <= 0:
+        return ()
+    ranked = _rank_relevant_blocks(query, min(top_k, 50))
+    hits = []
+    remaining = max_chars
+    for score, title, block in ranked:
+        if remaining <= 0:
+            break
+        content = block[:remaining]
+        remaining -= len(content)
+        meta = _parse_meta(block)
+        revision = (
+            f"{meta['last_used']}:{meta['hits']}:{meta['confidence']:.2f}"
+        )
+        hits.append(
+            RetrievalHit(
+                record_id=stable_record_id("gsa", "experience", title),
+                namespace="gsa",
+                source_type="experience",
+                source_id=title,
+                source_revision=revision,
+                content=content,
+                score=score,
+                score_kind="gsa_fsrs_jaccard",
+                provenance={
+                    "retrieval_algorithm": "gsa_fsrs_jaccard",
+                    "archive": "global_skills.md",
+                    "title": title,
+                    "content_source": "gsa_markdown",
+                    "truncated": str(len(content) < len(block)).lower(),
+                },
+            )
+        )
+    return tuple(hits)
+
+
+class GSAKnowledgeAdapter:
+    """Read-only adapter for experience retrieval from the Markdown archive."""
+
+    def query(self, request: KnowledgeQuery) -> RetrievalBatch:
+        hits = search_gsa_hits(
+            request.text,
+            top_k=request.top_k,
+            max_chars=request.max_chars,
+        )
+        return RetrievalBatch(
+            hits=hits,
+            adapter="gsa",
+            algorithm="gsa_fsrs_jaccard",
+            index_version="gsa-markdown-v1",
+        )
+
+
+def load_relevant_skills(
+    query: str,
+    top_k: int = 3,
+) -> tuple[str, str]:
+    """Load relevant GSA blocks while preserving the legacy prompt shape."""
+    filtered = _rank_relevant_blocks(query, top_k)
+    if not filtered:
+        return "", ""
 
     # Conflict detection.
     conflict_warning = _detect_conflicts(filtered)

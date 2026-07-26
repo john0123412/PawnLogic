@@ -132,7 +132,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 | Multi-provider models | Built-in DeepSeek, OpenAI, and Anthropic aliases plus custom OpenAI-compatible or Anthropic-style providers through `/provider`. |
 | Delegated agents | Bounded sub-agents use host-controlled dynamic model routing, user allow/deny policy, token/tool/cost budgets, and capability-filtered Tools. |
 | Structured context | Versioned task state, Tool-call-safe trimming, `ctx_trim_to` targeting, and host-selected delegated context keep long sessions bounded without copying raw parent history. |
-| Persistent workspace | SQLite-backed sessions, searchable history, memory commands, knowledge base, per-session workspaces, and audit logs under `~/.pawnlogic/`. |
+| Persistent workspace | SQLite-backed sessions, searchable history, memory commands, bounded provenance-aware knowledge retrieval, per-session workspaces, and audit logs under `~/.pawnlogic/`. |
 | Real tool execution | Host shell, code sandbox, file operations, URL fetch, browser automation, Docker containers, and CTF helpers. |
 | Trust-boundary UX | User-mode warnings make it explicit when a tool crosses local host, container, browser, network, delegate, or plaintext HTTP boundaries. |
 | Optional Extensions | Installed packages can advertise `pawnlogic.extensions` entry points. Discovery does not load their code, and `/extension enable <name>` is always explicit. |

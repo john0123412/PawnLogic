@@ -19,6 +19,8 @@
 | `core/delegation.py` | Delegation contracts | `AgentTask`, `AgentResult`, `DelegationPolicyStore` | `test_delegation_contracts.py` | Immutable bounded task/result values. Policy writes are atomic and secret fields are rejected. |
 | `core/model_router.py` | Delegated model policy | `ModelRouter.route()` | `test_model_router.py` | Only visible, configured, allowed, capability-matching, budget-eligible models can be selected. |
 | `core/delegation_runtime.py` | Delegated execution | `SubAgentSession` | `test_delegate_tool.py`, `test_delegation_baseline.py` | Host safety instructions precede task instructions; Tool capabilities and call/token budgets are enforced. |
+| `core/knowledge.py` | Retrieval contracts and orchestration | `KnowledgeRecord`, `RetrievalHit`, `KnowledgeRetriever` | `test_knowledge.py` | SQLite content is authoritative; optional projections provide ranking only; stale or unavailable projections fall back without startup failure. |
+| `core/knowledge_sqlite.py` | Durable knowledge Adapter | `SQLiteKnowledgeAdapter` | `test_knowledge_memory_adapter.py` | Bounded FTS/keyword reads, revision-aware outbox events, and database-side rebuild enqueueing never materialize the full corpus. |
 | `core/tool_registry.py` | Capability Interface | `ToolRegistry.register()` / `visible_specs()` | `test_tool_registry.py` | Handler, schema, phase, trust, capabilities registered atomically. No tool without handler. |
 | `core/extension_contracts.py` | Extension Interface | Frozen Extension values and lifecycle Protocols | `test_extensions.py` | Contracts import no discovery/startup logic. Contributions are typed and owner-attributed. |
 | `core/extensions.py` | Extension Runtime | `ExtensionManager` | `test_extensions.py` | Discovery never loads entry points. Enablement is explicit, transactional, persisted, and failure-isolated. |
@@ -108,7 +110,7 @@ implementations already exist.
 | Delegation Runtime | `AgentTask`, `AgentResult`, `DelegationModelPolicy`, `ModelRouter`, `SubAgentSession` | Legacy `delegate_task` compatibility Adapter; Provider-backed execution Adapter | Core Module and command/Tool Adapters implemented |
 | Structured Context | `ContextManager`, `ContextState`, `ContextEnvelope` | Main-session provider view; host-owned delegated projection; legacy context-window Adapters | Core Module and main/delegation Adapters implemented |
 | Network Policy | `NetworkPolicy.evaluate()` over normalized `NetworkOperation` values | DNS resolver plus web, browser, MCP, and Docker caller Adapters | Core Module and caller Adapters implemented |
-| Knowledge Retrieval | Durable knowledge-record and retrieval Interface | SQLite source-of-truth Adapter; optional Redis cache/vector Adapter | Planned |
+| Knowledge Retrieval | Durable knowledge-record and retrieval Interface | SQLite source-of-truth Adapter; optional Redis cache/vector Adapter | Core Interface and SQLite Adapter implemented |
 | Agent Event | Typed event stream for conversations, tools, delegation, budgets, and evidence | CLI, NDJSON, and optional Streamlit rendering Adapters | Planned |
 
 The planned Interfaces must preserve these boundaries:
