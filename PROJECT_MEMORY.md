@@ -16,14 +16,12 @@ release history.
 - Latest published tag: `v0.2.3`.
 - Most recent completed plan:
   `docs/plans/0.2.3-autonomous-runtime-reliability-deepening.md`.
-- Active plan: none. Register the next iteration in `docs/plans/INDEX.md`
-  before implementation begins.
-- Proposed next iteration:
+- Active plan:
   `docs/plans/0.3.0-extensible-agent-platform-and-security-distribution.md`.
-  It remains a candidate until the first implementation PR opens.
-- Local branch `work/0.3.0-contracts` contains the prepared PR 1 contract
-  artifacts: ADR 0007, ADR 0008, and focused characterization tests. They are
-  locally verified but not committed, pushed, or represented by an open PR.
+  PR 1 opened as
+  [#79](https://github.com/john0123412/PawnLogic/pull/79) on 2026-07-26.
+- PR 1 contracts are recorded in commit `7ff8c27`: ADR 0007, ADR 0008, and
+  focused delegation/MCP characterization tests.
 - Local release artifacts such as `dist/`, `build/`, and `*.egg-info/` should
   not remain after release validation unless a maintainer explicitly asks to
   keep them.

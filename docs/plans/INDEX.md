@@ -5,17 +5,16 @@
 
 ## Active Plan
 
-There is no active release plan. The next iteration must register its plan here
-before implementation begins.
+| Version | Plan | Status |
+|---------|------|--------|
+| 0.3.0 | [0.3.0-extensible-agent-platform-and-security-distribution.md](0.3.0-extensible-agent-platform-and-security-distribution.md) | Active; PR 1 opened as [#79](https://github.com/john0123412/PawnLogic/pull/79) |
 
 There is exactly one active plan at a time. When the active plan is completed
 and its release is published, it moves to Completed below.
 
 ## Proposed Plans
 
-| Candidate | Plan | Status |
-|-----------|------|--------|
-| 0.3.0 | [0.3.0-extensible-agent-platform-and-security-distribution.md](0.3.0-extensible-agent-platform-and-security-distribution.md) | Audited proposal; activate when the first implementation PR opens |
+There are no proposed plans.
 
 ## Completed Plans
 
