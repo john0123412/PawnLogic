@@ -9,6 +9,7 @@ on:
       - "i18n/**"
       - "docs/**"
       - "test/**"
+      - "work/**"
     paths:
       - "README.md"
       - "README_zh-CN.md"
@@ -25,7 +26,7 @@ on:
       - "tools/check_doc_structure.py"
       - ".github/workflows/docs.yml"
   pull_request:
-    branches: [main]
+    branches: [main, "work/**"]
     paths:
       - "README.md"
       - "README_zh-CN.md"

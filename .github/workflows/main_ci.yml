@@ -15,8 +15,9 @@ on:
       - "fix/**"              # Allow fix branch self-checks
       - "i18n/**"             # Allow i18n branch self-checks
       - "test/**"             # Allow temporary test branch manual runs
+      - "work/**"             # Allow stacked release-work branch self-checks
   pull_request:
-    branches: [main]
+    branches: [main, "work/**"]
   workflow_dispatch:          # Allow manual CI runs on any branch
 
 # ── FIX #4: Prevent duplicate concurrent runs on the same branch ─────
