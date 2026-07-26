@@ -26,6 +26,12 @@ def test_runtime_metrics_records_usage_retries_tools_and_failures():
     metrics.record_circuit_rejection()
     metrics.record_circuit_success()
     metrics.record_circuit_failure()
+    metrics.record_delegation(
+        status="completed",
+        prompt_tokens=7,
+        completion_tokens=11,
+    )
+    metrics.record_delegation(status="failed", prompt_tokens=-1, completion_tokens=2)
 
     snapshot = metrics.snapshot()
     assert snapshot.turn_tool_calls == 2
@@ -42,6 +48,12 @@ def test_runtime_metrics_records_usage_retries_tools_and_failures():
     assert snapshot.total_circuit_rejections == 1
     assert snapshot.total_circuit_successes == 1
     assert snapshot.total_circuit_failures == 1
+    assert snapshot.turn_delegations == 2
+    assert snapshot.total_delegations == 2
+    assert snapshot.turn_delegation_failures == 1
+    assert snapshot.total_delegation_failures == 1
+    assert snapshot.turn_delegation_tokens == 20
+    assert snapshot.total_delegation_tokens == 20
 
 
 def test_runtime_metrics_reset_turn_keeps_session_totals():
@@ -54,6 +66,7 @@ def test_runtime_metrics_reset_turn_keeps_session_totals():
     metrics.record_provider_retries(1)
     metrics.record_tool_call(elapsed_ms=9)
     metrics.record_failure_class("RuntimeError")
+    metrics.record_delegation(status="failed", prompt_tokens=2, completion_tokens=3)
 
     metrics.reset_turn()
     snapshot = metrics.snapshot()
@@ -68,11 +81,17 @@ def test_runtime_metrics_reset_turn_keeps_session_totals():
     assert snapshot.turn_provider_retries == 0
     assert snapshot.turn_tokens == 0
     assert snapshot.turn_failure_classes == {}
+    assert snapshot.turn_delegations == 0
+    assert snapshot.turn_delegation_failures == 0
+    assert snapshot.turn_delegation_tokens == 0
     assert snapshot.total_tool_calls == 1
     assert snapshot.total_tool_latency_ms == 9
     assert snapshot.total_provider_retries == 1
     assert snapshot.total_tokens == 3
     assert snapshot.total_failure_classes == {"RuntimeError": 1}
+    assert snapshot.total_delegations == 1
+    assert snapshot.total_delegation_failures == 1
+    assert snapshot.total_delegation_tokens == 5
 
 
 def test_runtime_metrics_snapshot_returns_copies():

@@ -1062,7 +1062,7 @@ async def _main_impl():
         "/low", "/mid", "/deep", "/max", "/normal", "/limits",
         "/tokens", "/ctx", "/iter", "/toolsize", "/fetchsize",
         "/webstatus", "/browserstatus", "/pwnenv", "/stats", "/time", "/docker",
-        "/worker", "/failures", "/memo", "/skills", "/skillpack", "/sp", "/ctf",
+        "/agent", "/worker", "/failures", "/memo", "/skills", "/skillpack", "/sp", "/ctf",
         "/chat", "/extension", "/help", "/exit",
     ]
 
@@ -1109,6 +1109,7 @@ async def _main_impl():
         "/stats":         "Token usage for this session",
         "/time":          "Time budget (/time 300 = 5 minutes)",
         "/docker":        "Docker container management (status/images/ps/pull)",
+        "/agent":         "Delegated-agent model policy and run guidance",
         "/worker":        "Worker model selection",
         "/failures":      "View or clear failure records",
         "/memo":          "Manually archive a skill to GSA",
@@ -1137,7 +1138,8 @@ async def _main_impl():
         _w = f"/failures {_sub}"
         _all_words.append(_w)
         _all_meta[_w] = f"Failure records {_sub}"
-    _all_words.extend(["/worker auto", "/skills view", "/skills path", "/skills packs",
+    _all_words.extend(["/agent policy show", "/agent run",
+                       "/worker auto", "/skills view", "/skills path", "/skills packs",
                        "/skillpack list", "/skillpack rescan", "/sp list", "/sp rescan",
                        "/sp sync", "/sp install",
                        "/ctf init", "/ctf status", "/ctf artifact", "/ctf remote",
@@ -1145,6 +1147,8 @@ async def _main_impl():
                        "/workspace status", "/workspace cleanup",
                        "/workspace cleanup plan", "/workspace cleanup execute",
                        "/workspace cleanup restore"])
+    _all_meta["/agent policy show"] = "Show delegated-agent model policy"
+    _all_meta["/agent run"] = "Prepare a delegated-agent request"
     _all_meta["/worker auto"] = "Restore automatic worker routing"
     _all_meta["/skills view"] = "Show full skill file"
     _all_meta["/skills path"] = "Show skill file path"

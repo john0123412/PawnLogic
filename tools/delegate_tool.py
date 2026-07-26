@@ -25,24 +25,48 @@ Import cycle avoidance:
   - Tool registry snapshots are lazily imported when the tool is called.
 """
 
-import io, contextlib, threading
-from datetime import datetime
+import json
+import os
+import threading
+from pathlib import Path
 from config import (
     DEFAULT_MODEL, MODELS, validate_api_key, is_fast_model, find_fast_peer,
-    user_friendly_error,
 )
-from core.api_client import stream_request, ensure_tool_call_id
-from core.memory     import _gen_id
+from core.delegation import (
+    AgentBudget,
+    AgentResult,
+    AgentTask,
+    AgentUsage,
+    DelegationModelPolicy,
+    DelegationPolicyStore,
+    FailureRecord,
+)
+from core.delegation_runtime import (
+    CAPABILITY_PROFILES,
+    SubAgentSession as _SubAgentSession,
+    make_sub_executor as _make_sub_executor,
+    _tool_map,
+    _tools_schema,
+    resolve_allowed_tools,
+    tool_allowed,
+)
+from core.model_router import ModelRouter, RoutingDecision
 from core.state import (
-    state as _runtime_state, runtime_config, get_dynamic_config_value,
-)
-from core.tool_executor import (
-    ToolExecutor, ToolExecutionContext, resolve_tool_arguments,
+    state as _runtime_state, get_dynamic_config_value,
 )
 from core.trust import subagent_notice
-from core.turn_api import consume_model_stream
-from tools.file_ops  import _session_cwd
 from utils.ansi      import c, YELLOW, GRAY, GREEN, MAGENTA
+
+__all__ = [
+    "CAPABILITY_PROFILES",
+    "DELEGATE_TOOL",
+    "_make_sub_executor",
+    "_tool_map",
+    "_tools_schema",
+    "resolve_allowed_tools",
+    "tool_allowed",
+    "tool_delegate_task",
+]
 
 # Recursion depth guard.
 _delegate_ctx = threading.local()   # .depth tracks delegation depth per thread.
@@ -95,283 +119,124 @@ def _select_worker_model(current_model: str = DEFAULT_MODEL) -> str:
     return DEFAULT_MODEL
 
 # ════════════════════════════════════════════════════════
-# Capability profiles.
-#
-# delegate_task is a NON-ISOLATED sub-agent: tool side effects are real and run
-# with the parent process's permissions. The capability profile narrows which
-# tools the sub-agent may see and execute. delegate_task is never available to a
-# sub-agent regardless of profile (no nested delegation).
-# ════════════════════════════════════════════════════════
-
-CAPABILITY_PROFILES = ("inherited", "read_only", "no_shell", "custom")
-
-
-def tool_allowed(
-    name: str,
-    profile: str,
-    allowlist=None,
-    *,
-    capabilities: frozenset[str] = frozenset(),
-) -> bool:
-    """Return whether a sub-agent under ``profile`` may use tool ``name``."""
-    if name == "delegate_task":
-        return False  # never allow nested delegation
-    if profile == "read_only":
-        return not capabilities.intersection({"shell", "mutating", "destructive"})
-    if profile == "no_shell":
-        return "shell" not in capabilities
-    if profile == "custom":
-        return name in set(allowlist or ())
-    return True  # inherited (default)
-
-
-def resolve_allowed_tools(
-    profile: str,
-    all_tool_names,
-    allowlist=None,
-    *,
-    capabilities_by_name=None,
-) -> set[str]:
-    """Return the subset of ``all_tool_names`` permitted under ``profile``."""
-    capability_map = capabilities_by_name or {}
-    return {
-        name
-        for name in all_tool_names
-        if tool_allowed(
-            name,
-            profile,
-            allowlist,
-            capabilities=frozenset(capability_map.get(name, ())),
-        )
-    }
-
-
-# ════════════════════════════════════════════════════════
-# Lazy imports to avoid a cycle with session.py.
-# ════════════════════════════════════════════════════════
-
-def _tool_map():
-    """Import the session tool map snapshot only after the import cycle is gone."""
-    from core.session import _tool_map_snapshot
-    return _tool_map_snapshot()
-
-def _tools_schema():
-    from core.session import _tool_schema_snapshot
-    return _tool_schema_snapshot()
-
-
-def _tool_capabilities():
-    from core.session import _tool_specs_snapshot
-    return {spec.name: spec.capabilities for spec in _tool_specs_snapshot()}
-
-
-def _make_sub_executor(handler_lookup):
-    """Build a ToolExecutor that dispatches through the sub-agent's allowed map.
-
-    Failure-tracking hooks are no-ops: a non-isolated sub-agent does not record
-    GSA failures or anti-pattern history. Only execute_handler is used, which
-    reuses the main loop's unknown-tool and exception envelopes.
-    """
-    return ToolExecutor(
-        get_handler=handler_lookup,
-        agent_phases={},
-        schema_snapshot=lambda: [],
-        check_failure_func=lambda *a, **k: [],
-        format_failures_func=lambda rows: "",
-        write_failure_func=lambda **k: None,
-        count_failure_func=lambda *a, **k: 0,
-        sink_failure_func=lambda **k: (False, ""),
-        user_error_formatter=user_friendly_error,
-    )
-
-# ════════════════════════════════════════════════════════
-# Sub-agent session running silently.
-# ════════════════════════════════════════════════════════
-
-class _SubAgentSession:
-    """
-    Lightweight sub-agent with only system + task messages.
-    It does not share state with the main session. Tool side effects are real,
-    but stdout is captured.
-    """
-
-    MAX_ITER = 15   # Hard cap to prevent infinite loops.
-
-    def __init__(
-        self,
-        task: str,
-        model_alias: str = DEFAULT_MODEL,
-        capability: str = "inherited",
-        allowlist=None,
-    ):
-        self.session_id  = "sub_" + _gen_id()
-        self.model_alias = model_alias
-        self.capability  = capability if capability in CAPABILITY_PROFILES else "inherited"
-        self.allowlist   = allowlist
-
-        # Inherit important facts from the parent agent.
-        inherited_ctx = ""
-        try:
-            from core.memory import search_facts, format_facts_for_prompt
-            # Take up to 5 high-priority facts (priority >= 2).
-            rows = search_facts(query="", priority_min=2, limit=5)
-            if rows:
-                inherited_ctx = (
-                    "\n[Inherited Context from Parent Agent]\n"
-                    + format_facts_for_prompt(rows, max_chars=400)
-                    + "\n"
-                )
-        except Exception:
-            inherited_ctx = ""
-
-        self.messages: list = [
-            {
-                "role":    "system",
-                "content": (
-                    "You are a focused sub-agent executing ONE specific delegated task.\n"
-                    "Complete the task thoroughly using available tools.\n"
-                    f"Working directory: {_session_cwd[0]}\n"
-                    f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
-                    f"{inherited_ctx}\n"
-                    "Rules:\n"
-                    "- Use tools as needed. Be thorough.\n"
-                    "- When done, return a concise summary of what was accomplished.\n"
-                    "- Do NOT explain your plan, just act.\n"
-                    "- Do NOT call delegate_task again (no nested delegation allowed).\n"
-                ),
-            },
-            {"role": "user", "content": task},
-        ]
-        self._tool_log: list[str] = []
-
-    def run(self) -> str:
-        """
-        Run the agentic loop silently.
-        stdout is redirected while tool calls still execute normally.
-        Returns the final text response from the sub-agent.
-        """
-        # Snapshot the registry once for a consistent view, then apply the
-        # capability profile to both the advertised schema and the executable map.
-        snapshot_map = _tool_map()
-        allowed      = resolve_allowed_tools(
-            self.capability,
-            snapshot_map,
-            self.allowlist,
-            capabilities_by_name=_tool_capabilities(),
-        )
-        tools_sch    = [s for s in _tools_schema()
-                        if s.get("function", {}).get("name") in allowed]
-        handler_map  = {n: h for n, h in snapshot_map.items() if n in allowed}
-        executor     = _make_sub_executor(handler_map.get)
-        cap          = io.StringIO()
-
-        for iteration in range(self.MAX_ITER):
-            # Reuse the main loop's stream consumer. Redirect stdout to hide
-            # streaming prints; tool side effects below still print normally.
-            with contextlib.redirect_stdout(cap):
-                api = consume_model_stream(
-                    stream_request(
-                        self.messages, self.model_alias,
-                        tools_schema=tools_sch,
-                        max_tokens=min(runtime_config()["max_tokens"], 8192),
-                    ),
-                    ensure_tool_call_id=ensure_tool_call_id,
-                    iteration=iteration,
-                )
-
-            if api.error:
-                return f"[Sub-agent error] {api.error}"
-
-            tc_buf = api.tool_calls
-            # No tool call means the subtask is done.
-            if not tc_buf:
-                return api.text.strip() or "(sub-agent returned no output)"
-
-            # Append assistant message.
-            self.messages.append({
-                "role":    "assistant",
-                "content": api.text or None,
-                "tool_calls": [
-                    {
-                        "id":       tc_buf[i]["id"],
-                        "type":     "function",
-                        "function": {
-                            "name":      tc_buf[i]["name"],
-                            "arguments": tc_buf[i]["args"],
-                        },
-                    }
-                    for i in sorted(tc_buf)
-                ],
-            })
-
-            # Execute tools through the shared ToolExecutor (unknown-tool and
-            # exception handling match the main loop).
-            ctx = ToolExecutionContext(
-                session_id=self.session_id,
-                model_alias=self.model_alias,
-                iteration=iteration,
-                current_phase="GENERAL",
-                user_mode=_user_mode(),
-            )
-            for i in sorted(tc_buf):
-                tc   = tc_buf[i]; name = tc["name"]
-                fn_args = resolve_tool_arguments(tc)
-
-                self._tool_log.append(f"  [{iteration+1}] {name}({list(fn_args.keys())})")
-
-                result = executor.execute_handler(
-                    tool_call_id=tc["id"],
-                    tool_name=name,
-                    fn_args=fn_args,
-                    context=ctx,
-                ).content
-
-                limit = min(runtime_config()["tool_max_chars"], 6000)
-                if len(result) > limit:
-                    result = result[:limit//2] + "\n...[truncated]...\n" + result[-500:]
-
-                self.messages.append({
-                    "role":         "tool",
-                    "tool_call_id": tc["id"],
-                    "content":      result,
-                })
-
-        return f"[Sub-agent hit max_iter={self.MAX_ITER}]"
-
-# ════════════════════════════════════════════════════════
 # Tool entry point.
 # ════════════════════════════════════════════════════════
 
+def _policy_store() -> DelegationPolicyStore:
+    import config.paths as path_config
+
+    runtime_home = Path(
+        os.environ.get("PAWNLOGIC_HOME") or path_config.PAWNLOGIC_HOME
+    )
+    return DelegationPolicyStore(runtime_home)
+
+
+def _agent_task_from_arguments(a: dict) -> AgentTask:
+    objective = str(a.get("objective") or a.get("task_description") or "")
+    capability = a.get(
+        "capability_profile",
+        a.get("capability", "inherited"),
+    )
+    allowed_tools = a.get("allowed_tools", a.get("allowlist", ())) or ()
+    budget = AgentBudget(
+        max_tokens=a.get("max_tokens", 8192),
+        max_cost=a.get("max_cost"),
+        max_tool_calls=a.get("max_tool_calls", 15),
+    )
+    return AgentTask(
+        objective=objective,
+        role=str(a.get("role", "general")),
+        instructions=str(a.get("instructions", "")),
+        model_requirement=str(a.get("model_requirement", "auto")),
+        model_alias=a.get("model_alias"),
+        context_mode=str(a.get("context_mode", "selected")),
+        capability_profile=str(capability),
+        allowed_tools=allowed_tools,
+        budget=budget,
+    )
+
+
+def _route_agent_task(
+    task: AgentTask,
+    *,
+    parent_model: str,
+    policy: DelegationModelPolicy,
+    legacy_arguments: dict,
+) -> RoutingDecision:
+    new_fields = {
+        "objective",
+        "role",
+        "instructions",
+        "model_requirement",
+        "model_alias",
+        "context_mode",
+        "capability_profile",
+        "allowed_tools",
+        "max_tokens",
+        "max_cost",
+        "max_tool_calls",
+    }
+    use_legacy = (
+        not new_fields.intersection(legacy_arguments)
+        and policy == DelegationModelPolicy()
+    )
+    if use_legacy:
+        selected = _select_worker_model(parent_model)
+        return RoutingDecision(
+            selected,
+            "legacy_auto_fast",
+            eligible_models=(selected,),
+        )
+    return ModelRouter().select(task, parent_model, policy)
+
+
+def _rejected_result(decision: RoutingDecision) -> str:
+    result = AgentResult(
+        status="rejected",
+        summary=decision.error or "Delegated model request was rejected.",
+        model_alias=None,
+        routing_reason=decision.reason,
+        failures=(
+            FailureRecord(
+                code=decision.reason,
+                message=decision.error or "No eligible delegated model.",
+                retryable=False,
+            ),
+        ),
+    )
+    return "[Sub-agent rejected]\n" + json.dumps(
+        result.to_dict(),
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
 def tool_delegate_task(a: dict) -> str:
-    """
-    Entry point for delegated subtasks.
-    Called from the main session, executes a full subtask, then returns a compact result.
-
-    Dual-model routing ignores caller-provided model_alias and selects the first
-    available fast worker model from the candidate list.
-    """
-    task        = a.get("task_description", "").strip()
-    caller_model = a.get("model_alias", DEFAULT_MODEL)
-    verbose     = bool(a.get("verbose", False))
-    capability  = a.get("capability", "inherited")
-    if capability not in CAPABILITY_PROFILES:
-        capability = "inherited"
-    allowlist   = a.get("allowlist")
-
-    if not task:
+    """Run a structured delegated task through host-owned model policy."""
+    if not str(a.get("objective") or a.get("task_description") or "").strip():
         return "ERROR: task_description is required"
+    try:
+        task = _agent_task_from_arguments(a)
+    except (TypeError, ValueError) as exc:
+        return f"ERROR: {exc}"
 
-    # Dual-model routing: pro -> fast peer, fast -> itself.
-    worker_model = _select_worker_model(caller_model)
-    _preferred = get_dynamic_config_value("preferred_worker", "auto")
-    if _preferred and _preferred != "auto":
-        print(c(MAGENTA,
-            f"  [Delegate] preferred worker forced: [{worker_model}]"
-        ))
+    verbose = bool(a.get("verbose", False))
+    parent_model = str(_runtime_state.current_model or DEFAULT_MODEL)
+    policy = _policy_store().load()
+    decision = _route_agent_task(
+        task,
+        parent_model=parent_model,
+        policy=policy,
+        legacy_arguments=a,
+    )
+    if decision.model_alias is None:
+        return _rejected_result(decision)
+    worker_model = decision.model_alias
+
+    if decision.reason == "preferred_model":
+        print(c(MAGENTA, f"  [Delegate] preferred worker: [{worker_model}]"))
     else:
-        print(c(YELLOW,
-            f"  [Delegate] worker model: [{worker_model}]"
-        ))
+        print(c(YELLOW, f"  [Delegate] worker model: [{worker_model}]"))
 
     # Recursion depth guard.
     current_depth = getattr(_delegate_ctx, "depth", 0)
@@ -382,12 +247,35 @@ def tool_delegate_task(a: dict) -> str:
         )
 
     print(c(MAGENTA, f"  [Sub-agent] starting delegated task..."))
-    print(c(GRAY,    f"  Task: {task[:80]}{'...' if len(task)>80 else ''}"))
-    print(c(GRAY,    f"  Model: {worker_model}  Depth: {current_depth+1}/{_MAX_DEPTH}  Limit: {_SubAgentSession.MAX_ITER} iterations  Capability: {capability}"))
+    print(c(
+        GRAY,
+        f"  Task: {task.objective[:80]}"
+        f"{'...' if len(task.objective) > 80 else ''}",
+    ))
+    print(c(
+        GRAY,
+        f"  Model: {worker_model}  Depth: {current_depth+1}/{_MAX_DEPTH}  "
+        f"Limit: {_SubAgentSession.MAX_ITER} iterations  "
+        f"Capability: {task.capability_profile}",
+    ))
     if _user_mode():
-        print(c(YELLOW, subagent_notice(capability)))
+        print(c(YELLOW, subagent_notice(task.capability_profile)))
 
-    sub    = _SubAgentSession(task, worker_model, capability=capability, allowlist=allowlist)
+    effective_tokens = (
+        ModelRouter.effective_max_tokens(task, policy)
+        or task.budget.max_tokens
+    )
+    sub = _SubAgentSession(
+        task.objective,
+        worker_model,
+        capability=task.capability_profile,
+        allowlist=task.allowed_tools or None,
+        role=task.role,
+        instructions=task.instructions,
+        context_mode=task.context_mode,
+        max_tokens=effective_tokens,
+        max_tool_calls=task.budget.max_tool_calls,
+    )
 
     _delegate_ctx.depth = current_depth + 1
     try:
@@ -400,18 +288,51 @@ def tool_delegate_task(a: dict) -> str:
         tool_summary = "\n".join(sub._tool_log[-10:])
         print(c(GRAY, f"\n  [Sub-agent tool-call summary]\n{tool_summary}"))
 
-    print(c(GREEN, f"  [Sub-agent] complete, result length: {len(result)} chars"))
+    status = str(getattr(sub, "status", "completed"))
+    usage = AgentUsage(
+        prompt_tokens=int(getattr(sub, "prompt_tokens", 0)),
+        completion_tokens=int(getattr(sub, "completion_tokens", 0)),
+        tool_calls=int(getattr(sub, "tool_calls", len(sub._tool_log))),
+    )
+    agent_result = AgentResult(
+        status=status,
+        summary=result,
+        model_alias=worker_model,
+        routing_reason=decision.reason,
+        failures=tuple(getattr(sub, "failures", ())),
+        usage=usage,
+    )
+
+    print(c(
+        GREEN,
+        f"  [Sub-agent] {status}, result length: {len(result)} chars",
+    ))
+    metadata = (
+        f"Model: {worker_model}\n"
+        f"Routing: {decision.reason}\n"
+        f"Usage: prompt={usage.prompt_tokens}, "
+        f"completion={usage.completion_tokens}, tools={usage.tool_calls}"
+    )
+    structured = json.dumps(
+        agent_result.to_dict(),
+        ensure_ascii=False,
+        sort_keys=True,
+    )
 
     if verbose:
         return (
-            f"[Sub-agent complete]\n"
+            f"[Sub-agent {status}]\n"
+            f"{metadata}\n"
+            f"Structured: {structured}\n"
             f"--- Tool-call log ---\n"
             f"{chr(10).join(sub._tool_log) or '(no tool calls)'}\n\n"
             f"--- Final result ---\n"
-            f"{result}"
+            f"{agent_result.summary}"
         )
-    else:
-        return f"[Sub-agent complete]\n{result}"
+    return (
+        f"[Sub-agent {status}]\n{metadata}\n"
+        f"Structured: {structured}\n{agent_result.summary}"
+    )
 
 # ════════════════════════════════════════════════════════
 # Schema
@@ -423,11 +344,12 @@ DELEGATE_SCHEMA = {
         "name":        "delegate_task",
         "description": (
             "Delegate a complex subtask to a fresh-context sub-agent.\n"
-            "The sub-agent has independent context, can use all tools, and returns only a compact result.\n"
+            "The sub-agent has independent context, uses a host-authorized model "
+            "and capability profile, and returns a compact structured result.\n"
             "The main agent context does not grow with subtask tool-call details.\n"
             "Use for one module of a large refactor, independent search-and-summarize work,\n"
             "multi-step test flows, reading long code files, analyzing large logs, or deep web search.\n"
-            "The worker model is selected automatically for cost control; do not specify it."
+            "model_alias is a request only; host visibility, user policy, and budgets remain authoritative."
         ),
         "parameters": {
             "type": "object",
@@ -436,16 +358,66 @@ DELEGATE_SCHEMA = {
                     "type":        "string",
                     "description": "Detailed subtask description; be as specific as possible.",
                 },
-                # model_alias was removed; worker selection is controlled by code.
+                "role": {
+                    "type": "string",
+                    "description": "Focused worker role, for example security-reviewer.",
+                },
+                "instructions": {
+                    "type": "string",
+                    "description": (
+                        "Additional task instructions. These remain below host "
+                        "safety policy and cannot grant authorization."
+                    ),
+                },
+                "model_requirement": {
+                    "type": "string",
+                    "enum": ["auto", "fast", "reasoning", "vision", "same", "same_provider"],
+                    "description": "Requested model capability or routing mode.",
+                },
+                "model_alias": {
+                    "type": "string",
+                    "description": (
+                        "Optional visible Model Alias request; the host may reject "
+                        "it under user policy or budget."
+                    ),
+                },
+                "context_mode": {
+                    "type": "string",
+                    "enum": ["selected", "minimal", "none"],
+                    "description": "Parent context selection policy.",
+                },
                 "capability": {
                     "type":        "string",
-                    "enum":        ["inherited", "read_only", "no_shell"],
+                    "enum":        ["inherited", "read_only", "no_shell", "custom"],
                     "description": (
                         "Tool permission profile for the non-isolated sub-agent. "
                         "'inherited' (default) grants all parent tools; 'read_only' "
                         "removes shell/code execution and filesystem writes; "
                         "'no_shell' removes only shell/code execution."
                     ),
+                },
+                "allowed_tools": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional additional Tool allowlist intersected with the "
+                        "capability profile."
+                    ),
+                },
+                "max_tokens": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Per-task token ceiling, capped by user policy.",
+                },
+                "max_cost": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Per-task cost ceiling, capped by user policy.",
+                },
+                "max_tool_calls": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Per-task Tool Call ceiling.",
                 },
                 "verbose": {
                     "type":        "boolean",

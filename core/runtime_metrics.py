@@ -34,6 +34,12 @@ class RuntimeMetricsSnapshot:
     turn_completion_tokens: int = 0
     total_prompt_tokens: int = 0
     total_completion_tokens: int = 0
+    turn_delegations: int = 0
+    total_delegations: int = 0
+    turn_delegation_failures: int = 0
+    total_delegation_failures: int = 0
+    turn_delegation_tokens: int = 0
+    total_delegation_tokens: int = 0
     turn_failure_classes: dict[str, int] = field(default_factory=dict)
     total_failure_classes: dict[str, int] = field(default_factory=dict)
 
@@ -71,6 +77,12 @@ class RuntimeMetrics:
     turn_completion_tokens: int = 0
     total_prompt_tokens: int = 0
     total_completion_tokens: int = 0
+    turn_delegations: int = 0
+    total_delegations: int = 0
+    turn_delegation_failures: int = 0
+    total_delegation_failures: int = 0
+    turn_delegation_tokens: int = 0
+    total_delegation_tokens: int = 0
     turn_failure_classes: Counter[str] = field(default_factory=Counter)
     total_failure_classes: Counter[str] = field(default_factory=Counter)
 
@@ -81,6 +93,9 @@ class RuntimeMetrics:
         self.turn_provider_retries = 0
         self.turn_prompt_tokens = 0
         self.turn_completion_tokens = 0
+        self.turn_delegations = 0
+        self.turn_delegation_failures = 0
+        self.turn_delegation_tokens = 0
         self.turn_failure_classes.clear()
 
     def record_turn_completed(self) -> None:
@@ -110,6 +125,23 @@ class RuntimeMetrics:
             return
         self.turn_provider_retries += count
         self.total_provider_retries += count
+
+    def record_delegation(
+        self,
+        *,
+        status: str,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+    ) -> None:
+        """Record one delegated run without emitting telemetry."""
+        self.turn_delegations += 1
+        self.total_delegations += 1
+        if status != "completed":
+            self.turn_delegation_failures += 1
+            self.total_delegation_failures += 1
+        tokens = max(0, prompt_tokens) + max(0, completion_tokens)
+        self.turn_delegation_tokens += tokens
+        self.total_delegation_tokens += tokens
 
     def record_circuit_probe(self) -> None:
         self.total_circuit_probes += 1
@@ -160,6 +192,12 @@ class RuntimeMetrics:
             turn_completion_tokens=self.turn_completion_tokens,
             total_prompt_tokens=self.total_prompt_tokens,
             total_completion_tokens=self.total_completion_tokens,
+            turn_delegations=self.turn_delegations,
+            total_delegations=self.total_delegations,
+            turn_delegation_failures=self.turn_delegation_failures,
+            total_delegation_failures=self.total_delegation_failures,
+            turn_delegation_tokens=self.turn_delegation_tokens,
+            total_delegation_tokens=self.total_delegation_tokens,
             turn_failure_classes=dict(self.turn_failure_classes),
             total_failure_classes=dict(self.total_failure_classes),
         )

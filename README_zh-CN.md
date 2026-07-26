@@ -104,6 +104,7 @@ python -m pawnlogic --help
 | 能力 | 描述 |
 |------|------|
 | 多 Provider 模型 | 内置 DeepSeek、OpenAI、Anthropic 别名，并可通过 `/provider` 添加自定义 OpenAI-compatible 或 Anthropic-style Provider。 |
+| 委派 Agent | 有界 sub-agent 使用由 host 控制的动态模型路由、用户 allow/deny 策略、Token/工具/成本预算以及按能力过滤的工具。 |
 | 持久化工作区 | 基于 SQLite 的会话、可搜索历史、memory 命令、知识库、每会话 workspace 和 `~/.pawnlogic/` 下的审计日志。 |
 | 真实工具执行 | Host shell、代码沙箱、文件操作、URL fetch、浏览器自动化、Docker 容器和 CTF helper。 |
 | Trust-boundary UX | 用户模式会明确提示工具何时跨越本地主机、容器、浏览器、网络、delegate 或明文 HTTP 边界。 |
@@ -123,6 +124,8 @@ PawnLogic 自带预配置模型别名。只有 active 且已配置 API Key 的 P
 | Anthropic | `claude-opus`, `claude-sonnet`, `claude-haiku` | Anthropic Messages API 路径下的 Opus、Sonnet、Haiku 别名。 |
 
 自定义 Provider 的模型描述来自 `~/.pawnlogic/custom_providers.json`。重新运行 `/provider update <name>` 会刷新已选模型；当 Provider 没有提供可用描述时，会写入英文 fallback 描述。
+
+未指定模型请求时，委派任务会自动优先选择符合条件的快速 worker，而不会默认复用当前对话模型。`/worker` 会列出当前可通过 `/model` 看见的全部模型，包括符合条件的自定义 Provider 别名。`/agent policy` 可以 allow 或 deny 模型别名、选择默认路由模式，并限制成本或并发。显式模型请求只是偏好；Provider 可见性、用户策略、能力和预算检查始终由 host 决定。
 
 ## Provider 管理
 
@@ -164,6 +167,9 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 /extension list                   # 列出已安装的 Extension
 /extension enable <name>          # 显式启用 Extension
 /extension disable <name>         # 禁用 Extension
+/worker [alias|auto]              # 查看或设置首选 worker
+/agent policy show                # 查看委派 Agent 策略
+/agent run <role> <objective>     # 输出安全的 delegate_task 请求模板
 ```
 
 在 PawnLogic 内运行 `/help` 可查看完整命令列表。

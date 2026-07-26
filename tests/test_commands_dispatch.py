@@ -88,7 +88,7 @@ EXPECTED_VERBS_BY_MODULE: dict[str, set[str]] = {
         "/cd", "/file", "/init_project", "/workspace",
     },
     "tools": {
-        "/docker", "/pwnenv", "/webstatus", "/browserstatus", "/worker",
+        "/docker", "/pwnenv", "/webstatus", "/browserstatus", "/agent", "/worker",
         "/knowledge", "/skills", "/skillpack", "/sp",
     },
     "ctf": {
@@ -100,9 +100,9 @@ EXPECTED_ALL: set[str] = {v for verbs in EXPECTED_VERBS_BY_MODULE.values() for v
 
 
 def test_registry_has_expected_verb_count(cmd_pkg):
-    assert len(EXPECTED_ALL) == 57, "Test harness expects 57 distinct verbs"
-    assert len(cmd_pkg.COMMANDS) >= 57, (
-        f"Expected at least 57 registered commands, got {len(cmd_pkg.COMMANDS)}"
+    assert len(EXPECTED_ALL) == 58, "Test harness expects 58 distinct verbs"
+    assert len(cmd_pkg.COMMANDS) >= 58, (
+        f"Expected at least 58 registered commands, got {len(cmd_pkg.COMMANDS)}"
     )
 
 

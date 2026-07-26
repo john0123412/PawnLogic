@@ -340,6 +340,19 @@ MYRELAY_API_KEY=...
 | `/keys` | 查看所有 Key 状态 |
 | `/setkey` | 重新运行 Key 配置向导 |
 
+委派 Agent 使用与 `/model` 相同的实时模型可见性契约。没有新增路由字段时，`delegate_task` 保持自动选择快速 worker 的兼容行为。父 Agent 可以请求 `auto`、`fast`、`reasoning`、`vision`、`same`、`same_provider` 或某个可见别名，但 host 会在创建 sub-agent 前应用用户策略和预算。配置成本上限后，没有显式成本元数据的模型会 fail closed。
+
+| 命令 | 说明 |
+|------|------|
+| `/worker [alias\|auto]` | 列出动态可用模型或设置首选 worker |
+| `/agent policy show` | 显示持久化的委派 Agent 策略 |
+| `/agent policy model allow <alias>` | 将可见模型加入 allowlist |
+| `/agent policy model deny <alias>` | deny 某个可见模型 |
+| `/agent policy default auto\|same\|fast\|reasoning` | 选择默认路由模式 |
+| `/agent policy max-cost <nonnegative\|off>` | 设置或关闭委派成本上限 |
+| `/agent policy max-concurrency <1\|2>` | 设置有界并发策略 |
+| `/agent run <role> <objective>` | 输出 `delegate_task` 请求模板，不调用 Provider |
+
 ### Extension 管理
 
 | 命令 | 说明 |
@@ -466,6 +479,8 @@ PawnLogic/
 - `core/turn_state.py` 让每轮 loop 状态不进入公开 session 和持久化契约。
 - `core/provider_streams.py` 将 OpenAI-compatible 和 Anthropic stream reader 隔离在现有 `stream_request()` delta dict 输出之后。
 - `core/runtime_metrics.py` 记录内部 turn、retry、token、tool latency 和 failure-class snapshot，不新增 telemetry，也不改变默认输出。
+- `core/delegation.py` 负责 immutable task/result/policy 契约和 atomic policy 持久化；`core/model_router.py` 只选择由 host 判定为 eligible 的模型。
+- `core/delegation_runtime.py` 负责有界 child loop 和基于 capability 的 Tool 过滤；`tools/delegate_tool.py` 是兼容 Adapter。
 - `core/trust.py` 集中维护工具 trust-boundary notice 分类，同时保持现有 warning 文案和执行决策。
 - Skill-pack manifest 只是运行时发现元数据；再分发授权仍由 `THIRD_PARTY_NOTICES.md` 和 packaging 测试约束。
 
@@ -475,6 +490,8 @@ PawnLogic/
 ~/.pawnlogic/
 ├── .env                    # API 密钥（不提交）
 ├── custom_providers.json   # 自定义 Provider（不含密钥）
+├── delegation/
+│   └── policy.json         # 委派模型 allow/deny 与预算策略
 ├── pawn.db                 # SQLite 数据库
 ├── mcp_configs.json        # MCP 服务声明
 ├── skills/                 # 可选用户安装技能包

@@ -130,6 +130,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 | Capability | Description |
 |-----------|-------------|
 | Multi-provider models | Built-in DeepSeek, OpenAI, and Anthropic aliases plus custom OpenAI-compatible or Anthropic-style providers through `/provider`. |
+| Delegated agents | Bounded sub-agents use host-controlled dynamic model routing, user allow/deny policy, token/tool/cost budgets, and capability-filtered Tools. |
 | Persistent workspace | SQLite-backed sessions, searchable history, memory commands, knowledge base, per-session workspaces, and audit logs under `~/.pawnlogic/`. |
 | Real tool execution | Host shell, code sandbox, file operations, URL fetch, browser automation, Docker containers, and CTF helpers. |
 | Trust-boundary UX | User-mode warnings make it explicit when a tool crosses local host, container, browser, network, delegate, or plaintext HTTP boundaries. |
@@ -153,6 +154,14 @@ Custom provider model descriptions come from
 `~/.pawnlogic/custom_providers.json`. Re-running `/provider update <name>`
 refreshes selected models and writes English fallback descriptions for fetched
 models when the provider does not supply a useful description.
+
+Delegated tasks automatically prefer an eligible fast worker when no model
+request is supplied; they do not automatically reuse the current conversation
+model. `/worker` lists every model currently visible through `/model`, including
+eligible custom-provider aliases. `/agent policy` can allow or deny aliases,
+select the default routing mode, and cap cost or concurrency. Explicit model
+requests are preferences: provider visibility, user policy, capability, and
+budget checks remain authoritative.
 
 ## Provider Management
 
@@ -203,6 +212,9 @@ connection and response wait times.
 /extension list                   # list installed Extensions
 /extension enable <name>          # explicitly enable an Extension
 /extension disable <name>         # disable an Extension
+/worker [alias|auto]              # inspect or set the preferred worker
+/agent policy show                # inspect delegated-agent policy
+/agent run <role> <objective>     # print a safe delegate_task request template
 ```
 
 Run `/help` inside PawnLogic for the full command list.
