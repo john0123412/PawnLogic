@@ -21,6 +21,7 @@ class RuntimeContext:
     user_mode: bool
     dynamic_config: MutableMapping[str, Any]
     extension_manager: Any = None
+    context_provider: Any = None
 
     @classmethod
     def from_current(

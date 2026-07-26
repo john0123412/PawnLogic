@@ -39,6 +39,15 @@ from config import (
 )
 from utils.ansi import c, BOLD, DIM, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
 from core.api_client import stream_request, ensure_tool_call_id
+from core.context_manager import (
+    ContextManager,
+    ContextState,
+    context_state_from_messages,
+    context_state_from_history,
+    replace_context_state_from_history,
+    select_host_parent_context,
+    without_context_state_messages,
+)
 from core.context_window import (
     _ctx_chars as _ctx_chars,
     _drop_dangling_tool_call_messages as _drop_dangling_tool_call_messages,
@@ -48,7 +57,10 @@ from core.state import state as _runtime_state, runtime_config
 from core.runtime_context import RuntimeContext, current_runtime_context
 from core.output import runtime_print as print
 from core.runtime_metrics import RuntimeMetrics, RuntimeMetricsSnapshot
-from core.prompt_builder import build_session_prompt
+from core.prompt_builder import (
+    build_session_prompt,
+    format_context_state_for_prompt,
+)
 from core.tool_calls import extract_tool_calls
 from core.tool_executor import (
     ToolExecutionOutcome,
@@ -944,6 +956,7 @@ class AgentSession:
         # Sliding window + history summary state.
         self._history_summary: str = ""          # current effective history summary
         self._summary_turn_count: int = 0        # turn count when summary was last generated
+        self.runtime_context.context_provider = self._select_delegation_context
         # Call last because it depends on all attributes above.
         self._reset_system_prompt()
 
@@ -958,6 +971,7 @@ class AgentSession:
             self.runtime_context = ctx
         else:
             ctx.update_paths(cwd=self.cwd, workspace_dir=self.workspace_dir)
+        ctx.context_provider = self._select_delegation_context
         ctx.sync_legacy_state()
         sync_runtime_context(ctx)
 
@@ -1291,6 +1305,11 @@ class AgentSession:
             if summary_text:
                 self._history_summary = summary_text
                 self._summary_turn_count = current_turn_count
+                self.messages[:] = replace_context_state_from_history(
+                    self.messages,
+                    summary=summary_text,
+                    current_phase=str(self.current_phase),
+                )
                 logger.info(
                     "[PawnLogic] Context pruning triggered. Summary updated. "
                     "Current dynamic window turns: {} | model={}",
@@ -1306,53 +1325,44 @@ class AgentSession:
             )
 
     def _build_api_messages(self) -> list:
-        """Build the message list sent to the LLM as a sliding-window view.
-
-        Does not mutate the original ``self.messages`` list; returns a trimmed copy.
-
-        Structure:
-          [0] system prompt
-          [1..2] original task goal (first 1-2 user+assistant turns, never trimmed)
-          [3] assistant: history summary block, when present
-          [4..] latest ctx_sliding_turns full iterations
-        """
-        msgs = self.messages
-        if len(msgs) <= 1:
-            return list(msgs)
-
-        cfg     = _dynamic_config()
-        sliding = cfg.get("ctx_sliding_turns", 5)
-
-        turns = self._count_turns(msgs)
-        total_turns = len(turns)
-
-        # No trimming needed when turn count is below the threshold.
-        if total_turns <= sliding + 2:
-            return _drop_dangling_tool_call_messages(msgs)
-
-        # Anchor: always keep the first 2 turns as the task goal.
-        anchor_end = turns[1][1] if len(turns) >= 2 else (turns[0][1] if turns else 1)
-        anchor_msgs = msgs[:anchor_end]  # system + first 2 turns
-
-        # Sliding window: latest N turns.
-        window_start_idx = turns[-sliding][0] if total_turns >= sliding else turns[0][0]
-
-        # Assemble.
-        result = list(anchor_msgs)
-
-        if self._history_summary:
-            result.append({
-                "role":    "assistant",
-                "content": f"📝 [History Summary — earlier iterations compressed]\n{self._history_summary}",
-                "_pinned": True,
-            })
-
-        # Append sliding-window messages and skip the middle span.
-        for i, m in enumerate(msgs[anchor_end:], start=anchor_end):
-            if i >= window_start_idx:
-                result.append(m)
-
+        """Build one bounded provider view without mutating canonical history."""
+        cfg = _dynamic_config()
+        manager = ContextManager(
+            max_chars=int(cfg["ctx_max_chars"]),
+            trim_to=int(cfg["ctx_trim_to"]),
+        )
+        state = self._structured_context_state()
+        envelope = manager.build(without_context_state_messages(self.messages), state=state)
+        result = list(envelope.messages)
+        state_block = format_context_state_for_prompt(state)
+        if state_block:
+            turns = self._count_turns(result)
+            insert_at = turns[0][1] if turns else min(1, len(result))
+            result.insert(
+                insert_at,
+                {
+                    "role": "assistant",
+                    "content": state_block,
+                    "_pinned": True,
+                },
+            )
         return _drop_dangling_tool_call_messages(result)
+
+    def _structured_context_state(self) -> ContextState:
+        return context_state_from_messages(self.messages) or context_state_from_history(
+            self.messages,
+            summary=str(getattr(self, "_history_summary", "") or ""),
+            current_phase=str(getattr(self, "current_phase", "")),
+        )
+
+    def _select_delegation_context(self, context_mode: str):
+        cfg = _dynamic_config()
+        return select_host_parent_context(
+            state=self._structured_context_state(),
+            context_mode=context_mode,
+            max_chars=int(cfg["ctx_max_chars"]),
+            trim_to=int(cfg["ctx_trim_to"]),
+        )
 
     # ════════════════════════════════════════════════════
     # Module 2: auto-intuition retrieval helper.
@@ -1643,16 +1653,6 @@ class AgentSession:
         # Sliding window: compute turn count and update history summary when needed.
         _current_turns = len(self._count_turns(self.messages))
         self._maybe_update_summary(self.messages, _current_turns)
-
-        dropped = _trim_and_compact_context(self.messages)
-        if dropped:
-            print(c(YELLOW,
-                    f"  ⚠ Context too long; compacted oldest {dropped} messages into a summary (Tool Clearing)"
-                    ))
-            logger.warning(
-                "Context compacted (Tool Clearing) | session={} compacted={} model={}",
-                self.session_id[:8], dropped, self.model_alias,
-            )
 
         ok, env_name = validate_api_key(self.model_alias)
         if not ok:

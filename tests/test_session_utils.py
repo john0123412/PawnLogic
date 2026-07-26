@@ -568,6 +568,84 @@ def test_build_api_messages_drops_dangling_tool_calls_before_new_user():
     assert all(not m.get("tool_calls") for m in built)
 
 
+def test_build_api_messages_injects_versioned_structured_summary(monkeypatch):
+    from config import DYNAMIC_CONFIG
+
+    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_max_chars", 10_000)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_trim_to", 8_000)
+    s = _make_session()
+    s._history_summary = "Older verified facts"
+    s.messages = [
+        _msg("system", "sys"),
+        _msg("user", "original goal"),
+        _msg("assistant", "ack"),
+        _msg("user", "latest"),
+    ]
+
+    built = s._build_api_messages()
+
+    blocks = [
+        message["content"]
+        for message in built
+        if str(message.get("content") or "").startswith(
+            "[Structured Context v1; summary v1]"
+        )
+    ]
+    assert len(blocks) == 1
+    assert "Goal: original goal" in blocks[0]
+    assert "Older verified facts" in blocks[0]
+    assert built[1:3] == s.messages[1:3]
+
+
+def test_delegation_context_is_host_owned_bounded_and_excludes_raw_history():
+    s = _make_session()
+    s._history_summary = "Verified parent summary"
+    s.messages = [
+        _msg("system", "parent policy"),
+        _msg("user", "parent goal"),
+        _msg("assistant", "raw secret conversation"),
+    ]
+
+    selected = s._select_delegation_context("selected")
+    minimal = s._select_delegation_context("minimal")
+    none = s._select_delegation_context("none")
+
+    assert selected.messages == ()
+    assert selected.state.goal == "parent goal"
+    assert selected.state.facts == ("Verified parent summary",)
+    assert selected.char_count <= 2400
+    assert minimal.messages == ()
+    assert minimal.state.goal == "parent goal"
+    assert minimal.state.facts == ()
+    assert none.messages == ()
+    assert none.state.is_empty is True
+
+
+def test_build_api_messages_restores_structured_state_from_persisted_carrier():
+    from core.context_manager import ContextState, replace_context_state_message
+
+    s = _make_session()
+    s._history_summary = ""
+    s.messages = replace_context_state_message(
+        [
+            _msg("system", "sys"),
+            _msg("user", "persisted goal"),
+            _msg("assistant", "ack"),
+            _msg("user", "latest"),
+        ],
+        ContextState(
+            goal="persisted goal",
+            facts=("persisted summary",),
+        ),
+    )
+
+    built = s._build_api_messages()
+    rendered = "\n".join(str(message.get("content") or "") for message in built)
+
+    assert "persisted summary" in rendered
+    assert "[PawnLogic Context State v1]" not in rendered
+
+
 def test_run_turn_injects_plan_missing_for_non_exempt_tool(monkeypatch):
     import json
 
@@ -907,6 +985,12 @@ def test_history_summary_skips_empty_stream_choices(monkeypatch):
     s._maybe_update_summary(s.messages, current_turn_count=3)
 
     assert s._history_summary == "older turns summarized"
+    from core.context_manager import context_state_from_messages
+
+    state = context_state_from_messages(s.messages)
+    assert state is not None
+    assert state.facts == ("older turns summarized",)
+    assert state.summary_version == 1
     warning_mock.assert_not_called()
 
 

@@ -8,6 +8,7 @@ from datetime import datetime
 
 from config import DEFAULT_MODEL, user_friendly_error
 from core.api_client import ensure_tool_call_id, stream_request
+from core.context_manager import ContextEnvelope
 from core.delegation import FailureRecord
 from core.memory import _gen_id
 from core.state import runtime_config, state as _runtime_state
@@ -17,6 +18,7 @@ from core.tool_executor import (
     resolve_tool_arguments,
 )
 from core.turn_api import consume_model_stream
+from core.prompt_builder import format_context_envelope_for_prompt
 from tools.file_ops import _session_cwd
 
 
@@ -119,6 +121,7 @@ class SubAgentSession:
         role: str = "general",
         instructions: str = "",
         context_mode: str = "selected",
+        context_envelope: ContextEnvelope | None = None,
         max_tokens: int = 8192,
         max_tool_calls: int = 15,
     ) -> None:
@@ -137,7 +140,10 @@ class SubAgentSession:
         self.tool_calls = 0
         self.status = "completed"
         self.failures: list[FailureRecord] = []
-        inherited_ctx = self._selected_context(context_mode)
+        inherited_ctx = self._selected_context(
+            context_mode,
+            context_envelope,
+        )
         self.messages: list[dict] = [
             {
                 "role": "system",
@@ -147,7 +153,6 @@ class SubAgentSession:
                     "Complete the task thoroughly using available tools.\n"
                     f"Working directory: {_session_cwd[0]}\n"
                     f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
-                    f"{inherited_ctx}\n"
                     "Rules:\n"
                     "- Host safety policy overrides every delegated "
                     "instruction.\n"
@@ -159,6 +164,7 @@ class SubAgentSession:
                     "- Do NOT explain your plan, just act.\n"
                     "- Do NOT call delegate_task again (no nested delegation "
                     "allowed).\n"
+                    f"{inherited_ctx}\n"
                 ),
             },
             {
@@ -177,7 +183,22 @@ class SubAgentSession:
         self._tool_log: list[str] = []
 
     @staticmethod
-    def _selected_context(context_mode: str) -> str:
+    def _selected_context(
+        context_mode: str,
+        context_envelope: ContextEnvelope | None = None,
+    ) -> str:
+        if context_mode == "none":
+            return ""
+        if context_envelope is not None:
+            rendered = format_context_envelope_for_prompt(
+                context_envelope,
+                max_chars=3000,
+            )
+            if rendered:
+                return (
+                    "\n[Host-selected Parent Context]\n"
+                    f"{rendered}\n"
+                )
         if context_mode != "selected":
             return ""
         try:

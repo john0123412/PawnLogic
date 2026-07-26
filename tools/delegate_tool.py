@@ -54,6 +54,7 @@ from core.model_router import ModelRouter, RoutingDecision
 from core.state import (
     state as _runtime_state, get_dynamic_config_value,
 )
+from core.runtime_context import current_runtime_context
 from core.trust import subagent_notice
 from utils.ansi      import c, YELLOW, GRAY, GREEN, MAGENTA
 
@@ -211,6 +212,18 @@ def _rejected_result(decision: RoutingDecision) -> str:
     )
 
 
+def _host_parent_context(task: AgentTask):
+    """Resolve child context only through the active host RuntimeContext."""
+    context = current_runtime_context()
+    provider = getattr(context, "context_provider", None)
+    if not callable(provider):
+        return None
+    try:
+        return provider(task.context_mode)
+    except (TypeError, ValueError):
+        return None
+
+
 def tool_delegate_task(a: dict) -> str:
     """Run a structured delegated task through host-owned model policy."""
     if not str(a.get("objective") or a.get("task_description") or "").strip():
@@ -265,16 +278,22 @@ def tool_delegate_task(a: dict) -> str:
         ModelRouter.effective_max_tokens(task, policy)
         or task.budget.max_tokens
     )
+    session_options = {
+        "role": task.role,
+        "instructions": task.instructions,
+        "context_mode": task.context_mode,
+        "max_tokens": effective_tokens,
+        "max_tool_calls": task.budget.max_tool_calls,
+    }
+    parent_context = _host_parent_context(task)
+    if parent_context is not None:
+        session_options["context_envelope"] = parent_context
     sub = _SubAgentSession(
         task.objective,
         worker_model,
         capability=task.capability_profile,
         allowlist=task.allowed_tools or None,
-        role=task.role,
-        instructions=task.instructions,
-        context_mode=task.context_mode,
-        max_tokens=effective_tokens,
-        max_tool_calls=task.budget.max_tool_calls,
+        **session_options,
     )
 
     _delegate_ctx.depth = current_depth + 1

@@ -91,6 +91,16 @@ These contracts are more important than local refactoring convenience:
   `~/.pawnlogic/delegation/policy.json`. Legacy `delegate_task` calls retain
   automatic fast-worker routing; explicit aliases and prompt requests never
   bypass host visibility, policy, Tool capability, or budget checks.
+- Structured context uses versioned `ContextState` and `ContextEnvelope`
+  contracts. The current state round-trips through the existing pinned
+  assistant-message persistence shape; provider payloads receive a rendered
+  block, not the JSON carrier. Tool Call groups remain atomic during trimming.
+- `ctx_max_chars` triggers selection and `ctx_trim_to` is the target. Protected
+  anchors, pins, Tool groups, or structured state are never silently corrupted
+  to satisfy the target; an over-budget envelope is explicit.
+- Delegated context is resolved through the active host RuntimeContext.
+  `none`, `minimal`, and `selected` cannot be forged by Tool arguments, and raw
+  parent system messages/full history are not copied to child Providers.
 - The Extension Runtime uses `pawnlogic.extensions` package entry points.
   Discovery reads metadata without loading Extension code; explicit enablement
   owns validation, contribution registration, rollback, persisted state, and
@@ -141,6 +151,10 @@ These contracts are more important than local refactoring convenience:
   writes go through `RuntimeContext`.
 - `core/runtime_metrics.py` owns internal metrics snapshots. Metrics are local
   runtime state only.
+- `core/context_manager.py` owns structured state, prompt-budget counting,
+  atomic Tool-group selection, versioned state carriers, and bounded host
+  projections. `core/context_window.py` retains the old helper exports as
+  compatibility Adapters.
 - `core/delegation.py` owns immutable delegated task/result/usage/failure and
   model-policy contracts plus atomic policy persistence.
 - `core/model_router.py` owns dynamic delegated-model eligibility and routing

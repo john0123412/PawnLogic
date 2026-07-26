@@ -54,6 +54,9 @@
 ### 5. 上下文管理
 
 - **滑动窗口**：自动摘要旧历史，防止长任务 API 超时
+- **结构化状态**：版本化的目标、事实、决策、artifact、失败尝试、开放问题、阶段和下一步动作通过现有 session store 在保存/加载后保留
+- **有界选择**：content、reasoning、Tool 参数和 Tool 结果都会计入 `ctx_max_chars`；溢出时以 `ctx_trim_to` 为目标，且不会拆分 Tool Call group
+- **委派上下文**：`none`、`minimal` 和 `selected` 由 host 解析；原始父级 system prompt 和完整历史不会复制给 child
 - `/compact` — 手动压缩上下文
 - `/clear` — 清空上下文（保留 Pin 消息）
 - `/pin [n]` — 固定最近 n 条消息（默认 2）
