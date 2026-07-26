@@ -45,7 +45,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: docs-${{ github.ref }}
+  group: docs-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
