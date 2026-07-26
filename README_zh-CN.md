@@ -84,6 +84,9 @@ python -m pawnlogic --help
 ```
 
 默认 `pawn` 使用用户友好的输出，会隐藏原始工具调用细节、解析器诊断、详细 reasoning 流和底层 API 错误。需要详细诊断时，使用 `pawn --debug` 或 `/mode`。
+使用 `--json` 时，每一行都是独立的 NDJSON record。现有 `text`、`chunk` 和 `json`
+record 保持稳定；带版本的 Agent lifecycle record 使用新增的
+`{"type":"event","data":{...}}` envelope。
 
 ## 新特性
 
@@ -104,7 +107,7 @@ python -m pawnlogic --help
 | 能力 | 描述 |
 |------|------|
 | 多 Provider 模型 | 内置 DeepSeek、OpenAI、Anthropic 别名，并可通过 `/provider` 添加自定义 OpenAI-compatible 或 Anthropic-style Provider。 |
-| 委派 Agent | 有界 sub-agent 使用由 host 控制的动态模型路由、用户 allow/deny 策略、Token/工具/成本预算以及按能力过滤的工具。 |
+| 委派 Agent | 有界 sub-agent 使用由 host 控制的动态模型路由、用户 allow/deny 策略、Token/工具/成本预算、按能力过滤的工具，以及带 task lineage 的确定性串行编排。 |
 | 结构化上下文 | 版本化任务状态、保持 Tool Call 完整性的裁剪、`ctx_trim_to` 目标和由 host 选择的委派上下文，使长会话保持有界且不会复制原始父级历史。 |
 | 持久化工作区 | 基于 SQLite 的会话、可搜索历史、memory 命令、有界且携带来源信息的知识检索、每会话 workspace 和 `~/.pawnlogic/` 下的审计日志。 |
 | 真实工具执行 | Host shell、代码沙箱、文件操作、URL fetch、浏览器自动化、Docker 容器和 CTF helper。 |
@@ -127,6 +130,10 @@ PawnLogic 自带预配置模型别名。只有 active 且已配置 API Key 的 P
 自定义 Provider 的模型描述来自 `~/.pawnlogic/custom_providers.json`。重新运行 `/provider update <name>` 会刷新已选模型；当 Provider 没有提供可用描述时，会写入英文 fallback 描述。
 
 未指定模型请求时，委派任务会自动优先选择符合条件的快速 worker，而不会默认复用当前对话模型。`/worker` 会列出当前可通过 `/model` 看见的全部模型，包括符合条件的自定义 Provider 别名。`/agent policy` 可以 allow 或 deny 模型别名、选择默认路由模式，并限制成本或并发。显式模型请求只是偏好；Provider 可见性、用户策略、能力和预算检查始终由 host 决定。
+结构化 task 和 result 携带 task/parent ID、deadline、usage 与 failure record。
+共享编排预算通过原子方式预留，取消采用协作式机制。当前 core orchestrator 有意保持
+串行：持久化的 `max-concurrency=2` 只是未来隔离 executor 的 policy ceiling，
+不授权当前共享 Workspace 和 RuntimeContext 并发执行。
 
 ## Provider 管理
 
@@ -213,6 +220,9 @@ Extension 元数据。PawnLogic 可以在不加载 Extension 代码的情况下�
 
 已启用名称存储在 `~/.pawnlogic/extensions/enabled.json`。Extension 启动失败不会阻断
 core 启动；贡献名称发生冲突时会拒绝注册，不会覆盖内置 Tool 或命令。
+依赖较重或安全敏感的 Extension 必须独立打包和发布。Core wheel 不包含
+`pawnlogic_security` package、security console script 或 security dependency；
+即使安装了这类 distribution，仍需通过 `/extension enable <name>` 明确授权。
 
 ## MCP 工具集成
 

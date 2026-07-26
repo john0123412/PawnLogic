@@ -7,6 +7,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Added explicit Extension discovery and lifecycle control through
+  `pawnlogic.extensions`, with disabled-by-default metadata discovery,
+  transactional contribution ownership, rollback, and startup isolation.
+- Added host-owned delegated-model policy, structured context, provenance-aware
+  knowledge retrieval, versioned Agent Events, and deterministic serial
+  multi-Agent orchestration with task lineage, deadlines, cooperative
+  cancellation, and atomic token/Tool/cost budget claims.
+- Added dynamic completion for delegated-agent allow/deny policy commands and
+  documented the additive NDJSON Agent Event envelope.
+
+### Security
+- Added shared HTTP(S) Network Policy enforcement for credential-bearing,
+  metadata, special-address, private-target, DNS, and redirect decisions.
+- Kept proposed security Extensions independently packaged, published, and
+  explicitly enabled; the core distribution contains no security package,
+  security console script, or security dependency.
+- Kept multi-Agent execution serial until Workspace and RuntimeContext
+  isolation tests can prove concurrency above one safe.
+
+### Tests
+- Added installed-layout Extension compatibility, bounded delegation,
+  structured context, knowledge fallback, Agent Event redaction, serial
+  orchestration, and distribution-content regression coverage.
+
 ## [0.2.3] - 2026-07-14
 
 ### Added

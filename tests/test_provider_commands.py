@@ -138,6 +138,8 @@ def test_pawn_completer_includes_live_visible_models_without_rebuild():
     assert "/model 1:gpt-5.5" in words
     assert meta_by_word["/model 1:gpt-5.5"] == "Dynamically fetched model"
     assert "/model 1:gpt-5.5" not in completer.meta_dict
+    assert "/agent policy model allow 1:gpt-5.5" in words
+    assert "/agent policy model deny 1:gpt-5.5" in words
 
 
 def test_packaged_cli_completer_includes_live_visible_models_without_rebuild():
@@ -156,6 +158,8 @@ def test_packaged_cli_completer_includes_live_visible_models_without_rebuild():
     assert "/model 1:gpt-5.5" in words
     assert meta_by_word["/model 1:gpt-5.5"] == "Dynamically fetched model"
     assert "/model 1:gpt-5.5" not in completer.meta_dict
+    assert "/agent policy model allow 1:gpt-5.5" in words
+    assert "/agent policy model deny 1:gpt-5.5" in words
 
 
 def test_packaged_cli_completer_refreshes_extension_names_and_subcommands_live():

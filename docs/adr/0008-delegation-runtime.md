@@ -440,3 +440,19 @@ The Delegation Runtime implementation must add contract tests for:
 The ADR itself is documentation-only. Its acceptance does not change the
 current version or current public behavior until the planned implementation
 and tests are delivered.
+
+## Implementation status
+
+Implemented on the 0.3.0 stacked development branches. `core.delegation` owns
+task/result/usage/policy values, `core.model_router` owns model eligibility,
+`core.delegation_runtime` owns the bounded child loop, and
+`core.agent_orchestrator` owns serial scheduling, cooperative cancellation, and
+atomic shared budget claims. `tools.delegate_tool` remains the compatibility
+Adapter and keeps its human text envelope while adding task lineage to its
+structured result and Agent Events.
+
+Execution deliberately remains serial. The policy accepts a maximum concurrency
+ceiling of two for forward compatibility, but the current orchestrator rejects
+values above one until Workspace and RuntimeContext isolation tests pass. No task
+graph is introduced because there are not yet two concrete callers that require
+one.

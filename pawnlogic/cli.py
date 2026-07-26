@@ -301,6 +301,11 @@ HELP_TEXT = f"""
   {c(MAGENTA, "/memorize [topic]")} Save a summary to knowledge base
   {c(MAGENTA, "/knowledge [query]")} Search knowledge entries
 
+{c(BOLD, "Delegated Agents")}
+  {c(CYAN, "/worker [alias|auto]")} Select the preferred visible worker model
+  {c(CYAN, "/agent policy show")} Show delegated-agent routing policy
+  {c(CYAN, "/agent run <role> <objective>")} Prepare a safe delegation request
+
 {c(BOLD, "Extensions")}
   {c(CYAN, "/extension list")}        List installed Extensions
   {c(CYAN, "/extension status [name]")} Show Extension state
@@ -1138,7 +1143,10 @@ async def _main_impl():
         _w = f"/failures {_sub}"
         _all_words.append(_w)
         _all_meta[_w] = f"Failure records {_sub}"
-    _all_words.extend(["/agent policy show", "/agent run",
+    _all_words.extend(["/agent policy show",
+                       "/agent policy model allow", "/agent policy model deny",
+                       "/agent policy default", "/agent policy max-cost",
+                       "/agent policy max-concurrency", "/agent run",
                        "/worker auto", "/skills view", "/skills path", "/skills packs",
                        "/skillpack list", "/skillpack rescan", "/sp list", "/sp rescan",
                        "/sp sync", "/sp install",
@@ -1148,6 +1156,11 @@ async def _main_impl():
                        "/workspace cleanup plan", "/workspace cleanup execute",
                        "/workspace cleanup restore"])
     _all_meta["/agent policy show"] = "Show delegated-agent model policy"
+    _all_meta["/agent policy model allow"] = "Allow a visible worker model"
+    _all_meta["/agent policy model deny"] = "Deny a visible worker model"
+    _all_meta["/agent policy default"] = "Set default delegated-agent routing"
+    _all_meta["/agent policy max-cost"] = "Set delegated-agent cost ceiling"
+    _all_meta["/agent policy max-concurrency"] = "Set concurrency policy ceiling"
     _all_meta["/agent run"] = "Prepare a delegated-agent request"
     _all_meta["/worker auto"] = "Restore automatic worker routing"
     _all_meta["/skills view"] = "Show full skill file"

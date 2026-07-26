@@ -44,3 +44,15 @@ Areas of particular concern for this project:
 - **Path traversal** — Docker file mounts are workspace-bound by default, including read-only mounts; write-capable file operations are resolved inside the workspace jail
 - **Docker escape** — containers run with `network_mode=none`, memory/CPU/PID limits
 - **CTF workflow boundaries** — CTF tools and skill packs are intended for legal CTFs, authorized labs, and systems you own or have permission to test
+- **Network targets** — built-in HTTP(S) adapters evaluate normalized targets,
+  DNS answers, and every redirect through the shared Network Policy; special
+  address ranges are denied and private targets require explicit authorization
+- **Extension activation** — installed Extensions remain disabled until explicit
+  enablement; compatibility and contribution names are validated before code is
+  allowed to register capabilities
+- **Security distribution boundary** — proposed penetration-testing Extensions
+  must be packaged and published independently from core, require a valid
+  engagement scope, and remain subject to host Operation/Network Policy
+- **Delegated execution** — model requests cannot expand Provider, Tool, network,
+  or cost authority; orchestration remains serial until shared Workspace and
+  RuntimeContext isolation has dedicated proof

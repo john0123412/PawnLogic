@@ -94,6 +94,9 @@ python -m pawnlogic --help
 Default `pawn` uses user-friendly output and hides raw tool-call internals,
 parser diagnostics, detailed reasoning streams, and low-level API errors.
 Use `pawn --debug` or `/mode` when you need detailed diagnostics.
+With `--json`, each line is an independent NDJSON record. Existing `text`,
+`chunk`, and `json` records remain stable; versioned Agent lifecycle records
+use the additive `{"type":"event","data":{...}}` envelope.
 
 ## What's New
 
@@ -130,7 +133,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 | Capability | Description |
 |-----------|-------------|
 | Multi-provider models | Built-in DeepSeek, OpenAI, and Anthropic aliases plus custom OpenAI-compatible or Anthropic-style providers through `/provider`. |
-| Delegated agents | Bounded sub-agents use host-controlled dynamic model routing, user allow/deny policy, token/tool/cost budgets, and capability-filtered Tools. |
+| Delegated agents | Bounded sub-agents use host-controlled dynamic model routing, user allow/deny policy, token/tool/cost budgets, capability-filtered Tools, and deterministic serial orchestration with task lineage. |
 | Structured context | Versioned task state, Tool-call-safe trimming, `ctx_trim_to` targeting, and host-selected delegated context keep long sessions bounded without copying raw parent history. |
 | Persistent workspace | SQLite-backed sessions, searchable history, memory commands, bounded provenance-aware knowledge retrieval, per-session workspaces, and audit logs under `~/.pawnlogic/`. |
 | Real tool execution | Host shell, code sandbox, file operations, URL fetch, browser automation, Docker containers, and CTF helpers. |
@@ -163,6 +166,12 @@ eligible custom-provider aliases. `/agent policy` can allow or deny aliases,
 select the default routing mode, and cap cost or concurrency. Explicit model
 requests are preferences: provider visibility, user policy, capability, and
 budget checks remain authoritative.
+Structured tasks and results carry task/parent IDs, deadlines, usage, and
+failure records. Shared orchestration budgets are reserved atomically, and
+cancellation is cooperative. The current core orchestrator is deliberately
+serial: a persisted `max-concurrency` value of `2` is a policy ceiling for a
+future isolated executor, not permission to run the current shared Workspace
+and RuntimeContext concurrently.
 
 ## Provider Management
 
@@ -278,6 +287,10 @@ Extension automatically.
 Enabled names are stored under `~/.pawnlogic/extensions/enabled.json`.
 Extension startup failures are isolated from core startup, and contribution
 name conflicts are rejected instead of overwriting built-in Tools or commands.
+Dependency-heavy or security-sensitive Extensions must remain independently
+packaged and published. The core wheel contains no `pawnlogic_security` package,
+security console script, or security dependency; installing such a distribution
+would still require explicit `/extension enable <name>` authorization.
 
 ## MCP Tool Integration
 

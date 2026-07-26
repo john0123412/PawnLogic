@@ -97,7 +97,7 @@
 |--------|------|-----------|-------|------------|
 | `pawnlogic/cli.py` | CLI facade | `run()`, `PawnCompleter` | `test_cli_startup.py`, `test_cli_transcripts.py` | Public entry point. Live model and Extension completions; Extension startup failures remain non-fatal. |
 | `pawnlogic/extension_host.py` | Extension startup Adapter | `ExtensionHost` | `test_extension_host.py` | One process-level manager; persisted activation and shutdown failures are isolated. |
-| `pawnlogic/completion_sources.py` | Live completion merge | `merge_completion_sources()` | `test_completion_sources.py`, `test_provider_commands.py` | Static completion inputs are immutable; model and Extension sources are read live. |
+| `pawnlogic/completion_sources.py` | Live completion merge | `merge_completion_sources()` | `test_completion_sources.py`, `test_provider_commands.py` | Static completion inputs are immutable; model, delegated-policy alias, and Extension sources are read live. |
 | `pawnlogic/startup.py` | Bootstrap | `setup_environment()` | `test_cli_startup.py` | First-run, env, debug mode. |
 | `pawnlogic/repl.py` | REPL loop | `run_repl()` | `test_cli_startup.py` | Signal handling, input restoration. |
 
