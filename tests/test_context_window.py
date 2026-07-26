@@ -69,6 +69,26 @@ def test_trim_compacts_old_messages_and_preserves_tail(monkeypatch):
     assert [m["content"] for m in msgs[-10:]] == [f"tail-{i}" for i in range(10)]
 
 
+def test_trim_applies_configured_target_without_changing_message_shapes(monkeypatch):
+    from config import DYNAMIC_CONFIG
+
+    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_max_chars", 1_000)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_trim_to", 300)
+    tail = [_msg("user", f"t{i}") for i in range(10)]
+    msgs = [
+        _msg("system", "sys"),
+        *[_msg("user", f"old-{i}-" + ("x" * 500)) for i in range(12)],
+        *tail,
+    ]
+
+    dropped = _trim_and_compact_context(msgs)
+
+    assert dropped == 12
+    assert _ctx_chars(msgs) <= DYNAMIC_CONFIG["ctx_trim_to"]
+    assert set(msgs[1]) == {"role", "content", "_pinned"}
+    assert msgs[-10:] == tail
+
+
 def test_trim_returns_zero_when_too_few_messages(monkeypatch):
     from config import DYNAMIC_CONFIG
 

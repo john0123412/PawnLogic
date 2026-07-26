@@ -22,6 +22,32 @@ def _ctx_chars(msgs: list) -> int:
     )
 
 
+def _bounded_summary_content(
+    summary_content: str,
+    *,
+    retained_messages: list,
+    cfg: dict,
+) -> str:
+    """Fit a compacted summary into a valid configured trim target."""
+    try:
+        max_chars = int(cfg["ctx_max_chars"])
+        trim_to = int(cfg["ctx_trim_to"])
+    except (KeyError, TypeError, ValueError):
+        return summary_content
+
+    if trim_to <= 0 or trim_to >= max_chars:
+        return summary_content
+
+    summary_budget = max(trim_to - _ctx_chars(retained_messages), 0)
+    if len(summary_content) <= summary_budget:
+        return summary_content
+    if summary_budget == 0:
+        return ""
+    if summary_budget == 1:
+        return "…"
+    return summary_content[: summary_budget - 1] + "…"
+
+
 def _trim_and_compact_context(msgs: list) -> int:
     """
     Context compaction (Tool Clearing).
@@ -64,6 +90,12 @@ def _trim_and_compact_context(msgs: list) -> int:
             compacted_lines.append(f"  └─ tool_calls: {', '.join(names)}")
 
     summary_content = "📝 [Context Compacted]:\n" + "\n".join(compacted_lines)
+    retained_messages = [msgs[0], *msgs[cutoff:]]
+    summary_content = _bounded_summary_content(
+        summary_content,
+        retained_messages=retained_messages,
+        cfg=cfg,
+    )
     summary_msg = {
         "role": "assistant",
         "content": summary_content,

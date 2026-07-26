@@ -13,6 +13,8 @@
 | `core/session_tool_loop.py` | Turn tool loop | `TurnToolLoop.execute_batch()` | `test_tool_executor.py`, `test_turn_guards.py` | Batch execution, Plan guard, audit, metrics. Single Interface for all tool dispatch. |
 | `core/session_snapshot.py` | Persistence Interface | `save_snapshot()` / `load_snapshot()` | `test_memory_reliability.py` | Manual and autosave share one snapshot shape. Atomic writes. |
 | `core/message_history.py` | Message ordering | `MessageHistory` class | `test_session_utils.py` | Preserves assistant/tool message order, `reasoning_content`, pinned messages. |
+| `core/context_manager.py` | Structured context Interface | `ContextManager`, `ContextState`, `ContextEnvelope` | `test_context_manager.py`, `test_context_window.py` | Counts content/reasoning/Tool data, preserves atomic Tool groups and protected state, persists versioned state through an existing pinned message carrier, and reports protected over-budget context without corruption. |
+| `core/context_window.py` | Context compatibility Adapter | `_ctx_chars()`, `_trim_and_compact_context()` | `test_context_window.py`, `test_session_utils.py` | Legacy exports remain stable; compaction targets `ctx_trim_to` when retained protected content permits it. |
 | `core/runtime_metrics.py` | Counter owner | `RuntimeMetrics` class | `test_runtime_metrics.py` | Sole owner of turn, tool, and API call counters. Snapshots are immutable. |
 | `core/delegation.py` | Delegation contracts | `AgentTask`, `AgentResult`, `DelegationPolicyStore` | `test_delegation_contracts.py` | Immutable bounded task/result values. Policy writes are atomic and secret fields are rejected. |
 | `core/model_router.py` | Delegated model policy | `ModelRouter.route()` | `test_model_router.py` | Only visible, configured, allowed, capability-matching, budget-eligible models can be selected. |
@@ -104,6 +106,7 @@ implementations already exist.
 |--------|--------------------|----------------|--------|
 | Extension Runtime | `ExtensionManager` over stable extension contracts | Python entry-point discovery Adapter; explicit enablement; transactional contribution registration | Core Module and CLI/command Adapters implemented |
 | Delegation Runtime | `AgentTask`, `AgentResult`, `DelegationModelPolicy`, `ModelRouter`, `SubAgentSession` | Legacy `delegate_task` compatibility Adapter; Provider-backed execution Adapter | Core Module and command/Tool Adapters implemented |
+| Structured Context | `ContextManager`, `ContextState`, `ContextEnvelope` | Main-session provider view; host-owned delegated projection; legacy context-window Adapters | Core Module and main/delegation Adapters implemented |
 | Network Policy | `NetworkPolicy.evaluate()` over normalized `NetworkOperation` values | DNS resolver plus web, browser, MCP, and Docker caller Adapters | Core Module and caller Adapters implemented |
 | Knowledge Retrieval | Durable knowledge-record and retrieval Interface | SQLite source-of-truth Adapter; optional Redis cache/vector Adapter | Planned |
 | Agent Event | Typed event stream for conversations, tools, delegation, budgets, and evidence | CLI, NDJSON, and optional Streamlit rendering Adapters | Planned |

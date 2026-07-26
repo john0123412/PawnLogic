@@ -54,6 +54,9 @@
 ### 5. Context Management
 
 - **Sliding window** — auto-summarizes old history to prevent API timeouts
+- **Structured state** — versioned goal, facts, decisions, artifacts, failed attempts, open questions, phase, and next actions survive save/load through the existing session store
+- **Bounded selection** — content, reasoning, Tool arguments, and Tool results count toward `ctx_max_chars`; overflow targets `ctx_trim_to` without splitting Tool Call groups
+- **Delegated context** — `none`, `minimal`, and `selected` are resolved by the host; raw parent system prompts and full history are not copied to a child
 - `/compact` — manually compress context
 - `/clear` — clear context, keep pinned messages
 - `/pin [n]` — pin last n messages (default 2)

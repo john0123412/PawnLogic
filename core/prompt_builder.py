@@ -6,7 +6,79 @@ from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
+import json
+import re
 from typing import Any
+
+from core.context_manager import ContextEnvelope, ContextState
+
+
+_CONTEXT_SECRET_RE = re.compile(
+    r"\b(?:"
+    r"sk-(?:proj-|svcacct-|live-)?[A-Za-z0-9_-]{20,}|"
+    r"ghp_[A-Za-z0-9]{36}|"
+    r"github_pat_[A-Za-z0-9_]{50,}|"
+    r"AKIA[0-9A-Z]{16}|"
+    r"ASIA[0-9A-Z]{16}"
+    r")\b"
+)
+_CONTEXT_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b([A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD))"
+    r"\s*[:=]\s*[^\s,;]+"
+)
+
+
+def _redact_context_text(value: str) -> str:
+    value = _CONTEXT_SECRET_RE.sub("[REDACTED_SECRET]", value)
+    return _CONTEXT_ASSIGNMENT_RE.sub(r"\1=[REDACTED_SECRET]", value)
+
+
+def format_context_state_for_prompt(state: ContextState) -> str:
+    """Render structured state without exposing common credential shapes."""
+    if not isinstance(state, ContextState):
+        raise TypeError("state must be a ContextState")
+    return _redact_context_text(state.prompt_block())
+
+
+def format_context_envelope_for_prompt(
+    envelope: ContextEnvelope,
+    *,
+    max_chars: int = 3000,
+) -> str:
+    """Render a bounded child-facing projection in stable field order."""
+    if not isinstance(envelope, ContextEnvelope):
+        raise TypeError("envelope must be a ContextEnvelope")
+    if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars <= 0:
+        raise ValueError("max_chars must be a positive integer")
+    blocks: list[str] = []
+    state_block = format_context_state_for_prompt(envelope.state)
+    if state_block:
+        blocks.append(state_block)
+    if envelope.messages:
+        lines = ["Selected parent references:"]
+        for message in envelope.messages:
+            role = str(message.get("role") or "unknown")
+            content = _redact_context_text(str(message.get("content") or ""))
+            lines.append(f"[{role}] {content}")
+            for call in message.get("tool_calls") or ():
+                function = call.get("function") or {}
+                name = str(function.get("name") or "unknown")
+                arguments = function.get("arguments") or ""
+                if not isinstance(arguments, str):
+                    arguments = json.dumps(
+                        arguments,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                lines.append(
+                    f"[tool request] {name}: "
+                    f"{_redact_context_text(arguments)}"
+                )
+        blocks.append("\n".join(lines))
+    rendered = "\n\n".join(blocks)
+    if len(rendered) <= max_chars:
+        return rendered
+    return rendered[: max_chars - 1] + "…"
 
 
 @dataclass(frozen=True)
