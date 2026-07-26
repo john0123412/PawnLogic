@@ -35,6 +35,8 @@ def test_transcript_runner_covers_core_cli_commands(tmp_path):
     transcript = result.output
     assert "PawnLogic" in transcript
     assert "/provider list" in transcript
+    assert "Delegated Agents" in transcript
+    assert "/agent policy show" in transcript
     assert "Debug mode enabled" in transcript
     assert "User-friendly mode enabled" in transcript
     assert "Providers:" in transcript

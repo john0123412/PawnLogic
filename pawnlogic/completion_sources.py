@@ -23,10 +23,15 @@ def merge_completion_sources(
         except Exception:
             models = {}
         for alias, model_info in models.items():
-            word = f"/model {alias}"
-            if word not in meta:
-                words.append(word)
-            meta[word] = str(model_info.get("desc", ""))
+            description = str(model_info.get("desc", ""))
+            for word in (
+                f"/model {alias}",
+                f"/agent policy model allow {alias}",
+                f"/agent policy model deny {alias}",
+            ):
+                if word not in meta:
+                    words.append(word)
+                meta[word] = description
 
     if extension_provider is not None:
         try:

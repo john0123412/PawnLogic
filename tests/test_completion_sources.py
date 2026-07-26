@@ -17,10 +17,13 @@ def test_merge_completion_sources_keeps_inputs_and_adds_live_entries():
     assert words == ["/model", "/extension"]
     assert meta == {"/model": "models"}
     assert "/model fast" in merged_words
+    assert "/agent policy model allow fast" in merged_words
+    assert "/agent policy model deny fast" in merged_words
     assert "/extension enable security" in merged_words
     assert "/extension disable security" in merged_words
     assert "/extension status security" in merged_words
     assert merged_meta["/model fast"] == "Fast model"
+    assert merged_meta["/agent policy model allow fast"] == "Fast model"
 
 
 def test_failing_dynamic_sources_are_ignored():

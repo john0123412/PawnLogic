@@ -22,14 +22,25 @@ release history.
   [#79](https://github.com/john0123412/PawnLogic/pull/79) on 2026-07-26.
 - PR 1 contracts are recorded in commit `7ff8c27`: ADR 0007, ADR 0008, and
   focused delegation/MCP characterization tests.
-- Stacked draft PRs #80-#88 implement the Extension Runtime, Extension
+- Stacked draft PRs #80-#89 implement the Extension Runtime, Extension
   commands/startup, Network Policy, installed-layout security compatibility
   fixture, policy-driven Delegation Runtime, and Structured Context Manager.
   PR 11 adds bounded, provenance-aware knowledge retrieval with SQLite as the
   durable authority. PR 12 adds the versioned Agent Event Interface and is
   open as [#87](https://github.com/john0123412/PawnLogic/pull/87). PR 14 adds
   bounded serial multi-Agent orchestration and is open as
-  [#88](https://github.com/john0123412/PawnLogic/pull/88).
+  [#88](https://github.com/john0123412/PawnLogic/pull/88). PR 15 synchronizes
+  integration/release documentation, CLI Agent help and live policy
+  completions, and core distribution gates; it is open as
+  [#89](https://github.com/john0123412/PawnLogic/pull/89).
+- Core release-preparation evidence is complete locally: fresh installs,
+  all entry points, NDJSON automation, installed-layout Extension activation,
+  wheel/sdist build, `twine check`, and content inspection passed. The core
+  remains `0.2.3`; no tag, merge, or package upload was authorized.
+- The proposed independent `pawnlogic-security` distribution is not present in
+  this repository. Its package implementation, TestPyPI install, and publish
+  authorization remain external gates and must not be inferred from the core
+  compatibility fixture.
 - Local release artifacts such as `dist/`, `build/`, and `*.egg-info/` should
   not remain after release validation unless a maintainer explicitly asks to
   keep them.
@@ -144,6 +155,8 @@ These contracts are more important than local refactoring convenience:
 
 - `pawnlogic/cli.py` remains the public parser/command facade and owns
   `PawnCompleter` compatibility.
+- Live model completions also feed `/agent policy model allow|deny <alias>`;
+  static completion inputs must not cache Provider visibility.
 - `pawnlogic/startup.py` owns runtime-home, env, proxy, key-readiness, and
   writable-runtime primitives.
 - `pawnlogic/repl.py` owns prompt-loop signal state, input restoration, and

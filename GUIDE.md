@@ -197,6 +197,10 @@ connectivity, parser behavior, tool-call arguments, or low-level API failures.
 `--json` is for scripting output with `--eval`; it is not the debug display
 mode. During an interactive session, `/mode` toggles between user-friendly and
 debug output.
+JSON output is NDJSON: consumers must parse one object per line and dispatch on
+its `type`. The legacy `text`, `chunk`, and `json` records remain stable.
+Versioned Agent lifecycle data is additive and uses
+`{"type":"event","data":{...}}`; it is not persisted as chat messages.
 
 ### Host Shell Operation Policy
 
@@ -271,7 +275,9 @@ authority; enablement is explicit:
 Enabled names are persisted under `~/.pawnlogic/extensions/enabled.json`.
 PawnLogic validates compatibility and all contribution names before exposing
 Tools or commands. A failing Extension is isolated and does not prevent normal
-core startup.
+core startup. Independent security or dependency-heavy distributions are not
+bundled in the core wheel and have separate publish authorization. Installation
+remains inactive until `/extension enable <name>` succeeds.
 
 ### Network Policy
 
@@ -391,6 +397,13 @@ selection. The parent may request `auto`, `fast`, `reasoning`, `vision`,
 `same`, or `same_provider`, or a visible alias, but the host applies user
 policy and budgets before constructing the sub-agent. A configured cost cap
 fails closed for models without explicit cost metadata.
+Structured tasks/results add generated task IDs, optional parent IDs,
+deadlines, usage, and normalized failures. The shared budget ledger reserves
+token, Tool Call, and cost capacity atomically, while cancellation is
+cooperative. Core orchestration currently executes in deterministic serial
+order. `max-concurrency=2` may be persisted as a forward-compatible policy
+ceiling, but the current executor rejects concurrency above one until Workspace
+and RuntimeContext isolation is proven.
 
 | Command | Description |
 |---------|-------------|

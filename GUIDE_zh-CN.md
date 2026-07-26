@@ -187,6 +187,9 @@ pawn --eval "prompt" --json       # 机器可读 JSON 输出
 `Thinking...` 或简短工具进度等状态。排查 Provider 连通性、解析器行为、工具参数
 或底层 API 失败时，使用 `pawn --debug`。`--json` 用于配合 `--eval` 输出脚本可读
 结果，不是 debug 显示模式。交互会话中，`/mode` 会在用户友好输出和 debug 输出之间切换。
+JSON 输出采用 NDJSON：consumer 必须逐行解析 object，并根据 `type` 分流。旧有
+`text`、`chunk` 和 `json` record 保持稳定。带版本的 Agent lifecycle 数据通过新增的
+`{"type":"event","data":{...}}` 输出，不会作为聊天 message 持久化。
 
 ### Host Shell Operation Policy
 
@@ -245,6 +248,8 @@ skill-pack manifest 只是运行时发现元数据，本身不授权再分发。
 
 已启用名称持久化在 `~/.pawnlogic/extensions/enabled.json`。PawnLogic 会在暴露 Tool
 或命令之前验证兼容性和全部贡献名称。单个 Extension 失败不会阻断 core 正常启动。
+独立 security 或依赖较重的 distribution 不会捆绑进 core wheel，并且具有单独的发布
+授权。安装后仍保持未激活，直到 `/extension enable <name>` 成功。
 
 ### Network Policy
 
@@ -348,6 +353,11 @@ MYRELAY_API_KEY=...
 | `/setkey` | 重新运行 Key 配置向导 |
 
 委派 Agent 使用与 `/model` 相同的实时模型可见性契约。没有新增路由字段时，`delegate_task` 保持自动选择快速 worker 的兼容行为。父 Agent 可以请求 `auto`、`fast`、`reasoning`、`vision`、`same`、`same_provider` 或某个可见别名，但 host 会在创建 sub-agent 前应用用户策略和预算。配置成本上限后，没有显式成本元数据的模型会 fail closed。
+结构化 task/result 增加自动生成的 task ID、可选 parent ID、deadline、usage 和标准化
+failure。共享 budget ledger 会原子预留 Token、Tool Call 和成本容量，取消采用协作式
+机制。Core 编排当前按确定性顺序串行执行。`max-concurrency=2` 可以作为向前兼容的
+policy ceiling 持久化，但在 Workspace 和 RuntimeContext 隔离得到证明前，当前
+executor 会拒绝大于一的并发。
 
 | 命令 | 说明 |
 |------|------|

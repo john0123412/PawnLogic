@@ -263,14 +263,15 @@ def test_fresh_venv_pip_install_exposes_pawn_command(tmp_path):
 
     py = install_venv / "bin" / "python"
     pawn = install_venv / "bin" / "pawn"
-    subprocess.run(
+    install = subprocess.run(
         [str(py), "-m", "pip", "install", "--upgrade", str(ROOT)],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        check=True,
+        check=False,
         timeout=120,
     )
+    assert install.returncode == 0, install.stdout + install.stderr
 
     extension_metadata = subprocess.run(
         [
@@ -415,6 +416,14 @@ def test_built_wheel_does_not_ship_top_level_main_module(tmp_path):
 
     with zipfile.ZipFile(wheels[-1]) as wheel:
         names = set(wheel.namelist())
+        metadata_name = next(
+            name for name in names if name.endswith(".dist-info/METADATA")
+        )
+        entry_points_name = next(
+            name for name in names if name.endswith(".dist-info/entry_points.txt")
+        )
+        metadata_text = wheel.read(metadata_name).decode("utf-8")
+        entry_points_text = wheel.read(entry_points_name).decode("utf-8")
 
     skill_file_count = sum(name.startswith("skills/") for name in names)
 
@@ -423,6 +432,9 @@ def test_built_wheel_does_not_ship_top_level_main_module(tmp_path):
     assert "pawnlogic/__main__.py" in names
     assert "pawnlogic_security.py" not in names
     assert not any(name.startswith("pawnlogic_security/") for name in names)
+    assert "pawnlogic-security" not in metadata_text.lower()
+    assert "pawnlogic.extensions" not in entry_points_text
+    assert "pawn-security" not in entry_points_text
     assert skill_file_count == 0
 
 

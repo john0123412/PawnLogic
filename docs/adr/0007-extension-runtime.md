@@ -330,3 +330,15 @@ and prove that:
 The existing built-in assembly should be moved behind the manager only when
 that creates a real ownership seam and removes import-time assembly from
 `core.session`; a pass-through wrapper is not an architectural improvement.
+
+## Implementation status
+
+Implemented on the 0.3.0 stacked development branches. `core.extension_contracts`
+owns the stable values, `core.extensions` owns discovery and lifecycle, and
+`pawnlogic.extension_host` is the CLI startup/shutdown Adapter. Installed-layout
+fixtures prove disabled discovery without import, explicit transactional
+enablement, incompatibility/start failure rollback, and contribution cleanup.
+Core wheel inspection also rejects `pawnlogic_security` files, Extension entry
+points, security console scripts, and security dependencies. The independent
+security distribution and its TestPyPI publication remain a separate external
+release gate.

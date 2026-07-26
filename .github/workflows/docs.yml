@@ -25,7 +25,7 @@ on:
       - "tools/check_doc_structure.py"
       - ".github/workflows/docs.yml"
   pull_request:
-    branches: [main]
+    branches: [main, "work/**"]
     paths:
       - "README.md"
       - "README_zh-CN.md"
