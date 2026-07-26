@@ -158,6 +158,26 @@ def test_packaged_cli_completer_includes_live_visible_models_without_rebuild():
     assert "/model 1:gpt-5.5" not in completer.meta_dict
 
 
+def test_packaged_cli_completer_refreshes_extension_names_and_subcommands_live():
+    visible = {"security": "Extension (disabled)"}
+    completer = pawn_cli.PawnCompleter(
+        ["/extension", "/extension enable", "/extension disable", "/extension status"],
+        meta_dict={"/extension": "Manage installed Extensions"},
+        dynamic_extension_provider=lambda: visible,
+    )
+
+    first = list(completer.get_completions(Document("/extension enable "), None))
+    assert "/extension enable security" in {item.text for item in first}
+
+    visible.clear()
+    visible["browser"] = "Extension (enabled)"
+    second = list(completer.get_completions(Document("/extension enable "), None))
+    second_words = {item.text for item in second}
+    assert "/extension enable browser" in second_words
+    assert "/extension enable security" not in second_words
+    assert all("security" not in item.text for item in second)
+
+
 def test_provider_model_name_filter_hides_non_chat_and_legacy_models():
     assert provider_tui._model_is_chat_candidate("gpt-4o") is True
     assert provider_tui._model_is_chat_candidate("gpt-4o-mini-vision") is True

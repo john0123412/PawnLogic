@@ -133,6 +133,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 | Persistent workspace | SQLite-backed sessions, searchable history, memory commands, knowledge base, per-session workspaces, and audit logs under `~/.pawnlogic/`. |
 | Real tool execution | Host shell, code sandbox, file operations, URL fetch, browser automation, Docker containers, and CTF helpers. |
 | Trust-boundary UX | User-mode warnings make it explicit when a tool crosses local host, container, browser, network, delegate, or plaintext HTTP boundaries. |
+| Optional Extensions | Installed packages can advertise `pawnlogic.extensions` entry points. Discovery does not load their code, and `/extension enable <name>` is always explicit. |
 | MCP integration | Stdio MCP servers can be configured from `~/.pawnlogic/mcp_configs.json`, with roots and stderr logging handled by PawnLogic. |
 | CTF / pwn workflows | Optional pwn tooling, Docker container helpers, GDB automation, ROP chain support, libc leak workflows, and user-installed local skill packs. |
 | Release hygiene | CI runs Ruff, typed-island mypy, docs guard, and fast Python 3.11 PR checks first, then release/manual validation covers Python 3.10/3.11/3.12, packaging, dynamic E2E, docs structure, language policy, package build, and Trusted Publishing guardrails. Production PyPI publishing is tag-only through Trusted Publishing; manual workflow dispatch targets TestPyPI only. |
@@ -199,6 +200,9 @@ connection and response wait times.
 /ctf solved [flag]                # mark a confirmed CTF flag as solved
 /ctf writeup                      # export a CTF writeup draft
 /sp install <repo_url>            # install a git-backed skill pack
+/extension list                   # list installed Extensions
+/extension enable <name>          # explicitly enable an Extension
+/extension disable <name>         # disable an Extension
 ```
 
 Run `/help` inside PawnLogic for the full command list.
@@ -224,6 +228,24 @@ critical operations are denied by default. Non-interactive execution, including
 `pawn --eval`, fails closed when a high-risk command would require
 confirmation. `DANGEROUS_PATTERNS` remains only one misuse/risk classifier; it
 is not a sandbox boundary and cannot stop a malicious local user.
+
+## Optional Extensions
+
+Python distributions may advertise Extension metadata through the
+`pawnlogic.extensions` entry-point group. PawnLogic can list installed
+Extensions without loading their code. Installation never enables an
+Extension automatically.
+
+```bash
+/extension list
+/extension status [name]
+/extension enable <name>
+/extension disable <name>
+```
+
+Enabled names are stored under `~/.pawnlogic/extensions/enabled.json`.
+Extension startup failures are isolated from core startup, and contribution
+name conflicts are rejected instead of overwriting built-in Tools or commands.
 
 ## MCP Tool Integration
 

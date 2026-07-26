@@ -137,6 +137,40 @@ def _tool_specs_snapshot() -> tuple[ToolSpec, ...]:
     return _TOOL_REGISTRY.snapshot_specs()
 
 
+class _ExtensionToolRegistryAdapter:
+    """Narrow Tool Registry seam exposed to the Extension Runtime."""
+
+    def register_many_owned(self, owner: str, specs) -> None:
+        _TOOL_REGISTRY.register_many_owned(owner, specs)
+        _refresh_legacy_tool_globals()
+
+    def unregister_owner(self, owner: str) -> None:
+        _TOOL_REGISTRY.unregister_owner(owner)
+        _refresh_legacy_tool_globals()
+
+    def owner_of(self, name: str):
+        return _TOOL_REGISTRY.owner_of(name)
+
+    def get_spec(self, name: str):
+        return _TOOL_REGISTRY.get_spec(name)
+
+    def snapshot_specs(self) -> tuple[ToolSpec, ...]:
+        return _TOOL_REGISTRY.snapshot_specs()
+
+
+_EXTENSION_TOOL_REGISTRY = _ExtensionToolRegistryAdapter()
+
+
+def extension_tool_registry() -> _ExtensionToolRegistryAdapter:
+    """Return the host-owned Tool Registry Interface for Extensions.
+
+    The concrete registry remains private to the session runtime.  This
+    Adapter refreshes compatibility views after ownership mutations so an
+    Extension cannot leave the legacy tool globals stale.
+    """
+    return _EXTENSION_TOOL_REGISTRY
+
+
 def _refresh_legacy_tool_globals() -> None:
     global TOOL_MAP, TOOLS_SCHEMA
     TOOL_MAP = _TOOL_REGISTRY.live_map()

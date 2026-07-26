@@ -107,6 +107,7 @@ python -m pawnlogic --help
 | 持久化工作区 | 基于 SQLite 的会话、可搜索历史、memory 命令、知识库、每会话 workspace 和 `~/.pawnlogic/` 下的审计日志。 |
 | 真实工具执行 | Host shell、代码沙箱、文件操作、URL fetch、浏览器自动化、Docker 容器和 CTF helper。 |
 | Trust-boundary UX | 用户模式会明确提示工具何时跨越本地主机、容器、浏览器、网络、delegate 或明文 HTTP 边界。 |
+| 可选 Extension | 已安装的包可以声明 `pawnlogic.extensions` entry point。发现阶段不会加载其代码，必须通过 `/extension enable <name>` 显式启用。 |
 | MCP 集成 | stdio MCP server 可通过 `~/.pawnlogic/mcp_configs.json` 配置，PawnLogic 会处理 roots 和 stderr 日志。 |
 | CTF / pwn 工作流 | 可选 pwn 工具、Docker 容器 helper、GDB 自动化、ROP 链支持、libc leak 工作流和用户安装的本地 skill pack。 |
 | 发布卫生 | CI 先运行 Ruff、typed-island mypy、docs guard 和 Python 3.11 fast PR 检查；release/manual 验证再覆盖 Python 3.10/3.11/3.12、packaging、Dynamic E2E、文档结构、语言策略、包构建和 Trusted Publishing 护栏。生产 PyPI 发布只能由版本 tag 通过 Trusted Publishing 触发；手动 workflow dispatch 仅面向 TestPyPI。 |
@@ -160,6 +161,9 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 /ctf solved [flag]                # 将已确认的 CTF flag 标记为 solved
 /ctf writeup                      # 导出 CTF writeup 草稿
 /sp install <repo_url>            # 安装 git-backed skill pack
+/extension list                   # 列出已安装的 Extension
+/extension enable <name>          # 显式启用 Extension
+/extension disable <name>         # 禁用 Extension
 ```
 
 在 PawnLogic 内运行 `/help` 可查看完整命令列表。
@@ -171,6 +175,22 @@ PawnLogic 是 agent 执行工具，不是安全沙箱。它会在你要求时，
 用户友好模式会针对 host shell 执行、Docker container exec、browser/network-capable 工具、private network URL 访问、delegated sub-agent 和 plaintext HTTP Provider 显示明确的 trust-boundary notice。需要更底层的工具参数和诊断信息时，使用 `pawn --debug`。Docker 文件挂载默认限制在 workspace 内，包括 read-only 挂载；挂载外部只读 challenge 文件需要显式设置 `allow_host_read_mount`。
 
 Host shell 执行现在会在启动子进程前经过 operation policy。低风险命令正常执行，中等风险命令会被分类并写入审计，高风险命令需要明确的交互确认，critical 操作默认拒绝。非交互执行，包括 `pawn --eval`，在高风险命令需要确认时会 fail closed。`DANGEROUS_PATTERNS` 只是误操作/风险分类的一部分，不是 sandbox 边界，也不能阻止恶意本地用户。
+
+## 可选 Extension
+
+Python distribution 可以通过 `pawnlogic.extensions` entry-point group 声明
+Extension 元数据。PawnLogic 可以在不加载 Extension 代码的情况下列出已安装项。
+安装 Extension 不会自动启用。
+
+```bash
+/extension list
+/extension status [name]
+/extension enable <name>
+/extension disable <name>
+```
+
+已启用名称存储在 `~/.pawnlogic/extensions/enabled.json`。Extension 启动失败不会阻断
+core 启动；贡献名称发生冲突时会拒绝注册，不会覆盖内置 Tool 或命令。
 
 ## MCP 工具集成
 

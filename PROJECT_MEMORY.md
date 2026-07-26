@@ -77,6 +77,9 @@ These contracts are more important than local refactoring convenience:
   Discovery reads metadata without loading Extension code; explicit enablement
   owns validation, contribution registration, rollback, persisted state, and
   shutdown.
+- `/extension list|status|enable|disable` is the lifecycle command Interface.
+  Startup reactivates only persisted enabled names before MCP attachment,
+  isolates individual failures, and mounts the manager on RuntimeContext.
 
 ## Architecture Map
 
@@ -165,6 +168,10 @@ These contracts are more important than local refactoring convenience:
   `core/extensions.py` owns entry-point discovery and Extension lifecycle.
   Tool and command registries record contribution owners and reject Extension
   collisions before mutation.
+- `core/commands/extensions.py` is a thin command Adapter over the manager.
+  `pawnlogic/cli.py` owns startup/shutdown integration and live Extension
+  completion; it reaches Tools through `extension_tool_registry()`, not private
+  session Registry state.
 - Delegate capability profiles filter Registry capabilities and must not grow
   a second hard-coded tool-name policy.
 - `core/trust.py` and `core/operation_policy.py` own trust-boundary categories,

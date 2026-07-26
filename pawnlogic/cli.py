@@ -14,6 +14,8 @@ from pawnlogic.repl import (
     terminal_notice,
     write_text_cache as _write_text_cache,
 )
+from pawnlogic.extension_host import ExtensionHost
+from pawnlogic.completion_sources import merge_completion_sources
 from pawnlogic.startup import (
     default_pawnlogic_home as _default_pawnlogic_home,
     ensure_runtime_dir_writable,
@@ -239,7 +241,7 @@ try:
     from core.session     import (
         AgentSession, STATE_FILENAME,
         attach_external_mcp_tools, detach_external_mcp_tools,
-        TurnInterrupted,
+        TurnInterrupted, extension_tool_registry,
     )
     from core.interrupts import turn_interrupt_handler
     from core.memory import init_db
@@ -248,6 +250,9 @@ try:
     from core.logger import logger, setup_logger
 except ImportError as _startup_import_error:
     _fatal_startup_import_error(_startup_import_error)
+
+
+_EXTENSION_HOST = ExtensionHost()
 
 # ════════════════════════════════════════════════════════
 # Interactive API key setup wizard.
@@ -295,6 +300,12 @@ HELP_TEXT = f"""
   {c(CYAN, "/resume [n]")}        Resume and display history
   {c(MAGENTA, "/memorize [topic]")} Save a summary to knowledge base
   {c(MAGENTA, "/knowledge [query]")} Search knowledge entries
+
+{c(BOLD, "Extensions")}
+  {c(CYAN, "/extension list")}        List installed Extensions
+  {c(CYAN, "/extension status [name]")} Show Extension state
+  {c(CYAN, "/extension enable <name>")} Enable an installed Extension
+  {c(CYAN, "/extension disable <name>")} Disable an Extension
 
 {c(BOLD, "Runtime")}
   {c(GREEN, "/low")}   Light mode
@@ -466,24 +477,20 @@ class PawnCompleter(Completer):
         words: list[str],
         meta_dict: dict[str, str] | None = None,
         dynamic_model_provider=None,
+        dynamic_extension_provider=None,
     ):
         self.words    = words
         self.meta_dict = meta_dict or {}
         self.dynamic_model_provider = dynamic_model_provider
+        self.dynamic_extension_provider = dynamic_extension_provider
 
     def _completion_words(self) -> tuple[list[str], dict[str, str]]:
-        words = list(self.words)
-        meta = dict(self.meta_dict)
-        if self.dynamic_model_provider:
-            try:
-                for alias, minfo in self.dynamic_model_provider().items():
-                    word = f"/model {alias}"
-                    if word not in meta:
-                        words.append(word)
-                    meta[word] = minfo.get("desc", "")
-            except Exception:
-                pass
-        return words, meta
+        return merge_completion_sources(
+            self.words,
+            self.meta_dict,
+            model_provider=self.dynamic_model_provider,
+            extension_provider=self.dynamic_extension_provider,
+        )
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
@@ -819,7 +826,7 @@ async def _run_eval_mode(session: AgentSession, args, sink) -> None:
     sys.exit(0)
 
 
-async def main():
+async def _main_impl():
     prompt_toolkit_enabled = _HAS_PROMPT_TOOLKIT
     # CLI argument parsing.
     parser = argparse.ArgumentParser(
@@ -926,6 +933,17 @@ async def main():
         else:
             print(c(RED, f"  ✗ {detail}"))
         sys.exit(1)
+
+    # Discover and reactivate persisted Extensions after the database is
+    # ready, but before MCP tools are attached. Extension failures are
+    # isolated so core startup remains usable.
+    try:
+        _EXTENSION_HOST.start(
+            runtime_home=_PAWNLOGIC_DIR,
+            tool_registry=extension_tool_registry(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Extension startup integration failed: {}", exc)
     attach_external_mcp_tools()
     from config.providers import init_providers
     init_providers(force=True)
@@ -958,6 +976,7 @@ async def main():
             ))
 
     session = AgentSession()
+    _EXTENSION_HOST.mount(session)
     if first_run_model_alias and first_run_model_alias in MODELS:
         session.model_alias = first_run_model_alias
 
@@ -1044,7 +1063,7 @@ async def main():
         "/tokens", "/ctx", "/iter", "/toolsize", "/fetchsize",
         "/webstatus", "/browserstatus", "/pwnenv", "/stats", "/time", "/docker",
         "/worker", "/failures", "/memo", "/skills", "/skillpack", "/sp", "/ctf",
-        "/chat", "/help", "/exit",
+        "/chat", "/extension", "/help", "/exit",
     ]
 
     _cmd_meta = {
@@ -1098,6 +1117,7 @@ async def main():
         "/sp":            "Alias for /skillpack",
         "/ctf":           "Track CTF metadata and export writeup drafts",
         "/chat":          "Session browser (list/view/find/tag/link)",
+        "/extension":     "Manage installed Extensions",
         "/workspace":     "Workspace maintenance tools (status/cleanup)",
         "/help":          "Show help",
         "/exit":          "Exit PawnLogic",
@@ -1159,6 +1179,16 @@ async def main():
         _w = f"/docker {_sub}"
         _all_words.append(_w)
         _all_meta[_w] = _desc
+
+    for _sub, _desc in [
+        ("list", "List installed Extensions"),
+        ("status", "Show Extension status"),
+        ("enable", "Enable an Extension"),
+        ("disable", "Disable an Extension"),
+    ]:
+        _w = f"/extension {_sub}"
+        _all_words.append(_w)
+        _all_meta[_w] = _desc
     # Provider subcommands.
     for _sub, _desc in [
         ("list",   "List all provider status"),
@@ -1184,6 +1214,7 @@ async def main():
             _all_words,
             meta_dict=_all_meta,
             dynamic_model_provider=_visible_models,
+            dynamic_extension_provider=_EXTENSION_HOST.completion_items,
         )
 
         try:
@@ -1437,6 +1468,15 @@ async def main():
             signal.signal(signal.SIGTSTP, _previous_sigtstp)
         except Exception:
             pass
+
+
+async def main():
+    """Run the CLI and always release Extension resources on exit."""
+    try:
+        return await _main_impl()
+    finally:
+        _EXTENSION_HOST.shutdown()
+
 
 if __name__ == "__main__":
     try:

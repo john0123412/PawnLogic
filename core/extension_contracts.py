@@ -255,12 +255,21 @@ class ExtensionImplementation(Protocol):
 
 
 ExtensionFactory: TypeAlias = Callable[[], ExtensionImplementation]
+CommandHandler: TypeAlias = Callable[..., object]
+CommandRegister: TypeAlias = Callable[
+    [str, Sequence[tuple[str, CommandHandler]]], None
+]
+CommandUnregister: TypeAlias = Callable[[str], None]
 
 
 class ExtensionManagerProtocol(Protocol):
     """Host lifecycle interface implemented by ``core.extensions``."""
 
     def discover(self) -> tuple[ExtensionDescriptor, ...]: ...
+
+    def refresh_discovery(self) -> tuple[ExtensionDescriptor, ...]: ...
+
+    def activate_persisted(self) -> tuple[ExtensionStatus, ...]: ...
 
     def enable(self, name: str) -> ExtensionStatus: ...
 
@@ -278,6 +287,9 @@ ExtensionManager = ExtensionManagerProtocol
 
 __all__ = [
     "CommandContribution",
+    "CommandHandler",
+    "CommandRegister",
+    "CommandUnregister",
     "ExtensionCommandContribution",
     "ExtensionContext",
     "ExtensionContributions",

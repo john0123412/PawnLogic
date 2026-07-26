@@ -16,6 +16,8 @@ from typing import Any
 from config.paths import VERSION
 from core.extension_contracts import (
     CommandContribution,
+    CommandRegister,
+    CommandUnregister,
     ExtensionContext,
     ExtensionContributions,
     ExtensionDescriptor,
@@ -272,6 +274,8 @@ class ExtensionManager:
         core_version: str = VERSION,
         api_version: int = SUPPORTED_API_VERSION,
         configs: Mapping[str, Mapping[str, object]] | None = None,
+        command_register: CommandRegister | None = None,
+        command_unregister: CommandUnregister | None = None,
     ) -> None:
         self.tool_registry = tool_registry
         self.runtime_home = Path(
@@ -283,12 +287,17 @@ class ExtensionManager:
         self.core_version = core_version
         self.api_version = api_version
         self._configs = dict(configs or {})
+        if (command_register is None) != (command_unregister is None):
+            raise ValueError("command_register and command_unregister must be provided together")
+        self._command_register = command_register
+        self._command_unregister = command_unregister
         self._records: dict[str, _Record] = {}
         self._descriptors: tuple[ExtensionDescriptor, ...] | None = None
         self._duplicate_names: set[str] = set()
         self._persisted_enabled = self._read_enabled_names()
         self._owned_tool_names: dict[str, set[str]] = {}
         self._commands: dict[str, tuple[str, CommandContribution]] = {}
+        self._registered_command_owners: set[str] = set()
         self._phases: dict[str, tuple[str, PhaseContribution]] = {}
         self._prompts: dict[str, tuple[str, PromptContribution]] = {}
 
@@ -384,6 +393,34 @@ class ExtensionManager:
             self._records.setdefault(descriptor.name, _Record(descriptor, entry_point))
         self._descriptors = tuple(result)
         return self._descriptors
+
+    def refresh_discovery(self) -> tuple[ExtensionDescriptor, ...]:
+        """Refresh entry-point metadata without loading any Extension code."""
+        previous_records = self._records
+        self._descriptors = None
+        self._duplicate_names = set()
+        self._records = {}
+        descriptors = self.discover()
+
+        # Keep already-running implementations alive while replacing only
+        # their metadata record. An installed distribution may disappear from
+        # the next metadata snapshot; retain that active record for shutdown
+        # and explicit disablement, but never load code during refresh.
+        refreshed_records = self._records
+        for name, previous in previous_records.items():
+            if previous.implementation is None:
+                continue
+            current = refreshed_records.get(name)
+            if current is None:
+                refreshed_records[name] = previous
+                continue
+            current.state = previous.state
+            current.error = previous.error
+            current.manifest = previous.manifest
+            current.compatible = previous.compatible
+            current.implementation = previous.implementation
+            current.contributions = previous.contributions
+        return descriptors
 
     @staticmethod
     def _coerce_manifest(value: object) -> ExtensionManifest:
@@ -502,6 +539,37 @@ class ExtensionManager:
                     unregister(name)
         self._owned_tool_names.pop(owner, None)
 
+    def _register_commands(
+        self,
+        owner: str,
+        contributions: tuple[CommandContribution, ...],
+    ) -> None:
+        if self._command_register is None:
+            # Compatibility mode keeps contributions in command_snapshot();
+            # host dispatch is wired only when both adapters are injected.
+            return
+        if any(not callable(item.handler) for item in contributions):
+            raise ValueError(
+                "command handler is required when command registration is configured"
+            )
+        handlers = tuple((item.name, item.handler) for item in contributions)
+        self._registered_command_owners.add(owner)
+        try:
+            self._command_register(owner, handlers)  # type: ignore[arg-type]
+        except Exception:
+            with suppress(Exception):
+                assert self._command_unregister is not None
+                self._command_unregister(owner)
+            self._registered_command_owners.discard(owner)
+            raise
+
+    def _unregister_commands(self, owner: str) -> None:
+        if owner not in self._registered_command_owners:
+            return
+        assert self._command_unregister is not None
+        self._command_unregister(owner)
+        self._registered_command_owners.discard(owner)
+
     def _add_owned_state(self, owner: str, contributions: ExtensionContributions) -> None:
         for item in contributions.commands:
             self._commands[item.name] = (owner, item)
@@ -583,6 +651,7 @@ class ExtensionManager:
             )
             self._validate_contributions(canonical, contributions)
             self._register_tools(canonical, contributions.tools)
+            self._register_commands(canonical, contributions.commands)
             self._add_owned_state(canonical, contributions)
             next_enabled = set(self._persisted_enabled)
             next_enabled.add(canonical)
@@ -599,6 +668,8 @@ class ExtensionManager:
                     implementation.stop()
             with suppress(Exception):
                 self._unregister_tools(canonical)
+            with suppress(Exception):
+                self._unregister_commands(canonical)
             self._remove_owned_state(canonical)
             record.implementation = None
             record.contributions = ExtensionContributions()
@@ -623,6 +694,10 @@ class ExtensionManager:
             self._unregister_tools(canonical)
         except Exception as error:
             stop_error = stop_error or _safe_error(error)
+        try:
+            self._unregister_commands(canonical)
+        except Exception as error:
+            stop_error = stop_error or _safe_error(error)
         self._remove_owned_state(canonical)
         next_enabled = set(self._persisted_enabled)
         next_enabled.discard(canonical)
@@ -642,6 +717,21 @@ class ExtensionManager:
         if name is not None:
             return (self._status(_canonical_name(name)),)
         return tuple(self._status(item.name) for item in self._descriptors or ())
+
+    def activate_persisted(self) -> tuple[ExtensionStatus, ...]:
+        """Attempt persisted enablement in canonical order, isolating failures."""
+        self.discover()
+        statuses: list[ExtensionStatus] = []
+        for name in sorted(self._persisted_enabled):
+            try:
+                statuses.append(self.enable(name))
+            except Exception as error:  # pragma: no cover - defensive adapter boundary
+                record = self._records.get(name)
+                if record is not None:
+                    record.state = ExtensionState.FAILED
+                    record.error = _safe_error(error)
+                statuses.append(self._status(name))
+        return tuple(statuses)
 
     def command_snapshot(self) -> tuple[CommandContribution, ...]:
         return tuple(item for _owner, item in self._commands.values())
@@ -677,6 +767,8 @@ class ExtensionManager:
                 record.error = _safe_error(error)
             with suppress(Exception):
                 self._unregister_tools(canonical)
+            with suppress(Exception):
+                self._unregister_commands(canonical)
             self._remove_owned_state(canonical)
             record.implementation = None
             record.contributions = ExtensionContributions()

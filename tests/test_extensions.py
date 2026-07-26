@@ -46,6 +46,31 @@ class _EntryPoint:
         return self.export
 
 
+class _CommandAdapter:
+    def __init__(self) -> None:
+        self.registered: dict[str, dict[str, object]] = {}
+        self.register_calls: list[tuple[str, tuple[tuple[str, object], ...]]] = []
+        self.unregister_calls: list[str] = []
+        self.fail_for: set[str] = set()
+
+    def register(self, owner: str, handlers) -> None:
+        batch = tuple(handlers)
+        self.register_calls.append((owner, batch))
+        if owner in self.fail_for:
+            raise RuntimeError("command registry unavailable")
+        verbs = {verb for verb, _handler in batch}
+        if verbs.intersection(self.registered.get("builtin", {})):
+            raise ValueError("command verb already registered")
+        for existing in self.registered.values():
+            if verbs.intersection(existing):
+                raise ValueError("command verb already registered")
+        self.registered[owner] = dict(batch)
+
+    def unregister(self, owner: str) -> None:
+        self.unregister_calls.append(owner)
+        self.registered.pop(owner, None)
+
+
 @dataclass
 class _Extension:
     manifest: ExtensionManifest
@@ -146,6 +171,122 @@ def test_enable_registers_all_contributions_and_persists_atomically(tmp_path):
     assert json_names(manager.enabled_state_path) == ["demo"]
 
 
+def test_command_adapter_registers_callable_handlers_and_unregisters_on_disable(tmp_path):
+    handler = lambda _ctx: "ok"
+    adapter = _CommandAdapter()
+    extension = _Extension(
+        _manifest(),
+        ExtensionContributions(commands=(CommandContribution("/demo", handler),)),
+    )
+    manager = _manager(
+        tmp_path,
+        [_EntryPoint("demo", extension)],
+        command_register=adapter.register,
+        command_unregister=adapter.unregister,
+    )
+
+    assert manager.enable("demo").state is ExtensionState.ENABLED
+    assert adapter.registered["demo"]["/demo"] is handler
+
+    assert manager.disable("demo").state is ExtensionState.DISABLED
+    assert "demo" not in adapter.registered
+    assert adapter.unregister_calls == ["demo"]
+
+
+def test_command_contribution_without_handler_fails_when_adapter_is_configured(tmp_path):
+    adapter = _CommandAdapter()
+    extension = _Extension(
+        _manifest(),
+        ExtensionContributions(commands=(CommandContribution("/missing"),)),
+    )
+    manager = _manager(
+        tmp_path,
+        [_EntryPoint("demo", extension)],
+        command_register=adapter.register,
+        command_unregister=adapter.unregister,
+    )
+
+    status = manager.enable("demo")
+
+    assert status.state is ExtensionState.FAILED
+    assert "handler is required" in (status.error or "")
+    assert adapter.register_calls == []
+    assert manager.command_snapshot() == ()
+
+
+def test_command_conflict_is_rejected_without_removing_existing_owner(tmp_path):
+    adapter = _CommandAdapter()
+    first = _Extension(
+        _manifest("first"),
+        ExtensionContributions(commands=(CommandContribution("/shared", lambda _ctx: "first"),)),
+    )
+    second = _Extension(
+        _manifest("second"),
+        ExtensionContributions(commands=(CommandContribution("/shared", lambda _ctx: "second"),)),
+    )
+    manager = _manager(
+        tmp_path,
+        [_EntryPoint("second", second), _EntryPoint("first", first)],
+        command_register=adapter.register,
+        command_unregister=adapter.unregister,
+    )
+
+    assert manager.enable("first").state is ExtensionState.ENABLED
+    status = manager.enable("second")
+
+    assert status.state is ExtensionState.FAILED
+    assert adapter.registered["first"]["/shared"] is not None
+    assert "second" not in adapter.registered
+    assert manager.command_snapshot()[0].name == "/shared"
+
+
+def test_command_registration_rolls_back_when_persistence_fails(tmp_path, monkeypatch):
+    adapter = _CommandAdapter()
+    extension = _Extension(
+        _manifest(),
+        ExtensionContributions(commands=(CommandContribution("/demo", lambda _ctx: "ok"),)),
+    )
+    manager = _manager(
+        tmp_path,
+        [_EntryPoint("demo", extension)],
+        command_register=adapter.register,
+        command_unregister=adapter.unregister,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_write_enabled_names",
+        lambda _names: (_ for _ in ()).throw(OSError("disk full")),
+    )
+
+    status = manager.enable("demo")
+
+    assert status.state is ExtensionState.FAILED
+    assert "demo" not in adapter.registered
+    assert adapter.unregister_calls == ["demo"]
+    assert manager.command_snapshot() == ()
+
+
+def test_shutdown_unregisters_command_contributions(tmp_path):
+    adapter = _CommandAdapter()
+    extension = _Extension(
+        _manifest(),
+        ExtensionContributions(commands=(CommandContribution("/demo", lambda _ctx: "ok"),)),
+    )
+    manager = _manager(
+        tmp_path,
+        [_EntryPoint("demo", extension)],
+        command_register=adapter.register,
+        command_unregister=adapter.unregister,
+    )
+
+    assert manager.enable("demo").state is ExtensionState.ENABLED
+    manager.shutdown()
+
+    assert "demo" not in adapter.registered
+    assert adapter.unregister_calls == ["demo"]
+    assert manager.command_snapshot() == ()
+
+
 def test_enable_failure_during_persistence_rolls_back_tools_and_calls_stop(tmp_path, monkeypatch):
     extension = _Extension(_manifest(), ExtensionContributions(tools=(_tool("demo_tool"),)))
     registry = ToolRegistry()
@@ -174,6 +315,55 @@ def test_persisted_enablement_is_visible_without_auto_loading(tmp_path):
 
     assert descriptor.enabled is True
     assert replacement_entry_point.load_count == 0
+
+
+def test_activate_persisted_uses_canonical_order_and_isolates_failures(tmp_path):
+    first_manager = _manager(
+        tmp_path,
+        [
+            _EntryPoint("zeta", _Extension(_manifest("zeta"))),
+            _EntryPoint("alpha", _Extension(_manifest("alpha"))),
+        ],
+    )
+    assert first_manager.enable("zeta").state is ExtensionState.ENABLED
+    assert first_manager.enable("alpha").state is ExtensionState.ENABLED
+
+    load_order: list[str] = []
+
+    class _OrderedEntryPoint(_EntryPoint):
+        def load(self):
+            load_order.append(self.name)
+            return super().load()
+
+    replacement = _manager(
+        tmp_path,
+        [
+            _OrderedEntryPoint("zeta", _Extension(_manifest("zeta"))),
+            _OrderedEntryPoint("alpha", RuntimeError("alpha failed")),
+        ],
+    )
+
+    statuses = replacement.activate_persisted()
+
+    assert [status.name for status in statuses] == ["alpha", "zeta"]
+    assert [status.state for status in statuses] == [ExtensionState.FAILED, ExtensionState.ENABLED]
+    assert load_order == ["alpha", "zeta"]
+
+
+def test_refresh_discovery_reloads_metadata_without_loading_entry_points(tmp_path):
+    first = _EntryPoint("first", _Extension(_manifest("first")))
+    second = _EntryPoint("second", _Extension(_manifest("second")))
+    available = [first]
+    manager = _manager(tmp_path, lambda: available)
+
+    assert [item.name for item in manager.discover()] == ["first"]
+    available.append(second)
+
+    descriptors = manager.refresh_discovery()
+
+    assert [item.name for item in descriptors] == ["first", "second"]
+    assert first.load_count == 0
+    assert second.load_count == 0
 
 
 def test_incompatible_extension_is_rejected_after_load_without_start(tmp_path):
