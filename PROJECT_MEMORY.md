@@ -69,6 +69,17 @@ release history.
   this repository. Its package implementation, TestPyPI install, and publish
   authorization remain external gates and must not be inferred from the core
   compatibility fixture.
+- A separate local `pawnlogic-security` checkout exists outside this repository
+  and holds contracts/scaffolding only, on branch `fix/scope-gated-mvp`. It is
+  not the plan's PR 6-8 MVP: no scope can be set, the recon tools perform no
+  network work, and it has no git remote. Do not treat its passing unit tests as
+  evidence that the security workstream is done.
+- `README.md` claiming an unreleased version as public is a fixed past defect.
+  `tools/check_release_consistency.py` used to compare the README claim against
+  `config/paths.py:VERSION`, so bumping VERSION on a candidate branch made the
+  false claim pass. It now compares against the newest `vX.Y.Z` git tag and
+  additionally requires both READMEs to name a VERSION ahead of that tag as an
+  unreleased release candidate. Untagged trees fall back to VERSION and say so.
 - Local release artifacts such as `dist/`, `build/`, and `*.egg-info/` should
   not remain after release validation unless a maintainer explicitly asks to
   keep them.
@@ -125,6 +136,13 @@ These contracts are more important than local refactoring convenience:
 - Third-party skill packs must not be included in wheels or sdists by default.
 - Proposed Extensions must remain disabled until explicitly enabled; installing
   a distribution is not authorization to load or execute it.
+- An enabled Extension may rebuild its contributions through
+  `ExtensionManager.recontribute(name)`, which is how a scope-gated Extension
+  publishes and withdraws Tools without a disable/enable cycle. `contribute`
+  must return the complete current set, never a delta. The swap is atomic: own
+  registrations are withdrawn before validation so a rebuild cannot conflict
+  with itself, and a rejected rebuild restores the previous set and stays
+  ENABLED. Extensions reach it only through `ExtensionContext.recontribute`.
 - Proposed network-security Tools require a valid Engagement Scope and shared
   Operation/Network Policy authorization before active work.
 - Proposed delegated-model requests are preferences routed by the host; user
@@ -172,7 +190,14 @@ These contracts are more important than local refactoring convenience:
 - The Extension Runtime uses `pawnlogic.extensions` package entry points.
   Discovery reads metadata without loading Extension code; explicit enablement
   owns validation, contribution registration, rollback, persisted state, and
-  shutdown.
+  shutdown. `recontribute` reuses that same validation and ownership path, so
+  there is one definition of a valid contribution set.
+- `core/extensions.py` owns discovery and lifecycle; `core/extension_contracts.py`
+  owns the frozen value/protocol surface shared with external distributions.
+  `ExtensionRecontributing` is optional, so Extensions written before it keep
+  working and are reported as not supporting rebuilds.
+- `tests/test_extension_recontribution.py` protects atomic contribution swaps,
+  rollback on a rejected rebuild, re-entrancy refusal, and model visibility.
 - `/extension list|status|enable|disable` is the lifecycle command Interface.
   Startup reactivates only persisted enabled names before MCP attachment,
   isolates individual failures, and mounts the manager on RuntimeContext.
