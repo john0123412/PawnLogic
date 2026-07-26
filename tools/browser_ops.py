@@ -41,7 +41,12 @@ from core.trust import (
     trust_notice,
     trust_notice_for_boundary,
 )
-from tools.web_ops import validate_fetch_url
+from tools.network_adapter import (
+    ensure_page_url,
+    navigate_with_policy as _navigate_with_policy,
+    response_url_with_policy,
+    validate_browser_url as _validate_browser_url,
+)
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN
 
 # Constants.
@@ -89,10 +94,6 @@ def _emit_browser_trust_warning() -> None:
         print(c(YELLOW, trust_notice(BROWSER_SANDBOX_DISABLED)))
 
 
-def _validate_browser_url(url: str) -> tuple[str | None, list[str]]:
-    return validate_fetch_url(url)
-
-
 def _get_page() -> Any | None:
     """Get or create a Patchright browser page lazily."""
     global _browser, _context, _page, _browser_error
@@ -129,28 +130,19 @@ def _get_page() -> Any | None:
             return None
 
 
-def _ensure_page_url(url: str) -> None:
+def _ensure_page_url(url: str, arguments: dict | None = None) -> str | None:
     """Ensure the Patchright page has navigated to the target URL."""
     global _current_url
-    err, warnings = _validate_browser_url(url)
-    if err:
-        _current_url = None
-        return
-    page = _get_page()
-    if not page:
-        return
-    try:
-        if warnings and _user_mode():
-            for warning in warnings:
-                print(c(YELLOW, trust_notice(warning)))
-        current = page.url
-        # Navigate when about:blank or URL mismatch is detected.
-        if not current or current == "about:blank" or current != url:
-            timeout_ms = BROWSER_CONFIG["timeout"] * 1000
-            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-            _current_url = url
-    except Exception:
-        pass  # Navigation failure should not block screenshots that may still have content.
+    error, _current_url = ensure_page_url(
+        url,
+        arguments=arguments,
+        current_url=_current_url,
+        get_page=_get_page,
+        timeout_ms=BROWSER_CONFIG["timeout"] * 1000,
+        emit_warnings=_user_mode(),
+        warning_sink=lambda warning: print(c(YELLOW, trust_notice(warning))),
+    )
+    return error
 
 
 def _get_stealthy_fetcher() -> Any | None:
@@ -238,7 +230,7 @@ def tool_web_fetch(a: dict) -> str:
     url = a["url"]
     timeout = int(a.get("timeout", BROWSER_CONFIG["timeout"]))
     print(c(CYAN, f"  🌐 [Scrapling/Fetch] {url[:80]}"))
-    err, warnings = _validate_browser_url(url)
+    err, warnings = _validate_browser_url(url, a)
     if err:
         return err
     if warnings and _user_mode():
@@ -254,7 +246,15 @@ def tool_web_fetch(a: dict) -> str:
         # Timeout retry delays are 2s -> 5s -> 10s.
         resp = _retry_fetch(fetcher, url, timeout * 1000, max_retries=3)
 
-        _current_url = url
+        final_err, _current_url = response_url_with_policy(
+            resp,
+            url,
+            arguments=a,
+            emit_warnings=_user_mode(),
+            warning_sink=lambda warning: print(c(YELLOW, trust_notice(warning))),
+        )
+        if final_err:
+            return final_err
 
         status = resp.status
         # Scrapling TextHandler may be None, so use multiple fallbacks.
@@ -324,7 +324,9 @@ def tool_web_screenshot(a: dict) -> str:
     try:
         # If fetch set a URL but Patchright has not navigated yet, sync it.
         if url:
-            _ensure_page_url(url)
+            navigation_error = _ensure_page_url(url, a)
+            if navigation_error:
+                return navigation_error
 
         page.screenshot(path=save_path, full_page=True)
         if os.path.exists(save_path):
@@ -392,7 +394,7 @@ def tool_web_navigate(a: dict) -> str:
     global _current_url
     url = a["url"]
     print(c(CYAN, f"  🧭 [Scrapling/Navigate] {url[:80]}"))
-    err, warnings = _validate_browser_url(url)
+    err, warnings = _validate_browser_url(url, a)
     if err:
         return err
     if warnings and _user_mode():
@@ -405,10 +407,18 @@ def tool_web_navigate(a: dict) -> str:
 
     try:
         timeout = int(a.get("timeout", BROWSER_CONFIG["timeout"]))
-        page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
-        _current_url = url
+        navigation_error, final_url = _navigate_with_policy(
+            page,
+            url,
+            timeout_ms=timeout * 1000,
+            arguments=a,
+        )
+        if navigation_error:
+            _current_url = None
+            return navigation_error
+        _current_url = final_url
         title = page.title()
-        return f"OK: navigated to {url}\n  Title: {title}"
+        return f"OK: navigated to {final_url}\n  Title: {title}"
     except Exception as e:
         return _format_browser_error(f"navigation failed ({url})", e)
 

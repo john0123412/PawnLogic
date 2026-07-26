@@ -172,6 +172,21 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 
 PawnLogic 是 agent 执行工具，不是安全沙箱。它会在你要求时，用当前用户权限执行真实工具。Pattern filter、Docker 边界和 capability profile 能减少误操作，但不能阻止有意攻击者。
 
+Web fetch 和 browser navigation 会在使用 HTTP(S) target 前通过共享 Network Policy
+进行评估。URL 会被规范化；包含 credential 的 URL、cloud metadata/internal target，
+以及 loopback、link-local、multicast、unspecified 或 reserved address 都会被拒绝。
+Private-network target 需要显式授权；在非交互请求本应要求确认时，系统会 fail closed。
+每个 redirect destination 在跟随前都会重新规范化、解析并评估，包括重新检查
+target-scoped authorization。模型生成的 Tool 参数不能授予 private-network
+权限；已确认的 private target 不会发送给远程 reader service。
+
+Docker `bridge`/`host` 网络和 legacy `uvx mcp-server-fetch` 启动在授权 gate
+处没有具体 URL，因此使用 capability-only authorization。Docker 网络需要
+`allow_network=true` 或 `PAWNLOGIC_DOCKER_ALLOW_NETWORK=true`；legacy MCP
+网络安装需要 `allow_network_install=true` 或
+`PAWNLOGIC_MCP_ALLOW_NETWORK_INSTALL=true`。这些授权只授予对应 capability，
+不代表 URL target 已获授权。
+
 用户友好模式会针对 host shell 执行、Docker container exec、browser/network-capable 工具、private network URL 访问、delegated sub-agent 和 plaintext HTTP Provider 显示明确的 trust-boundary notice。需要更底层的工具参数和诊断信息时，使用 `pawn --debug`。Docker 文件挂载默认限制在 workspace 内，包括 read-only 挂载；挂载外部只读 challenge 文件需要显式设置 `allow_host_read_mount`。
 
 Host shell 执行现在会在启动子进程前经过 operation policy。低风险命令正常执行，中等风险命令会被分类并写入审计，高风险命令需要明确的交互确认，critical 操作默认拒绝。非交互执行，包括 `pawn --eval`，在高风险命令需要确认时会 fail closed。`DANGEROUS_PATTERNS` 只是误操作/风险分类的一部分，不是 sandbox 边界，也不能阻止恶意本地用户。

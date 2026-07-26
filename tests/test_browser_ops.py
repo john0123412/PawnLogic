@@ -29,7 +29,11 @@ class _ReadinessFailurePage:
 
 def test_web_navigate_timeout_returns_user_facing_error(monkeypatch):
     monkeypatch.setattr(browser_ops, "_get_page", lambda: _TimeoutPage())
-    monkeypatch.setattr(browser_ops, "_validate_browser_url", lambda _url: (None, []))
+    monkeypatch.setattr(
+        browser_ops,
+        "_validate_browser_url",
+        lambda _url, _arguments=None: (None, []),
+    )
 
     result = browser_ops.tool_web_navigate({"url": "https://example.test", "timeout": 1})
 
@@ -76,7 +80,11 @@ def test_web_fetch_failure_has_no_traceback(monkeypatch):
             raise RuntimeError("fetch failed\nTraceback (most recent call last): hidden")
 
     monkeypatch.setattr(browser_ops, "_get_stealthy_fetcher", lambda: FailingFetcher())
-    monkeypatch.setattr(browser_ops, "_validate_browser_url", lambda _url: (None, []))
+    monkeypatch.setattr(
+        browser_ops,
+        "_validate_browser_url",
+        lambda _url, _arguments=None: (None, []),
+    )
 
     result = browser_ops.tool_web_fetch({"url": "https://example.test", "timeout": 1})
 

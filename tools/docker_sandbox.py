@@ -19,6 +19,8 @@ Dependencies:
 import os, re, tempfile
 
 from config import DANGEROUS_PATTERNS, READ_BLACKLIST, WORKSPACE_DIR
+from core.network_policy import NetworkOperation, NetworkPolicy
+from core.operation_policy import OperationAction
 from core.state import state as _runtime_state, runtime_config
 from core.trust import TrustBoundaryKind, trust_notice_for_boundary
 from tools.docker_plan import build_docker_execution_plan
@@ -161,7 +163,18 @@ def _check_network_policy(a: dict, network: str) -> str | None:
     mode = (network or "none").strip().lower()
     if mode not in _RISKY_NETWORK_MODES:
         return None
-    if _docker_policy_enabled(a.get("allow_network"), "PAWNLOGIC_DOCKER_ALLOW_NETWORK"):
+    explicit_authorization = _docker_policy_enabled(
+        a.get("allow_network"), "PAWNLOGIC_DOCKER_ALLOW_NETWORK"
+    )
+    decision = NetworkPolicy().evaluate(
+        NetworkOperation(
+            capability_only=True,
+            action="container_network",
+            explicit_authorization=explicit_authorization,
+            interactive=False,
+        )
+    )
+    if decision.action == OperationAction.ALLOW:
         return None
     return (
         f"SECURITY BLOCK: Docker network='{mode}' requires explicit approval. "
