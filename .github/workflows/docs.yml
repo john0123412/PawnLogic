@@ -9,7 +9,6 @@ on:
       - "i18n/**"
       - "docs/**"
       - "test/**"
-      - "work/**"
     paths:
       - "README.md"
       - "README_zh-CN.md"
@@ -45,7 +44,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: docs-${{ github.event.pull_request.number || github.ref }}
+  group: docs-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
