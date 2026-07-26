@@ -300,6 +300,7 @@ class ExtensionManager:
         self._registered_command_owners: set[str] = set()
         self._phases: dict[str, tuple[str, PhaseContribution]] = {}
         self._prompts: dict[str, tuple[str, PromptContribution]] = {}
+        self._recontributing: set[str] = set()
 
     @property
     def enabled_state_path(self) -> Path:
@@ -570,6 +571,57 @@ class ExtensionManager:
         self._command_unregister(owner)
         self._registered_command_owners.discard(owner)
 
+    def _build_context(
+        self,
+        canonical: str,
+        config: Mapping[str, object],
+        buffer: _ContributionBuffer,
+    ) -> ExtensionContext:
+        return ExtensionContext(
+            name=canonical,
+            core_version=self.core_version,
+            runtime_home=self.runtime_home,
+            config=config,
+            tools=buffer,
+            commands=buffer,
+            prompts=buffer,
+            phases=buffer,
+            events=_EventSink(),
+            recontribute=lambda: self.recontribute(canonical),
+        )
+
+    @staticmethod
+    def _merge_contributions(
+        collected: ExtensionContributions,
+        returned: ExtensionContributions | None,
+    ) -> ExtensionContributions:
+        """Combine what the Extension pushed at us with what it handed back."""
+        if returned is not None and not isinstance(returned, ExtensionContributions):
+            raise TypeError("Extension must return ExtensionContributions or None")
+        returned = returned or ExtensionContributions()
+        return ExtensionContributions(
+            tools=collected.tools + returned.tools,
+            commands=collected.commands + returned.commands,
+            phases=collected.phases + returned.phases,
+            prompts=collected.prompts + returned.prompts,
+        )
+
+    def _apply_contributions(self, owner: str, contributions: ExtensionContributions) -> None:
+        """Replace ``owner``'s entire registered set with ``contributions``.
+
+        The Extension's own registrations are withdrawn *before* validation so a
+        rebuild is not rejected as a name conflict with itself. Everything after
+        that point is the same path ``enable`` uses, which keeps one definition
+        of what a valid contribution set is.
+        """
+        self._unregister_tools(owner)
+        self._unregister_commands(owner)
+        self._remove_owned_state(owner)
+        self._validate_contributions(owner, contributions)
+        self._register_tools(owner, contributions.tools)
+        self._register_commands(owner, contributions.commands)
+        self._add_owned_state(owner, contributions)
+
     def _add_owned_state(self, owner: str, contributions: ExtensionContributions) -> None:
         for item in contributions.commands:
             self._commands[item.name] = (owner, item)
@@ -626,29 +678,10 @@ class ExtensionManager:
                 record.compatible = False
             self._validate_manifest(record, manifest)
             config = self._validate_config(canonical, manifest)
-            context = ExtensionContext(
-                name=canonical,
-                core_version=self.core_version,
-                runtime_home=self.runtime_home,
-                config=config,
-                tools=buffer,
-                commands=buffer,
-                prompts=buffer,
-                phases=buffer,
-                events=_EventSink(),
-            )
+            context = self._build_context(canonical, config, buffer)
             record.state = ExtensionState.STARTING
             returned = implementation.start(context)
-            if returned is not None and not isinstance(returned, ExtensionContributions):
-                raise TypeError("Extension start() must return ExtensionContributions or None")
-            returned = returned or ExtensionContributions()
-            collected = buffer.snapshot()
-            contributions = ExtensionContributions(
-                tools=collected.tools + returned.tools,
-                commands=collected.commands + returned.commands,
-                phases=collected.phases + returned.phases,
-                prompts=collected.prompts + returned.prompts,
-            )
+            contributions = self._merge_contributions(buffer.snapshot(), returned)
             self._validate_contributions(canonical, contributions)
             self._register_tools(canonical, contributions.tools)
             self._register_commands(canonical, contributions.commands)
@@ -710,6 +743,75 @@ class ExtensionManager:
         record.contributions = ExtensionContributions()
         record.state = ExtensionState.DISABLED
         record.error = stop_error
+        return self._status(canonical)
+
+    def recontribute(self, name: str) -> ExtensionStatus:
+        """Rebuild an enabled Extension's contributions without restarting it.
+
+        An Extension gated on external authorization has to be able to publish
+        and withdraw Tools while it stays enabled, and ``disable``/``enable``
+        cannot express that: it would drop the Extension's own runtime state and
+        rewrite persisted enablement for what is not a lifecycle change.
+
+        The swap is all-or-nothing. If the rebuild is rejected the previous set
+        is put back and the Extension stays enabled, because a bad rebuild is
+        not a reason to withdraw Tools the host had already accepted.
+        """
+        canonical = _canonical_name(name)
+        self.discover()
+        record = self._records.get(canonical)
+        if record is None:
+            return self._status(canonical)
+        if record.state is not ExtensionState.ENABLED or record.implementation is None:
+            record.error = "extension is not enabled"
+            return self._status(canonical)
+        contribute = getattr(record.implementation, "contribute", None)
+        if not callable(contribute):
+            record.error = "extension does not support recontribution"
+            return self._status(canonical)
+        if canonical in self._recontributing:
+            # A contribute() that calls back into recontribute() would otherwise
+            # recurse until the stack runs out, having already torn down the
+            # previous set on the way in.
+            record.error = "recontribution already in progress"
+            return self._status(canonical)
+        if record.manifest is None:  # pragma: no cover - defensive
+            record.error = "extension manifest is unavailable"
+            return self._status(canonical)
+
+        previous = record.contributions
+        self._recontributing.add(canonical)
+        try:
+            buffer = _ContributionBuffer()
+            config = self._validate_config(canonical, record.manifest)
+            returned = contribute(self._build_context(canonical, config, buffer))
+            contributions = self._merge_contributions(buffer.snapshot(), returned)
+            self._apply_contributions(canonical, contributions)
+        except Exception as error:
+            try:
+                self._apply_contributions(canonical, previous)
+            except Exception as rollback_error:
+                # The previous set was valid moments ago, so failing to restore
+                # it means the registry is no longer trustworthy for this owner.
+                # Surfacing FAILED is safer than reporting a state we cannot back.
+                with suppress(Exception):
+                    self._unregister_tools(canonical)
+                with suppress(Exception):
+                    self._unregister_commands(canonical)
+                self._remove_owned_state(canonical)
+                record.contributions = ExtensionContributions()
+                record.state = ExtensionState.FAILED
+                record.error = (
+                    f"{_safe_error(error)}; rollback failed: {_safe_error(rollback_error)}"
+                )
+                return self._status(canonical)
+            record.contributions = previous
+            record.error = _safe_error(error)
+            return self._status(canonical)
+        finally:
+            self._recontributing.discard(canonical)
+        record.contributions = contributions
+        record.error = None
         return self._status(canonical)
 
     def status(self, name: str | None = None) -> tuple[ExtensionStatus, ...]:
