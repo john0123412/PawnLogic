@@ -22,6 +22,10 @@ release history.
   [#79](https://github.com/john0123412/PawnLogic/pull/79) on 2026-07-26.
 - PR 1 contracts are recorded in commit `7ff8c27`: ADR 0007, ADR 0008, and
   focused delegation/MCP characterization tests.
+- Stacked draft PRs #80-#84 implement the Extension Runtime, Extension
+  commands/startup, Network Policy, installed-layout security compatibility
+  fixture, and policy-driven Delegation Runtime. PR 9 is open as
+  [#84](https://github.com/john0123412/PawnLogic/pull/84).
 - Local release artifacts such as `dist/`, `build/`, and `*.egg-info/` should
   not remain after release validation unless a maintainer explicitly asks to
   keep them.
@@ -83,6 +87,10 @@ These contracts are more important than local refactoring convenience:
 - Proposed delegated-model requests are preferences routed by the host; user
   allowlists, Provider visibility, capability checks, and effective budgets
   remain authoritative.
+- Delegation policy is persisted atomically under
+  `~/.pawnlogic/delegation/policy.json`. Legacy `delegate_task` calls retain
+  automatic fast-worker routing; explicit aliases and prompt requests never
+  bypass host visibility, policy, Tool capability, or budget checks.
 - The Extension Runtime uses `pawnlogic.extensions` package entry points.
   Discovery reads metadata without loading Extension code; explicit enablement
   owns validation, contribution registration, rollback, persisted state, and
@@ -133,6 +141,12 @@ These contracts are more important than local refactoring convenience:
   writes go through `RuntimeContext`.
 - `core/runtime_metrics.py` owns internal metrics snapshots. Metrics are local
   runtime state only.
+- `core/delegation.py` owns immutable delegated task/result/usage/failure and
+  model-policy contracts plus atomic policy persistence.
+- `core/model_router.py` owns dynamic delegated-model eligibility and routing
+  reasons. `core/delegation_runtime.py` owns the bounded child execution loop
+  and Tool filtering. `tools/delegate_tool.py` remains the public compatibility
+  Adapter.
 - `tests/test_session_utils.py` and `tests/test_turn_guards.py` protect turn
   behavior, guard behavior, message ordering, and persistence shape.
 

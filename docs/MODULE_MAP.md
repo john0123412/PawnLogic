@@ -14,6 +14,9 @@
 | `core/session_snapshot.py` | Persistence Interface | `save_snapshot()` / `load_snapshot()` | `test_memory_reliability.py` | Manual and autosave share one snapshot shape. Atomic writes. |
 | `core/message_history.py` | Message ordering | `MessageHistory` class | `test_session_utils.py` | Preserves assistant/tool message order, `reasoning_content`, pinned messages. |
 | `core/runtime_metrics.py` | Counter owner | `RuntimeMetrics` class | `test_runtime_metrics.py` | Sole owner of turn, tool, and API call counters. Snapshots are immutable. |
+| `core/delegation.py` | Delegation contracts | `AgentTask`, `AgentResult`, `DelegationPolicyStore` | `test_delegation_contracts.py` | Immutable bounded task/result values. Policy writes are atomic and secret fields are rejected. |
+| `core/model_router.py` | Delegated model policy | `ModelRouter.route()` | `test_model_router.py` | Only visible, configured, allowed, capability-matching, budget-eligible models can be selected. |
+| `core/delegation_runtime.py` | Delegated execution | `SubAgentSession` | `test_delegate_tool.py`, `test_delegation_baseline.py` | Host safety instructions precede task instructions; Tool capabilities and call/token budgets are enforced. |
 | `core/tool_registry.py` | Capability Interface | `ToolRegistry.register()` / `visible_specs()` | `test_tool_registry.py` | Handler, schema, phase, trust, capabilities registered atomically. No tool without handler. |
 | `core/extension_contracts.py` | Extension Interface | Frozen Extension values and lifecycle Protocols | `test_extensions.py` | Contracts import no discovery/startup logic. Contributions are typed and owner-attributed. |
 | `core/extensions.py` | Extension Runtime | `ExtensionManager` | `test_extensions.py` | Discovery never loads entry points. Enablement is explicit, transactional, persisted, and failure-isolated. |
@@ -61,7 +64,7 @@
 | `tools/pwn_binary.py` | Binary analysis | `ElfAnalysisCache` | `test_ctf_workflow.py` | Pure binary/ROP/cyclic helpers. |
 | `tools/pwn_debugger.py` | Debugger ops | Tool handlers | `test_ctf_workflow.py` | GDB/interactive process logic. |
 | `tools/browser_ops.py` | Browser Network Policy Adapter | Tool handlers | `test_browser_ops.py`, `test_network_policy_baseline.py` | Navigation requests and final destinations are policy-checked. Path containment for screenshots. |
-| `tools/delegate_tool.py` | Delegate tool | `delegate_tool_handler()` | `test_tool_executor.py` | Capability-based filtering. No bypass of host/network/destructive gates. |
+| `tools/delegate_tool.py` | Delegation Adapter | `tool_delegate_task()` | `test_delegate_tool.py`, `test_delegation_baseline.py` | Preserves legacy automatic routing while adapting structured tasks/results to the Delegation Runtime. |
 
 ## Evaluation
 
@@ -100,7 +103,7 @@ implementations already exist.
 | Module | Intended Interface | Seam / Adapter | Status |
 |--------|--------------------|----------------|--------|
 | Extension Runtime | `ExtensionManager` over stable extension contracts | Python entry-point discovery Adapter; explicit enablement; transactional contribution registration | Core Module and CLI/command Adapters implemented |
-| Delegation Runtime | `AgentTask`, `AgentResult`, `DelegationPolicy`, `ModelRouter`, `DelegationExecutor` | Legacy `delegate_task` compatibility Adapter; Provider-backed execution Adapters | Contract accepted in ADR 0008; implementation pending |
+| Delegation Runtime | `AgentTask`, `AgentResult`, `DelegationModelPolicy`, `ModelRouter`, `SubAgentSession` | Legacy `delegate_task` compatibility Adapter; Provider-backed execution Adapter | Core Module and command/Tool Adapters implemented |
 | Network Policy | `NetworkPolicy.evaluate()` over normalized `NetworkOperation` values | DNS resolver plus web, browser, MCP, and Docker caller Adapters | Core Module and caller Adapters implemented |
 | Knowledge Retrieval | Durable knowledge-record and retrieval Interface | SQLite source-of-truth Adapter; optional Redis cache/vector Adapter | Planned |
 | Agent Event | Typed event stream for conversations, tools, delegation, budgets, and evidence | CLI, NDJSON, and optional Streamlit rendering Adapters | Planned |

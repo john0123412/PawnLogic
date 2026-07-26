@@ -376,6 +376,24 @@ Check key status at runtime: `/keys`
 | `/keys` | Show all key status |
 | `/setkey` | Re-run key wizard |
 
+Delegated agents use the same live model visibility contract as `/model`.
+Without new routing fields, `delegate_task` preserves automatic fast-worker
+selection. The parent may request `auto`, `fast`, `reasoning`, `vision`,
+`same`, or `same_provider`, or a visible alias, but the host applies user
+policy and budgets before constructing the sub-agent. A configured cost cap
+fails closed for models without explicit cost metadata.
+
+| Command | Description |
+|---------|-------------|
+| `/worker [alias\|auto]` | List dynamic eligible models or set the preferred worker |
+| `/agent policy show` | Show the persisted delegated-agent policy |
+| `/agent policy model allow <alias>` | Add a visible model to the allowlist |
+| `/agent policy model deny <alias>` | Deny a visible model |
+| `/agent policy default auto\|same\|fast\|reasoning` | Select the default routing mode |
+| `/agent policy max-cost <nonnegative\|off>` | Set or disable the delegated cost cap |
+| `/agent policy max-concurrency <1\|2>` | Set the bounded concurrency policy |
+| `/agent run <role> <objective>` | Print a `delegate_task` request template without calling a Provider |
+
 ### Extension Management
 
 | Command | Description |
@@ -514,6 +532,10 @@ moving runtime details into internal modules:
   readers behind the existing `stream_request()` delta dict output.
 - `core/runtime_metrics.py` records internal turn, retry, token, tool latency,
   and failure-class snapshots without telemetry or default output changes.
+- `core/delegation.py` owns immutable task/result/policy contracts and atomic
+  policy persistence; `core/model_router.py` selects only host-eligible models.
+- `core/delegation_runtime.py` owns the bounded child loop and capability-based
+  Tool filtering; `tools/delegate_tool.py` is the compatibility Adapter.
 - `core/trust.py` centralizes tool trust-boundary notice categories while
   preserving existing warning text and execution decisions.
 - Skill-pack manifests are runtime discovery metadata only; redistribution
@@ -525,6 +547,8 @@ moving runtime details into internal modules:
 ~/.pawnlogic/
 ├── .env                    # API keys (never committed)
 ├── custom_providers.json   # Custom providers, no keys
+├── delegation/
+│   └── policy.json         # Delegated-model allow/deny and budget policy
 ├── pawn.db                 # SQLite database
 ├── mcp_configs.json        # MCP server declarations
 ├── skills/                 # Optional user-installed skill packs

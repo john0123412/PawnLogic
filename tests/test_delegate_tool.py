@@ -1,7 +1,10 @@
 """Tests for delegate capability profiles and unified tool execution."""
 
+from types import SimpleNamespace
+
 import pytest
 
+import core.delegation_runtime as delegation_runtime
 import tools.delegate_tool as delegate_tool
 from tools.delegate_tool import (
     CAPABILITY_PROFILES,
@@ -78,6 +81,16 @@ def test_custom_profile_cannot_allow_delegate():
     assert allowed == {"read_file"}
 
 
+def test_explicit_allowlist_intersects_inherited_profile():
+    allowed = resolve_allowed_tools(
+        "inherited",
+        _ALL_TOOLS,
+        allowlist=["read_file", "run_shell", "delegate_task"],
+    )
+
+    assert allowed == {"read_file", "run_shell"}
+
+
 def test_no_profile_ever_permits_nested_delegation():
     for profile in CAPABILITY_PROFILES:
         assert (
@@ -133,6 +146,128 @@ def test_sub_executor_catches_tool_exception():
     )
     assert "kaboom" in result.content
     assert result.audit_ok is False
+
+
+def test_subagent_token_budget_is_shared_across_provider_iterations(monkeypatch):
+    requested_limits = []
+    responses = iter(
+        [
+            SimpleNamespace(
+                error=None,
+                usage={"prompt_tokens": 4, "completion_tokens": 3},
+                tool_calls={
+                    0: {
+                        "id": "call-1",
+                        "name": "echo",
+                        "args": '{"value":"ok"}',
+                    }
+                },
+                text="",
+            ),
+            SimpleNamespace(
+                error=None,
+                usage={"prompt_tokens": 6, "completion_tokens": 2},
+                tool_calls={},
+                text="done",
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        delegation_runtime,
+        "_tool_map",
+        lambda: {"echo": lambda args: args["value"]},
+    )
+    monkeypatch.setattr(
+        delegation_runtime,
+        "_tools_schema",
+        lambda: [{"function": {"name": "echo"}}],
+    )
+    monkeypatch.setattr(delegation_runtime, "_tool_capabilities", lambda: {})
+    monkeypatch.setattr(
+        delegation_runtime,
+        "runtime_config",
+        lambda: {"max_tokens": 100, "tool_max_chars": 6000},
+    )
+
+    def fake_stream(_messages, _model, *, tools_schema, max_tokens):
+        assert tools_schema == [{"function": {"name": "echo"}}]
+        requested_limits.append(max_tokens)
+        return object()
+
+    monkeypatch.setattr(delegation_runtime, "stream_request", fake_stream)
+    monkeypatch.setattr(
+        delegation_runtime,
+        "consume_model_stream",
+        lambda *_args, **_kwargs: next(responses),
+    )
+
+    sub = delegation_runtime.SubAgentSession(
+        "finish a bounded task",
+        "worker",
+        context_mode="none",
+        max_tokens=5,
+    )
+
+    assert sub.run() == "done"
+    assert requested_limits == [5, 2]
+    assert sub.completion_tokens == 5
+    assert sub.prompt_tokens == 10
+    assert sub.tool_calls == 1
+
+
+def test_subagent_stops_before_tools_when_completion_budget_is_exhausted(
+    monkeypatch,
+):
+    executed = []
+    monkeypatch.setattr(
+        delegation_runtime,
+        "_tool_map",
+        lambda: {"echo": lambda args: executed.append(args)},
+    )
+    monkeypatch.setattr(
+        delegation_runtime,
+        "_tools_schema",
+        lambda: [{"function": {"name": "echo"}}],
+    )
+    monkeypatch.setattr(delegation_runtime, "_tool_capabilities", lambda: {})
+    monkeypatch.setattr(
+        delegation_runtime,
+        "runtime_config",
+        lambda: {"max_tokens": 100, "tool_max_chars": 6000},
+    )
+    monkeypatch.setattr(
+        delegation_runtime,
+        "stream_request",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        delegation_runtime,
+        "consume_model_stream",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            error=None,
+            usage={"prompt_tokens": 1, "completion_tokens": 3},
+            tool_calls={
+                0: {
+                    "id": "call-1",
+                    "name": "echo",
+                    "args": '{"value":"must-not-run"}',
+                }
+            },
+            text="",
+        ),
+    )
+    sub = delegation_runtime.SubAgentSession(
+        "do not exceed the budget",
+        "worker",
+        context_mode="none",
+        max_tokens=3,
+    )
+
+    assert sub.run() == "[Sub-agent budget exhausted] max_tokens=3"
+    assert sub.status == "budget_exhausted"
+    assert sub.failures[0].code == "token_budget_exhausted"
+    assert executed == []
+    assert sub.tool_calls == 0
 
 
 def _ctx():
