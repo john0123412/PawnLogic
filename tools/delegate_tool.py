@@ -26,9 +26,7 @@ Import cycle avoidance:
 """
 
 import json
-import os
 import threading
-from pathlib import Path
 from config import (
     DEFAULT_MODEL, MODELS, validate_api_key, is_fast_model, find_fast_peer,
 )
@@ -38,9 +36,10 @@ from core.delegation import (
     AgentTask,
     AgentUsage,
     DelegationModelPolicy,
-    DelegationPolicyStore,
     FailureRecord,
+    default_delegation_policy_store,
 )
+from core import delegation as delegation_events
 from core.delegation_runtime import (
     CAPABILITY_PROFILES,
     SubAgentSession as _SubAgentSession,
@@ -123,13 +122,8 @@ def _select_worker_model(current_model: str = DEFAULT_MODEL) -> str:
 # Tool entry point.
 # ════════════════════════════════════════════════════════
 
-def _policy_store() -> DelegationPolicyStore:
-    import config.paths as path_config
-
-    runtime_home = Path(
-        os.environ.get("PAWNLOGIC_HOME") or path_config.PAWNLOGIC_HOME
-    )
-    return DelegationPolicyStore(runtime_home)
+def _policy_store():
+    return default_delegation_policy_store()
 
 
 def _agent_task_from_arguments(a: dict) -> AgentTask:
@@ -242,7 +236,9 @@ def tool_delegate_task(a: dict) -> str:
         policy=policy,
         legacy_arguments=a,
     )
+    delegation_events.publish_routing_event(decision)
     if decision.model_alias is None:
+        delegation_events.publish_delegation_rejected(decision.reason)
         return _rejected_result(decision)
     worker_model = decision.model_alias
 
@@ -254,6 +250,7 @@ def tool_delegate_task(a: dict) -> str:
     # Recursion depth guard.
     current_depth = getattr(_delegate_ctx, "depth", 0)
     if current_depth >= _MAX_DEPTH:
+        delegation_events.publish_delegation_rejected("depth_limit")
         return (
             f"ERROR: maximum delegation depth {_MAX_DEPTH} reached; nested delegation denied.\n"
             f"Use tools directly for this task instead of calling delegate_task again."
@@ -295,6 +292,10 @@ def tool_delegate_task(a: dict) -> str:
         allowlist=task.allowed_tools or None,
         **session_options,
     )
+    child_agent_id = str(getattr(sub, "session_id", "delegated-agent"))
+    delegation_events.publish_delegation_started(
+        task, decision, child_agent_id=child_agent_id, effective_tokens=effective_tokens
+    )
 
     _delegate_ctx.depth = current_depth + 1
     try:
@@ -321,6 +322,7 @@ def tool_delegate_task(a: dict) -> str:
         failures=tuple(getattr(sub, "failures", ())),
         usage=usage,
     )
+    delegation_events.publish_delegation_result(agent_result, child_agent_id)
 
     print(c(
         GREEN,

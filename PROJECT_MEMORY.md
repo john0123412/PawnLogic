@@ -22,12 +22,12 @@ release history.
   [#79](https://github.com/john0123412/PawnLogic/pull/79) on 2026-07-26.
 - PR 1 contracts are recorded in commit `7ff8c27`: ADR 0007, ADR 0008, and
   focused delegation/MCP characterization tests.
-- Stacked draft PRs #80-#86 implement the Extension Runtime, Extension
+- Stacked draft PRs #80-#87 implement the Extension Runtime, Extension
   commands/startup, Network Policy, installed-layout security compatibility
   fixture, policy-driven Delegation Runtime, and Structured Context Manager.
   PR 11 adds bounded, provenance-aware knowledge retrieval with SQLite as the
-  durable authority and is open as
-  [#86](https://github.com/john0123412/PawnLogic/pull/86).
+  durable authority. PR 12 adds the versioned Agent Event Interface and is
+  open as [#87](https://github.com/john0123412/PawnLogic/pull/87).
 - Local release artifacts such as `dist/`, `build/`, and `*.egg-info/` should
   not remain after release validation unless a maintainer explicitly asks to
   keep them.
@@ -111,6 +111,15 @@ These contracts are more important than local refactoring convenience:
 - Knowledge indexing uses revision-aware durable outbox events. Rebuild
   enqueueing runs inside SQLite with `INSERT ... SELECT`, so the process and an
   optional Redis projection never need the complete corpus in memory.
+- Agent Events use a versioned immutable `AgentEvent` contract and a
+  synchronous process-local publisher. RuntimeContext owns the stream;
+  main-session and delegated execution publish structural Turn, retrieval,
+  Tool, policy, usage, and delegation events without changing persisted
+  messages. Event payloads are recursively redacted before subscribers receive
+  them, and subscriber failures do not stop Agent execution.
+- Human output keeps its existing transcript. `JsonSink` keeps the existing
+  `text`, `chunk`, and `json` NDJSON records and adds a typed `event` record;
+  event transport does not require parsing ANSI output.
 - The Extension Runtime uses `pawnlogic.extensions` package entry points.
   Discovery reads metadata without loading Extension code; explicit enablement
   owns validation, contribution registration, rollback, persisted state, and

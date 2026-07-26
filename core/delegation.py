@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from core.file_store import atomic_write_text
+from core.agent_events import AgentEvent, AgentEventKind
+from core.runtime_context import current_runtime_context
 
 
 _MODEL_REQUIREMENTS = frozenset(
@@ -34,6 +37,99 @@ _POLICY_FIELDS = frozenset(
 _MAX_TEXT_LENGTH = 32_768
 _MAX_NAME_LENGTH = 256
 _MAX_CONCURRENCY = 2
+
+
+def publish_delegation_event(
+    event_type: AgentEventKind,
+    payload: dict[str, object],
+    *,
+    child_agent_id: str | None = None,
+) -> None:
+    """Publish structural delegation evidence without exposing task text."""
+    context = current_runtime_context()
+    if context is None or not context.session_id or not context.agent_id:
+        return
+    try:
+        context.publish_event(
+            AgentEvent(
+                event_type=event_type,
+                session_id=context.session_id,
+                turn_id=context.active_turn_id,
+                agent_id=child_agent_id or context.agent_id,
+                parent_agent_id=(
+                    context.agent_id if child_agent_id is not None else None
+                ),
+                payload=payload,
+                metadata={"source": "delegation"},
+            )
+        )
+    except Exception:
+        return
+
+
+def publish_routing_event(decision: Any) -> None:
+    publish_delegation_event(
+        AgentEventKind.POLICY_DECISION,
+        {
+            "policy": "delegated_model_routing",
+            "decision": str(decision.reason),
+            "approved": decision.model_alias is not None,
+            "model_alias": decision.model_alias,
+        },
+    )
+
+
+def publish_delegation_rejected(reason: str) -> None:
+    publish_delegation_event(
+        AgentEventKind.DELEGATION_RESULT,
+        {"status": "rejected", "routing_reason": reason},
+    )
+
+
+def publish_delegation_started(
+    task: Any,
+    decision: Any,
+    *,
+    child_agent_id: str,
+    effective_tokens: int,
+) -> None:
+    publish_delegation_event(
+        AgentEventKind.DELEGATION_STARTED,
+        {
+            "status": "started",
+            "model_alias": decision.model_alias,
+            "routing_reason": decision.reason,
+            "role": task.role,
+            "capability_profile": task.capability_profile,
+            "max_tokens": effective_tokens,
+            "max_tool_calls": task.budget.max_tool_calls,
+        },
+        child_agent_id=child_agent_id,
+    )
+
+
+def publish_delegation_result(result: Any, child_agent_id: str) -> None:
+    publish_delegation_event(
+        AgentEventKind.DELEGATION_RESULT,
+        {
+            "status": result.status,
+            "model_alias": result.model_alias,
+            "routing_reason": result.routing_reason,
+            "failure_codes": [failure.code for failure in result.failures],
+            "usage": result.usage.to_dict(),
+        },
+        child_agent_id=child_agent_id,
+    )
+
+
+def default_delegation_policy_store() -> DelegationPolicyStore:
+    """Resolve the policy store from the active Runtime Home."""
+    import config.paths as path_config
+
+    runtime_home = Path(
+        os.environ.get("PAWNLOGIC_HOME") or path_config.PAWNLOGIC_HOME
+    )
+    return DelegationPolicyStore(runtime_home)
 
 
 def _text(
@@ -467,4 +563,10 @@ __all__ = [
     "DelegationPolicyStore",
     "EvidenceRef",
     "FailureRecord",
+    "default_delegation_policy_store",
+    "publish_delegation_event",
+    "publish_delegation_rejected",
+    "publish_delegation_result",
+    "publish_delegation_started",
+    "publish_routing_event",
 ]

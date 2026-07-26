@@ -22,6 +22,23 @@ class RuntimeContext:
     dynamic_config: MutableMapping[str, Any]
     extension_manager: Any = None
     context_provider: Any = None
+    event_publisher: Any = None
+    session_id: str = ""
+    agent_id: str = ""
+    active_turn_id: str = "turn-inactive"
+
+    def __post_init__(self) -> None:
+        if self.event_publisher is None:
+            from core.agent_events import AgentEventPublisher
+
+            self.event_publisher = AgentEventPublisher()
+        emit = getattr(self.sink, "emit", None)
+        if callable(emit):
+            self.event_publisher.subscribe(emit)
+
+    def publish_event(self, event: Any) -> None:
+        """Publish one validated event to process-local subscribers."""
+        self.event_publisher.publish(event)
 
     @classmethod
     def from_current(
