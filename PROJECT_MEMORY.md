@@ -18,25 +18,32 @@ release history.
   `docs/plans/0.2.3-autonomous-runtime-reliability-deepening.md`.
 - Active plan:
   `docs/plans/0.3.0-extensible-agent-platform-and-security-distribution.md`.
-  PR 1 opened as
-  [#79](https://github.com/john0123412/PawnLogic/pull/79) on 2026-07-26.
+  All eleven core PRs (#79-#89) were merged into `main` on 2026-07-26; every
+  `work/0.3.0-*` branch has been deleted. Merged `main` is `fc898fe`.
 - PR 1 contracts are recorded in commit `7ff8c27`: ADR 0007, ADR 0008, and
   focused delegation/MCP characterization tests.
-- Stacked draft PRs #80-#89 implement the Extension Runtime, Extension
+- The merged 0.3.0 core delivers the Extension Runtime, Extension
   commands/startup, Network Policy, installed-layout security compatibility
-  fixture, policy-driven Delegation Runtime, and Structured Context Manager.
-  PR 11 adds bounded, provenance-aware knowledge retrieval with SQLite as the
-  durable authority. PR 12 adds the versioned Agent Event Interface and is
-  open as [#87](https://github.com/john0123412/PawnLogic/pull/87). PR 14 adds
-  bounded serial multi-Agent orchestration and is open as
-  [#88](https://github.com/john0123412/PawnLogic/pull/88). PR 15 synchronizes
-  integration/release documentation, CLI Agent help and live policy
-  completions, and core distribution gates; it is open as
-  [#89](https://github.com/john0123412/PawnLogic/pull/89).
+  fixture, policy-driven Delegation Runtime, Structured Context Manager,
+  bounded provenance-aware knowledge retrieval with SQLite as the durable
+  authority, the versioned Agent Event Interface, bounded serial multi-Agent
+  orchestration, and the integration/release documentation, CLI Agent help,
+  live policy completions, and core distribution gates.
+- Merged `main` was verified directly, not only per-branch: 1153 non-E2E tests
+  and 8 E2E tests passed, ruff/mypy/docs/release/architecture/index guards
+  passed, all three CLI entry points responded, and the wheel/sdist built with
+  `twine check` passing and zero `skills/` entries.
 - Core release-preparation evidence is complete locally: fresh installs,
   all entry points, NDJSON automation, installed-layout Extension activation,
   wheel/sdist build, `twine check`, and content inspection passed. The core
-  remains `0.2.3`; no tag, merge, or package upload was authorized.
+  remains `0.2.3`; no tag or package upload was authorized. The version bump
+  and publish remain separate, explicitly authorized release steps.
+- CI trigger scope is a known past defect: `work/**` branches originally had
+  neither a `push` nor a `pull_request` trigger, so stacked PRs reported no
+  checks. Both triggers now exist, with `pull_request` alone covering branches
+  that have an open PR to avoid duplicate runs. `main` has no branch
+  protection and no ruleset, so passing checks are still not enforced at merge
+  time; this remains an open hardening risk.
 - The proposed independent `pawnlogic-security` distribution is not present in
   this repository. Its package implementation, TestPyPI install, and publish
   authorization remain external gates and must not be inferred from the core
