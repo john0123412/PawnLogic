@@ -76,6 +76,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0           # Release consistency compares against tags
 
       - uses: actions/setup-python@v6
         with:
