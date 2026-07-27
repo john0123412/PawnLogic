@@ -7,7 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-07-26
+## [0.3.0] - 2026-07-27
 
 ### Added
 - Added explicit Extension discovery and lifecycle control through

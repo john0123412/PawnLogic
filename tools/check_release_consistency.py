@@ -31,6 +31,7 @@ SECURITY_SUPPORTED_ROW_RE = re.compile(
     re.MULTILINE,
 )
 TAG_RE = re.compile(r"^v([0-9]+\.[0-9]+\.[0-9]+)$")
+RELEASE_READY_FILE = ".release-ready"
 
 
 def _read(path: Path) -> str:
@@ -72,6 +73,17 @@ def _latest_release_tag(root: Path) -> str | None:
     if not versions:
         return None
     return ".".join(str(part) for part in max(versions))
+
+
+def _release_ready_version(root: Path) -> str | None:
+    """Return the explicitly staged release version, if present."""
+    path = root / RELEASE_READY_FILE
+    if not path.is_file():
+        return None
+    value = path.read_text(encoding="utf-8").strip()
+    if TAG_RE.fullmatch(f"v{value}") is None:
+        raise ValueError(f"{RELEASE_READY_FILE} must contain exactly x.y.z")
+    return value
 
 
 def _check_single_version(
@@ -141,12 +153,26 @@ def check_repository(root: Path) -> list[str]:
         )
         published = version
 
+    release_ready = _release_ready_version(root)
+    expected_public = published
+    if release_ready is not None:
+        if release_ready != version:
+            errors.append(
+                f"{RELEASE_READY_FILE} declares {release_ready}, expected {version}"
+            )
+        else:
+            # A reviewed release-finalization commit has to land on main before
+            # its tag can exist. This explicit, version-pinned marker permits
+            # that short staging state without treating every VERSION bump as
+            # a public release.
+            expected_public = version
+
     _check_single_version(
         errors=errors,
         relative_path="README.md",
         text=_read(root / "README.md"),
         pattern=README_RELEASE_RE,
-        expected_version=published,
+        expected_version=expected_public,
         description="public release version",
     )
     _check_single_version(
@@ -154,11 +180,11 @@ def check_repository(root: Path) -> list[str]:
         relative_path="README_zh-CN.md",
         text=_read(root / "README_zh-CN.md"),
         pattern=README_ZH_CN_RELEASE_RE,
-        expected_version=published,
+        expected_version=expected_public,
         description="public release version",
     )
 
-    if version != published:
+    if version != expected_public:
         _check_release_candidate_is_declared(errors=errors, root=root, version=version)
 
     changelog_versions = set(CHANGELOG_SECTION_RE.findall(_read(root / "CHANGELOG.md")))
