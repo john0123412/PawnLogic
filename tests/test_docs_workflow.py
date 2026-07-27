@@ -78,7 +78,7 @@ def test_release_consistency_jobs_fetch_tags() -> None:
     """A candidate checkout must not mistake VERSION for the public release."""
     text = MAIN_CI_WORKFLOW.read_text(encoding="utf-8")
 
-    for job_name in ("lint", "docs-guard"):
+    for job_name in ("lint", "docs-guard", "test-fast", "test-full-matrix"):
         match = re.search(
             rf"^  {re.escape(job_name)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
             text,
