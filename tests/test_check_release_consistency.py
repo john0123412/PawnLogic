@@ -191,6 +191,28 @@ def test_release_consistency_accepts_a_declared_release_candidate(tmp_path):
     assert errors == []
 
 
+def test_release_consistency_accepts_explicit_release_ready_marker(tmp_path):
+    _write_release_fixture(tmp_path, version="9.9.9")
+    _tag_fixture_repository(tmp_path, "v9.9.8")
+    (tmp_path / ".release-ready").write_text("9.9.9\n", encoding="utf-8")
+
+    errors = check_release_consistency.check_repository(tmp_path)
+
+    assert errors == []
+
+
+def test_release_consistency_rejects_stale_release_ready_marker(tmp_path):
+    _write_release_fixture(tmp_path, version="9.9.9")
+    _tag_fixture_repository(tmp_path, "v9.9.8")
+    (tmp_path / ".release-ready").write_text("9.9.7\n", encoding="utf-8")
+
+    errors = check_release_consistency.check_repository(tmp_path)
+
+    assert any(
+        ".release-ready declares 9.9.7, expected 9.9.9" in error for error in errors
+    )
+
+
 def test_release_consistency_requires_the_candidate_to_be_declared(tmp_path):
     _write_release_fixture(tmp_path, version="9.9.9")
     _tag_fixture_repository(tmp_path, "v9.9.8")

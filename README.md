@@ -11,8 +11,7 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.2.3**. Version
-**0.3.0** is an unreleased release candidate and is not on PyPI yet.
+CTF-oriented toolchain. The current public release is **0.3.0**.
 
 ## System Requirements
 
@@ -102,7 +101,7 @@ use the additive `{"type":"event","data":{...}}` envelope.
 ## What's New
 
 Version 0.3.0 turns PawnLogic into an extensible agent host while keeping the
-core distribution small and preserving the 0.2.3 public contracts:
+core distribution small and preserving existing public contracts:
 
 - Extensions are discovered through the `pawnlogic.extensions` entry point
   group and stay disabled until you enable them. Discovery reads metadata

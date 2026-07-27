@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.2.3**。版本 **0.3.0** 是尚未发布的候选版本，目前还没有发布到 PyPI。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.0**。
 
 ## 系统要求
 
@@ -90,7 +90,7 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 
 ## 新特性
 
-0.3.0 把 PawnLogic 变成可扩展的 Agent host，同时保持核心分发包精简，并保持 0.2.3 的公开 contract 不变：
+0.3.0 把 PawnLogic 变成可扩展的 Agent host，同时保持核心分发包精简，并保持现有公开 contract 不变：
 
 - Extension 通过 `pawnlogic.extensions` entry point group 被发现，且在你显式启用前保持禁用。Discovery 只读取 metadata 而不导入 Extension 代码，`/extension list|status|enable|disable` 负责整个生命周期。安装一个分发包不等于授权运行它。
 - 共享的 Network Policy 为 web、browser、MCP 和 Docker 调用方裁决每一个 HTTP(S) target。Credential、cloud metadata 和特殊地址段一律拒绝，private target 需要显式授权，每一次 redirect 都重新评估，non-interactive confirmation 一律 fail closed。
