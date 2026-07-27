@@ -161,6 +161,14 @@ def test_production_tag_must_point_at_a_main_commit():
     assert "if" not in _jobs()["verify-release-source"]
 
 
+def test_pre_publish_tests_fetch_release_tags():
+    """The candidate README must be checked against the latest public tag."""
+    test_job = _job_section(_workflow_text(), "test-before-publish")
+
+    assert "actions/checkout@v6" in test_job
+    assert "fetch-depth: 0" in test_job
+
+
 def test_build_pins_artifact_identity_for_post_upload_comparison():
     """skip-existing must not be able to leave a stale file and still pass."""
     build_job = _job_section(_workflow_text(), "build-distributions")
