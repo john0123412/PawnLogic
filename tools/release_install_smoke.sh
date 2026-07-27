@@ -16,7 +16,7 @@
 #   INDEX_URL         index to install from
 #
 # Optional environment:
-#   SMOKE_ATTEMPTS    install attempts before failing (default 6)
+#   SMOKE_ATTEMPTS    download attempts before failing (default 6)
 #   SMOKE_SLEEP       seconds between attempts (default 20)
 
 set -euo pipefail
@@ -42,36 +42,30 @@ mkdir -p "$download" "$runtime_home"
 
 python3 -m venv "$venv"
 
-pip_install() {
-    "$venv/bin/pip" install --no-cache-dir \
+pip_download() {
+    "$venv/bin/pip" download --no-deps --no-cache-dir \
+        --only-binary :all: \
         --index-url "$INDEX_URL" \
         --extra-index-url https://pypi.org/simple/ \
+        --dest "$download" \
         "pawnlogic==${EXPECTED_VERSION}"
 }
 
 # A freshly uploaded file is not always served immediately.
-installed=0
+downloaded=0
 for attempt in $(seq 1 "$attempts"); do
-    if pip_install; then
-        installed=1
+    if pip_download; then
+        downloaded=1
         break
     fi
-    echo "Install attempt ${attempt}/${attempts} failed; the index may lag."
+    echo "Download attempt ${attempt}/${attempts} failed; the index may lag."
     sleep "$sleep_seconds"
 done
 
-if [ "$installed" -ne 1 ]; then
-    echo "Could not install pawnlogic==${EXPECTED_VERSION} from ${INDEX_URL}." >&2
+if [ "$downloaded" -ne 1 ]; then
+    echo "Could not download pawnlogic==${EXPECTED_VERSION} from ${INDEX_URL}." >&2
     exit 1
 fi
-
-# The served artifact must be the artifact this release run built.
-"$venv/bin/pip" download --no-deps --no-cache-dir \
-    --only-binary :all: \
-    --index-url "$INDEX_URL" \
-    --extra-index-url https://pypi.org/simple/ \
-    --dest "$download" \
-    "pawnlogic==${EXPECTED_VERSION}"
 
 served_wheel="$download/$EXPECTED_WHEEL"
 if [ ! -f "$served_wheel" ]; then
@@ -88,6 +82,13 @@ if [ "$served_sha" != "$EXPECTED_SHA256" ]; then
     exit 1
 fi
 echo "Served wheel matches the wheel this run built."
+
+# Install the exact wheel whose index identity was just verified. Dependencies
+# still resolve from the configured index pair.
+"$venv/bin/pip" install --no-cache-dir \
+    --index-url "$INDEX_URL" \
+    --extra-index-url https://pypi.org/simple/ \
+    "$served_wheel"
 
 reported="$("$venv/bin/python" -c \
     'import importlib.metadata as m; print(m.version("pawnlogic"))')"

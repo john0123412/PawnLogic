@@ -216,3 +216,17 @@ def test_install_smoke_fails_closed_on_missing_inputs():
     # The script must never mask a failure.
     assert "|| true" not in text
     assert "continue-on-error" not in text
+
+
+def test_install_smoke_retries_identity_download_before_install():
+    """A newly uploaded wheel may reach different index views at different times."""
+    text = INSTALL_SMOKE.read_text(encoding="utf-8")
+
+    assert "if pip_download; then" in text
+    assert "Download attempt ${attempt}/${attempts} failed" in text
+    assert text.index("if pip_download; then") < text.index(
+        'served_wheel="$download/$EXPECTED_WHEEL"'
+    )
+    assert text.index('served_sha="$(sha256sum "$served_wheel"') < text.index(
+        '"$venv/bin/pip" install --no-cache-dir'
+    )

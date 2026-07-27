@@ -11,23 +11,22 @@ release history.
 
 ## Current Release State
 
-- Current public release: `0.2.3`. PyPI and the latest tag are still `v0.2.3`.
+- Current public release: `0.3.0`. PyPI, the GitHub Release, and the latest tag
+  are `v0.3.0`, published from reviewed `main` commit `75d249b` on 2026-07-27.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- `release/0.3.0-prep` is an unpublished release candidate. It is the only
-  branch where `VERSION` reads `0.3.0`; `main` still reads `0.2.3`. The bump is
-  deliberately early so the security distribution can be tested against a real
-  local core `0.3.0` wheel, because it declares `pawnlogic>=0.3,<0.4` and a
-  `0.2.3` host cannot satisfy that. Nothing is published until the release is
-  separately authorized.
-- Latest published tag: `v0.2.3`.
+- The production workflow run `30246474406` passed source ancestry, 1186
+  release tests, Dynamic E2E, artifact identity, Trusted Publishing, a
+  hash-pinned fresh PyPI install, and GitHub Release creation. The first PyPI
+  smoke attempt observed inconsistent simple-index propagation after upload;
+  the served wheel later matched the built SHA-256 exactly and the failed job
+  rerun passed.
 - Most recent completed plan:
   `docs/plans/0.2.3-autonomous-runtime-reliability-deepening.md`.
 - Active plan:
   `docs/plans/0.3.0-extensible-agent-platform-and-security-distribution.md`.
-  All eleven core PRs (#79-#89) were merged into `main` on 2026-07-26; every
-  `work/0.3.0-*` branch has been deleted. `fc898fe` is the merge of the last
-  core PR (#89) and is the tip of the 0.3.0 core stack; later documentation
-  commits move `main` past it, so do not treat `fc898fe` as the current `main`.
+  The core 0.3.0 work and release are complete. The independent security
+  distribution is implemented and merged but its package-index release remains
+  externally blocked as described below.
 - PR 1 contracts are recorded in commit `7ff8c27`: ADR 0007, ADR 0008, and
   focused delegation/MCP characterization tests.
 - The merged 0.3.0 core delivers the Extension Runtime, Extension
@@ -37,15 +36,10 @@ release history.
   authority, the versioned Agent Event Interface, bounded serial multi-Agent
   orchestration, and the integration/release documentation, CLI Agent help,
   live policy completions, and core distribution gates.
-- Merged `main` was verified directly, not only per-branch: 1153 non-E2E tests
+- Merged `main` was verified directly, not only per-branch: 1178 non-E2E tests
   and 8 E2E tests passed, ruff/mypy/docs/release/architecture/index guards
   passed, all three CLI entry points responded, and the wheel/sdist built with
   `twine check` passing and zero `skills/` entries.
-- Core release-preparation evidence is complete locally: fresh installs,
-  all entry points, NDJSON automation, installed-layout Extension activation,
-  wheel/sdist build, `twine check`, and content inspection passed. No tag or
-  package upload was authorized, and publishing remains a separate, explicitly
-  authorized release step.
 - Publishing is gated on more than a successful upload. A production tag must
   point at a commit contained in `main`, the built artifacts are pinned by
   hash, and `tools/release_install_smoke.sh` reinstalls the published
@@ -57,34 +51,33 @@ release history.
   neither a `push` nor a `pull_request` trigger, so stacked PRs reported no
   checks. Both triggers now exist, with `pull_request` alone covering branches
   that have an open PR to avoid duplicate runs.
-- `main` is protected by a single classic branch protection rule; there is no
-  ruleset, and a second governance system must not be added without retiring
-  this one. It requires a pull request, zero approvals, up-to-date branches,
-  conversation resolution, and four GitHub Actions checks: `🔍 Lint (ruff)`,
-  `📖 Docs Guard`, `🔎 Type Check (mypy)`, and `🧪 Fast Tests (Python 3.11)`.
-  Force pushes and deletions are denied and the rule applies to admins. Full
-  Matrix, Dynamic E2E, and the standalone translated-structure check are
-  deliberately not required, because normal pull requests skip or omit them.
-- The proposed independent `pawnlogic-security` distribution is not present in
-  this repository. Its package implementation, TestPyPI install, and publish
-  authorization remain external gates and must not be inferred from the core
-  compatibility fixture.
-- A separate local `pawnlogic-security` checkout exists outside this repository
-  on branch `fix/scope-gated-mvp`, with no git remote. It now has a scope-gated
-  tool set (tools registered only while a valid scope is active, withdrawn when
-  it is cleared or expires), a versioned scope file format with CIDR, port,
-  exclusion, and budget support, `/security scope set|clear|show|status`
-  commands, `pawn-security scope validate`, real passive recon (DNS, TLS, HTTP
-  headers, tech fingerprint), real bounded active discovery (port scanning
-  within scope constraints), and Trusted Publishing release workflow. All 126
-  tests pass. CI and release workflow are configured but not yet exercised on a
-  remote. The distribution is unpublished.
+- `main` remains protected by the classic branch protection rule requiring a
+  pull request, up-to-date branches, conversation resolution, and four GitHub
+  Actions checks: `🔍 Lint (ruff)`, `📖 Docs Guard`, `🔎 Type Check (mypy)`,
+  and `🧪 Fast Tests (Python 3.11)`. Force pushes and deletions are denied and
+  the rule applies to admins. A separate tag-target ruleset protects
+  `v*.*.*` from deletion or retargeting after creation.
+- The independent `pawnlogic-security` distribution now lives at
+  `john0123412/pawnlogic-security`. Its MVP was merged to protected `main` at
+  `534e9e0`; 192 local tests and the remote Python 3.10/3.11/3.12 oldest/newest
+  PawnLogic compatibility matrix pass. It provides scope-gated passive recon,
+  bounded active discovery, workflows/evidence, and an optional
+  default-disabled child-process adapter. It remains unpublished: TestPyPI
+  build verification passed, but OIDC returned `invalid-publisher` because no
+  matching TestPyPI Trusted Publisher exists for repository
+  `john0123412/pawnlogic-security`, workflow `release.yml`, environment
+  `testpypi`. Do not create `v0.1.0` until TestPyPI upload and hash-pinned smoke
+  pass, and configure the corresponding production `pypi` publisher before the
+  production tag.
 - `README.md` claiming an unreleased version as public is a fixed past defect.
   `tools/check_release_consistency.py` used to compare the README claim against
   `config/paths.py:VERSION`, so bumping VERSION on a candidate branch made the
   false claim pass. It now compares against the newest `vX.Y.Z` git tag and
   additionally requires both READMEs to name a VERSION ahead of that tag as an
-  unreleased release candidate. Untagged trees fall back to VERSION and say so.
+  unreleased release candidate. A reviewed pre-tag finalization may use the
+  exact-version `.release-ready` marker; stale markers fail closed and the
+  marker is removed after publishing. Untagged trees fall back to VERSION and
+  say so.
 - Local release artifacts such as `dist/`, `build/`, and `*.egg-info/` should
   not remain after release validation unless a maintainer explicitly asks to
   keep them.
