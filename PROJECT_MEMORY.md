@@ -70,10 +70,15 @@ release history.
   authorization remain external gates and must not be inferred from the core
   compatibility fixture.
 - A separate local `pawnlogic-security` checkout exists outside this repository
-  and holds contracts/scaffolding only, on branch `fix/scope-gated-mvp`. It is
-  not the plan's PR 6-8 MVP: no scope can be set, the recon tools perform no
-  network work, and it has no git remote. Do not treat its passing unit tests as
-  evidence that the security workstream is done.
+  on branch `fix/scope-gated-mvp`, with no git remote. It now has a scope-gated
+  tool set (tools registered only while a valid scope is active, withdrawn when
+  it is cleared or expires), a versioned scope file format with CIDR, port,
+  exclusion, and budget support, `/security scope set|clear|show|status`
+  commands, `pawn-security scope validate`, real passive recon (DNS, TLS, HTTP
+  headers, tech fingerprint), real bounded active discovery (port scanning
+  within scope constraints), and Trusted Publishing release workflow. All 126
+  tests pass. CI and release workflow are configured but not yet exercised on a
+  remote. The distribution is unpublished.
 - `README.md` claiming an unreleased version as public is a fixed past defect.
   `tools/check_release_consistency.py` used to compare the README claim against
   `config/paths.py:VERSION`, so bumping VERSION on a candidate branch made the
