@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -71,3 +72,19 @@ def test_main_ci_has_required_docs_guard_job():
     assert (
         "language" in joined.lower() or "repository_language" in joined
     ), "docs-guard must run repository language policy check"
+
+
+def test_release_consistency_jobs_fetch_tags() -> None:
+    """A candidate checkout must not mistake VERSION for the public release."""
+    text = MAIN_CI_WORKFLOW.read_text(encoding="utf-8")
+
+    for job_name in ("lint", "docs-guard", "test-fast", "test-full-matrix"):
+        match = re.search(
+            rf"^  {re.escape(job_name)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
+            text,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        assert match is not None
+        section = match.group("body")
+        assert "actions/checkout@v6" in section
+        assert "fetch-depth: 0" in section

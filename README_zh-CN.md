@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.2.3**。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.2.3**。版本 **0.3.0** 是尚未发布的候选版本，目前还没有发布到 PyPI。
 
 ## 系统要求
 
@@ -90,15 +90,16 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 
 ## 新特性
 
-0.2.3 关闭了安全缺口，让自定义 Provider 可预测地恢复，并深化了 runtime 模块，同时保持 0.2.2 的公开 contract 不变：
+0.3.0 把 PawnLogic 变成可扩展的 Agent host，同时保持核心分发包精简，并保持 0.2.3 的公开 contract 不变：
 
-- Canonical path containment 通过 `core/path_policy.py` 防止 workspace 遍历、symlink 逃逸和恶意 MCP server-name 注入。
-- 集中式 host-process trust enforcement 让 host shell、code-execution 和 pwn debugger 子进程共享 Operation Policy decision。Docker network/destructive action 和 delegate capability 仍有显式 gate，browser access 则保留独立的 network trust warning。
-- Transactional provider mutation 在写入 key 之前验证 name、URL、format 和 definition metadata；写入失败时，disk 和 memory 保持不变。Format-specific header（OpenAI bearer、Anthropic x-api-key）在 test、fetch、stream 和 non-stream 路径中一致使用。
-- 统一 retry 和 circuit-breaker policy 在请求开始时加载，具有 bounded validation，仅在没有 partial response 被发出时重试，并给 half-open 状态一个 single probe lease。
-- Runtime evaluation 通过 child-process termination 强制执行 real deadline，产生 schema-versioned atomic JSONL artifact，并在没有网络访问的情况下运行带有 provider stream fixture 的 offline replay scenario。
-- Bounded codex goal runner 为 maintainer-only unattended work 提供 locking、manifest、heartbeat、wall-clock timeout 和显式 capability gate。
-- Module ownership split 将 CLI startup/REPL、provider TUI state、tool implementation、session persistence、runtime context 和 runtime metrics 隔离到经过测试的 internal interface 后面。
+- Extension 通过 `pawnlogic.extensions` entry point group 被发现，且在你显式启用前保持禁用。Discovery 只读取 metadata 而不导入 Extension 代码，`/extension list|status|enable|disable` 负责整个生命周期。安装一个分发包不等于授权运行它。
+- 共享的 Network Policy 为 web、browser、MCP 和 Docker 调用方裁决每一个 HTTP(S) target。Credential、cloud metadata 和特殊地址段一律拒绝，private target 需要显式授权，每一次 redirect 都重新评估，non-interactive confirmation 一律 fail closed。
+- Delegated Agent 通过 host policy 请求 Model 和 Tool。Prompt 和 Tool 参数无法绕过 Provider 可见性、用户 allowlist、capability 过滤或 budget。
+- Structured context 以原子 Tool Call 组为单位跟踪 prompt budget，因此裁剪永远不会静默破坏受保护的 anchor、pin 或 Tool 组。
+- Knowledge retrieval 读取有界的、带 provenance 的语料，以 SQLite 作为持久权威。可选 projection 只影响排序，其缺失或过期永远不是致命错误。
+- 版本化的 Agent Event 流报告 Turn、retrieval、Tool、policy、usage 和 delegation。Payload 被递归脱敏，subscriber 失败永远不会中断执行，NDJSON sink 新增 typed `event` 记录，自动化不再需要解析终端输出。
+- Multi-Agent 编排保持确定性串行，具备任务血缘、deadline、协作式取消，以及原子的 token、Tool 和 cost budget 认领。并发数超过 1 会 fail closed，直到隔离性被证明。
+- 发布不再以上传成功为准：生产 tag 必须指向 `main` 上的 commit，且已发布的分发包会被从 index 重新安装并冒烟验证，之后才创建 GitHub Release。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 

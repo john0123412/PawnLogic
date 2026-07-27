@@ -11,7 +11,8 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.2.3**.
+CTF-oriented toolchain. The current public release is **0.2.3**. Version
+**0.3.0** is an unreleased release candidate and is not on PyPI yet.
 
 ## System Requirements
 
@@ -100,31 +101,35 @@ use the additive `{"type":"event","data":{...}}` envelope.
 
 ## What's New
 
-Version 0.2.3 closes safety gaps, makes custom providers recover predictably,
-and deepens runtime modules while preserving the 0.2.2 public contracts:
+Version 0.3.0 turns PawnLogic into an extensible agent host while keeping the
+core distribution small and preserving the 0.2.3 public contracts:
 
-- Canonical path containment prevents workspace traversal, symlink escapes, and
-  hostile MCP server-name injection through `core/path_policy.py`.
-- Centralized host-process trust enforcement gives host shell, code-execution,
-  and pwn debugger subprocesses shared Operation Policy decisions. Docker
-  network/destructive actions and delegate capabilities remain explicitly gated,
-  while browser access keeps its dedicated network trust warning.
-- Transactional provider mutations validate name, URL, format, and definition
-  metadata before writing keys; on write failure, disk and memory stay unchanged.
-  Format-specific headers (OpenAI bearer, Anthropic x-api-key) are used
-  consistently across test, fetch, stream, and non-stream paths.
-- Unified retry and circuit-breaker policy loads at request start with bounded
-  validation, retries only when no partial response has been emitted, and gives
-  half-open state a single probe lease.
-- Runtime evaluation enforces real deadlines through child-process termination,
-  produces schema-versioned atomic JSONL artifacts, and runs offline replay
-  scenarios with provider stream fixtures without network access.
-- Bounded codex goal runner provides maintainer-only unattended work with
-  locking, manifest, heartbeat, wall-clock timeout, and explicit capability
-  gates.
-- Module ownership splits isolate CLI startup/REPL, provider TUI state, tool
-  implementations, session persistence, runtime context, and runtime metrics
-  behind tested internal interfaces.
+- Extensions are discovered through the `pawnlogic.extensions` entry point
+  group and stay disabled until you enable them. Discovery reads metadata
+  without importing extension code, and `/extension list|status|enable|disable`
+  owns the lifecycle. Installing a distribution is not authorization to run it.
+- A shared Network Policy decides every HTTP(S) target for web, browser, MCP,
+  and Docker callers. Credentials, cloud metadata, and special address ranges
+  are denied, private targets need explicit authorization, every redirect is
+  re-evaluated, and non-interactive confirmation fails closed.
+- Delegated agents request models and tools through host policy. Prompts and
+  tool arguments cannot bypass provider visibility, user allowlists, capability
+  filtering, or budgets.
+- Structured context tracks prompt budget with atomic tool-call groups, so
+  trimming never silently corrupts protected anchors, pins, or tool groups.
+- Knowledge retrieval reads a bounded, provenance-aware corpus with SQLite as
+  the durable authority. Optional projections only affect ranking, and their
+  absence or staleness is never fatal.
+- A versioned Agent Event stream reports turns, retrieval, tools, policy,
+  usage, and delegation. Payloads are recursively redacted, subscriber failures
+  never stop execution, and the NDJSON sink gains a typed `event` record so
+  automation no longer needs to parse terminal output.
+- Multi-agent orchestration is deterministic and serial, with task lineage,
+  deadlines, cooperative cancellation, and atomic token, tool, and cost budget
+  claims. Concurrency above one fails closed until isolation is proven.
+- Releases are gated on more than a successful upload: a production tag must
+  point at a commit on `main`, and the published distribution is reinstalled
+  from the index and smoke-tested before the GitHub Release is created.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 

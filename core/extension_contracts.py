@@ -231,7 +231,13 @@ class ExtensionEventSink(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class ExtensionContext:
-    """Controlled host capabilities passed to an enabled Extension."""
+    """Controlled host capabilities passed to an enabled Extension.
+
+    ``recontribute`` is the Extension's own handle for asking the host to
+    rebuild its contributions while it stays enabled. It is optional so a host
+    that does not support rebuilding simply leaves it unset, and an Extension
+    that needs it can detect the absence instead of discovering it mid-call.
+    """
 
     name: str
     core_version: str
@@ -242,6 +248,7 @@ class ExtensionContext:
     prompts: ExtensionPromptRegistrar
     events: ExtensionEventSink
     phases: ExtensionPhaseRegistrar | None = None
+    recontribute: Callable[[], ExtensionStatus] | None = None
 
 
 class ExtensionImplementation(Protocol):
@@ -252,6 +259,19 @@ class ExtensionImplementation(Protocol):
     def start(self, context: ExtensionContext) -> ExtensionContributions | None: ...
 
     def stop(self) -> None: ...
+
+
+class ExtensionRecontributing(Protocol):
+    """Optional capability for an Extension whose contributions change at runtime.
+
+    An Extension gated on external state - an authorization record, a licence, a
+    reachable dependency - cannot decide its final Tool set at ``start``. It
+    implements this method so the host can ask again later. ``contribute`` must
+    return the *complete* current contribution set, not a delta, because the
+    host swaps the whole set atomically and a delta could not be rolled back.
+    """
+
+    def contribute(self, context: ExtensionContext) -> ExtensionContributions | None: ...
 
 
 ExtensionFactory: TypeAlias = Callable[[], ExtensionImplementation]
@@ -274,6 +294,8 @@ class ExtensionManagerProtocol(Protocol):
     def enable(self, name: str) -> ExtensionStatus: ...
 
     def disable(self, name: str) -> ExtensionStatus: ...
+
+    def recontribute(self, name: str) -> ExtensionStatus: ...
 
     def status(self, name: str | None = None) -> tuple[ExtensionStatus, ...]: ...
 

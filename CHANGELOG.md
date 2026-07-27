@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-26
+
 ### Added
 - Added explicit Extension discovery and lifecycle control through
   `pawnlogic.extensions`, with disabled-by-default metadata discovery,
@@ -31,6 +33,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added installed-layout Extension compatibility, bounded delegation,
   structured context, knowledge fallback, Agent Event redaction, serial
   orchestration, and distribution-content regression coverage.
+
+### Changed
+- Release publishing now gates on the source commit and on a post-upload
+  install. A production tag must point at a commit contained in `main`, the
+  exact built artifacts are pinned by hash, and the published distribution is
+  reinstalled from the index into a fresh environment to confirm the served
+  wheel, the reported version, and a working `pawn` console script before the
+  GitHub Release is created.
+- Continuous integration now covers stacked release-work branches through pull
+  requests, and `main` requires a pull request with passing lint, documentation,
+  type, and fast-test checks.
 
 ## [0.2.3] - 2026-07-14
 

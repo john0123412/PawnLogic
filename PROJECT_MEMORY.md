@@ -11,8 +11,14 @@ release history.
 
 ## Current Release State
 
-- Current public release: `0.2.3`.
+- Current public release: `0.2.3`. PyPI and the latest tag are still `v0.2.3`.
 - Runtime version source of truth: `config/paths.py:VERSION`.
+- `release/0.3.0-prep` is an unpublished release candidate. It is the only
+  branch where `VERSION` reads `0.3.0`; `main` still reads `0.2.3`. The bump is
+  deliberately early so the security distribution can be tested against a real
+  local core `0.3.0` wheel, because it declares `pawnlogic>=0.3,<0.4` and a
+  `0.2.3` host cannot satisfy that. Nothing is published until the release is
+  separately authorized.
 - Latest published tag: `v0.2.3`.
 - Most recent completed plan:
   `docs/plans/0.2.3-autonomous-runtime-reliability-deepening.md`.
@@ -37,9 +43,16 @@ release history.
   `twine check` passing and zero `skills/` entries.
 - Core release-preparation evidence is complete locally: fresh installs,
   all entry points, NDJSON automation, installed-layout Extension activation,
-  wheel/sdist build, `twine check`, and content inspection passed. The core
-  remains `0.2.3`; no tag or package upload was authorized. The version bump
-  and publish remain separate, explicitly authorized release steps.
+  wheel/sdist build, `twine check`, and content inspection passed. No tag or
+  package upload was authorized, and publishing remains a separate, explicitly
+  authorized release step.
+- Publishing is gated on more than a successful upload. A production tag must
+  point at a commit contained in `main`, the built artifacts are pinned by
+  hash, and `tools/release_install_smoke.sh` reinstalls the published
+  distribution from the index into a fresh environment to confirm the served
+  wheel matches the built wheel, the reported version is correct, and the
+  installed `pawn` console script runs. The GitHub Release waits on that smoke,
+  so `skip-existing` cannot leave a stale artifact and still report success.
 - CI trigger scope is a known past defect: `work/**` branches originally had
   neither a `push` nor a `pull_request` trigger, so stacked PRs reported no
   checks. Both triggers now exist, with `pull_request` alone covering branches
@@ -56,6 +69,22 @@ release history.
   this repository. Its package implementation, TestPyPI install, and publish
   authorization remain external gates and must not be inferred from the core
   compatibility fixture.
+- A separate local `pawnlogic-security` checkout exists outside this repository
+  on branch `fix/scope-gated-mvp`, with no git remote. It now has a scope-gated
+  tool set (tools registered only while a valid scope is active, withdrawn when
+  it is cleared or expires), a versioned scope file format with CIDR, port,
+  exclusion, and budget support, `/security scope set|clear|show|status`
+  commands, `pawn-security scope validate`, real passive recon (DNS, TLS, HTTP
+  headers, tech fingerprint), real bounded active discovery (port scanning
+  within scope constraints), and Trusted Publishing release workflow. All 126
+  tests pass. CI and release workflow are configured but not yet exercised on a
+  remote. The distribution is unpublished.
+- `README.md` claiming an unreleased version as public is a fixed past defect.
+  `tools/check_release_consistency.py` used to compare the README claim against
+  `config/paths.py:VERSION`, so bumping VERSION on a candidate branch made the
+  false claim pass. It now compares against the newest `vX.Y.Z` git tag and
+  additionally requires both READMEs to name a VERSION ahead of that tag as an
+  unreleased release candidate. Untagged trees fall back to VERSION and say so.
 - Local release artifacts such as `dist/`, `build/`, and `*.egg-info/` should
   not remain after release validation unless a maintainer explicitly asks to
   keep them.
@@ -112,6 +141,13 @@ These contracts are more important than local refactoring convenience:
 - Third-party skill packs must not be included in wheels or sdists by default.
 - Proposed Extensions must remain disabled until explicitly enabled; installing
   a distribution is not authorization to load or execute it.
+- An enabled Extension may rebuild its contributions through
+  `ExtensionManager.recontribute(name)`, which is how a scope-gated Extension
+  publishes and withdraws Tools without a disable/enable cycle. `contribute`
+  must return the complete current set, never a delta. The swap is atomic: own
+  registrations are withdrawn before validation so a rebuild cannot conflict
+  with itself, and a rejected rebuild restores the previous set and stays
+  ENABLED. Extensions reach it only through `ExtensionContext.recontribute`.
 - Proposed network-security Tools require a valid Engagement Scope and shared
   Operation/Network Policy authorization before active work.
 - Proposed delegated-model requests are preferences routed by the host; user
@@ -159,7 +195,14 @@ These contracts are more important than local refactoring convenience:
 - The Extension Runtime uses `pawnlogic.extensions` package entry points.
   Discovery reads metadata without loading Extension code; explicit enablement
   owns validation, contribution registration, rollback, persisted state, and
-  shutdown.
+  shutdown. `recontribute` reuses that same validation and ownership path, so
+  there is one definition of a valid contribution set.
+- `core/extensions.py` owns discovery and lifecycle; `core/extension_contracts.py`
+  owns the frozen value/protocol surface shared with external distributions.
+  `ExtensionRecontributing` is optional, so Extensions written before it keep
+  working and are reported as not supporting rebuilds.
+- `tests/test_extension_recontribution.py` protects atomic contribution swaps,
+  rollback on a rejected rebuild, re-entrancy refusal, and model visibility.
 - `/extension list|status|enable|disable` is the lifecycle command Interface.
   Startup reactivates only persisted enabled names before MCP attachment,
   isolates individual failures, and mounts the manager on RuntimeContext.
