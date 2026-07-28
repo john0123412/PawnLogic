@@ -24,9 +24,8 @@ release history.
   `docs/plans/0.2.3-autonomous-runtime-reliability-deepening.md`.
 - Active plan:
   `docs/plans/0.3.0-extensible-agent-platform-and-security-distribution.md`.
-  The core 0.3.0 work and release are complete. The independent security
-  distribution is implemented and merged but its package-index release remains
-  externally blocked as described below.
+  The core 0.3.0 work and release are complete, as is the independent
+  `pawnlogic-security` 0.1.0 package release described below.
 - PR 1 contracts are recorded in commit `7ff8c27`: ADR 0007, ADR 0008, and
   focused delegation/MCP characterization tests.
 - The merged 0.3.0 core delivers the Extension Runtime, Extension
@@ -62,13 +61,12 @@ release history.
   `534e9e0`; 192 local tests and the remote Python 3.10/3.11/3.12 oldest/newest
   PawnLogic compatibility matrix pass. It provides scope-gated passive recon,
   bounded active discovery, workflows/evidence, and an optional
-  default-disabled child-process adapter. It remains unpublished: TestPyPI
-  build verification passed, but OIDC returned `invalid-publisher` because no
-  matching TestPyPI Trusted Publisher exists for repository
-  `john0123412/pawnlogic-security`, workflow `release.yml`, environment
-  `testpypi`. Do not create `v0.1.0` until TestPyPI upload and hash-pinned smoke
-  pass, and configure the corresponding production `pypi` publisher before the
-  production tag.
+  default-disabled child-process adapter. Version `0.1.0` was published from
+  protected `main` commit `955da3c` on 2026-07-28: TestPyPI workflow
+  `30347824976` passed upload and hash-pinned fresh-install smoke, while
+  production workflow `30349110662` passed source/tag/changelog verification,
+  PyPI Trusted Publishing, hash-pinned fresh-install smoke, and GitHub Release
+  creation for `v0.1.0`.
 - `README.md` claiming an unreleased version as public is a fixed past defect.
   `tools/check_release_consistency.py` used to compare the README claim against
   `config/paths.py:VERSION`, so bumping VERSION on a candidate branch made the
