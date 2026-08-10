@@ -35,7 +35,7 @@ from config import (
     AGENT_PHASES,
     user_friendly_error,
     is_fast_model, find_fast_peer,
-    SKILLS_DIR,
+    SKILLS_DIR, SKILLS_ENABLED_PATH,
 )
 from utils.ansi import c, BOLD, DIM, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
 from core.api_client import stream_request, ensure_tool_call_id
@@ -733,7 +733,7 @@ _tool_call_missing_plan = _plan_guard.tool_call_missing_plan
 # ════════════════════════════════════════════════════════
 
 from core.skill_manager import SkillScanner
-_skill_scanner = SkillScanner(SKILLS_DIR)
+_skill_scanner = SkillScanner(SKILLS_DIR, enabled_path=SKILLS_ENABLED_PATH)
 
 
 def _load_skills_toc() -> str:

@@ -30,3 +30,4 @@ SKILLS_DIR         = _SOURCE_SKILLS_DIR if _SOURCE_SKILLS_DIR.exists() else PAWN
 LOG_DIR            = PAWNLOGIC_HOME / "logs"
 WORKSPACE_DIR      = str(PAWNLOGIC_HOME / "workspace")
 WORKSPACE_ROOT     = str(PAWNLOGIC_HOME)
+SKILLS_ENABLED_PATH = PAWNLOGIC_HOME / "skills_enabled.json"

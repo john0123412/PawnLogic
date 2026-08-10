@@ -173,6 +173,10 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 /ctf solved [flag]                # 将已确认的 CTF flag 标记为 solved
 /ctf writeup                      # 导出 CTF writeup 草稿
 /sp install <repo_url>            # 安装 git-backed skill pack
+/sp enable <name>                 # 启用 skill pack
+/sp disable <name>                # 禁用 skill pack
+/sp status                        # 查看启用/禁用状态
+/skills manage                    # 交互式 TUI 管理 skill pack
 /extension list                   # 列出已安装的 Extension
 /extension enable <name>          # 显式启用 Extension
 /extension disable <name>         # 禁用 Extension

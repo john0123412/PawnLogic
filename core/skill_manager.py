@@ -32,6 +32,7 @@ import re
 import subprocess
 from pathlib import Path
 from config import scrub_sensitive_env
+from core.file_store import atomic_write_text
 from core.git_security import (
     git_remote_error,
     git_with_safe_protocol_config,
@@ -39,16 +40,131 @@ from core.git_security import (
 )
 
 
+def _canonical_skill_name(value: str) -> str:
+    """Normalize a skill pack name for comparison."""
+    return re.sub(r"[-_.]+", "-", str(value).strip()).lower()
+
+
 class SkillScanner:
     """Scan ./skills/*/, auto-extract metadata from .md files, and match packs."""
 
-    def __init__(self, skills_dir: Path):
+    def __init__(self, skills_dir: Path, enabled_path: Path | None = None):
         self.skills_dir = skills_dir
         self._cache: list[dict] | None = None
+        self._enabled_path = enabled_path
+        self._enabled: set[str] | None = None  # None = all enabled (backwards compat)
 
     def invalidate_cache(self):
         """Clear cache so scan_all() re-scans the disk next time."""
         self._cache = None
+
+    # ── Enable / disable persistence ──────────────────────────
+
+    def _read_enabled(self) -> set[str] | None:
+        """Read enabled skill names from persistence. None = all enabled."""
+        if self._enabled is not None:
+            return self._enabled
+        if self._enabled_path is None:
+            self._enabled = None
+            return None
+        try:
+            raw = json.loads(self._enabled_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, list):
+                self._enabled = None
+                return None
+            self._enabled = {
+                _canonical_skill_name(item)
+                for item in raw
+                if isinstance(item, str) and item.strip()
+            }
+        except (OSError, ValueError, TypeError):
+            self._enabled = None
+        return self._enabled
+
+    def _write_enabled(self, names: set[str]) -> None:
+        """Persist enabled skill names atomically."""
+        if self._enabled_path is None:
+            return
+        text = json.dumps(sorted(names), indent=2, ensure_ascii=False) + "\n"
+        atomic_write_text(self._enabled_path, text)
+        self._enabled = set(names)
+
+    def _resolve_folder_key(self, name_or_folder: str) -> str | None:
+        """Resolve a user-provided name or folder name to a canonical folder key.
+
+        Returns None if no pack matches.
+        """
+        canonical = _canonical_skill_name(name_or_folder)
+        for p in self.scan_all(include_disabled=True):
+            folder_key = _canonical_skill_name(p.get("_folder", ""))
+            display_key = _canonical_skill_name(p.get("name", ""))
+            if canonical in (folder_key, display_key):
+                return folder_key
+        return None
+
+    def _all_folder_keys(self) -> set[str]:
+        """Return canonical folder keys for all discovered packs."""
+        return {
+            _canonical_skill_name(p.get("_folder", ""))
+            for p in self.scan_all(include_disabled=True)
+        }
+
+    def is_enabled(self, pack_name: str) -> bool:
+        """Check whether a skill pack is enabled.
+
+        Matches against both the display name and the folder name.
+        """
+        enabled = self._read_enabled()
+        if enabled is None:
+            return True  # No config file → all enabled (backwards compat)
+        folder_key = self._resolve_folder_key(pack_name)
+        if folder_key is None:
+            return False
+        return folder_key in enabled
+
+    def enable(self, pack_name: str) -> bool:
+        """Enable a skill pack. Returns True if changed."""
+        folder_key = self._resolve_folder_key(pack_name)
+        if folder_key is None:
+            return False
+        enabled = self._read_enabled()
+        if enabled is None:
+            enabled = self._all_folder_keys()
+        if folder_key in enabled:
+            return False
+        enabled.add(folder_key)
+        self._write_enabled(enabled)
+        self.invalidate_cache()
+        return True
+
+    def disable(self, pack_name: str) -> bool:
+        """Disable a skill pack. Returns True if changed."""
+        folder_key = self._resolve_folder_key(pack_name)
+        if folder_key is None:
+            return False
+        enabled = self._read_enabled()
+        if enabled is None:
+            enabled = self._all_folder_keys()
+        if folder_key not in enabled:
+            return False
+        enabled.discard(folder_key)
+        self._write_enabled(enabled)
+        self.invalidate_cache()
+        return True
+
+    def enable_all(self) -> int:
+        """Enable all discovered packs. Returns count enabled."""
+        all_keys = self._all_folder_keys()
+        self._write_enabled(all_keys)
+        self.invalidate_cache()
+        return len(all_keys)
+
+    def disable_all(self) -> int:
+        """Disable all packs. Returns count disabled."""
+        count = len(self._all_folder_keys())
+        self._write_enabled(set())
+        self.invalidate_cache()
+        return count
 
     def sync_packs(self) -> list[dict]:
         """Run git pull for every ./skills/ child directory containing .git.
@@ -159,25 +275,45 @@ class SkillScanner:
         except Exception as e:
             return {"status": "error", "name": name, "detail": str(e)[:120]}
 
-    def scan_all(self) -> list[dict]:
-        """Scan all skill packs and return metadata."""
-        if self._cache is not None:
+    def scan_all(self, include_disabled: bool = False) -> list[dict]:
+        """Scan skill packs and return metadata.
+
+        By default only enabled packs are returned. Pass
+        ``include_disabled=True`` to see every discovered pack regardless of
+        enabled state.
+        """
+        if self._cache is not None and not include_disabled:
             return self._cache
 
         if not self.skills_dir.exists() or not self.skills_dir.is_dir():
-            self._cache = []
+            if not include_disabled:
+                self._cache = []
             return []
 
+        enabled = self._read_enabled()
         packs = []
         for skill_dir in sorted(self.skills_dir.iterdir()):
             if not skill_dir.is_dir():
                 continue
 
             pack = self._scan_one(skill_dir)
-            if pack:
-                packs.append(pack)
+            if not pack:
+                continue
 
-        self._cache = packs
+            # Tag pack with enabled state using folder name as canonical key.
+            folder_key = _canonical_skill_name(pack.get("_folder", ""))
+            is_enabled = (
+                True if enabled is None
+                else folder_key in enabled
+            )
+            pack["_enabled"] = is_enabled
+
+            if not include_disabled and not is_enabled:
+                continue
+            packs.append(pack)
+
+        if not include_disabled:
+            self._cache = packs
         return packs
 
     def _scan_one(self, skill_dir: Path) -> dict | None:
@@ -239,6 +375,7 @@ class SkillScanner:
             "scripts": scripts,
             "_path": skill_dir,
             "_md_file": md_file,
+            "_folder": skill_dir.name,
         }
 
     def match(self, query: str, top_k: int = 3, min_score: int = 3) -> list[dict]:
@@ -339,11 +476,15 @@ class SkillScanner:
         names = [p.get("name", "?") for p in packs]
         return f"  ✓ Loaded skills: {', '.join(names)}"
 
-    def format_list(self) -> str:
-        """Format all scanned skill packs for /skillpack."""
-        packs = self.scan_all()
+    def format_list(self, include_disabled: bool = False) -> str:
+        """Format all scanned skill packs for /skillpack.
+
+        Shows a ✓/✗ status indicator when the enabled-state config exists.
+        """
+        packs = self.scan_all(include_disabled=include_disabled)
         if not packs:
             return "(no skill packs found under skills/)"
+        has_enabled_state = self._read_enabled() is not None
         lines = []
         for i, p in enumerate(packs):
             name = p.get("name", "?")
@@ -351,7 +492,11 @@ class SkillScanner:
             ver  = p.get("version", "1.0")
             kw   = ", ".join(p.get("keywords", [])[:5])
             scripts = p.get("scripts", [])
-            line = f"  [{i+1}] {name} v{ver}"
+            if has_enabled_state:
+                status = "✓" if p.get("_enabled", True) else "✗"
+                line = f"  [{status} {i+1}] {name} v{ver}"
+            else:
+                line = f"  [{i+1}] {name} v{ver}"
             if desc:
                 line += f" — {desc[:60]}"
             lines.append(line)
