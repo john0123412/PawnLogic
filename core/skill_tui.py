@@ -376,17 +376,15 @@ class SkillPackTUI:
 
     # ── run ────────────────────────────────────────────────────────────────
 
-    def run(self) -> bool:
+    async def run(self) -> bool:
         """Run the TUI. Returns True if changes were saved."""
         body = FormattedTextControl(self._render)
         status = FormattedTextControl(self._render_status)
 
-        root = HSplit(
-            [
-                Window(content=body, always_hide_cursor=True),
-                Window(content=status, height=1),
-            ]
-        )
+        root = HSplit([
+            Window(content=body, always_hide_cursor=True),
+            Window(content=status, height=1),
+        ])
 
         self._app = Application(
             layout=Layout(root),
@@ -395,11 +393,11 @@ class SkillPackTUI:
             full_screen=False,
             mouse_support=False,
         )
-        self._app.run()
+        await self._app.run_async()
         return self._saved
 
 
-def run_skill_tui(scanner: SkillScanner) -> bool:
+async def run_skill_tui(scanner: SkillScanner) -> bool:
     """Launch the skill pack TUI. Returns True if saved."""
     tui = SkillPackTUI(scanner)
-    return tui.run()
+    return await tui.run()
