@@ -263,14 +263,56 @@ MCP 子进程 stderr 默认写入 `~/.pawnlogic/logs/mcp/<server>.stderr.log`。
 
 项目目录不包含 secret，可以安全提交或分享。
 
+## 使用示例
+
+### 接入第三方 API
+
+```
+/provider add myrelay https://api.myrelay.com/v1/chat/completions MYRELAY_API_KEY
+/provider fetch myrelay
+/provider activate myrelay
+/model <别名>
+```
+
+### 视觉分析
+
+```
+分析截图 ./screenshot.png，提取代码并修复 bug。
+```
+
+### CTF Pwn
+
+```
+/model ds-v4-pro
+分析 ./challenge，用 pwn_debug 检查 main 断点处的寄存器。
+```
+
+## 常见问题
+
+**Q: 添加了 Provider 但 `/model` 看不到新模型？**
+A: 配置 Key，运行 `/provider fetch <name>`，选择模型，再 `/provider activate <name>`。
+
+**Q: Test Connection 失败但 fetch 成功？**
+A: Fetch 只读 `/v1/models`；Test Connection 发送聊天请求。先加载聊天模型。
+
+**Q: API Key 在哪里？**
+A: `~/.pawnlogic/.env`，不在项目目录，不被 git 追踪。
+
+**Q: `pawn: command not found`？**
+A: `export PATH="$HOME/.local/bin:$PATH"`
+
+**Q: 浏览器工具缺少模块？**
+A: `pip install 'pawnlogic[browser]'` 然后 `patchright install chromium`。
+
+**Q: 支持 Ollama 本地模型？**
+A: 支持。`/provider add`，Base URL 填 `http://localhost:11434`，Key 留空。
+
 ## 文档
 
 | 文档 | 描述 |
 |------|------|
 | [**README.md**](README.md) | 英文 README |
 | [**README_zh-CN.md**](README_zh-CN.md) | 本页 |
-| [**GUIDE.md**](GUIDE.md) | 完整参考：命令、架构和 FAQ |
-| [**GUIDE_zh-CN.md**](GUIDE_zh-CN.md) | 中文完整参考 |
 | [**CHANGELOG.md**](CHANGELOG.md) | 版本历史和发布说明 |
 | [**CONTRIBUTING.md**](CONTRIBUTING.md) | 贡献、Provider 和测试工作流 |
 | [**SECURITY.md**](SECURITY.md) | 漏洞报告策略 |

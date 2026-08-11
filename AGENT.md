@@ -18,9 +18,8 @@ wrapper that imports this file; do not duplicate the shared instructions there.
   `PAWNLOGIC_HOME`.
 - Version source of truth: `config/paths.py:VERSION`.
 - Build backend: setuptools with dynamic version in `pyproject.toml`.
-- Project memory: `PROJECT_MEMORY.md` is the compact architecture, ownership,
-  active-plan, and risk map for agents. Read it after this file before broad
-  planning, code changes, release work, or multi-file audits.
+- Project memory: The release state, typed-island scope, known risks, and
+  agent workflow are in the sections at the end of this file.
 
 ## Non-Negotiable Safety Rules
 
@@ -105,9 +104,9 @@ The repository has one CLI runtime implementation.
 - Source code, comments, runtime prompts, log messages, generated templates,
   tests, and agent-facing instructions must be written in English.
 - English is the repository default. Do not add `_EN` suffixes for default
-  English files; use names such as `README.md` and `GUIDE.md`.
+  English files; use names such as `README.md`.
 - Chinese is allowed only in repository files whose filename stem ends with
-  `_zh-CN` (for example `README_zh-CN.md` and `GUIDE_zh-CN.md`), where it must match
+  `_zh-CN` (for example `README_zh-CN.md`), where it must match
   the English documentation semantically.
 - Checked-in `skills/` assets are optional source-checkout material governed by
   the Third-Party Skill Pack Policy. They may retain their upstream language,
@@ -139,18 +138,15 @@ Documentation drift is considered a bug.
   `README.md` and `README_zh-CN.md` in the same change.
 - If a change does not require a README edit, say so explicitly in the final
   report as `README reviewed: no change needed`, with the reason.
-- Every completed repository change must also include a `PROJECT_MEMORY.md`
-  review before the final report. Update it in the same commit when the change
-  affects architecture boundaries, module ownership, public contracts, active
-  release plans, typed-island scope, release state, or known recurring risks.
-  If no update is needed, say so explicitly in the final report as
-  `PROJECT_MEMORY reviewed: no change needed`, with the reason.
+- Every completed repository change must also review the "Current Release State",
+  "Typed Island", and "Known Risks" sections of this file. Update them in the
+  same commit when the change affects architecture, contracts, release state,
+  typed-island scope, or known risks. If no update is needed, say so explicitly
+  in the final report as `AGENT.md sections reviewed: no change needed`.
 - README updates must be completed before release PR merge, release tag
   creation, package build, or PyPI upload. Do not treat a post-release README
   cleanup as fixing the already published PyPI project page.
 - `README.md` and `README_zh-CN.md` must stay structurally and semantically
-  equivalent.
-- `GUIDE.md` and `GUIDE_zh-CN.md` must stay structurally and semantically
   equivalent.
 - `tools/check_doc_structure.py` and the Docs workflow must enforce matching
   heading level/order for the English and Chinese documentation pairs.
@@ -163,8 +159,7 @@ Documentation drift is considered a bug.
 - When provider/model behavior changes, update all of these together:
   - `README.md`
   - `README_zh-CN.md`
-  - `GUIDE.md`
-  - `GUIDE_zh-CN.md`
+  (GUIDE merged into README)
   - `CONTRIBUTING.md` if contributor workflow is affected
   - `pawnlogic/cli.py` help text
   - `core/commands/provider.py` user-facing messages
@@ -177,10 +172,10 @@ Useful drift scans:
 
 ```bash
 rg -n "appear automatically|only shows configured|ds-chat|ds-r1|gpt-3\.5-turbo|myrelay/gpt-4o" \
-  README.md README_zh-CN.md GUIDE.md GUIDE_zh-CN.md CONTRIBUTING.md pawnlogic/cli.py core tests
+  README.md README_zh-CN.md CONTRIBUTING.md pawnlogic/cli.py core tests
 
 rg -n "<name>|/provider activate|/provider deactivate|active provider" \
-  README.md README_zh-CN.md GUIDE.md GUIDE_zh-CN.md pawnlogic/cli.py core/commands/provider.py
+  README.md README_zh-CN.md pawnlogic/cli.py core/commands/provider.py
 ```
 
 ## Third-Party Skill Pack Policy
@@ -211,7 +206,7 @@ package contents.
   resources after attribution is recorded. Do not claim third-party CTF skill
   content is fully self-developed or original to PawnLogic.
 - When changing skill-pack packaging or installation behavior, update
-  `README.md`, `README_zh-CN.md`, `GUIDE.md`, `GUIDE_zh-CN.md`,
+  `README.md`, `README_zh-CN.md`,
   `THIRD_PARTY_NOTICES.md`, `CHANGELOG.md`, and the packaging tests together.
 
 ## Configuration And Database Cleanliness
@@ -422,7 +417,7 @@ Git operations require separate explicit flags. See
 - Version release work must start on a new remote test branch such as
   `test/release-<version>` or `fix/<issue>-<version>`.
 - Before tagging or publishing a version, verify that `README.md`,
-  `README_zh-CN.md`, `GUIDE.md`, `GUIDE_zh-CN.md`, `CHANGELOG.md`, `SECURITY.md`,
+  `README_zh-CN.md`, `CHANGELOG.md`, `SECURITY.md`,
   and package metadata all describe the release consistently.
 - PyPI renders the long description embedded in the built distribution at
   upload time. PyPI does not update an existing version's project description
@@ -567,3 +562,61 @@ PY
 The wheel should not include any `skills/` packs by default. Local skill packs
 are source-checkout or user-installed assets; pip/curl installations should use
 `~/.pawnlogic/skills` only when the user installs packs explicitly.
+
+## Current Release State
+
+- Current public release: `0.3.0`. PyPI, GitHub Release, and latest tag are
+  `v0.3.0`, published from reviewed `main` commit `75d249b` on 2026-07-27.
+- Runtime version source of truth: `config/paths.py:VERSION`.
+- Active plan: `docs/plans/0.3.0-extensible-agent-platform-and-security-distribution.md`.
+  Core 0.3.0 work and release are complete. Independent `pawnlogic-security`
+  0.1.0 published from `john0123412/pawnlogic-security` on 2026-07-28.
+- `main` protected by branch rule requiring PR, up-to-date branches, and four
+  checks: ruff, docs guard, mypy, fast tests. Tag ruleset protects `v*.*.*`.
+- Publishing uses Trusted Publishing / OIDC. GitHub Release waits on
+  hash-pinned fresh-install smoke via `tools/release_install_smoke.sh`.
+
+## Typed Island
+
+The typed-island mypy check is intentionally selective. Grow through stable
+modules and narrow fixes only. Avoid broad `# type: ignore` or global strict
+mode.
+
+Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
+`core/tool_executor`, `core/runtime_context`, `core/provider_runtime`,
+`core/api_errors`, `core/tool_calls`, `core/tool_registry`, `core/context_window`,
+`core/workspace_cleanup`, `core/turn_state`, `core/session_tool_loop`,
+`core/session_snapshot`, `core/delegation`, `core/agent_orchestrator`,
+`core/message_history`, `core/provider_streams`, `core/runtime_metrics`,
+`core/mcp_client_manager`, `core/path_policy`, `core/provider_transport`,
+`core/api_retry`, `core/provider_tui_state`, `tools/check_doc_structure`,
+`tools/check_release_consistency`, `tools/merge_ctf_skills`, `tools/browser_ops`,
+`tools/lsp_lite`, `tools/text_patch`, `tools/shell_ops`, `tools/docker_plan`,
+`tools/pwn_binary`, `tools/pwn_debugger`.
+
+## Known Risks
+
+- Trust/Operation/Network Policy drift across host, Docker, browser, MCP, CTF
+  execution paths. URL adapters must re-evaluate DNS and redirects.
+- Provider visibility drift between CLI, TUI, completions, and runtime fetch.
+- User-friendly mode accidentally leaking debug internals.
+- Stream adapters changing public delta dict keys or ordering.
+- Extension discovery importing or enabling third-party code during startup.
+- Security Tools bypassing shared Tool Registry, Operation Policy, or
+  Network Policy checks.
+- Delegated-agent requests bypassing Provider visibility, allowlists, budgets,
+  or capability filtering.
+- English and zh-CN docs drifting in structure or command examples.
+- Release prep editing version literals outside fixed locations.
+- Packaging accidentally including `skills/` content.
+
+## Agent Workflow
+
+For broad code changes:
+
+1. Read `AGENT.md` (this file).
+2. Read the active plan under `docs/plans/`.
+3. Refresh the code index: `python tools/code_index.py build`
+4. Use the index: `python tools/code_index.py symbol <name>` / `refs <name>`
+5. Run narrow tests first, then wider validation before committing.
+6. Update this file if the work changes architecture, contracts, or risks.

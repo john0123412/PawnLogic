@@ -331,14 +331,56 @@ All runtime data and API keys are stored in `~/.pawnlogic/`.
 
 The project directory contains no secrets and is safe to commit or share.
 
+## Examples
+
+### Add a third-party API
+
+```
+/provider add myrelay https://api.myrelay.com/v1/chat/completions MYRELAY_API_KEY
+/provider fetch myrelay
+/provider activate myrelay
+/model <alias>
+```
+
+### Vision analysis
+
+```
+Analyze screenshot ./screenshot.png, extract the code and fix the bug.
+```
+
+### CTF Pwn
+
+```
+/model ds-v4-pro
+Analyze ./challenge, use pwn_debug to inspect registers at main breakpoint.
+```
+
+## FAQ
+
+**Q: `/model` doesn't show new models after adding a provider?**
+A: Configure its key, run `/provider fetch <name>`, select models, then `/provider activate <name>`.
+
+**Q: Test Connection fails but fetch succeeds?**
+A: Fetch reads `/v1/models`; Test Connection sends a chat request. Load a chat model first.
+
+**Q: Where are API keys stored?**
+A: `~/.pawnlogic/.env` — outside the project, never tracked by git.
+
+**Q: `pawn` says command not found?**
+A: `export PATH="$HOME/.local/bin:$PATH"`
+
+**Q: Browser tools say a module is missing?**
+A: `pip install 'pawnlogic[browser]'` then `patchright install chromium`.
+
+**Q: Does it support local Ollama models?**
+A: Yes. `/provider add`, Base URL `http://localhost:11434`, leave key empty.
+
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | [**README.md**](README.md) | This page |
 | [**README_zh-CN.md**](README_zh-CN.md) | Chinese README |
-| [**GUIDE.md**](GUIDE.md) | Full reference: commands, architecture, and FAQ |
-| [**GUIDE_zh-CN.md**](GUIDE_zh-CN.md) | Chinese full reference |
 | [**CHANGELOG.md**](CHANGELOG.md) | Version history and release notes |
 | [**CONTRIBUTING.md**](CONTRIBUTING.md) | Contribution, provider, and test workflow |
 | [**SECURITY.md**](SECURITY.md) | Vulnerability reporting policy |

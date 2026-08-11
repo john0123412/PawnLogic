@@ -24,13 +24,9 @@ def test_docs_workflow_triggers_use_zh_cn_not_cn():
     for trigger in ("push", "pull_request"):
         paths = wf["on"][trigger]["paths"]
         assert "README_zh-CN.md" in paths, f"{trigger} must watch README_zh-CN.md"
-        assert "GUIDE_zh-CN.md" in paths, f"{trigger} must watch GUIDE_zh-CN.md"
         assert (
             "README_CN.md" not in paths
         ), f"{trigger} must not watch obsolete README_CN.md"
-        assert (
-            "GUIDE_CN.md" not in paths
-        ), f"{trigger} must not watch obsolete GUIDE_CN.md"
 
 
 def test_docs_workflow_includes_plan_and_agent_paths():
@@ -39,7 +35,6 @@ def test_docs_workflow_includes_plan_and_agent_paths():
 
     for trigger in ("push", "pull_request"):
         paths = wf["on"][trigger]["paths"]
-        assert "PROJECT_MEMORY.md" in paths, f"{trigger} must watch PROJECT_MEMORY.md"
         assert "CONTEXT.md" in paths, f"{trigger} must watch CONTEXT.md"
         assert "CONTRIBUTING.md" in paths, f"{trigger} must watch CONTRIBUTING.md"
         assert "docs/agents/**" in paths, f"{trigger} must watch docs/agents/**"
