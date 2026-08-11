@@ -2,7 +2,7 @@
 core/skill_tui.py — Unified Interactive TUI for Skill Pack Management.
 
 Single interface combining enable/disable, sync, rescan, and status display.
-Launched via /skills. Replaces the separate /sp command surface.
+Launched via /skills. Arrow keys + Enter for all operations.
 """
 
 from __future__ import annotations
@@ -19,6 +19,8 @@ from prompt_toolkit.formatted_text import StyleAndTextTuples
 from core.skill_manager import SkillScanner, _canonical_skill_name
 
 _PAGE = 20
+_BTN_NAMES = ["Save", "All", "Clear", "Invert", "Sync", "Rescan", "Cancel"]
+_BTN_COUNT = len(_BTN_NAMES)
 
 TUI_STYLE = Style.from_dict(
     {
@@ -31,11 +33,9 @@ TUI_STYLE = Style.from_dict(
         "search-normal": "#888888",
         "btn-focus": "#00ff00 bold",
         "btn-normal": "#888888",
+        "btn-active": "#ffffff bg:#005f00 bold",
         "status-key": "#00afff bold",
         "status": "#888888",
-        "warning": "#ffaf00",
-        "error": "#ff5555",
-        "info": "#5fafd7",
         "msg-ok": "#00d700",
         "msg-err": "#ff5555",
     }
@@ -55,13 +55,16 @@ class SkillPackTUI:
             }
         else:
             self._selected = set(enabled)
-        self._cursor = 0
+        self._cursor = 0  # position in list
+        self._btn_cursor = 0  # position in button row
+        self._focus = "list"  # "list" or "buttons"
         self._viewport = 0
         self._search = ""
         self._search_focus = False
         self._saved = False
-        self._msg = ""  # status message
-        self._msg_style = ""  # style class for message
+        self._msg = ""
+        self._msg_style = ""
+        self._flash_btn = -1  # button index to flash on activation
         self._app: Application | None = None
 
     # ── filtering ──────────────────────────────────────────────────────────
@@ -109,17 +112,24 @@ class SkillPackTUI:
         # Pack list
         start = self._viewport
         end = min(start + _PAGE, total)
+        in_list = self._focus == "list"
         for idx in range(start, end):
             _, pack = filtered[idx]
             key = self._folder_key(pack)
             checked = "✓" if key in self._selected else " "
-            cur = "▶" if idx == self._cursor and not self._search_focus else " "
+            cur = (
+                "▶"
+                if idx == self._cursor and in_list and not self._search_focus
+                else " "
+            )
             name = pack.get("name", "?")
             folder = pack.get("_folder", "")
             desc = pack.get("description", "")[:45]
             chk_cls = "class:checked" if checked == "✓" else "class:unchecked"
             row_cls = (
-                "class:cursor" if idx == self._cursor and not self._search_focus else ""
+                "class:cursor"
+                if idx == self._cursor and in_list and not self._search_focus
+                else ""
             )
             f.append((row_cls, f"  {cur} "))
             f.append((chk_cls, f"[{checked}]"))
@@ -140,41 +150,48 @@ class SkillPackTUI:
             f.append(("", "\n"))
             f.append((self._msg_style, f"  {self._msg}\n"))
 
-        # Buttons
-        btn_base = total
-        names = ["Save", "Sync", "Rescan", "Cancel"]
-        f.append(("", "\n"))
-        for i, label in enumerate(names):
-            cls = (
-                "class:btn-focus"
-                if self._cursor == btn_base + i and not self._search_focus
-                else "class:btn-normal"
-            )
-            f.append((cls, f"  [ {label} ]"))
+        # Button row
+        f.append(("", "\n  "))
+        for i, label in enumerate(_BTN_NAMES):
+            if i == self._flash_btn:
+                cls = "class:btn-active"
+            elif i == self._btn_cursor and self._focus == "buttons":
+                cls = "class:btn-focus"
+            else:
+                cls = "class:btn-normal"
+            f.append((cls, f" [ {label} ]"))
         f.append(("", "\n"))
 
         return f
 
     def _render_status(self) -> StyleAndTextTuples:
+        if self._search_focus:
+            return [
+                ("class:status-key", " Enter "),
+                ("class:status", "Confirm  "),
+                ("class:status-key", "Esc "),
+                ("class:status", "Cancel  "),
+            ]
+        if self._focus == "buttons":
+            return [
+                ("class:status-key", " ←→ "),
+                ("class:status", "Move  "),
+                ("class:status-key", "Enter "),
+                ("class:status", "Activate  "),
+                ("class:status-key", "Tab "),
+                ("class:status", "Back to list  "),
+                ("class:status-key", "Esc "),
+                ("class:status", "Quit  "),
+            ]
         return [
-            ("class:status-key", " ↑↓jk "),
+            ("class:status-key", " ↑↓ "),
             ("class:status", "Move  "),
             ("class:status-key", "Space "),
             ("class:status", "Toggle  "),
-            ("class:status-key", "/ "),
-            ("class:status", "Search  "),
-            ("class:status-key", "A "),
-            ("class:status", "All  "),
-            ("class:status-key", "C "),
-            ("class:status", "Clear  "),
-            ("class:status-key", "I "),
-            ("class:status", "Invert  "),
-            ("class:status-key", "S "),
-            ("class:status", "Sync  "),
-            ("class:status-key", "R "),
-            ("class:status", "Rescan  "),
-            ("class:status-key", "Enter "),
-            ("class:status", "OK  "),
+            ("class:status-key", "Tab "),
+            ("class:status", "Buttons  "),
+            ("class:status-key", "PgUp/Dn "),
+            ("class:status", "Page  "),
             ("class:status-key", "Esc "),
             ("class:status", "Quit  "),
         ]
@@ -191,7 +208,6 @@ class SkillPackTUI:
         err = len(results) - ok
         self._msg = f"Sync done: {ok} updated, {err} failed"
         self._msg_style = "class:msg-ok" if err == 0 else "class:msg-err"
-        # Refresh pack list
         self._all_packs = self._scanner.scan_all(include_disabled=True)
         self._adjust_cursor()
 
@@ -202,12 +218,51 @@ class SkillPackTUI:
         self._msg = f"Rescanned: {len(self._all_packs)} packs found"
         self._msg_style = "class:msg-ok"
 
+    def _do_select_all(self) -> None:
+        for _, p in self._filtered():
+            self._selected.add(self._folder_key(p))
+
+    def _do_clear(self) -> None:
+        for _, p in self._filtered():
+            self._selected.discard(self._folder_key(p))
+
+    def _do_invert(self) -> None:
+        for _, p in self._filtered():
+            key = self._folder_key(p)
+            if key in self._selected:
+                self._selected.discard(key)
+            else:
+                self._selected.add(key)
+
     def _adjust_cursor(self) -> None:
         total = len(self._filtered())
-        btn_count = 4  # Save, Sync, Rescan, Cancel
-        max_idx = total + btn_count - 1
-        if self._cursor > max_idx:
-            self._cursor = max_idx
+        if self._cursor >= total:
+            self._cursor = max(0, total - 1)
+
+    def _activate_button(self, idx: int) -> None:
+        """Activate a button by index with a brief flash."""
+        self._flash_btn = idx
+        if self._app:
+            self._app.invalidate()
+        name = _BTN_NAMES[idx]
+        if name == "Save":
+            self._save_and_exit()
+        elif name == "All":
+            self._do_select_all()
+        elif name == "Clear":
+            self._do_clear()
+        elif name == "Invert":
+            self._do_invert()
+        elif name == "Sync":
+            self._do_sync()
+        elif name == "Rescan":
+            self._do_rescan()
+        elif name == "Cancel":
+            self._saved = False
+            if self._app:
+                self._app.exit()
+        # Reset flash after a short delay (next invalidate cycle)
+        self._flash_btn = -1
 
     # ── key bindings ───────────────────────────────────────────────────────
 
@@ -218,10 +273,7 @@ class SkillPackTUI:
             if self._app:
                 self._app.invalidate()
 
-        filtered_len = lambda: len(self._filtered())
-        btn_count = 4  # Save, Sync, Rescan, Cancel
-
-        # Search mode
+        # ── search mode ────────────────────────────────────────────────────
         _searching = Condition(lambda: self._search_focus)
 
         @kb.add("escape", filter=_searching)
@@ -239,42 +291,71 @@ class SkillPackTUI:
             self._viewport = 0
             inv()
 
-        # List mode
-        _listing = Condition(lambda: not self._search_focus)
+        # ── button focus mode ──────────────────────────────────────────────
+        _buttons = Condition(
+            lambda: not self._search_focus and self._focus == "buttons"
+        )
+
+        @kb.add("left", filter=_buttons)
+        def _btn_left(e):
+            self._btn_cursor = (self._btn_cursor - 1) % _BTN_COUNT
+            inv()
+
+        @kb.add("right", filter=_buttons)
+        def _btn_right(e):
+            self._btn_cursor = (self._btn_cursor + 1) % _BTN_COUNT
+            inv()
+
+        @kb.add("enter", filter=_buttons)
+        def _btn_enter(e):
+            self._activate_button(self._btn_cursor)
+            inv()
+
+        @kb.add("tab", filter=_buttons)
+        def _btn_tab(e):
+            self._focus = "list"
+            inv()
+
+        @kb.add("escape", filter=_buttons)
+        def _btn_esc(e):
+            self._saved = False
+            if self._app:
+                self._app.exit()
+
+        # ── list focus mode ────────────────────────────────────────────────
+        _listing = Condition(lambda: not self._search_focus and self._focus == "list")
 
         @kb.add("up", filter=_listing)
-        @kb.add("k", filter=_listing)
-        def _up(e):
-            total = filtered_len() + btn_count
+        def _list_up(e):
+            total = len(self._filtered())
             if total > 0:
                 self._cursor = (self._cursor - 1) % total
                 self._ensure_viewport()
             inv()
 
         @kb.add("down", filter=_listing)
-        @kb.add("j", filter=_listing)
-        def _down(e):
-            total = filtered_len() + btn_count
+        def _list_down(e):
+            total = len(self._filtered())
             if total > 0:
                 self._cursor = (self._cursor + 1) % total
                 self._ensure_viewport()
             inv()
 
         @kb.add("pageup", filter=_listing)
-        def _pgup(e):
+        def _list_pgup(e):
             self._cursor = max(0, self._cursor - _PAGE)
             self._ensure_viewport()
             inv()
 
         @kb.add("pagedown", filter=_listing)
-        def _pgdn(e):
-            total = filtered_len() + btn_count
+        def _list_pgdn(e):
+            total = len(self._filtered())
             self._cursor = min(total - 1, self._cursor + _PAGE)
             self._ensure_viewport()
             inv()
 
         @kb.add("space", filter=_listing)
-        def _space(e):
+        def _list_space(e):
             filtered = self._filtered()
             if self._cursor < len(filtered):
                 _, pack = filtered[self._cursor]
@@ -286,75 +367,29 @@ class SkillPackTUI:
             inv()
 
         @kb.add("enter", filter=_listing)
-        def _enter(e):
+        def _list_enter(e):
             filtered = self._filtered()
-            total = len(filtered)
-            btn_idx = self._cursor - total
-            if self._cursor < total:
+            if self._cursor < len(filtered):
                 _, pack = filtered[self._cursor]
                 key = self._folder_key(pack)
                 if key in self._selected:
                     self._selected.discard(key)
                 else:
                     self._selected.add(key)
-                inv()
-                return
-            if btn_idx == 0:  # Save
-                self._save_and_exit()
-            elif btn_idx == 1:  # Sync
-                self._do_sync()
-                inv()
-            elif btn_idx == 2:  # Rescan
-                self._do_rescan()
-                inv()
-            elif btn_idx == 3:  # Cancel
-                self._saved = False
-                if self._app:
-                    self._app.exit()
-
-        @kb.add("a", filter=_listing)
-        @kb.add("A", filter=_listing)
-        def _select_all(e):
-            for _, p in self._filtered():
-                self._selected.add(self._folder_key(p))
             inv()
 
-        @kb.add("c", filter=_listing)
-        @kb.add("C", filter=_listing)
-        def _clear_all(e):
-            for _, p in self._filtered():
-                self._selected.discard(self._folder_key(p))
-            inv()
-
-        @kb.add("i", filter=_listing)
-        @kb.add("I", filter=_listing)
-        def _invert(e):
-            for _, p in self._filtered():
-                key = self._folder_key(p)
-                if key in self._selected:
-                    self._selected.discard(key)
-                else:
-                    self._selected.add(key)
-            inv()
-
-        @kb.add("s", filter=_listing)
-        def _sync(e):
-            self._do_sync()
-            inv()
-
-        @kb.add("r", filter=_listing)
-        @kb.add("R", filter=_listing)
-        def _rescan(e):
-            self._do_rescan()
+        @kb.add("tab", filter=_listing)
+        def _list_tab(e):
+            self._focus = "buttons"
             inv()
 
         @kb.add("/", filter=_listing)
-        def _to_search(e):
+        def _list_search(e):
             self._search_focus = True
             inv()
 
         @kb.add("escape", filter=_listing)
-        def _esc(e):
+        def _list_esc(e):
             self._saved = False
             if self._app:
                 self._app.exit()
@@ -381,10 +416,12 @@ class SkillPackTUI:
         body = FormattedTextControl(self._render)
         status = FormattedTextControl(self._render_status)
 
-        root = HSplit([
-            Window(content=body, always_hide_cursor=True),
-            Window(content=status, height=1),
-        ])
+        root = HSplit(
+            [
+                Window(content=body, always_hide_cursor=True),
+                Window(content=status, height=1),
+            ]
+        )
 
         self._app = Application(
             layout=Layout(root),

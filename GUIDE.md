@@ -266,13 +266,13 @@ to the agent and matched during search. State persists in
 
 The TUI provides:
 
-- **Space/Enter**: toggle enable/disable
-- **↑↓/j/k**: navigate, **PgUp/PgDn**: page scroll
+- **↑↓**: navigate list, **Space/Enter**: toggle enable/disable
+- **Tab**: switch between list and button row
+- **←→**: navigate buttons, **Enter**: activate button
 - **/**: search/filter packs
-- **A**: select all, **C**: clear all, **I**: invert selection
-- **S**: sync git-backed packs, **R**: rescan directory
-- **Enter on Save**: persist and exit
-- **Esc**: cancel without saving
+- **PgUp/PgDn**: page scroll
+- Buttons: Save, All, Clear, Invert, Sync, Rescan, Cancel
+- **Esc**: quit without saving
 
 Only redistribute third-party CTF skill content from this repository after the
 upstream license, source URL, commit, and required notices have been recorded in
