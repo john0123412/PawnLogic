@@ -110,6 +110,38 @@ def test_tool_spec_registers_metadata_atomically():
     assert reg.owner_of("alpha") == "builtin"
 
 
+def test_resolve_for_execution_returns_complete_spec_and_owner():
+    reg = ToolRegistry()
+    spec = ToolSpec("alpha", lambda _args: "ok", _schema("alpha"))
+    reg.register_many_owned("extension:example", [spec])
+
+    assert reg.resolve_for_execution("alpha") == (spec, "extension:example")
+
+
+def test_resolve_for_execution_excludes_pending_legacy_handlers():
+    reg = ToolRegistry()
+    reg.register("pending", lambda _args: "must not run")
+
+    assert reg.get_handler("pending") is not None
+    assert reg.resolve_for_execution("pending") is None
+
+
+def test_resolve_for_execution_preserves_metadata_for_legacy_handler_override():
+    reg = ToolRegistry()
+    original = ToolSpec("alpha", lambda _args: "original", _schema("alpha"))
+    replacement = lambda _args: "replacement"
+    reg.register_many_owned("extension:example", [original])
+    reg.live_map()["alpha"] = replacement
+
+    resolved = reg.resolve_for_execution("alpha")
+
+    assert resolved is not None
+    spec, owner = resolved
+    assert spec.handler is replacement
+    assert spec.schema == original.schema
+    assert owner == "extension:example"
+
+
 def test_tool_spec_rejects_mismatched_schema_name_without_mutation():
     reg = ToolRegistry()
     with pytest.raises(ValueError, match="does not match"):

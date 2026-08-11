@@ -424,6 +424,14 @@ class NetworkPolicy:
         private = target.address is not None and target.address.is_private
         private = private or any(address.is_private for address in addresses)
         authorized = _target_authorized(target, operation, addresses)
+        if operation.active_probe and (
+            not operation.engagement_scope or not operation.scope_valid
+        ):
+            return self._deny(
+                NetworkRule.ENGAGEMENT_SCOPE_REQUIRED,
+                "active network operation requires a valid Engagement Scope",
+                target.url,
+            )
         if private and not authorized:
             if not operation.interactive:
                 return self._deny(
@@ -444,14 +452,6 @@ class NetworkPolicy:
                 normalized_target=target.url,
             )
 
-        if operation.active_probe and (
-            not operation.engagement_scope or not operation.scope_valid
-        ):
-            return self._deny(
-                NetworkRule.ENGAGEMENT_SCOPE_REQUIRED,
-                "active network operation requires a valid Engagement Scope",
-                target.url,
-            )
         if operation.active_probe and not authorized:
             if not operation.interactive:
                 return self._deny(

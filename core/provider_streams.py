@@ -14,6 +14,11 @@ class StreamResponse(Protocol):
 
 InterruptCheck = Callable[[], None]
 
+# An empty ``readline()`` result is not a reliable EOF discriminator across
+# response adapters. Retry only a bounded number of times so a persistent empty
+# result cannot create an unbounded polling loop.
+_MAX_CONSECUTIVE_EMPTY_READS = 3
+
 
 def parse_sse_delta(raw: str) -> dict[str, Any] | None:
     raw = raw.strip()
@@ -191,6 +196,8 @@ def read_anthropic_sse_lines(
     current_event = ""
     state: dict[str, Any] = {"tool_blocks": {}}
     partial_text = ""
+    empty_streak = 0
+
     while True:
         raise_if_interrupted()
         try:
@@ -209,7 +216,11 @@ def read_anthropic_sse_lines(
             raise
 
         if not raw_line:
-            return
+            empty_streak += 1
+            if empty_streak >= _MAX_CONSECUTIVE_EMPTY_READS:
+                return
+            continue
+        empty_streak = 0
 
         line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
 
@@ -240,6 +251,8 @@ def read_openai_sse_lines(
     raise_if_interrupted: InterruptCheck,
 ) -> Iterator[dict[str, Any]]:
     partial_text = ""
+    empty_streak = 0
+
     while True:
         raise_if_interrupted()
         try:
@@ -258,7 +271,11 @@ def read_openai_sse_lines(
             raise
 
         if not raw_line:
-            return
+            empty_streak += 1
+            if empty_streak >= _MAX_CONSECUTIVE_EMPTY_READS:
+                return
+            continue
+        empty_streak = 0
 
         line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
         if not line.startswith("data: "):

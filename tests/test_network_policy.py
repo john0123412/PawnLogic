@@ -186,6 +186,29 @@ def test_active_probe_requires_confirmation_unless_authorized():
     assert allowed.action == NetworkAction.ALLOW
 
 
+@pytest.mark.parametrize(
+    ("engagement_scope", "scope_valid"),
+    [(None, False), ("expired-engagement", False)],
+)
+def test_authorized_private_active_probe_requires_valid_engagement_scope(
+    engagement_scope, scope_valid
+):
+    decision = NetworkPolicy().evaluate(
+        NetworkOperation(
+            url="http://192.168.1.10:8080/lab",
+            active_probe=True,
+            explicit_authorization=True,
+            authorized_targets=("192.168.1.0/24",),
+            engagement_scope=engagement_scope,
+            scope_valid=scope_valid,
+            interactive=False,
+        )
+    )
+
+    assert decision.action == NetworkAction.DENY
+    assert decision.rule == NetworkRule.ENGAGEMENT_SCOPE_REQUIRED.value
+
+
 def test_network_capability_without_target_uses_explicit_authorization_gate():
     policy = NetworkPolicy()
     denied = policy.evaluate(

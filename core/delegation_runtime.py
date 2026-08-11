@@ -4,13 +4,22 @@ from __future__ import annotations
 
 import contextlib
 import io
+from collections.abc import Callable
 from datetime import datetime
+from typing import Any
 
 from config import DEFAULT_MODEL, user_friendly_error
+from core.agent_orchestrator import CancellationToken
 from core.api_client import ensure_tool_call_id, stream_request
 from core.context_manager import ContextEnvelope
 from core.agent_events import AgentEventKind
-from core.delegation import FailureRecord, publish_delegation_event
+from core.delegation import (
+    AgentResult,
+    AgentTask,
+    AgentUsage,
+    FailureRecord,
+    publish_delegation_event,
+)
 from core.memory import _gen_id
 from core.state import runtime_config, state as _runtime_state
 from core.tool_executor import (
@@ -92,10 +101,16 @@ def _tool_capabilities():
     }
 
 
-def make_sub_executor(handler_lookup):
-    """Build the shared ToolExecutor behind a restricted handler lookup."""
+def _tool_execution_resolver():
+    from core.session import _resolve_tool_for_execution
+
+    return _resolve_tool_for_execution
+
+
+def make_sub_executor(tool_resolver):
+    """Build the shared ToolExecutor behind a restricted ToolSpec resolver."""
     return ToolExecutor(
-        get_handler=handler_lookup,
+        resolve_tool=tool_resolver,
         agent_phases={},
         schema_snapshot=lambda: [],
         check_failure_func=lambda *a, **k: [],
@@ -141,6 +156,7 @@ class SubAgentSession:
         self.tool_calls = 0
         self.status = "completed"
         self.failures: list[FailureRecord] = []
+        self.cancellation: CancellationToken | None = None
         inherited_ctx = self._selected_context(
             context_mode,
             context_envelope,
@@ -265,7 +281,38 @@ class SubAgentSession:
             f"max_tokens={self.max_tokens}"
         )
 
+    def _cancellation_reason(self) -> str | None:
+        cancellation = self.cancellation
+        if cancellation is not None and cancellation.cancelled:
+            return cancellation.reason or "Task was cancelled."
+        try:
+            from core.interrupts import interrupted
+
+            if interrupted():
+                reason = "parent turn interrupted"
+                if cancellation is not None:
+                    cancellation.cancel(reason)
+                    return cancellation.reason or reason
+                return reason
+        except Exception:
+            pass
+        return None
+
+    def _cancelled_error(self, reason: str) -> str:
+        self.status = "cancelled"
+        self.failures.append(
+            FailureRecord(
+                code="cancelled",
+                message=reason,
+                retryable=False,
+            )
+        )
+        return f"[Sub-agent cancelled] {reason}"
+
     def run(self) -> str:
+        cancellation_reason = self._cancellation_reason()
+        if cancellation_reason is not None:
+            return self._cancelled_error(cancellation_reason)
         snapshot_map = _tool_map()
         allowed = resolve_allowed_tools(
             self.capability,
@@ -278,32 +325,45 @@ class SubAgentSession:
             for schema in _tools_schema()
             if schema.get("function", {}).get("name") in allowed
         ]
-        handler_map = {
-            name: handler
-            for name, handler in snapshot_map.items()
-            if name in allowed
-        }
-        executor = make_sub_executor(handler_map.get)
+        resolve_registered_tool = _tool_execution_resolver()
+
+        def resolve_allowed_tool(name: str):
+            if name not in allowed:
+                return None
+            return resolve_registered_tool(name)
+
+        executor = make_sub_executor(resolve_allowed_tool)
         captured = io.StringIO()
 
         for iteration in range(self.MAX_ITER):
+            cancellation_reason = self._cancellation_reason()
+            if cancellation_reason is not None:
+                return self._cancelled_error(cancellation_reason)
             remaining_tokens = self.max_tokens - self.completion_tokens
             if remaining_tokens <= 0:
                 return self._token_budget_error()
-            with contextlib.redirect_stdout(captured):
-                api = consume_model_stream(
-                    stream_request(
-                        self.messages,
-                        self.model_alias,
-                        tools_schema=tools_schema,
-                        max_tokens=min(
-                            int(runtime_config()["max_tokens"]),
-                            remaining_tokens,
+            try:
+                with contextlib.redirect_stdout(captured):
+                    api = consume_model_stream(
+                        stream_request(
+                            self.messages,
+                            self.model_alias,
+                            tools_schema=tools_schema,
+                            max_tokens=min(
+                                int(runtime_config()["max_tokens"]),
+                                remaining_tokens,
+                            ),
                         ),
-                    ),
-                    ensure_tool_call_id=ensure_tool_call_id,
-                    iteration=iteration,
-                )
+                        ensure_tool_call_id=ensure_tool_call_id,
+                        iteration=iteration,
+                    )
+            except KeyboardInterrupt:
+                if self.cancellation is not None:
+                    self.cancellation.cancel("parent turn interrupted")
+                return self._cancelled_error("parent turn interrupted")
+            cancellation_reason = self._cancellation_reason()
+            if cancellation_reason is not None:
+                return self._cancelled_error(cancellation_reason)
             if api.error:
                 return self._record_provider_error(api.error)
             self.prompt_tokens += int(api.usage.get("prompt_tokens", 0))
@@ -337,6 +397,9 @@ class SubAgentSession:
                 user_mode=self._user_mode(),
             )
             for index in sorted(api.tool_calls):
+                cancellation_reason = self._cancellation_reason()
+                if cancellation_reason is not None:
+                    return self._cancelled_error(cancellation_reason)
                 if self.tool_calls >= self.max_tool_calls:
                     return self._tool_budget_error()
                 self._execute_tool(
@@ -435,8 +498,108 @@ class SubAgentSession:
         )
 
 
+class DelegationTaskExecutor:
+    """Adapt one bounded child session to the serial orchestration seam."""
+
+    def __init__(
+        self,
+        model_alias: str,
+        *,
+        context_envelope: ContextEnvelope | None = None,
+        session_factory: Callable[..., Any] = SubAgentSession,
+        on_started: Callable[[str], None] | None = None,
+    ) -> None:
+        if not isinstance(model_alias, str) or not model_alias.strip():
+            raise ValueError("model_alias must not be empty")
+        if not callable(session_factory):
+            raise TypeError("session_factory must be callable")
+        if on_started is not None and not callable(on_started):
+            raise TypeError("on_started must be callable or None")
+        self._model_alias = model_alias.strip()
+        self._context_envelope = context_envelope
+        self._session_factory = session_factory
+        self._on_started = on_started
+        self.subagent: Any | None = None
+        self.child_agent_id: str | None = None
+
+    def execute(
+        self,
+        task: AgentTask,
+        cancellation: CancellationToken,
+    ) -> AgentResult:
+        if cancellation.cancelled:
+            return self._cancelled(task, cancellation.reason or "Task was cancelled.")
+
+        options: dict[str, Any] = {
+            "role": task.role,
+            "instructions": task.instructions,
+            "context_mode": task.context_mode,
+            "max_tokens": task.budget.max_tokens,
+            "max_tool_calls": task.budget.max_tool_calls,
+        }
+        if self._context_envelope is not None:
+            options["context_envelope"] = self._context_envelope
+        subagent = self._session_factory(
+            task.objective,
+            self._model_alias,
+            capability=task.capability_profile,
+            allowlist=task.allowed_tools or None,
+            **options,
+        )
+        subagent.cancellation = cancellation
+        self.subagent = subagent
+        self.child_agent_id = str(
+            getattr(subagent, "session_id", "delegated-agent")
+        )
+        if self._on_started is not None:
+            self._on_started(self.child_agent_id)
+
+        try:
+            summary = str(subagent.run())
+        except KeyboardInterrupt:
+            cancellation.cancel("parent turn interrupted")
+            return self._cancelled(task, "parent turn interrupted")
+
+        return AgentResult(
+            task_id=task.task_id,
+            parent_task_id=task.parent_task_id,
+            status=str(getattr(subagent, "status", "completed")),
+            summary=summary,
+            model_alias=self._model_alias,
+            failures=tuple(getattr(subagent, "failures", ())),
+            usage=AgentUsage(
+                prompt_tokens=int(getattr(subagent, "prompt_tokens", 0)),
+                completion_tokens=int(getattr(subagent, "completion_tokens", 0)),
+                tool_calls=int(
+                    getattr(
+                        subagent,
+                        "tool_calls",
+                        len(getattr(subagent, "_tool_log", ())),
+                    )
+                ),
+            ),
+        )
+
+    @staticmethod
+    def _cancelled(task: AgentTask, reason: str) -> AgentResult:
+        return AgentResult(
+            task_id=task.task_id,
+            parent_task_id=task.parent_task_id,
+            status="cancelled",
+            summary=reason,
+            failures=(
+                FailureRecord(
+                    code="cancelled",
+                    message=reason,
+                    retryable=False,
+                ),
+            ),
+        )
+
+
 __all__ = [
     "CAPABILITY_PROFILES",
+    "DelegationTaskExecutor",
     "SubAgentSession",
     "make_sub_executor",
     "resolve_allowed_tools",
