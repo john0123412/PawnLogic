@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.0**。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.0**。版本 **0.3.1** 是尚未发布的候选版本。
 
 ## 系统要求
 
@@ -90,16 +90,12 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 
 ## 新特性
 
-0.3.0 把 PawnLogic 变成可扩展的 Agent host，同时保持核心分发包精简，并保持现有公开 contract 不变：
+尚未发布的 0.3.1 候选版本在保持已发布 0.3.0 公共 contract 不变的前提下，强化运行时流处理、文件发现和 Tool 执行安全性：
 
-- Extension 通过 `pawnlogic.extensions` entry point group 被发现，且在你显式启用前保持禁用。Discovery 只读取 metadata 而不导入 Extension 代码，`/extension list|status|enable|disable` 负责整个生命周期。安装一个分发包不等于授权运行它。
-- 共享的 Network Policy 为 web、browser、MCP 和 Docker 调用方裁决每一个 HTTP(S) target。Credential、cloud metadata 和特殊地址段一律拒绝，private target 需要显式授权，每一次 redirect 都重新评估，non-interactive confirmation 一律 fail closed。
-- Delegated Agent 通过 host policy 请求 Model 和 Tool。Prompt 和 Tool 参数无法绕过 Provider 可见性、用户 allowlist、capability 过滤或 budget。
-- Structured context 以原子 Tool Call 组为单位跟踪 prompt budget，因此裁剪永远不会静默破坏受保护的 anchor、pin 或 Tool 组。
-- Knowledge retrieval 读取有界的、带 provenance 的语料，以 SQLite 作为持久权威。可选 projection 只影响排序，其缺失或过期永远不是致命错误。
-- 版本化的 Agent Event 流报告 Turn、retrieval、Tool、policy、usage 和 delegation。Payload 被递归脱敏，subscriber 失败永远不会中断执行，NDJSON sink 新增 typed `event` 记录，自动化不再需要解析终端输出。
-- Multi-Agent 编排保持确定性串行，具备任务血缘、deadline、协作式取消，以及原子的 token、Tool 和 cost budget 认领。并发数超过 1 会 fail closed，直到隔离性被证明。
-- 发布不再以上传成功为准：生产 tag 必须指向 `main` 上的 commit，且已发布的分发包会被从 index 重新安装并冒烟验证，之后才创建 GitHub Release。
+- SSE reader 可容忍 chunked transport 中最多两次瞬时空 `readline()` 结果；第三次空读结束流，避免无界轮询循环。
+- `find_files` 默认使用 10 秒 monotonic 遍历 deadline；到期时结果会标记为 partial。
+- active network probe 必须先拥有有效 Engagement Scope，才能允许已授权的 private target。
+- Host 只会通过 policy seam 执行完整且有 owner 的 ToolSpec；缺少 metadata 的 handler 会 fail closed。公开委派任务现在经由 serial orchestrator 执行，并使用协作式取消和共享 budget。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 

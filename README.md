@@ -11,7 +11,8 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.3.0**.
+CTF-oriented toolchain. The current public release is **0.3.0**. Version
+**0.3.1** is an unreleased release candidate.
 
 ## System Requirements
 
@@ -100,35 +101,20 @@ use the additive `{"type":"event","data":{...}}` envelope.
 
 ## What's New
 
-Version 0.3.0 turns PawnLogic into an extensible agent host while keeping the
-core distribution small and preserving existing public contracts:
+The unreleased 0.3.1 release candidate hardens runtime streaming, file
+discovery, and tool-execution safety while preserving the published 0.3.0
+public contracts:
 
-- Extensions are discovered through the `pawnlogic.extensions` entry point
-  group and stay disabled until you enable them. Discovery reads metadata
-  without importing extension code, and `/extension list|status|enable|disable`
-  owns the lifecycle. Installing a distribution is not authorization to run it.
-- A shared Network Policy decides every HTTP(S) target for web, browser, MCP,
-  and Docker callers. Credentials, cloud metadata, and special address ranges
-  are denied, private targets need explicit authorization, every redirect is
-  re-evaluated, and non-interactive confirmation fails closed.
-- Delegated agents request models and tools through host policy. Prompts and
-  tool arguments cannot bypass provider visibility, user allowlists, capability
-  filtering, or budgets.
-- Structured context tracks prompt budget with atomic tool-call groups, so
-  trimming never silently corrupts protected anchors, pins, or tool groups.
-- Knowledge retrieval reads a bounded, provenance-aware corpus with SQLite as
-  the durable authority. Optional projections only affect ranking, and their
-  absence or staleness is never fatal.
-- A versioned Agent Event stream reports turns, retrieval, tools, policy,
-  usage, and delegation. Payloads are recursively redacted, subscriber failures
-  never stop execution, and the NDJSON sink gains a typed `event` record so
-  automation no longer needs to parse terminal output.
-- Multi-agent orchestration is deterministic and serial, with task lineage,
-  deadlines, cooperative cancellation, and atomic token, tool, and cost budget
-  claims. Concurrency above one fails closed until isolation is proven.
-- Releases are gated on more than a successful upload: a production tag must
-  point at a commit on `main`, and the published distribution is reinstalled
-  from the index and smoke-tested before the GitHub Release is created.
+- SSE readers tolerate up to two transient empty `readline()` results from
+  chunked transports; a third ends the stream to prevent an unbounded polling
+  loop.
+- `find_files` uses a default 10-second monotonic traversal deadline and marks
+  results as partial when the deadline expires.
+- Active network probes require a valid Engagement Scope before an authorized
+  private target can be allowed.
+- The host executes only complete, owned ToolSpecs through its policy seam;
+  metadata-less handlers fail closed. Public delegated tasks now run through
+  the serial orchestrator with cooperative cancellation and shared budgets.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
