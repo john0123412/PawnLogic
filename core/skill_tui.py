@@ -18,7 +18,7 @@ from prompt_toolkit.formatted_text import StyleAndTextTuples
 
 from core.skill_manager import SkillScanner, _canonical_skill_name
 
-_PAGE = 20
+_PAGE = 12
 _BTN_NAMES = ["Save", "All", "Clear", "Invert", "Sync", "Rescan", "Cancel"]
 _BTN_COUNT = len(_BTN_NAMES)
 
