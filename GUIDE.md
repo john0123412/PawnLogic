@@ -267,12 +267,16 @@ to the agent and matched during search. State persists in
 The TUI provides:
 
 - **↑↓**: navigate list, **Space/Enter**: toggle enable/disable
-- **Tab**: switch between list and button row
-- **←→**: navigate buttons, **Enter**: activate button
-- **/**: search/filter packs
-- **PgUp/PgDn**: page scroll
-- Buttons: Save, All, Clear, Invert, Sync, Rescan, Cancel
+- **Tab**: switch between list and button row, **←→**: navigate buttons
+- **Enter** on button: activate
+- **/**: search/filter packs, **PgUp/PgDn**: page scroll
 - **Esc**: quit without saving
+
+Buttons: **Save** (persist and exit), **All** (enable all visible),
+**Clear** (disable all visible), **Invert** (flip selection),
+**Sync** (git pull on git-backed packs), **Rescan** (re-read skills directory),
+**Cancel** (discard changes and exit). Operations apply to search results when
+a filter is active.
 
 Only redistribute third-party CTF skill content from this repository after the
 upstream license, source URL, commit, and required notices have been recorded in

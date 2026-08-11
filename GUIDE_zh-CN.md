@@ -243,12 +243,14 @@ git-backed skill pack 安装只接受 `https://`、`ssh://` 或
 TUI 功能:
 
 - **↑↓**: 移动列表, **Space/Enter**: 切换启用/禁用
-- **Tab**: 在列表和按钮行之间切换
-- **←→**: 移动按钮, **Enter**: 激活按钮
-- **/**: 搜索/过滤
-- **PgUp/PgDn**: 翻页
-- 按钮: Save, All, Clear, Invert, Sync, Rescan, Cancel
+- **Tab**: 在列表和按钮行之间切换, **←→**: 移动按钮
+- **Enter** 在按钮上: 激活
+- **/**: 搜索/过滤, **PgUp/PgDn**: 翻页
 - **Esc**: 不保存退出
+
+按钮: **Save** (保存并退出), **All** (启用所有可见), **Clear** (禁用所有可见),
+**Invert** (反选), **Sync** (git pull 更新), **Rescan** (重新扫描目录),
+**Cancel** (放弃退出)。有搜索过滤时操作只影响搜索结果。
 
 只有在 `THIRD_PARTY_NOTICES.md` 中记录了上游许可证、来源 URL、commit 和必要 notice
 之后，才可以从本仓库再分发第三方 CTF skill 内容。

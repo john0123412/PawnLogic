@@ -352,7 +352,11 @@ These contracts are more important than local refactoring convenience:
 
 - `core/workspace_cleanup.py` owns workspace backup, restore, staging, cleanup,
   and rollback behavior.
-- `core/skill_manager.py` owns skill-pack metadata and indexing behavior.
+- `core/skill_manager.py` owns skill-pack metadata, indexing, and
+  enable/disable persistence (`~/.pawnlogic/skills_enabled.json`).
+  `core/skill_tui.py` owns the interactive TUI for skill pack management
+  (arrow keys, Tab, Space toggle, search, bulk operations).
+  `/skills` is the single entry point; `/sp` and `/skillpack` are removed.
 - `tools/runtime_eval.py` owns the local runtime evaluation harness and writes
   redacted JSONL artifacts under ignored `.pawnlogic_eval/`. Real API smoke
   remains opt-in through `PAWNLOGIC_REAL_API_SMOKE=true` and guarded by local

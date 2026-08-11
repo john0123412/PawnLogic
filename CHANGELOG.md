@@ -30,10 +30,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [0.3.1] - 2026-08-12
 
 ### Added
-- Added unified skill pack management TUI (`/skills`): interactive
-  enable/disable with space toggle, search, sync, rescan, and bulk
-  operations. State persists in `~/.pawnlogic/skills_enabled.json`.
-  New packs default to disabled; users enable what they need.
+- Added unified skill pack management TUI (`/skills`): arrow-key navigation,
+  Space/Enter to toggle, Tab to switch between list and button row, search,
+  and bulk operations (All/Clear/Invert/Sync/Rescan). State persists in
+  `~/.pawnlogic/skills_enabled.json`. New packs default to disabled; users
+  enable what they need. Fits standard 24-line terminals.
 - Added 41 third-party skill packs from `zhaoxuya520/reverse-skill` (MIT)
   covering reverse engineering, penetration testing, malware analysis,
   digital forensics, and more. All new packs excluded from PyPI wheels and
