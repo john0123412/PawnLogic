@@ -96,10 +96,26 @@ def _emit_run_shell_warning() -> None:
 # Security checks.
 # ════════════════════════════════════════════════════════
 
+# Resolve blacklist paths once per READ_BLACKLIST identity. On WSL2, resolving
+# a symlink to a Windows mount (e.g. ~/.aws -> /mnt/c/Users/...) costs ~18ms
+# per call. Without caching, _read_block_reason re-resolves all entries for
+# every file candidate, turning a 34k-file walk into a 60+ minute hang.
+_resolved_blacklist_cache: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+
+
+def _resolved_blacklist() -> tuple[str, ...]:
+    global _resolved_blacklist_cache
+    bl_id = id(READ_BLACKLIST)
+    if _resolved_blacklist_cache is not None and _resolved_blacklist_cache[0] == (bl_id,):
+        return _resolved_blacklist_cache[1]
+    resolved = tuple(str(Path(bl).expanduser().resolve()) for bl in READ_BLACKLIST)
+    _resolved_blacklist_cache = ((bl_id,), resolved)
+    return resolved
+
+
 def _read_block_reason(path, action: str) -> str:
     abs_p = str(Path(path).expanduser().resolve())
-    for bl in READ_BLACKLIST:
-        bl_p = str(Path(bl).expanduser().resolve())
+    for bl_p in _resolved_blacklist():
         try:
             is_blocked = os.path.commonpath([abs_p, bl_p]) == bl_p
         except ValueError:
