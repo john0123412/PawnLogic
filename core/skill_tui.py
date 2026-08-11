@@ -1,8 +1,8 @@
 """
-core/skill_tui.py — Interactive TUI for Skill Pack Management.
+core/skill_tui.py — Unified Interactive TUI for Skill Pack Management.
 
-Checklist interface: space to toggle, search, bulk select/clear, save/cancel.
-Reuses prompt_toolkit patterns from core/provider_tui.py.
+Single interface combining enable/disable, sync, rescan, and status display.
+Launched via /skills. Replaces the separate /sp command surface.
 """
 
 from __future__ import annotations
@@ -36,17 +36,18 @@ TUI_STYLE = Style.from_dict(
         "warning": "#ffaf00",
         "error": "#ff5555",
         "info": "#5fafd7",
+        "msg-ok": "#00d700",
+        "msg-err": "#ff5555",
     }
 )
 
 
 class SkillPackTUI:
-    """Interactive checklist for enabling/disabling skill packs."""
+    """Unified interactive TUI for skill pack management."""
 
     def __init__(self, scanner: SkillScanner) -> None:
         self._scanner = scanner
         self._all_packs = scanner.scan_all(include_disabled=True)
-        # Working copy of enabled set (canonical folder keys).
         enabled = scanner._read_enabled()
         if enabled is None:
             self._selected: set[str] = {
@@ -59,12 +60,13 @@ class SkillPackTUI:
         self._search = ""
         self._search_focus = False
         self._saved = False
+        self._msg = ""  # status message
+        self._msg_style = ""  # style class for message
         self._app: Application | None = None
 
     # ── filtering ──────────────────────────────────────────────────────────
 
     def _filtered(self) -> list[tuple[int, dict]]:
-        """Return (original_index, pack) tuples matching search."""
         if not self._search:
             return [(i, p) for i, p in enumerate(self._all_packs)]
         q = self._search.lower()
@@ -74,6 +76,7 @@ class SkillPackTUI:
             if q in p.get("name", "").lower()
             or q in p.get("_folder", "").lower()
             or q in p.get("description", "").lower()
+            or q in p.get("_md_file", "").name.lower()
         ]
 
     def _folder_key(self, pack: dict) -> str:
@@ -84,21 +87,26 @@ class SkillPackTUI:
     def _render(self) -> StyleAndTextTuples:
         filtered = self._filtered()
         total = len(filtered)
+        enabled_count = sum(
+            1 for _, p in filtered if self._folder_key(p) in self._selected
+        )
+        all_count = len(self._all_packs)
+
         f: StyleAndTextTuples = [
-            ("class:title", "\n  📦 Skill Pack Manager\n"),
+            ("class:title", "\n  Skill Pack Manager\n"),
             (
                 "class:subtitle",
-                f"  {len(self._all_packs)} packs total. "
-                f"Toggle with Space, save with Enter.\n\n",
+                f"  {all_count} packs  |  {enabled_count}/{total} enabled"
+                f"{f'  |  filter: {self._search}' if self._search else ''}\n\n",
             ),
         ]
 
         # Search bar
         sb_cls = "class:search-focus" if self._search_focus else "class:search-normal"
-        cursor_char = "▌" if self._search_focus else ""
-        f.append((sb_cls, f"  🔍 Search: {self._search}{cursor_char}\n\n"))
+        cur_ch = "▌" if self._search_focus else ""
+        f.append((sb_cls, f"  Search: {self._search}{cur_ch}\n\n"))
 
-        # List
+        # Pack list
         start = self._viewport
         end = min(start + _PAGE, total)
         for idx in range(start, end):
@@ -108,7 +116,7 @@ class SkillPackTUI:
             cur = "▶" if idx == self._cursor and not self._search_focus else " "
             name = pack.get("name", "?")
             folder = pack.get("_folder", "")
-            desc = pack.get("description", "")[:40]
+            desc = pack.get("description", "")[:45]
             chk_cls = "class:checked" if checked == "✓" else "class:unchecked"
             row_cls = (
                 "class:cursor" if idx == self._cursor and not self._search_focus else ""
@@ -123,32 +131,33 @@ class SkillPackTUI:
             f.append(("", "\n"))
 
         if total > _PAGE:
-            f.append(("class:subtitle", f"\n  Showing {start+1}-{end} of {total}\n"))
+            f.append(
+                ("class:subtitle", f"\n  {start+1}-{end} of {total}  (PgUp/PgDn)\n")
+            )
 
-        # Count
-        sel_count = sum(1 for _, p in filtered if self._folder_key(p) in self._selected)
-        f.append(("", f"\n  {sel_count}/{total} enabled\n\n"))
+        # Message area
+        if self._msg:
+            f.append(("", "\n"))
+            f.append((self._msg_style, f"  {self._msg}\n"))
 
         # Buttons
-        btn_total = total
-        save_cls = (
-            "class:btn-focus"
-            if self._cursor == btn_total and not self._search_focus
-            else "class:btn-normal"
-        )
-        cancel_cls = (
-            "class:btn-focus"
-            if self._cursor == btn_total + 1 and not self._search_focus
-            else "class:btn-normal"
-        )
-        f.append((save_cls, "  [ Save & Close ]  "))
-        f.append((cancel_cls, "[ Cancel ]\n"))
+        btn_base = total
+        names = ["Save", "Sync", "Rescan", "Cancel"]
+        f.append(("", "\n"))
+        for i, label in enumerate(names):
+            cls = (
+                "class:btn-focus"
+                if self._cursor == btn_base + i and not self._search_focus
+                else "class:btn-normal"
+            )
+            f.append((cls, f"  [ {label} ]"))
+        f.append(("", "\n"))
 
         return f
 
     def _render_status(self) -> StyleAndTextTuples:
         return [
-            ("class:status-key", " ↑↓ "),
+            ("class:status-key", " ↑↓jk "),
             ("class:status", "Move  "),
             ("class:status-key", "Space "),
             ("class:status", "Toggle  "),
@@ -160,11 +169,45 @@ class SkillPackTUI:
             ("class:status", "Clear  "),
             ("class:status-key", "I "),
             ("class:status", "Invert  "),
+            ("class:status-key", "S "),
+            ("class:status", "Sync  "),
+            ("class:status-key", "R "),
+            ("class:status", "Rescan  "),
             ("class:status-key", "Enter "),
-            ("class:status", "Confirm  "),
+            ("class:status", "OK  "),
             ("class:status-key", "Esc "),
-            ("class:status", "Cancel  "),
+            ("class:status", "Quit  "),
         ]
+
+    # ── actions ────────────────────────────────────────────────────────────
+
+    def _do_sync(self) -> None:
+        results = self._scanner.sync_packs()
+        if not results:
+            self._msg = "No git-backed skill packs found"
+            self._msg_style = "class:subtitle"
+            return
+        ok = sum(1 for r in results if r["status"] == "ok")
+        err = len(results) - ok
+        self._msg = f"Sync done: {ok} updated, {err} failed"
+        self._msg_style = "class:msg-ok" if err == 0 else "class:msg-err"
+        # Refresh pack list
+        self._all_packs = self._scanner.scan_all(include_disabled=True)
+        self._adjust_cursor()
+
+    def _do_rescan(self) -> None:
+        self._scanner.invalidate_cache()
+        self._all_packs = self._scanner.scan_all(include_disabled=True)
+        self._adjust_cursor()
+        self._msg = f"Rescanned: {len(self._all_packs)} packs found"
+        self._msg_style = "class:msg-ok"
+
+    def _adjust_cursor(self) -> None:
+        total = len(self._filtered())
+        btn_count = 4  # Save, Sync, Rescan, Cancel
+        max_idx = total + btn_count - 1
+        if self._cursor > max_idx:
+            self._cursor = max_idx
 
     # ── key bindings ───────────────────────────────────────────────────────
 
@@ -176,7 +219,7 @@ class SkillPackTUI:
                 self._app.invalidate()
 
         filtered_len = lambda: len(self._filtered())
-        btn_base = filtered_len
+        btn_count = 4  # Save, Sync, Rescan, Cancel
 
         # Search mode
         _searching = Condition(lambda: self._search_focus)
@@ -202,7 +245,7 @@ class SkillPackTUI:
         @kb.add("up", filter=_listing)
         @kb.add("k", filter=_listing)
         def _up(e):
-            total = btn_base() + 2  # +2 for buttons
+            total = filtered_len() + btn_count
             if total > 0:
                 self._cursor = (self._cursor - 1) % total
                 self._ensure_viewport()
@@ -211,7 +254,7 @@ class SkillPackTUI:
         @kb.add("down", filter=_listing)
         @kb.add("j", filter=_listing)
         def _down(e):
-            total = btn_base() + 2
+            total = filtered_len() + btn_count
             if total > 0:
                 self._cursor = (self._cursor + 1) % total
                 self._ensure_viewport()
@@ -225,7 +268,7 @@ class SkillPackTUI:
 
         @kb.add("pagedown", filter=_listing)
         def _pgdn(e):
-            total = btn_base() + 2
+            total = filtered_len() + btn_count
             self._cursor = min(total - 1, self._cursor + _PAGE)
             self._ensure_viewport()
             inv()
@@ -246,8 +289,8 @@ class SkillPackTUI:
         def _enter(e):
             filtered = self._filtered()
             total = len(filtered)
+            btn_idx = self._cursor - total
             if self._cursor < total:
-                # Toggle current item
                 _, pack = filtered[self._cursor]
                 key = self._folder_key(pack)
                 if key in self._selected:
@@ -256,12 +299,15 @@ class SkillPackTUI:
                     self._selected.add(key)
                 inv()
                 return
-            if self._cursor == total:
-                # Save & Close
+            if btn_idx == 0:  # Save
                 self._save_and_exit()
-                return
-            if self._cursor == total + 1:
-                # Cancel
+            elif btn_idx == 1:  # Sync
+                self._do_sync()
+                inv()
+            elif btn_idx == 2:  # Rescan
+                self._do_rescan()
+                inv()
+            elif btn_idx == 3:  # Cancel
                 self._saved = False
                 if self._app:
                     self._app.exit()
@@ -289,6 +335,17 @@ class SkillPackTUI:
                     self._selected.discard(key)
                 else:
                     self._selected.add(key)
+            inv()
+
+        @kb.add("s", filter=_listing)
+        def _sync(e):
+            self._do_sync()
+            inv()
+
+        @kb.add("r", filter=_listing)
+        @kb.add("R", filter=_listing)
+        def _rescan(e):
+            self._do_rescan()
             inv()
 
         @kb.add("/", filter=_listing)

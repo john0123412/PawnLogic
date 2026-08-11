@@ -195,7 +195,7 @@ package contents.
   wheel. If a file is in the wheel, every installation receives it regardless
   of which extra the user selected.
 - Keep third-party CTF skill packs external by default. Users may install them
-  explicitly into `~/.pawnlogic/skills` with `/sp install <repo_url>` or copy a
+  explicitly into `~/.pawnlogic/skills` with `/skills install <repo_url>` or copy a
   local skill-pack directory.
 - Do not redistribute third-party skill content in PyPI artifacts, generated
   release source archives, Docker images, or generated bundled-skill

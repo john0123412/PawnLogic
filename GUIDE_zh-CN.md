@@ -223,7 +223,7 @@ skill-pack Markdown 安装进 PyPI 包。CTF skill pack 是可选扩展资产，
 `~/.pawnlogic/skills`，例如：
 
 ```bash
-/sp install <repo_url>
+/skills install <repo_url>
 ```
 
 git-backed skill pack 安装只接受 `https://`、`ssh://` 或
@@ -231,23 +231,24 @@ git-backed skill pack 安装只接受 `https://`、`ssh://` 或
 
 #### Skill Pack 管理
 
-已安装的 skill pack 可以单独启用或禁用。新安装的包默认禁用；只有启用的包才会对 agent
-可见并在搜索时匹配。状态持久化在 `~/.pawnlogic/skills_enabled.json`。
+已安装的 skill pack 可以通过交互式 TUI 单独启用或禁用。新安装的包默认禁用；
+只有启用的包才会对 agent 可见并在搜索时匹配。状态持久化在
+`~/.pawnlogic/skills_enabled.json`。
 
 ```bash
-# 交互式 TUI (space 切换, / 搜索, a=全选, c=清空, i=反选)
-/skills manage
-
-# 命令行
-/sp enable <name>       # 按显示名或文件夹名启用
-/sp disable <name>      # 禁用
-/sp enable all          # 启用全部
-/sp disable all         # 禁用全部
-/sp status              # 查看启用/禁用状态
-/sp list                # 带状态标记的列表
+/skills                   # 启动交互式 TUI
+/skills install <url>     # 从 git 安装 (文本命令)
 ```
 
-TUI 支持方向键和 `j`/`k` 移动，`PgUp`/`PgDn` 翻页，`Enter` 保存，`Esc` 取消。
+TUI 功能:
+
+- **Space/Enter**: 切换启用/禁用
+- **↑↓/j/k**: 移动, **PgUp/PgDn**: 翻页
+- **/**: 搜索/过滤
+- **A**: 全选, **C**: 清空, **I**: 反选
+- **S**: 同步 git-backed 包, **R**: 重新扫描
+- **Enter (Save)**: 保存并退出
+- **Esc**: 取消不保存
 
 只有在 `THIRD_PARTY_NOTICES.md` 中记录了上游许可证、来源 URL、commit 和必要 notice
 之后，才可以从本仓库再分发第三方 CTF skill 内容。

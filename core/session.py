@@ -542,7 +542,7 @@ def tool_search_skills(args: dict) -> str:
         return f"ERROR: search_skills failed: {e}"
 
     if not packs:
-        return f"No skill packs matched '{query}'. Try: 1. /skillpack rescan  2. Check the skills/ directory."
+        return f"No skill packs matched '{query}'. Try: 1. /skills (rescan)  2. Check the skills/ directory."
 
     # Use format_for_prompt for full guidance, including script execution commands.
     result = _skill_scanner.format_for_prompt(packs)

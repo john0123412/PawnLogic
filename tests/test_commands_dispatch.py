@@ -89,7 +89,7 @@ EXPECTED_VERBS_BY_MODULE: dict[str, set[str]] = {
     },
     "tools": {
         "/docker", "/pwnenv", "/webstatus", "/browserstatus", "/agent", "/worker",
-        "/knowledge", "/skills", "/skillpack", "/sp",
+        "/knowledge", "/skills",
     },
     "ctf": {
         "/ctf",
@@ -100,9 +100,9 @@ EXPECTED_ALL: set[str] = {v for verbs in EXPECTED_VERBS_BY_MODULE.values() for v
 
 
 def test_registry_has_expected_verb_count(cmd_pkg):
-    assert len(EXPECTED_ALL) == 58, "Test harness expects 58 distinct verbs"
-    assert len(cmd_pkg.COMMANDS) >= 58, (
-        f"Expected at least 58 registered commands, got {len(cmd_pkg.COMMANDS)}"
+    assert len(EXPECTED_ALL) == 56, "Test harness expects 56 distinct verbs"
+    assert len(cmd_pkg.COMMANDS) >= 56, (
+        f"Expected at least 56 registered commands, got {len(cmd_pkg.COMMANDS)}"
     )
 
 
@@ -205,10 +205,9 @@ def test_dispatch_unknown_verb_does_not_raise(cmd_pkg, fake_session, capsys):
 
 
 def test_dispatch_aliases_share_handler(cmd_pkg):
-    """/skillpack and /sp are registered as aliases of one async function;
-    similarly /exit /quit /q. Both should resolve to the same handler obj.
+    """/exit /quit /q are registered as aliases of one async function
+    and should resolve to the same handler obj.
     """
-    assert cmd_pkg.COMMANDS["/skillpack"] is cmd_pkg.COMMANDS["/sp"]
     assert cmd_pkg.COMMANDS["/exit"] is cmd_pkg.COMMANDS["/quit"]
     assert cmd_pkg.COMMANDS["/exit"] is cmd_pkg.COMMANDS["/q"]
 

@@ -68,7 +68,7 @@ pip install -e ".[dev,ctf]"        # source checkout with tests and CTF tools
 
 `pawnlogic[ctf]` installs CTF tooling dependencies only. CTF skill packs are
 optional extension assets that users install explicitly, for example with
-`/sp install <repo_url>` into `~/.pawnlogic/skills`. Third-party skill packs are
+`/skills install <repo_url>` into `~/.pawnlogic/skills`. Third-party skill packs are
 not bundled into PyPI distributions unless their upstream license and notices
 have been reviewed for redistribution.
 Skill-pack manifests are runtime discovery metadata only; they do not authorize
@@ -209,11 +209,8 @@ connection and response wait times.
 /ctf init <name>                  # start CTF workspace metadata
 /ctf solved [flag]                # mark a confirmed CTF flag as solved
 /ctf writeup                      # export a CTF writeup draft
-/sp install <repo_url>            # install a git-backed skill pack
-/sp enable <name>                 # enable a skill pack
-/sp disable <name>                # disable a skill pack
-/sp status                        # show enabled/disabled status
-/skills manage                    # interactive TUI for skill pack toggle
+/skills install <repo_url>         # install a git-backed skill pack
+/skills                            # interactive TUI: toggle, sync, rescan
 /extension list                   # list installed Extensions
 /extension enable <name>          # explicitly enable an Extension
 /extension disable <name>         # disable an Extension

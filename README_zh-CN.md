@@ -61,7 +61,7 @@ pip install -e ".[dev,ctf]"        # 源码 checkout + 测试 + CTF 工具
 ```
 
 `pawnlogic[ctf]` 只安装 CTF 工具依赖。CTF skill pack 是可选扩展资产，需要用户显式安装，
-例如通过 `/sp install <repo_url>` 安装到 `~/.pawnlogic/skills`。第三方 skill pack
+例如通过 `/skills install <repo_url>` 安装到 `~/.pawnlogic/skills`。第三方 skill pack
 只有在上游许可证和 notice 已完成再分发审查后，才会随 PyPI 分发。git-backed skill
 pack manifest 只是运行时发现元数据；没有匹配的 `THIRD_PARTY_NOTICES.md` 条目时，
 它不授权再分发。git-backed skill pack 安装只接受 `https://`、`ssh://` 或
@@ -170,11 +170,8 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 /ctf init <name>                  # 创建 CTF workspace metadata
 /ctf solved [flag]                # 将已确认的 CTF flag 标记为 solved
 /ctf writeup                      # 导出 CTF writeup 草稿
-/sp install <repo_url>            # 安装 git-backed skill pack
-/sp enable <name>                 # 启用 skill pack
-/sp disable <name>                # 禁用 skill pack
-/sp status                        # 查看启用/禁用状态
-/skills manage                    # 交互式 TUI 管理 skill pack
+/skills install <repo_url>         # 安装 git-backed skill pack
+/skills                            # 交互式 TUI: 切换、同步、重新扫描
 /extension list                   # 列出已安装的 Extension
 /extension enable <name>          # 显式启用 Extension
 /extension disable <name>         # 禁用 Extension

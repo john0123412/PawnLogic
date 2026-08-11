@@ -477,7 +477,7 @@ class SkillScanner:
         return f"  ✓ Loaded skills: {', '.join(names)}"
 
     def format_list(self, include_disabled: bool = False) -> str:
-        """Format all scanned skill packs for /skillpack.
+        """Format all scanned skill packs for /skills display.
 
         Shows a ✓/✗ status indicator when the enabled-state config exists.
         """

@@ -246,7 +246,7 @@ package. CTF skill packs are optional extension assets. Install them explicitly
 into `~/.pawnlogic/skills`, for example:
 
 ```bash
-/sp install <repo_url>
+/skills install <repo_url>
 ```
 
 Git-backed skill-pack installs accept only `https://`, `ssh://`, or
@@ -254,25 +254,25 @@ Git-backed skill-pack installs accept only `https://`, `ssh://`, or
 
 #### Skill Pack Management
 
-Installed skill packs can be individually enabled or disabled. New packs default
-to disabled; only enabled packs are visible to the agent and matched during
-search. State persists in `~/.pawnlogic/skills_enabled.json`.
+Installed skill packs can be individually enabled or disabled through an
+interactive TUI. New packs default to disabled; only enabled packs are visible
+to the agent and matched during search. State persists in
+`~/.pawnlogic/skills_enabled.json`.
 
 ```bash
-# Interactive TUI (space to toggle, / to search, a=all, c=clear, i=invert)
-/skills manage
-
-# Command line
-/sp enable <name>       # enable by display name or folder name
-/sp disable <name>      # disable
-/sp enable all          # enable all
-/sp disable all         # disable all
-/sp status              # show enabled/disabled status
-/sp list                # list with status indicators
+/skills                   # launch interactive TUI
+/skills install <url>     # install from git (text command)
 ```
 
-The TUI supports arrow keys and `j`/`k` for navigation, `PgUp`/`PgDn` for
-page scrolling, `Enter` to save, and `Esc` to cancel without saving.
+The TUI provides:
+
+- **Space/Enter**: toggle enable/disable
+- **↑↓/j/k**: navigate, **PgUp/PgDn**: page scroll
+- **/**: search/filter packs
+- **A**: select all, **C**: clear all, **I**: invert selection
+- **S**: sync git-backed packs, **R**: rescan directory
+- **Enter on Save**: persist and exit
+- **Esc**: cancel without saving
 
 Only redistribute third-party CTF skill content from this repository after the
 upstream license, source URL, commit, and required notices have been recorded in
