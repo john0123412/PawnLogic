@@ -7,7 +7,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-## [0.3.1] - 2026-08-11
+## [0.3.2] - 2026-08-12
+
+### Added
+- Added a bounded two-worker Delegation Runtime path for supported batch
+  callers. FIFO admission and input-order results are retained, while
+  `delegate_task` remains a single-task compatibility adapter.
+- Added per-task RuntimeContext forks, unique `.tasks/` workspaces, bounded
+  output collection, task-local cancellation, and thread-safe delegation-event
+  forwarding for concurrent children.
+
+### Security
+- Concurrent execution now requires a forkable parent RuntimeContext and
+  permits only task-isolated file Tools. Shell, network, container, extension,
+  MCP, browser, pwn, sandbox, and other non-isolated Tools fail closed before
+  their handlers run.
+
+### Tests
+- Added concurrent context/workspace round-trip, budget, cancellation,
+  deadline, output-isolation, and non-isolated-Tool denial regression coverage.
+
+## [0.3.1] - 2026-08-12
 
 ### Added
 - Added skill pack enable/disable mechanism with persistent state in

@@ -7,21 +7,16 @@
 
 | Version | Plan | Status |
 |---------|------|--------|
-| 0.3.1 | [0.3.1-runtime-hardening-and-release-preparation.md](0.3.1-runtime-hardening-and-release-preparation.md) | Active; the version remains an unreleased candidate. Scope is bounded stream and file recovery, execution-boundary hardening, and release readiness only; do not tag or publish without explicit authorization. |
+| 0.3.2 | [0.3.2-bounded-concurrency-two.md](0.3.2-bounded-concurrency-two.md) | Active unreleased release candidate. It prepares bounded two-worker delegation and does not authorize a tag, package publication, or GitHub Release. |
 
 There is exactly one active plan at a time. When the active plan is completed
 and its release is published, it moves to Completed below.
-
-## Proposed Plans
-
-| Version | Plan | Status |
-|---------|------|--------|
-| 0.3.2 | [0.3.2-bounded-concurrency-two.md](0.3.2-bounded-concurrency-two.md) | Proposed; implementation is a stacked review branch and cannot become active until the 0.3.1 candidate is released or superseded. It does not authorize a tag or package publication. |
 
 ## Completed Plans
 
 | Version | Plan | Release |
 |---------|------|---------|
+| 0.3.1 | [0.3.1-runtime-hardening-and-release-preparation.md](0.3.1-runtime-hardening-and-release-preparation.md) | v0.3.1 |
 | 0.3.0 | [0.3.0-extensible-agent-platform-and-security-distribution.md](0.3.0-extensible-agent-platform-and-security-distribution.md) | v0.3.0 |
 | 0.2.3 | [0.2.3-autonomous-runtime-reliability-deepening.md](0.2.3-autonomous-runtime-reliability-deepening.md) | v0.2.3 |
 | 0.2.2 | [0.2.2-runtime-evaluation-architecture-slimming.md](0.2.2-runtime-evaluation-architecture-slimming.md) | v0.2.2 |

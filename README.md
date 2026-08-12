@@ -11,8 +11,8 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.3.0**. Version
-**0.3.1** is an unreleased release candidate.
+CTF-oriented toolchain. The current public release is **0.3.1**. Version
+**0.3.2** is an unreleased release candidate for bounded two-worker delegation.
 
 ## System Requirements
 
@@ -101,20 +101,19 @@ use the additive `{"type":"event","data":{...}}` envelope.
 
 ## What's New
 
-The unreleased 0.3.1 release candidate hardens runtime streaming, file
-discovery, and tool-execution safety while preserving the published 0.3.0
-public contracts:
+Version 0.3.2 introduces bounded, isolation-proven two-worker delegation while
+preserving existing public contracts:
 
-- SSE readers tolerate up to two transient empty `readline()` results from
-  chunked transports; a third ends the stream to prevent an unbounded polling
-  loop.
-- `find_files` uses a default 10-second monotonic traversal deadline and marks
-  results as partial when the deadline expires.
-- Active network probes require a valid Engagement Scope before an authorized
-  private target can be allowed.
-- The host executes only complete, owned ToolSpecs through its policy seam;
-  metadata-less handlers fail closed. Public delegated tasks run through the
-  serial orchestrator with cooperative cancellation and shared budgets.
+- A supported batch caller can run at most two delegated tasks while preserving
+  FIFO admission and input-order results; `delegate_task` remains a one-task
+  compatibility adapter and never creates implicit fan-out.
+- Each concurrent child receives a copied RuntimeContext, unique `.tasks/`
+  workspace, bounded output collector, and task-local cancellation token.
+- Shared token, Tool-call, and cost budgets retain atomic claim and settlement
+  behavior across queued, completed, cancelled, and deadline-expired tasks.
+- Concurrent children may use only task-isolated file Tools. Shell, network,
+  container, extension, MCP, browser, pwn, sandbox, and other non-isolated
+  Tool paths fail closed before handler execution.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 

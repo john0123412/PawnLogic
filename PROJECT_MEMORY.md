@@ -11,21 +11,27 @@ release history.
 
 ## Current Release State
 
-- Current public release: `0.3.0` (tag and GitHub Release: `v0.3.0`).
-- Runtime version source of truth: `config/paths.py:VERSION`, currently
-  `0.3.1` as an unreleased release candidate. Do not create a `v0.3.1` tag,
-  publish packages, or create a GitHub Release without explicit authorization.
+- Latest published release: `0.3.1` (tag, PyPI, and GitHub Release:
+  `v0.3.1`). The release-finalization PR #100 merged at `ae5857d`; the
+  tag-only Trusted Publishing workflow
+  [31582224372](https://github.com/john0123412/PawnLogic/actions/runs/31582224372)
+  passed source verification, full tests, Dynamic E2E, package build, PyPI
+  upload, hash-pinned install smoke, and GitHub Release creation.
+- The working release candidate is `0.3.2`; `config/paths.py:VERSION` is its
+  source of truth. It must remain explicitly described as unreleased until a
+  separately authorized tag, package publication, and GitHub Release. The
+  short-lived `.release-ready` marker used for `0.3.1` was removed after that
+  release completed.
 - Most recent completed plan:
-  `docs/plans/0.3.0-extensible-agent-platform-and-security-distribution.md`.
-- Active plan:
   `docs/plans/0.3.1-runtime-hardening-and-release-preparation.md`.
-  The 0.3.1 candidate contains bounded streaming and file-discovery recovery,
-  execution-boundary hardening, and documented release preparation. The
-  independent `pawnlogic-security` 0.1.0 package release is described below.
-- Proposed follow-up plan:
-  `docs/plans/0.3.2-bounded-concurrency-two.md`. Its implementation is a
-  stacked review branch above the unreleased 0.3.1 candidate; it does not
-  authorize a version bump, tag, package publication, or GitHub Release.
+- Active plan:
+  `docs/plans/0.3.2-bounded-concurrency-two.md`. Its implementation is under
+  review as PR #99 against `test/release-0.3.2`; it does not authorize a tag,
+  package publication, or GitHub Release.
+- The 0.3.2 candidate adds bounded two-worker delegation only for supported
+  batch callers. It requires isolated child context/workspace/output/cancel
+  state and fails closed for concurrent non-isolated Tools. The independent
+  `pawnlogic-security` 0.1.0 package release is described below.
 - PR 1 contracts are recorded in commit `7ff8c27`: ADR 0007, ADR 0008, and
   focused delegation/MCP characterization tests.
 - The merged 0.3.0 core delivers the Extension Runtime, Extension

@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.0**。版本 **0.3.1** 是尚未发布的候选版本。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.1**。版本 **0.3.2** 是尚未发布的候选版本，用于有界的双 worker 委派。
 
 ## 系统要求
 
@@ -90,12 +90,12 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 
 ## 新特性
 
-尚未发布的 0.3.1 候选版本在保持已发布 0.3.0 公共 contract 不变的前提下，强化运行时流处理、文件发现和 Tool 执行安全性：
+0.3.2 在保持现有公共 contract 不变的前提下，引入经过隔离证明的有界双 worker 委派：
 
-- SSE reader 可容忍 chunked transport 中最多两次瞬时空 `readline()` 结果；第三次空读结束流，避免无界轮询循环。
-- `find_files` 默认使用 10 秒 monotonic 遍历 deadline；到期时结果会标记为 partial。
-- active network probe 必须先拥有有效 Engagement Scope，才能允许已授权的 private target。
-- Host 只会通过 policy seam 执行完整且有 owner 的 ToolSpec；缺少 metadata 的 handler 会 fail closed。公开委派任务经由 serial orchestrator 执行，并使用协作式取消和共享 budget。
+- 支持的 batch caller 最多可并行运行两个委派 task，同时保留 FIFO 准入和按输入顺序返回结果；`delegate_task` 仍是单 task 兼容 Adapter，不会隐式 fan-out。
+- 每个并发 child 都获得复制的 RuntimeContext、唯一的 `.tasks/` workspace、有界 output collector 与 task-local cancellation token。
+- 共享 Token、Tool Call 和成本 budget 在排队、完成、取消和 deadline 到期时仍保持原子 claim 与 settle 行为。
+- 并发 child 只能使用完成 task 隔离的文件 Tool。shell、network、container、extension、MCP、browser、pwn、sandbox 及其他未隔离 Tool 会在 handler 执行前 fail closed。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 

@@ -206,7 +206,7 @@ def _emit_run_shell_warning() -> None:
 # a symlink to a Windows mount (e.g. ~/.aws -> /mnt/c/Users/...) costs ~18ms
 # per call. Without caching, _read_block_reason re-resolves all entries for
 # every file candidate, turning a 34k-file walk into a 60+ minute hang.
-_resolved_blacklist_cache: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+_resolved_blacklist_cache: tuple[tuple[int], tuple[str, ...]] | None = None
 
 
 def _resolved_blacklist() -> tuple[str, ...]:
