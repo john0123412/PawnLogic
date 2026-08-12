@@ -127,16 +127,12 @@ def _read_block_reason(path, action: str) -> str:
 
 def _check_read(path: str):
     reason = _read_block_reason(path, "read denied")
-    if reason:
-        return False, reason
-    return True, ""
+    return (False, reason) if reason else (True, "")
 
 
 def _check_directory_listing(path: Path) -> tuple[bool, str]:
     reason = _read_block_reason(path, "directory enumeration denied")
-    if reason:
-        return False, reason
-    return True, ""
+    return (False, reason) if reason else (True, "")
 
 
 def _is_read_blacklisted(path: Path) -> bool:
