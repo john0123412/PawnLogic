@@ -11,8 +11,7 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.3.0**. Version
-**0.3.1** is an unreleased release candidate.
+CTF-oriented toolchain. The current public release is **0.3.1**.
 
 ## System Requirements
 
@@ -101,9 +100,8 @@ use the additive `{"type":"event","data":{...}}` envelope.
 
 ## What's New
 
-The unreleased 0.3.1 release candidate hardens runtime streaming, file
-discovery, and tool-execution safety while preserving the published 0.3.0
-public contracts:
+Version 0.3.1 hardens runtime streaming, file discovery, and tool-execution
+safety while preserving existing public contracts:
 
 - SSE readers tolerate up to two transient empty `readline()` results from
   chunked transports; a third ends the stream to prevent an unbounded polling

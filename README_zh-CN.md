@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.0**。版本 **0.3.1** 是尚未发布的候选版本。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.1**。
 
 ## 系统要求
 
@@ -90,7 +90,7 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 
 ## 新特性
 
-尚未发布的 0.3.1 候选版本在保持已发布 0.3.0 公共 contract 不变的前提下，强化运行时流处理、文件发现和 Tool 执行安全性：
+0.3.1 在保持现有公共 contract 不变的前提下，强化运行时流处理、文件发现和 Tool 执行安全性：
 
 - SSE reader 可容忍 chunked transport 中最多两次瞬时空 `readline()` 结果；第三次空读结束流，避免无界轮询循环。
 - `find_files` 默认使用 10 秒 monotonic 遍历 deadline；到期时结果会标记为 partial。
