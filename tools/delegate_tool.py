@@ -40,14 +40,16 @@ from core.delegation import (
     default_delegation_policy_store,
 )
 from core import delegation as delegation_events
-from core.agent_orchestrator import CancellationToken, SerialAgentOrchestrator
+from core.agent_orchestrator import SerialAgentOrchestrator
 from core.delegation_runtime import (
     CAPABILITY_PROFILES,
     DelegationTaskExecutor,
     SubAgentSession as _SubAgentSession,
+    host_cancellation_token,
     make_sub_executor as _make_sub_executor,
     _tool_map,
     _tools_schema,
+    resolve_host_parent_context,
     resolve_allowed_tools,
     tool_allowed,
 )
@@ -55,7 +57,6 @@ from core.model_router import ModelRouter, RoutingDecision
 from core.state import (
     state as _runtime_state, get_dynamic_config_value,
 )
-from core.runtime_context import current_runtime_context
 from core.trust import subagent_notice
 from utils.ansi      import c, YELLOW, GRAY, GREEN, MAGENTA
 
@@ -126,19 +127,6 @@ def _select_worker_model(current_model: str = DEFAULT_MODEL) -> str:
 
 def _policy_store():
     return default_delegation_policy_store()
-
-
-def _host_cancellation_token() -> CancellationToken:
-    """Project the active turn interrupt into delegated execution."""
-    token = CancellationToken()
-    try:
-        from core.interrupts import interrupted
-
-        if interrupted():
-            token.cancel("parent turn interrupted")
-    except Exception:
-        pass
-    return token
 
 
 def _agent_task_from_arguments(a: dict) -> AgentTask:
@@ -221,18 +209,6 @@ def _rejected_result(decision: RoutingDecision) -> str:
     )
 
 
-def _host_parent_context(task: AgentTask):
-    """Resolve child context only through the active host RuntimeContext."""
-    context = current_runtime_context()
-    provider = getattr(context, "context_provider", None)
-    if not callable(provider):
-        return None
-    try:
-        return provider(task.context_mode)
-    except (TypeError, ValueError):
-        return None
-
-
 def tool_delegate_task(a: dict) -> str:
     """Run a structured delegated task through host-owned model policy."""
     if not str(a.get("objective") or a.get("task_description") or "").strip():
@@ -245,7 +221,7 @@ def tool_delegate_task(a: dict) -> str:
     verbose = bool(a.get("verbose", False))
     parent_model = str(_runtime_state.current_model or DEFAULT_MODEL)
     policy = _policy_store().load()
-    cancellation = _host_cancellation_token()
+    cancellation = host_cancellation_token()
     decision = _route_agent_task(
         task,
         parent_model=parent_model,
@@ -297,9 +273,7 @@ def tool_delegate_task(a: dict) -> str:
         max_tool_calls=task.budget.max_tool_calls,
     )
     effective_task = replace(task, budget=effective_budget)
-    parent_context = (
-        None if cancellation.cancelled else _host_parent_context(effective_task)
-    )
+    parent_context = resolve_host_parent_context(effective_task, cancellation)
 
     def _started(child_agent_id: str) -> None:
         delegation_events.publish_delegation_started(

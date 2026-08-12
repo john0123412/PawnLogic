@@ -35,6 +35,35 @@ from tools.file_ops import _session_cwd
 CAPABILITY_PROFILES = ("inherited", "read_only", "no_shell", "custom")
 
 
+def host_cancellation_token() -> CancellationToken:
+    """Create a child token seeded from the active host turn interrupt."""
+    from core.interrupts import interrupted
+
+    cancellation = CancellationToken()
+    if interrupted():
+        cancellation.cancel("parent turn interrupted")
+    return cancellation
+
+
+def resolve_host_parent_context(
+    task: AgentTask,
+    cancellation: CancellationToken,
+) -> ContextEnvelope | None:
+    """Resolve bounded parent context only while delegated work may start."""
+    if cancellation.cancelled:
+        return None
+    from core.runtime_context import current_runtime_context
+
+    context = current_runtime_context()
+    provider = getattr(context, "context_provider", None)
+    if not callable(provider):
+        return None
+    try:
+        return provider(task.context_mode)
+    except (TypeError, ValueError):
+        return None
+
+
 def tool_allowed(
     name: str,
     profile: str,
@@ -102,9 +131,9 @@ def _tool_capabilities():
 
 
 def _tool_execution_resolver():
-    from core.session import _resolve_tool_for_execution
+    from core.session import _TOOL_REGISTRY
 
-    return _resolve_tool_for_execution
+    return _TOOL_REGISTRY.resolve_for_execution
 
 
 def make_sub_executor(tool_resolver):
@@ -601,7 +630,9 @@ __all__ = [
     "CAPABILITY_PROFILES",
     "DelegationTaskExecutor",
     "SubAgentSession",
+    "host_cancellation_token",
     "make_sub_executor",
     "resolve_allowed_tools",
+    "resolve_host_parent_context",
     "tool_allowed",
 ]

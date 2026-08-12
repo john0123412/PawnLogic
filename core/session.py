@@ -150,11 +150,6 @@ def _tool_specs_snapshot() -> tuple[ToolSpec, ...]:
     return _TOOL_REGISTRY.snapshot_specs()
 
 
-def _resolve_tool_for_execution(name: str) -> tuple[ToolSpec, str] | None:
-    """Resolve only complete, owned tool metadata at the host boundary."""
-    return _TOOL_REGISTRY.resolve_for_execution(name)
-
-
 class _ExtensionToolRegistryAdapter:
     """Narrow Tool Registry seam exposed to the Extension Runtime."""
 
@@ -1466,7 +1461,7 @@ class AgentSession:
 
     def _make_tool_executor(self) -> ToolExecutor:
         return ToolExecutor(
-            resolve_tool=_resolve_tool_for_execution,
+            resolve_tool=_TOOL_REGISTRY.resolve_for_execution,
             agent_phases=AGENT_PHASES,
             schema_snapshot=_tool_schema_snapshot,
             check_failure_func=check_failure,
@@ -1714,32 +1709,16 @@ class AgentSession:
         _API_RETRY_MAX = 3
 
         while True:
-            logger.debug(
-                "api_stream start | iter={} msgs={} tools={} max_tok={}",
-                iteration, len(api_msgs), len(current_tools) if current_tools else 0,
-                current_max_tokens,
-            )
             _api_start = time.monotonic()
             _api_result = self._consume_api_stream_attempt(
                 api_msgs, current_tools, current_max_tokens, renderer, iteration
             )
-            _elapsed = time.monotonic() - _api_start
+            logger.debug(
+                "api_stream {} {:.1f}s", iteration, time.monotonic() - _api_start
+            )
             if _api_result.error:
-                logger.debug(
-                    "api_stream error | iter={} elapsed={:.1f}s error={}",
-                    iteration,
-                    _elapsed,
-                    _api_result.error[:100],
-                )
                 self.messages.pop()
                 return None
-            logger.debug(
-                "api_stream done | iter={} elapsed={:.1f}s text_len={} tc_count={}",
-                iteration,
-                _elapsed,
-                len(_api_result.text),
-                len(_api_result.tool_calls),
-            )
 
             text_buf, tc_buf, reasoning_buf = self._finalize_api_stream_result(
                 _api_result, renderer, iteration

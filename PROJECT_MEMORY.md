@@ -126,6 +126,10 @@ These contracts are more important than local refactoring convenience:
   capability-only authorization gates. Capability approval is not target
   approval.
 - Third-party skill packs must not be included in wheels or sdists by default.
+- The repository language scan enforces English outside `_zh-CN` documentation
+  while excluding optional source-checkout `skills/` assets. Those assets remain
+  governed by attribution and export-ignore rules; first-party source, tests,
+  and product documentation do not inherit that exception.
 - Proposed Extensions must remain disabled until explicitly enabled; installing
   a distribution is not authorization to load or execute it.
 - An enabled Extension may rebuild its contributions through

@@ -25,7 +25,8 @@ def _chinese_text_violations(root: Path, relative_paths: list[str]) -> list[str]
 
     for relative_path in relative_paths:
         path = root / relative_path
-        if path.stem.endswith("_zh-CN"):
+        source_path = Path(relative_path)
+        if path.stem.endswith("_zh-CN") or source_path.parts[:1] == ("skills",):
             continue
 
         try:
@@ -47,7 +48,8 @@ def test_chinese_text_only_appears_in_zh_cn_files():
 
     assert not violations, (
         "Chinese text is only allowed in tracked files whose filename stem "
-        "ends with _zh-CN:\n" + "\n".join(violations)
+        "ends with _zh-CN or source-checkout assets under skills/:\n"
+        + "\n".join(violations)
     )
 
 
@@ -60,6 +62,19 @@ def test_language_policy_rejects_chinese_text_in_non_zh_cn_tracked_file(tmp_path
     violations = _chinese_text_violations(tmp_path, ["docs/example.md"])
 
     assert violations == [f"docs/example.md:2: {restricted_text}"]
+
+
+def test_language_policy_allows_chinese_in_skill_source_assets(tmp_path):
+    doc = tmp_path / "skills" / "upstream" / "SKILL.md"
+    doc.parent.mkdir(parents=True)
+    doc.write_text("\u4e2d\u6587\n", encoding="utf-8")
+
+    violations = _chinese_text_violations(
+        tmp_path,
+        ["skills/upstream/SKILL.md"],
+    )
+
+    assert violations == []
 
 
 def test_legacy_cn_documentation_filenames_are_not_tracked():

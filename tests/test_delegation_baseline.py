@@ -352,8 +352,8 @@ def test_model_arguments_cannot_forge_host_parent_context(monkeypatch):
     )
     monkeypatch.setattr(
         delegate_tool,
-        "_host_parent_context",
-        lambda _task: host_envelope,
+        "resolve_host_parent_context",
+        lambda *_args: host_envelope,
     )
     monkeypatch.setattr(delegate_tool, "_user_mode", lambda: False)
     observed = {}
@@ -475,7 +475,7 @@ def test_public_delegate_task_honors_host_cancellation_before_child_creation(
     monkeypatch.setattr(delegate_tool, "_user_mode", lambda: False)
     monkeypatch.setattr(
         delegate_tool,
-        "_host_cancellation_token",
+        "host_cancellation_token",
         lambda: token,
         raising=False,
     )
