@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.1**。版本 **0.3.2** 是尚未发布的候选版本，用于有界的双 worker 委派和统一的 skill pack 管理。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.2**。
 
 ## 系统要求
 
@@ -159,7 +159,7 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 ## 快速命令参考
 
 ```bash
-/model [alias]                    # 切换模型
+/model <alias>                    # 切换模型
 /mode                             # 切换用户友好/debug 输出
 /chat find <keyword>              # 搜索所有会话
 /think <prompt>                   # 执行一次更深推理

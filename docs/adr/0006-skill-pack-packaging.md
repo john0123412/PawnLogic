@@ -20,7 +20,7 @@ agent behavior for specific domains (e.g., CTF). Before this ADR:
 
 1. **External by default:** Third-party Skill Packs are user-installed assets,
    not mandatory runtime package contents. Users install them explicitly into
-   `~/.pawnlogic/skills` with `/sp install <repo_url>` or by copying a local
+   `~/.pawnlogic/skills` with `/skills install <repo_url>` or by copying a local
    directory.
 2. **No wheel content:** `pawnlogic[ctf]` installs CTF tooling dependencies
    only. It does not install third-party Skill Pack markdown, support files,
@@ -38,8 +38,8 @@ agent behavior for specific domains (e.g., CTF). Before this ADR:
 The PyPI wheel contains no `skills/` directory. The build verification step
 checks that the wheel has zero skill files.
 
-Users who want CTF skills install them separately. The README and GUIDE document
-this explicitly.
+Users who want CTF skills install them separately. The README documents this
+explicitly.
 
 Changing skill-pack packaging or installation behavior requires updating
-README, GUIDE, THIRD_PARTY_NOTICES.md, CHANGELOG.md, and the packaging tests.
+README, THIRD_PARTY_NOTICES.md, CHANGELOG.md, and the packaging tests.
