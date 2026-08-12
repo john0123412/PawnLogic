@@ -81,3 +81,6 @@ temp/
 .claude/
 pwn_debug.md
 iscc_work/
+
+# Agent memory (privacy: may contain user context)
+docs/agents/skill-pack-tui.md

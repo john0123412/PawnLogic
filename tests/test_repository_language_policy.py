@@ -28,6 +28,11 @@ def _chinese_text_violations(root: Path, relative_paths: list[str]) -> list[str]
         source_path = Path(relative_path)
         if path.stem.endswith("_zh-CN") or source_path.parts[:1] == ("skills",):
             continue
+        # Third-party skill packs may contain Chinese content; they are
+        # source-checkout assets excluded from PyPI wheels and release
+        # archives via .gitattributes export-ignore.
+        if relative_path.startswith("skills/"):
+            continue
 
         try:
             lines = path.read_text(encoding="utf-8").splitlines()

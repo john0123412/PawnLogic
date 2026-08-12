@@ -223,7 +223,7 @@ def build_session_prompt(
         "  1. Recon fingerprint — web_fetch extracts Server/X-Powered-By/Cookie/HTML traits and identifies the framework.\n"
         "  2. Confirm environment — check_service(port) obtains PID/path/environment/shared libraries.\n"
         "  3. Retrieve weaponry — search_skills(query='<framework>'); try variant keywords when empty.\n"
-        "  4. Sync/install — /sp sync for latest packs, /sp install <url> for new packs.\n"
+        "  4. Sync/install — /skills to manage, /skills install <url> for new packs.\n"
         "  5. Read the guide — read_file(guide.md), then understand conditions and parameters.\n"
         "  6. Execute scripts — prefer run_shell(pack_path/script); use run_code_docker for isolation.\n"
         "  7. Verify finish — confirm Flag/Shell/echo; after success call bump_skill to raise weight.\n\n"

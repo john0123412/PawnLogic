@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.1**。版本 **0.3.2** 是尚未发布的候选版本，用于有界的双 worker 委派。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.1**。版本 **0.3.2** 是尚未发布的候选版本，用于有界的双 worker 委派和统一的 skill pack 管理。
 
 ## 系统要求
 
@@ -61,7 +61,7 @@ pip install -e ".[dev,ctf]"        # 源码 checkout + 测试 + CTF 工具
 ```
 
 `pawnlogic[ctf]` 只安装 CTF 工具依赖。CTF skill pack 是可选扩展资产，需要用户显式安装，
-例如通过 `/sp install <repo_url>` 安装到 `~/.pawnlogic/skills`。第三方 skill pack
+例如通过 `/skills install <repo_url>` 安装到 `~/.pawnlogic/skills`。第三方 skill pack
 只有在上游许可证和 notice 已完成再分发审查后，才会随 PyPI 分发。git-backed skill
 pack manifest 只是运行时发现元数据；没有匹配的 `THIRD_PARTY_NOTICES.md` 条目时，
 它不授权再分发。git-backed skill pack 安装只接受 `https://`、`ssh://` 或
@@ -90,12 +90,13 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 
 ## 新特性
 
-0.3.2 在保持现有公共 contract 不变的前提下，引入经过隔离证明的有界双 worker 委派：
+0.3.2 在保持现有公共 contract 不变的前提下，引入经过隔离证明的有界双 worker 委派和统一的 skill pack 管理：
 
 - 支持的 batch caller 最多可并行运行两个委派 task，同时保留 FIFO 准入和按输入顺序返回结果；`delegate_task` 仍是单 task 兼容 Adapter，不会隐式 fan-out。
 - 每个并发 child 都获得复制的 RuntimeContext、唯一的 `.tasks/` workspace、有界 output collector 与 task-local cancellation token。
 - 共享 Token、Tool Call 和成本 budget 在排队、完成、取消和 deadline 到期时仍保持原子 claim 与 settle 行为。
 - 并发 child 只能使用完成 task 隔离的文件 Tool。shell、network、container、extension、MCP、browser、pwn、sandbox 及其他未隔离 Tool 会在 handler 执行前 fail closed。
+- 统一的 skill pack 管理入口 `/skills`：支持方向键导航、空格切换、搜索和批量操作的交互式 TUI。`/sp` 和 `/skillpack` 命令已移除；`/skills` 是安装、同步、重新扫描和启用/禁用的唯一入口。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -170,11 +171,8 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 /ctf init <name>                  # 创建 CTF workspace metadata
 /ctf solved [flag]                # 将已确认的 CTF flag 标记为 solved
 /ctf writeup                      # 导出 CTF writeup 草稿
-/sp install <repo_url>            # 安装 git-backed skill pack
-/sp enable <name>                 # 启用 skill pack
-/sp disable <name>                # 禁用 skill pack
-/sp status                        # 查看启用/禁用状态
-/skills manage                    # 交互式 TUI 管理 skill pack
+/skills install <repo_url>         # 安装 git-backed skill pack
+/skills                            # 交互式 TUI: 切换、同步、重新扫描
 /extension list                   # 列出已安装的 Extension
 /extension enable <name>          # 显式启用 Extension
 /extension disable <name>         # 禁用 Extension
@@ -266,14 +264,56 @@ MCP 子进程 stderr 默认写入 `~/.pawnlogic/logs/mcp/<server>.stderr.log`。
 
 项目目录不包含 secret，可以安全提交或分享。
 
+## 使用示例
+
+### 接入第三方 API
+
+```
+/provider add myrelay https://api.myrelay.com/v1/chat/completions MYRELAY_API_KEY
+/provider fetch myrelay
+/provider activate myrelay
+/model <别名>
+```
+
+### 视觉分析
+
+```
+分析截图 ./screenshot.png，提取代码并修复 bug。
+```
+
+### CTF Pwn
+
+```
+/model ds-v4-pro
+分析 ./challenge，用 pwn_debug 检查 main 断点处的寄存器。
+```
+
+## 常见问题
+
+**Q: 添加了 Provider 但 `/model` 看不到新模型？**
+A: 配置 Key，运行 `/provider fetch <name>`，选择模型，再 `/provider activate <name>`。
+
+**Q: Test Connection 失败但 fetch 成功？**
+A: Fetch 只读 `/v1/models`；Test Connection 发送聊天请求。先加载聊天模型。
+
+**Q: API Key 在哪里？**
+A: `~/.pawnlogic/.env`，不在项目目录，不被 git 追踪。
+
+**Q: `pawn: command not found`？**
+A: `export PATH="$HOME/.local/bin:$PATH"`
+
+**Q: 浏览器工具缺少模块？**
+A: `pip install 'pawnlogic[browser]'` 然后 `patchright install chromium`。
+
+**Q: 支持 Ollama 本地模型？**
+A: 支持。`/provider add`，Base URL 填 `http://localhost:11434`，Key 留空。
+
 ## 文档
 
 | 文档 | 描述 |
 |------|------|
 | [**README.md**](README.md) | 英文 README |
 | [**README_zh-CN.md**](README_zh-CN.md) | 本页 |
-| [**GUIDE.md**](GUIDE.md) | 完整参考：命令、架构和 FAQ |
-| [**GUIDE_zh-CN.md**](GUIDE_zh-CN.md) | 中文完整参考 |
 | [**CHANGELOG.md**](CHANGELOG.md) | 版本历史和发布说明 |
 | [**CONTRIBUTING.md**](CONTRIBUTING.md) | 贡献、Provider 和测试工作流 |
 | [**SECURITY.md**](SECURITY.md) | 漏洞报告策略 |

@@ -1067,7 +1067,7 @@ async def _main_impl():
         "/low", "/mid", "/deep", "/max", "/normal", "/limits",
         "/tokens", "/ctx", "/iter", "/toolsize", "/fetchsize",
         "/webstatus", "/browserstatus", "/pwnenv", "/stats", "/time", "/docker",
-        "/agent", "/worker", "/failures", "/memo", "/skills", "/skillpack", "/sp", "/ctf",
+        "/agent", "/worker", "/failures", "/memo", "/skills", "/ctf",
         "/chat", "/extension", "/help", "/exit",
     ]
 
@@ -1118,9 +1118,7 @@ async def _main_impl():
         "/worker":        "Worker model selection",
         "/failures":      "View or clear failure records",
         "/memo":          "Manually archive a skill to GSA",
-        "/skills":        "Show global skill archive directory",
-        "/skillpack":     "Manage local skill packs (list/rescan/detail)",
-        "/sp":            "Alias for /skillpack",
+        "/skills":        "Skill pack management TUI (toggle/sync/rescan)",
         "/ctf":           "Track CTF metadata and export writeup drafts",
         "/chat":          "Session browser (list/view/find/tag/link)",
         "/extension":     "Manage installed Extensions",
@@ -1147,9 +1145,7 @@ async def _main_impl():
                        "/agent policy model allow", "/agent policy model deny",
                        "/agent policy default", "/agent policy max-cost",
                        "/agent policy max-concurrency", "/agent run",
-                       "/worker auto", "/skills view", "/skills path", "/skills packs",
-                       "/skillpack list", "/skillpack rescan", "/sp list", "/sp rescan",
-                       "/sp sync", "/sp install",
+                       "/worker auto", "/skills view", "/skills path", "/skills install",
                        "/ctf init", "/ctf status", "/ctf artifact", "/ctf remote",
                        "/ctf flag", "/ctf solved", "/ctf confirm", "/ctf writeup",
                        "/workspace status", "/workspace cleanup",
@@ -1165,13 +1161,7 @@ async def _main_impl():
     _all_meta["/worker auto"] = "Restore automatic worker routing"
     _all_meta["/skills view"] = "Show full skill file"
     _all_meta["/skills path"] = "Show skill file path"
-    _all_meta["/skills packs"] = "List local skill packs under skills/"
-    _all_meta["/skillpack list"] = "List all local skill packs"
-    _all_meta["/skillpack rescan"] = "Rescan skills/"
-    _all_meta["/sp list"] = "List all local skill packs"
-    _all_meta["/sp rescan"] = "Rescan skills/"
-    _all_meta["/sp sync"] = "Sync all git-backed skill packs"
-    _all_meta["/sp install"] = "Install a new skill pack from a remote repository"
+    _all_meta["/skills install"] = "Install a skill pack from a remote git repository"
     _all_meta["/ctf init"] = "Initialize CTF workspace metadata"
     _all_meta["/ctf status"] = "Show CTF workspace metadata"
     _all_meta["/ctf artifact"] = "Record a CTF artifact"

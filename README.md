@@ -12,7 +12,8 @@
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
 CTF-oriented toolchain. The current public release is **0.3.1**. Version
-**0.3.2** is an unreleased release candidate for bounded two-worker delegation.
+**0.3.2** is an unreleased release candidate for bounded two-worker delegation
+and unified skill pack management.
 
 ## System Requirements
 
@@ -68,7 +69,7 @@ pip install -e ".[dev,ctf]"        # source checkout with tests and CTF tools
 
 `pawnlogic[ctf]` installs CTF tooling dependencies only. CTF skill packs are
 optional extension assets that users install explicitly, for example with
-`/sp install <repo_url>` into `~/.pawnlogic/skills`. Third-party skill packs are
+`/skills install <repo_url>` into `~/.pawnlogic/skills`. Third-party skill packs are
 not bundled into PyPI distributions unless their upstream license and notices
 have been reviewed for redistribution.
 Skill-pack manifests are runtime discovery metadata only; they do not authorize
@@ -101,8 +102,8 @@ use the additive `{"type":"event","data":{...}}` envelope.
 
 ## What's New
 
-Version 0.3.2 introduces bounded, isolation-proven two-worker delegation while
-preserving existing public contracts:
+Version 0.3.2 introduces bounded, isolation-proven two-worker delegation and
+unified skill pack management while preserving existing public contracts:
 
 - A supported batch caller can run at most two delegated tasks while preserving
   FIFO admission and input-order results; `delegate_task` remains a one-task
@@ -114,6 +115,10 @@ preserving existing public contracts:
 - Concurrent children may use only task-isolated file Tools. Shell, network,
   container, extension, MCP, browser, pwn, sandbox, and other non-isolated
   Tool paths fail closed before handler execution.
+- Unified skill pack management under `/skills`: interactive TUI with
+  arrow-key navigation, space-to-toggle, search, and bulk operations.
+  `/sp` and `/skillpack` commands are removed; `/skills` is the single entry
+  point for install, sync, rescan, and enable/disable.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
@@ -209,11 +214,8 @@ connection and response wait times.
 /ctf init <name>                  # start CTF workspace metadata
 /ctf solved [flag]                # mark a confirmed CTF flag as solved
 /ctf writeup                      # export a CTF writeup draft
-/sp install <repo_url>            # install a git-backed skill pack
-/sp enable <name>                 # enable a skill pack
-/sp disable <name>                # disable a skill pack
-/sp status                        # show enabled/disabled status
-/skills manage                    # interactive TUI for skill pack toggle
+/skills install <repo_url>         # install a git-backed skill pack
+/skills                            # interactive TUI: toggle, sync, rescan
 /extension list                   # list installed Extensions
 /extension enable <name>          # explicitly enable an Extension
 /extension disable <name>         # disable an Extension
@@ -334,14 +336,56 @@ All runtime data and API keys are stored in `~/.pawnlogic/`.
 
 The project directory contains no secrets and is safe to commit or share.
 
+## Examples
+
+### Add a third-party API
+
+```
+/provider add myrelay https://api.myrelay.com/v1/chat/completions MYRELAY_API_KEY
+/provider fetch myrelay
+/provider activate myrelay
+/model <alias>
+```
+
+### Vision analysis
+
+```
+Analyze screenshot ./screenshot.png, extract the code and fix the bug.
+```
+
+### CTF Pwn
+
+```
+/model ds-v4-pro
+Analyze ./challenge, use pwn_debug to inspect registers at main breakpoint.
+```
+
+## FAQ
+
+**Q: `/model` doesn't show new models after adding a provider?**
+A: Configure its key, run `/provider fetch <name>`, select models, then `/provider activate <name>`.
+
+**Q: Test Connection fails but fetch succeeds?**
+A: Fetch reads `/v1/models`; Test Connection sends a chat request. Load a chat model first.
+
+**Q: Where are API keys stored?**
+A: `~/.pawnlogic/.env` — outside the project, never tracked by git.
+
+**Q: `pawn` says command not found?**
+A: `export PATH="$HOME/.local/bin:$PATH"`
+
+**Q: Browser tools say a module is missing?**
+A: `pip install 'pawnlogic[browser]'` then `patchright install chromium`.
+
+**Q: Does it support local Ollama models?**
+A: Yes. `/provider add`, Base URL `http://localhost:11434`, leave key empty.
+
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | [**README.md**](README.md) | This page |
 | [**README_zh-CN.md**](README_zh-CN.md) | Chinese README |
-| [**GUIDE.md**](GUIDE.md) | Full reference: commands, architecture, and FAQ |
-| [**GUIDE_zh-CN.md**](GUIDE_zh-CN.md) | Chinese full reference |
 | [**CHANGELOG.md**](CHANGELOG.md) | Version history and release notes |
 | [**CONTRIBUTING.md**](CONTRIBUTING.md) | Contribution, provider, and test workflow |
 | [**SECURITY.md**](SECURITY.md) | Vulnerability reporting policy |

@@ -16,6 +16,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added per-task RuntimeContext forks, unique `.tasks/` workspaces, bounded
   output collection, task-local cancellation, and thread-safe delegation-event
   forwarding for concurrent children.
+- Added unified skill pack management TUI (`/skills`): arrow-key navigation,
+  Space/Enter to toggle, Tab to switch between list and button row, search,
+  and bulk operations (All/Clear/Invert/Sync/Rescan). State persists in
+  `~/.pawnlogic/skills_enabled.json`. New packs default to disabled; users
+  enable what they need. Fits standard 24-line terminals.
+- Added 41 third-party skill packs from `zhaoxuya520/reverse-skill` (MIT)
+  covering reverse engineering, penetration testing, malware analysis,
+  digital forensics, and more. All new packs excluded from PyPI wheels and
+  release archives via `.gitattributes export-ignore`.
 
 ### Security
 - Concurrent execution now requires a forkable parent RuntimeContext and
@@ -23,25 +32,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   MCP, browser, pwn, sandbox, and other non-isolated Tools fail closed before
   their handlers run.
 
+### Refactored
+- Removed `/sp` and `/skillpack` commands; all skill pack management is now
+  unified under `/skills` (TUI, install, sync, rescan).
+- Archived completed release plans under `docs/plans/archive/`.
+- Merged `GUIDE.md` content into `README.md` and project memory into `AGENT.md`
+  to reduce documentation surface area.
+
 ### Tests
 - Added concurrent context/workspace round-trip, budget, cancellation,
   deadline, output-isolation, and non-isolated-Tool denial regression coverage.
 
 ## [0.3.1] - 2026-08-12
-
-### Added
-- Added skill pack enable/disable mechanism with persistent state in
-  `~/.pawnlogic/skills_enabled.json`. New packs default to disabled; users
-  enable them via `/sp enable <name>` or the TUI.
-- Added interactive TUI for skill pack management (`/skills manage`):
-  space to toggle, `/` to search, `a`/`c`/`i` for all/clear/invert, arrow
-  keys and `j`/`k` for navigation, Enter to save, Esc to cancel.
-- Added `/sp enable`, `/sp disable`, `/sp enable all`, `/sp disable all`,
-  and `/sp status` slash commands for command-line skill management.
-- Added 41 third-party skill packs from `zhaoxuya520/reverse-skill` (MIT)
-  covering reverse engineering, penetration testing, malware analysis,
-  digital forensics, and more. All new packs excluded from PyPI wheels and
-  release archives via `.gitattributes export-ignore`.
 
 ### Fixed
 - Tolerate bounded transient empty `readline()` results in chunked SSE streams

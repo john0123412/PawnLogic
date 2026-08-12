@@ -191,11 +191,10 @@ def test_git_safe_protocol_config_disables_dangerous_transports():
     assert "protocol.file.allow=never" in argv
 
 
-def test_docs_workflow_tracks_existing_guide_file():
+def test_docs_workflow_tracks_existing_files():
     workflow = (Path(ROOT) / ".github" / "workflows" / "docs.yml").read_text(encoding="utf-8")
 
-    assert "GUIDE.md" in workflow
-    assert "GUIDE_EN.md" not in workflow
+    assert "README.md" in workflow
     assert "AGENTS.md" in workflow
 
 

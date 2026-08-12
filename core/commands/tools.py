@@ -12,7 +12,7 @@ Commands in this module:
     /agent [sub]           delegated-agent policy and run guidance
     /worker [alias|auto]   pick the delegate-task worker model
     /skills [sub]          GSA archive: toc / packs / view / path
-    /skillpack /sp [sub]   local skill-pack management:
+    /skills [sub]          skill pack management TUI:
                            list / rescan / sync / install / <name>
 
 This is the last theme module: after this step the legacy dispatcher in
@@ -438,50 +438,41 @@ async def cmd_worker(ctx: CommandContext) -> None:
 
 
 # ════════════════════════════════════════════════════════
-# /skills
+# /skills — unified skill pack management
 # ════════════════════════════════════════════════════════
 
 @register("/skills")
 async def cmd_skills(ctx: CommandContext) -> None:
     arg = ctx.arg
     arg2 = ctx.arg2
-    from config import GLOBAL_SKILLS_PATH
-    sub = arg.lower().strip() if arg else "toc"
+    sub = arg.lower().strip() if arg else ""
 
-    if sub == "path":
-        _print(c(GRAY, f"  {GLOBAL_SKILLS_PATH}"))
-        return
-
-    if sub in ("manage", "toggle", "tui"):
+    # /skills install <url> — needs a URL argument, stays as text command
+    if sub == "install":
         from core.session import _skill_scanner
-        from core.skill_tui import run_skill_tui
-        saved = run_skill_tui(_skill_scanner)
-        if saved:
-            _print(c(GREEN, "  ✓ Skill pack selection saved"))
+        repo_url = (arg2 or "").strip()
+        if not repo_url:
+            _print(c(RED, "  Usage: /skills install <repo_url>"))
+            _print(c(GRAY, "  Example: /skills install https://github.com/user/exploit-pack.git"))
+            return
+        if _runtime_state.user_mode:
+            with Spinner("Installing skill pack"):
+                result = _skill_scanner.install_pack(repo_url)
         else:
-            _print(c(GRAY, "  Cancelled — no changes saved"))
+            _print(c(CYAN, f"  Cloning {repo_url} ..."))
+            result = _skill_scanner.install_pack(repo_url)
+        if result["status"] == "ok":
+            _print(c(GREEN, f"  {result['detail']}"))
+            _print(c(GRAY, "  Run /skills to manage enabled packs"))
+        else:
+            _print(c(RED, f"  Install failed: {result['detail']}"))
         return
 
-    if sub == "packs":
-        from core.session import _skill_scanner
-        from config import SKILLS_DIR
-        packs = _skill_scanner.scan_all()
-        if not packs:
-            _print(c(GRAY,
-                f"  No skill packs found under skills/.\n"
-                f"  Path: {SKILLS_DIR}\n"
-                "  Create one with: mkdir -p skills/my_skill && echo '# My Skill' > skills/my_skill/skill.md"
-            ))
-        else:
-            _print(c(BOLD, f"\n  📦 Local skill packs ({len(packs)})"))
-            _print(c(GRAY,  f"  Path: {SKILLS_DIR}\n"))
-            _print(_skill_scanner.format_list())
-            _print(c(GRAY, "\n  /skillpack rescan -> rescan  |  /skillpack <name> -> show details"))
-        return
-
+    # /skills view [page] — view GSA content (text only)
     if sub == "view":
+        from config import GLOBAL_SKILLS_PATH
         if not GLOBAL_SKILLS_PATH.exists():
-            _print(c(GRAY, "  global_skills.md has not been created. The agent can generate it after tasks, or use /memo."))
+            _print(c(GRAY, "  global_skills.md has not been created. Use /memo to archive."))
             return
         lines_all = GLOBAL_SKILLS_PATH.read_text(encoding="utf-8").splitlines()
         total = len(lines_all)
@@ -505,236 +496,20 @@ async def cmd_skills(ctx: CommandContext) -> None:
             _print(c(GRAY, f"\n  {rem} pages remain. Continue with /skills view <page>."))
         return
 
-    # Default: table of contents.
-    try:
-        from core.gsa import load_toc
-        toc = load_toc(max_lines=120)
-    except ImportError:
-        if not GLOBAL_SKILLS_PATH.exists():
-            toc = "(not created yet)"
-        else:
-            toc = "\n".join(
-                line for line in GLOBAL_SKILLS_PATH.read_text(encoding="utf-8").splitlines()[:80]
-                if line.startswith("#")
-            )
-    if not GLOBAL_SKILLS_PATH.exists():
-        _print(c(GRAY,
-            f"  global_skills.md has not been created.\n"
-            f"  Path: {GLOBAL_SKILLS_PATH}\n"
-            "  The agent can create it after tasks, or you can archive manually with /memo."
-        ))
-    else:
-        _print(c(BOLD, "\n  📚 Global Skills Archive - Table of Contents"))
-        _print(c(GRAY,  f"  Path: {GLOBAL_SKILLS_PATH}\n"))
-        for line in toc.splitlines():
-            if line.startswith("# "):
-                _print(c(CYAN + BOLD, f"  {line}"))
-            elif line.startswith("## "):
-                _print(c(YELLOW, f"    {line}"))
-            else:
-                _print(c(GRAY, f"  {line}"))
-        _print(c(GRAY, "\n  /skills manage -> TUI toggle  |  /skills view -> full content  |  /skills packs -> local packs  |  /memo -> manual archive"))
+    # /skills path — show GSA path
+    if sub == "path":
+        from config import GLOBAL_SKILLS_PATH
+        _print(c(GRAY, f"  {GLOBAL_SKILLS_PATH}"))
+        return
 
-
-# ════════════════════════════════════════════════════════
-# /skillpack /sp
-# ════════════════════════════════════════════════════════
-
-@register("/skillpack", "/sp")
-async def cmd_skillpack(ctx: CommandContext) -> None:
-    arg = ctx.arg
-    arg2 = ctx.arg2
-    from config import SKILLS_DIR
+    # Default: launch the TUI
     from core.session import _skill_scanner
-    sub = arg.lower().strip() if arg else "list"
-
-    if sub == "rescan":
-        _skill_scanner.invalidate_cache()
-        packs = _skill_scanner.scan_all(include_disabled=True)
-        enabled_count = sum(1 for p in packs if p.get("_enabled", True))
-        _print(c(GREEN, f"  ✓ Rescanned skills/ and found {len(packs)} skill packs ({enabled_count} enabled)"))
-        if packs:
-            _print(c(BOLD, "\n  Local skill packs:"))
-            _print(_skill_scanner.format_list(include_disabled=True))
-        return
-
-    if sub == "sync":
-        if _runtime_state.user_mode:
-            with Spinner("Syncing skill packs"):
-                results = _skill_scanner.sync_packs()
-        else:
-            _print(c(CYAN, "  🔄 Syncing all git-backed skill packs..."))
-            results = _skill_scanner.sync_packs()
-        if not results:
-            _print(c(GRAY, "  No git-backed skill pack directories found"))
-            return
-        ok_count = sum(1 for r in results if r["status"] == "ok")
-        err_count = len(results) - ok_count
-        _print(c(GREEN, f"  ✓ Sync complete: {ok_count} succeeded, {err_count} failed"))
-        for r in results:
-            tag = c(GREEN, "✓") if r["status"] == "ok" else c(RED, "✗")
-            detail = ""
-            if not _runtime_state.user_mode:
-                detail = c(GRAY, f"  {r['detail']}")
-            _print(f"    {tag} {r['name']}{detail}")
-        if err_count > 0:
-            _print(c(GRAY, "  Tip: enter the failed directory and run git pull for details"))
-        return
-
-    if sub == "install":
-        repo_url = arg2.strip() if arg2 else ""
-        if not repo_url:
-            _print(c(RED, "  Usage: /sp install <repo_url>"))
-            _print(c(GRAY, "  Example: /sp install https://github.com/user/exploit-pack.git"))
-            return
-        if _runtime_state.user_mode:
-            with Spinner("Installing skill pack"):
-                result = _skill_scanner.install_pack(repo_url)
-        else:
-            _print(c(CYAN, f"  📥 Cloning {repo_url} ..."))
-            result = _skill_scanner.install_pack(repo_url)
-        if result["status"] == "ok":
-            _print(c(GREEN, f"  ✓ {result['detail']}"))
-            packs = _skill_scanner.scan_all()
-            installed = [p for p in packs if result["name"] in p.get("_path", "").name]
-            if installed:
-                _print(c(BOLD, "\n  Newly installed skill packs:"))
-                for p in installed:
-                    name = p.get("name", "?")
-                    desc = p.get("description", "")
-                    scripts = p.get("scripts", [])
-                    _print(c(GREEN, f"    📦 {name}"))
-                    if desc:
-                        _print(c(GRAY, f"       {desc[:60]}"))
-                    if scripts:
-                        _print(c(GRAY, f"       scripts: {', '.join(scripts)}"))
-        else:
-            _print(c(RED, f"  ✗ Install failed: {result['detail']}"))
-        return
-
-    if sub == "enable":
-        target = (arg2 or "").strip()
-        if not target:
-            _print(c(RED, "  Usage: /sp enable <name>  |  /sp enable all"))
-            return
-        if target == "all":
-            count = _skill_scanner.enable_all()
-            _print(c(GREEN, f"  ✓ Enabled all {count} skill packs"))
-            return
-        # Find pack by name (case-insensitive partial match).
-        all_packs = _skill_scanner.scan_all(include_disabled=True)
-        matched = [p for p in all_packs if target.lower() in p.get("name", "").lower()
-                   or target.lower() in p.get("_path", "").name.lower()]
-        if not matched:
-            _print(c(RED, f"  ✗ No skill pack named '{target}' found"))
-            return
-        for p in matched:
-            name = p.get("name", "?")
-            if _skill_scanner.enable(name):
-                _print(c(GREEN, f"  ✓ Enabled: {name}"))
-            else:
-                _print(c(GRAY, f"  Already enabled: {name}"))
-        return
-
-    if sub == "disable":
-        target = (arg2 or "").strip()
-        if not target:
-            _print(c(RED, "  Usage: /sp disable <name>  |  /sp disable all"))
-            return
-        if target == "all":
-            count = _skill_scanner.disable_all()
-            _print(c(GREEN, f"  ✓ Disabled all {count} skill packs"))
-            return
-        all_packs = _skill_scanner.scan_all(include_disabled=True)
-        matched = [p for p in all_packs if target.lower() in p.get("name", "").lower()
-                   or target.lower() in p.get("_path", "").name.lower()]
-        if not matched:
-            _print(c(RED, f"  ✗ No skill pack named '{target}' found"))
-            return
-        for p in matched:
-            name = p.get("name", "?")
-            if _skill_scanner.disable(name):
-                _print(c(GREEN, f"  ✓ Disabled: {name}"))
-            else:
-                _print(c(GRAY, f"  Already disabled: {name}"))
-        return
-
-    if sub == "status":
-        packs = _skill_scanner.scan_all(include_disabled=True)
-        if not packs:
-            _print(c(GRAY, "  No skill packs found"))
-            return
-        enabled = [p for p in packs if p.get("_enabled", True)]
-        disabled = [p for p in packs if not p.get("_enabled", True)]
-        _print(c(BOLD, f"\n  Skill Pack Status ({len(enabled)} enabled, {len(disabled)} disabled)"))
-        _print(c(GRAY,  f"  Path: {SKILLS_DIR}\n"))
-        _print(_skill_scanner.format_list(include_disabled=True))
-        _print(c(GRAY,
-            "\n  /sp enable <name>   -> enable a pack"
-            "\n  /sp disable <name>  -> disable a pack"
-            "\n  /sp enable all      -> enable all"
-            "\n  /sp disable all     -> disable all"
-        ))
-        return
-
-    if sub == "list" or sub == "":
-        packs = _skill_scanner.scan_all()
-        all_packs = _skill_scanner.scan_all(include_disabled=True)
-        if not all_packs:
-            _print(c(GRAY,
-                f"  No skill packs found under skills/.\n"
-                f"  Path: {SKILLS_DIR}\n"
-                "  Create one with: mkdir -p skills/my_skill && echo '# My Skill' > skills/my_skill/skill.md"
-            ))
-        else:
-            enabled_count = len(packs)
-            total_count = len(all_packs)
-            _print(c(BOLD, f"\n  📦 Local skill packs ({enabled_count}/{total_count} enabled)"))
-            _print(c(GRAY,  f"  Path: {SKILLS_DIR}\n"))
-            _print(_skill_scanner.format_list(include_disabled=True))
-            _print(c(GRAY,
-                "\n  /skills manage -> TUI toggle (space to toggle, / to search)"
-                "\n  /sp enable <name> -> enable  |  /sp disable <name> -> disable  |"
-                "  /sp status -> full status"
-                "\n  /sp rescan -> rescan  |  /sp sync -> sync updates  |"
-                "  /sp install <url> -> install new pack  |  /sp <name> -> show details"
-            ))
-        return
-
-    # Show details by name.
-    packs = _skill_scanner.scan_all(include_disabled=True)
-    matched = [p for p in packs if sub in p.get("name", "").lower()
-               or sub in p.get("_path", "").name.lower()]
-    if not matched:
-        _print(c(RED, f"  ✗ No skill pack named '{sub}' was found"))
-        _print(c(GRAY, "  Use /skillpack to list all available skill packs"))
-        return
-    for pack in matched:
-        name = pack.get("name", "?")
-        desc = pack.get("description", "")
-        ver = pack.get("version", "1.0")
-        kw = pack.get("keywords", [])
-        tr = pack.get("triggers", [])
-        scripts = pack.get("scripts", [])
-        guide = pack.get("guide", "")
-        pack_path = pack.get("_path", "")
-
-        is_enabled = pack.get("_enabled", True)
-        status_tag = c(GREEN, "✓ enabled") if is_enabled else c(RED, "✗ disabled")
-        _print(c(BOLD, f"\n  📦 {name} v{ver}  [{status_tag}]"))
-        if desc:
-            _print(f"  {desc}")
-        _print(c(GRAY, f"  Path: {pack_path}"))
-        if kw:
-            _print(c(CYAN, f"  Keywords: {', '.join(kw)}"))
-        if tr:
-            _print(c(CYAN, f"  Triggers: {', '.join(tr)}"))
-        if guide:
-            _print(c(GREEN, f"  Guide: {pack_path / guide}"))
-            _print(c(GRAY,  f"    → read_file(path='{pack_path / guide}')"))
-        if scripts:
-            _print(c(GREEN, f"  Scripts: {', '.join(scripts)}"))
-            _print(c(GRAY,  "    → Prefer running scripts over ad-hoc code"))
+    from core.skill_tui import run_skill_tui
+    saved = await run_skill_tui(_skill_scanner)
+    if saved:
+        _print(c(GREEN, "  Skill pack selection saved"))
+    else:
+        _print(c(GRAY, "  Cancelled"))
 
 
 # Reference MAGENTA so that ruff doesn't flag the import as unused.
