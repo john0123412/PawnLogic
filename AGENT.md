@@ -565,12 +565,17 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current public release: `0.3.0`. PyPI, GitHub Release, and latest tag are
-  `v0.3.0`, published from reviewed `main` commit `75d249b` on 2026-07-27.
+- Current published release: `0.3.1`. PyPI, GitHub Release, and latest tag
+  are `v0.3.1`.
+- Release finalization: `0.3.2` is staged. The `.release-ready` marker permits
+  staging its public-facing README version only; creating `v0.3.2`, publishing
+  to PyPI, and creating the GitHub Release remain pending separate
+  authorization.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Active plan: `docs/plans/0.3.0-extensible-agent-platform-and-security-distribution.md`.
-  Core 0.3.0 work and release are complete. Independent `pawnlogic-security`
-  0.1.0 published from `john0123412/pawnlogic-security` on 2026-07-28.
+- Active plan: `docs/plans/0.3.2-bounded-concurrency-two.md`. Its implementation
+  evidence is recorded there; release finalization is staged. Independent
+  `pawnlogic-security` 0.1.0 published from `john0123412/pawnlogic-security`
+  on 2026-07-28.
 - `main` protected by branch rule requiring PR, up-to-date branches, and four
   checks: ruff, docs guard, mypy, fast tests. Tag ruleset protects `v*.*.*`.
 - Publishing uses Trusted Publishing / OIDC. GitHub Release waits on

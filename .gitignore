@@ -30,6 +30,12 @@ __pycache__/
 *$py.class
 .pytest_cache/
 .mypy_cache/
+.hypothesis/
+.nox/
+.tox/
+.pytype/
+.eggs/
+pip-wheel-metadata/
 
 # --- AI tool caches and config ---
 .aider*
@@ -63,6 +69,7 @@ Thumbs.db
 .ruff_cache/
 htmlcov/
 .coverage
+.coverage.*
 coverage.xml
 
 # --- History and backups (avoid committing filter-repo or manual backups) ---
@@ -82,5 +89,16 @@ temp/
 pwn_debug.md
 iscc_work/
 
+# --- Local runtime databases (never commit user or test session state) ---
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
 # Agent memory (privacy: may contain user context)
 docs/agents/skill-pack-tui.md
+
+# Release staging marker must remain visible and stageable.
+!.release-ready

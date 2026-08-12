@@ -7,7 +7,7 @@
 
 | Version | Plan | Status |
 |---------|------|--------|
-| 0.3.2 | [0.3.2-bounded-concurrency-two.md](0.3.2-bounded-concurrency-two.md) | Active unreleased release candidate. It prepares bounded two-worker delegation and does not authorize a tag, package publication, or GitHub Release. |
+| 0.3.2 | [0.3.2-bounded-concurrency-two.md](0.3.2-bounded-concurrency-two.md) | Release finalization staged. It prepares bounded two-worker delegation; its tag, PyPI publication, and GitHub Release remain pending separate authorization. |
 
 There is exactly one active plan at a time. When the active plan is completed
 and its release is published, it moves to Completed below.
