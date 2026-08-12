@@ -12,7 +12,8 @@
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
 CTF-oriented toolchain. The current public release is **0.3.1**. Version
-**0.3.2** is an unreleased release candidate for bounded two-worker delegation.
+**0.3.2** is an unreleased release candidate for bounded two-worker delegation
+and unified skill pack management.
 
 ## System Requirements
 
@@ -101,8 +102,8 @@ use the additive `{"type":"event","data":{...}}` envelope.
 
 ## What's New
 
-Version 0.3.2 introduces bounded, isolation-proven two-worker delegation while
-preserving existing public contracts:
+Version 0.3.2 introduces bounded, isolation-proven two-worker delegation and
+unified skill pack management while preserving existing public contracts:
 
 - A supported batch caller can run at most two delegated tasks while preserving
   FIFO admission and input-order results; `delegate_task` remains a one-task
@@ -114,6 +115,10 @@ preserving existing public contracts:
 - Concurrent children may use only task-isolated file Tools. Shell, network,
   container, extension, MCP, browser, pwn, sandbox, and other non-isolated
   Tool paths fail closed before handler execution.
+- Unified skill pack management under `/skills`: interactive TUI with
+  arrow-key navigation, space-to-toggle, search, and bulk operations.
+  `/sp` and `/skillpack` commands are removed; `/skills` is the single entry
+  point for install, sync, rescan, and enable/disable.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 

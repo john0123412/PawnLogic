@@ -16,20 +16,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added per-task RuntimeContext forks, unique `.tasks/` workspaces, bounded
   output collection, task-local cancellation, and thread-safe delegation-event
   forwarding for concurrent children.
-
-### Security
-- Concurrent execution now requires a forkable parent RuntimeContext and
-  permits only task-isolated file Tools. Shell, network, container, extension,
-  MCP, browser, pwn, sandbox, and other non-isolated Tools fail closed before
-  their handlers run.
-
-### Tests
-- Added concurrent context/workspace round-trip, budget, cancellation,
-  deadline, output-isolation, and non-isolated-Tool denial regression coverage.
-
-## [0.3.1] - 2026-08-12
-
-### Added
 - Added unified skill pack management TUI (`/skills`): arrow-key navigation,
   Space/Enter to toggle, Tab to switch between list and button row, search,
   and bulk operations (All/Clear/Invert/Sync/Rescan). State persists in
@@ -39,6 +25,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   covering reverse engineering, penetration testing, malware analysis,
   digital forensics, and more. All new packs excluded from PyPI wheels and
   release archives via `.gitattributes export-ignore`.
+
+### Security
+- Concurrent execution now requires a forkable parent RuntimeContext and
+  permits only task-isolated file Tools. Shell, network, container, extension,
+  MCP, browser, pwn, sandbox, and other non-isolated Tools fail closed before
+  their handlers run.
+
+### Refactored
+- Removed `/sp` and `/skillpack` commands; all skill pack management is now
+  unified under `/skills` (TUI, install, sync, rescan).
+- Archived completed release plans under `docs/plans/archive/`.
+- Merged `GUIDE.md` content into `README.md` and project memory into `AGENT.md`
+  to reduce documentation surface area.
+
+### Tests
+- Added concurrent context/workspace round-trip, budget, cancellation,
+  deadline, output-isolation, and non-isolated-Tool denial regression coverage.
+
+## [0.3.1] - 2026-08-12
 
 ### Fixed
 - Tolerate bounded transient empty `readline()` results in chunked SSE streams
