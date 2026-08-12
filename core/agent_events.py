@@ -9,6 +9,7 @@ from enum import Enum
 import json
 import math
 import re
+import threading
 from types import MappingProxyType
 from typing import Protocol, TypeAlias, cast
 
@@ -365,12 +366,14 @@ class AgentEventPublisher:
         subscribers: Iterable[AgentEventSubscriber] = (),
     ) -> None:
         self._subscribers = list(subscribers)
+        self._lock = threading.RLock()
         if any(not callable(subscriber) for subscriber in self._subscribers):
             raise TypeError("Agent Event subscribers must be callable")
 
     @property
     def subscriber_count(self) -> int:
-        return len(self._subscribers)
+        with self._lock:
+            return len(self._subscribers)
 
     def subscribe(
         self,
@@ -378,7 +381,8 @@ class AgentEventPublisher:
     ) -> Callable[[], None]:
         if not callable(subscriber):
             raise TypeError("Agent Event subscriber must be callable")
-        self._subscribers.append(subscriber)
+        with self._lock:
+            self._subscribers.append(subscriber)
         active = True
 
         def unsubscribe() -> None:
@@ -390,15 +394,18 @@ class AgentEventPublisher:
         return unsubscribe
 
     def unsubscribe(self, subscriber: AgentEventSubscriber) -> None:
-        with suppress(ValueError):
+        with self._lock, suppress(ValueError):
             self._subscribers.remove(subscriber)
 
     def publish(self, event: AgentEvent) -> None:
         if not isinstance(event, AgentEvent):
             raise TypeError("event must be an AgentEvent")
-        for subscriber in tuple(self._subscribers):
-            with suppress(Exception):
-                subscriber(event)
+        # Subscribers may write to stdout/JSON sinks, so keep dispatch ordered
+        # even when concurrent child workers publish at the same time.
+        with self._lock:
+            for subscriber in tuple(self._subscribers):
+                with suppress(Exception):
+                    subscriber(event)
 
     def emit(self, event: AgentEvent) -> None:
         """Compatibility spelling for callers that expose an ``emit`` sink."""

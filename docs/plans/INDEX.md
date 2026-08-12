@@ -7,19 +7,16 @@
 
 | Version | Plan | Status |
 |---------|------|--------|
-| 0.3.1 | [0.3.1-runtime-hardening-and-release-preparation.md](0.3.1-runtime-hardening-and-release-preparation.md) | Release finalization pending. The exact-version marker and public docs are staged for 0.3.1, but the tag, package publication, and GitHub Release remain explicitly authorized follow-up actions. |
+| 0.3.2 | [0.3.2-bounded-concurrency-two.md](0.3.2-bounded-concurrency-two.md) | Active unreleased release candidate. It prepares bounded two-worker delegation and does not authorize a tag, package publication, or GitHub Release. |
 
 There is exactly one active plan at a time. When the active plan is completed
 and its release is published, it moves to Completed below.
-
-## Proposed Plans
-
-There are no proposed plans.
 
 ## Completed Plans
 
 | Version | Plan | Release |
 |---------|------|---------|
+| 0.3.1 | [0.3.1-runtime-hardening-and-release-preparation.md](0.3.1-runtime-hardening-and-release-preparation.md) | v0.3.1 |
 | 0.3.0 | [0.3.0-extensible-agent-platform-and-security-distribution.md](0.3.0-extensible-agent-platform-and-security-distribution.md) | v0.3.0 |
 | 0.2.3 | [0.2.3-autonomous-runtime-reliability-deepening.md](0.2.3-autonomous-runtime-reliability-deepening.md) | v0.2.3 |
 | 0.2.2 | [0.2.2-runtime-evaluation-architecture-slimming.md](0.2.2-runtime-evaluation-architecture-slimming.md) | v0.2.2 |

@@ -4,6 +4,7 @@
 
 | Version | Supported |
 |---------|-----------|
+| 0.3.2   | ✅ Yes     |
 | 0.3.1   | ✅ Yes     |
 | 0.3.0   | ✅ Yes     |
 | 0.2.3   | ⚠️ Upgrade recommended |
@@ -56,5 +57,6 @@ Areas of particular concern for this project:
   must be packaged and published independently from core, require a valid
   engagement scope, and remain subject to host Operation/Network Policy
 - **Delegated execution** — model requests cannot expand Provider, Tool, network,
-  or cost authority; orchestration remains serial until shared Workspace and
-  RuntimeContext isolation has dedicated proof
+  or cost authority. Two-worker execution requires a forkable task context,
+  task-local workspace/output/cancellation, and task-isolated file Tools; every
+  non-isolated concurrent Tool path fails closed before handler execution

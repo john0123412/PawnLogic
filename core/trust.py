@@ -29,7 +29,7 @@ class TrustLevel(str, Enum):
     NETWORK = "network"  # outbound network access
     PRIVATE_NETWORK = "private_network"  # reaching private / loopback hosts
     INSECURE_TRANSPORT = "insecure_transport"  # plaintext HTTP (no TLS)
-    SUBAGENT = "subagent"  # non-isolated delegated sub-agent
+    SUBAGENT = "subagent"  # task-isolated delegated sub-agent
 
 
 class TrustBoundaryKind(str, Enum):
@@ -95,8 +95,8 @@ TRUST_BOUNDARIES: dict[TrustBoundaryKind, TrustBoundary] = {
     TrustBoundaryKind.DELEGATE: TrustBoundary(
         TrustBoundaryKind.DELEGATE,
         TrustLevel.SUBAGENT,
-        "delegate_task is a non-isolated sub-agent; tool side effects are real "
-        "and run with parent permissions.",
+        "delegate_task uses a task-isolated context and workspace; allowed "
+        "tool side effects are real and run with parent permissions.",
     ),
 }
 
@@ -139,7 +139,7 @@ def trust_notice_for_boundary(kind: TrustBoundaryKind) -> str:
 
 
 def subagent_notice(capability: str) -> str:
-    """Return the delegate non-isolated sub-agent notice for a capability profile."""
+    """Return the delegate task-isolation notice for a capability profile."""
     base_notice = TRUST_BOUNDARIES[TrustBoundaryKind.DELEGATE].message.removesuffix(".")
     return trust_notice(f"{base_notice} (capability={capability}).")
 

@@ -433,8 +433,8 @@ The Delegation Runtime implementation must add contract tests for:
 - minimal selected context, parent/root linkage, bounded structured results,
   redacted artifacts/evidence, and partial failure reporting;
 - Tool visibility intersection and refusal to bypass host Tool/operation policy;
-- serial execution, no implicit concurrency, no nested delegation, and
-  cleanup after cancellation;
+- bounded one-or-two-worker execution, no implicit concurrency, no nested
+  delegation, and cleanup after cancellation;
 - legacy `delegate_task` arguments and text result compatibility.
 
 The ADR itself is documentation-only. Its acceptance does not change the
@@ -451,8 +451,37 @@ atomic shared budget claims. `tools.delegate_tool` remains the compatibility
 Adapter and keeps its human text envelope while adding task lineage to its
 structured result and Agent Events.
 
-Execution deliberately remains serial. The policy accepts a maximum concurrency
-ceiling of two for forward compatibility, but the current orchestrator rejects
-values above one until Workspace and RuntimeContext isolation tests pass. No task
-graph is introduced because there are not yet two concrete callers that require
-one.
+The initial implementation deliberately remained serial. The bounded
+concurrency-two amendment below supersedes that execution restriction while
+retaining the public single-task `delegate_task` Adapter. No task graph is
+introduced because there is not yet a public batch caller.
+
+## Amendment: bounded concurrency two
+
+After the initial serial runtime, the implementation may admit at most two
+synchronous child tasks when all of these conditions hold:
+
+1. The Delegation Runtime has a forkable parent `RuntimeContext`; each child
+   receives a copied context, independent dynamic configuration, unique child
+   workspace, task-local output collector, and child cancellation token.
+2. Isolated child activation never mirrors legacy process globals. Relative
+   child file work and shell defaults resolve to the child workspace; sibling
+   task workspaces are denied.
+3. A two-worker child may execute only Tool paths proven task-isolated. The
+   current allowlist is the file Tool family; shell, container, network, MCP,
+   extension, browser, pwn, and sandbox paths fail closed before their handler
+   runs.
+4. Shared `BudgetLedger` claims remain atomic and are settled after every
+   completed, cancelled, timed-out, failed, or invalid result. A task-local
+   cancellation never reaches a sibling; host cancellation fans out through
+   the parent token.
+5. Direct stdout is captured into a bounded task collector. Child events are
+   collected locally and forwarded through a thread-safe parent publisher, so
+   NDJSON/human sinks cannot be interleaved by worker writes.
+
+`SerialAgentOrchestrator` keeps its legacy name for compatibility but accepts
+only `max_concurrency` values one and two. An executor that has not been
+configured for two workers must reject accidental parallel calls. The public
+`delegate_task` Adapter still submits exactly one task; a persisted policy
+value of two never creates implicit work and affects only a supported batch
+caller.
