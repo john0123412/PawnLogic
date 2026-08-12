@@ -15,6 +15,8 @@ from core.tool_executor import (
     result_has_semantic_failure,
     resolve_tool_arguments,
 )
+from core.tool_registry import ToolRegistry, ToolSpec
+from core.trust import TrustBoundaryKind
 
 
 def test_tool_execution_context_exposes_short_session_label():
@@ -379,7 +381,7 @@ def test_record_tool_failure_preserves_error_type_when_write_fails():
 
 def _make_tool_executor(**overrides) -> ToolExecutor:
     defaults = {
-        "get_handler": lambda _name: None,
+        "resolve_tool": lambda _name: None,
         "agent_phases": {"RECON": ["read_file"], "EXPLOIT": ["run_shell"]},
         "schema_snapshot": lambda: [_schema("read_file"), _schema("run_shell")],
         "check_failure_func": lambda *_args, **_kwargs: [],
@@ -393,9 +395,24 @@ def _make_tool_executor(**overrides) -> ToolExecutor:
     return ToolExecutor(**defaults)
 
 
-def test_tool_executor_execute_handler_looks_up_registered_handler():
+def test_tool_executor_runs_complete_external_tool_spec_by_default():
+    calls = []
+
+    def handler(args):
+        calls.append(args)
+        return f"custom_tool:{args['value']}"
+
+    spec = ToolSpec(
+        name="custom_tool",
+        handler=handler,
+        schema=_schema("custom_tool"),
+        trust=TrustBoundaryKind.BROWSER_NETWORK,
+        capabilities=frozenset({"external", "network"}),
+    )
     executor = _make_tool_executor(
-        get_handler=lambda name: (lambda args: f"{name}:{args['value']}"),
+        resolve_tool=lambda name: (spec, "mcp:example")
+        if name == "custom_tool"
+        else None,
     )
 
     result = executor.execute_handler(
@@ -407,6 +424,138 @@ def test_tool_executor_execute_handler_looks_up_registered_handler():
 
     assert result.content == "custom_tool:ok"
     assert result.audit_ok is True
+    assert calls == [{"value": "ok"}]
+
+
+def test_tool_executor_does_not_invoke_handler_without_complete_tool_spec():
+    registry = ToolRegistry()
+    calls = []
+
+    def pending_external_handler(args):
+        calls.append(args)
+        return "unexpected remote call"
+
+    # The legacy adapter can hold a handler before its matching schema creates
+    # a complete ToolSpec. That handler must never cross the host execution
+    # boundary.
+    registry.register("pending_external", pending_external_handler)
+    executor = _make_tool_executor(
+        resolve_tool=registry.resolve_for_execution,
+    )
+
+    result = executor.execute_handler(
+        tool_call_id="call_pending",
+        tool_name="pending_external",
+        fn_args={"target": "remote"},
+        context=ToolExecutionContext("session123", "model", 0, "RECON"),
+    )
+
+    assert result.content == "ERROR: Unknown tool 'pending_external'"
+    assert result.audit_ok is False
+    assert calls == []
+
+
+def test_tool_executor_passes_spec_and_owner_to_policy_before_handler():
+    registry = ToolRegistry()
+    calls = []
+    seen = []
+
+    def handler(args):
+        calls.append(args)
+        return "unexpected remote call"
+
+    spec = ToolSpec(
+        name="mcp_network_tool",
+        handler=handler,
+        schema=_schema("mcp_network_tool"),
+        trust=TrustBoundaryKind.BROWSER_NETWORK,
+        capabilities=frozenset({"external", "network"}),
+    )
+    registry.register_many_owned("mcp:example", [spec])
+
+    def reject(spec, owner, arguments, context):
+        seen.append((spec, owner, arguments, context))
+        return "host approval required"
+
+    executor = _make_tool_executor(
+        resolve_tool=registry.resolve_for_execution,
+        execution_policy=reject,
+    )
+    context = ToolExecutionContext("session123", "model", 0, "RECON")
+    result = executor.execute_handler(
+        tool_call_id="call_mcp",
+        tool_name="mcp_network_tool",
+        fn_args={"target": "remote"},
+        context=context,
+    )
+
+    assert result.content == (
+        "ERROR: Tool 'mcp_network_tool' blocked by execution policy: "
+        "host approval required"
+    )
+    assert result.error_type == "ToolExecutionPolicyDenied"
+    assert calls == []
+    assert seen == [(spec, "mcp:example", {"target": "remote"}, context)]
+
+
+def test_tool_executor_fails_closed_when_execution_policy_raises():
+    calls = []
+
+    def handler(args):
+        calls.append(args)
+        return "unexpected tool call"
+
+    spec = ToolSpec(
+        name="guarded_tool",
+        handler=handler,
+        schema=_schema("guarded_tool"),
+    )
+
+    def broken_policy(*_args):
+        raise RuntimeError("unavailable")
+
+    executor = _make_tool_executor(
+        resolve_tool=lambda _name: (spec, "extension:example"),
+        execution_policy=broken_policy,
+    )
+    result = executor.execute_handler(
+        tool_call_id="call_guarded",
+        tool_name="guarded_tool",
+        fn_args={},
+        context=ToolExecutionContext("session123", "model", 0, "RECON"),
+    )
+
+    assert result.content == (
+        "ERROR: Tool 'guarded_tool' blocked because execution policy failed."
+    )
+    assert result.error_type == "ToolExecutionPolicyError"
+    assert calls == []
+
+
+def test_tool_executor_does_not_invoke_spec_without_an_owner():
+    calls = []
+
+    def handler(args):
+        calls.append(args)
+        return "unexpected tool call"
+
+    spec = ToolSpec(
+        name="ownerless_tool",
+        handler=handler,
+        schema=_schema("ownerless_tool"),
+    )
+    executor = _make_tool_executor(
+        resolve_tool=lambda _name: (spec, ""),
+    )
+    result = executor.execute_handler(
+        tool_call_id="call_ownerless",
+        tool_name="ownerless_tool",
+        fn_args={},
+        context=ToolExecutionContext("session123", "model", 0, "RECON"),
+    )
+
+    assert result.error_type == "ToolMetadataError"
+    assert calls == []
 
 
 def test_tool_executor_execute_phase_switch_uses_schema_snapshot():

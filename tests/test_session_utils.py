@@ -789,7 +789,17 @@ def test_run_turn_tool_exception_appends_error_result(monkeypatch):
     def broken_tool(_args):
         raise ValueError("bad tool args")
 
-    session_mod._TOOL_REGISTRY.register("pytest_broken_tool", broken_tool)
+    session_mod._TOOL_REGISTRY.register(
+        "pytest_broken_tool",
+        broken_tool,
+        {
+            "type": "function",
+            "function": {
+                "name": "pytest_broken_tool",
+                "parameters": {"type": "object"},
+            },
+        },
+    )
     try:
         monkeypatch.setattr(
             session_mod,
@@ -929,7 +939,17 @@ def test_run_turn_tool_keyboard_interrupt_raises_for_cli_rollback(monkeypatch):
     def interrupted_tool(_args):
         raise KeyboardInterrupt
 
-    session_mod._TOOL_REGISTRY.register("pytest_interrupt_tool", interrupted_tool)
+    session_mod._TOOL_REGISTRY.register(
+        "pytest_interrupt_tool",
+        interrupted_tool,
+        {
+            "type": "function",
+            "function": {
+                "name": "pytest_interrupt_tool",
+                "parameters": {"type": "object"},
+            },
+        },
+    )
     try:
         monkeypatch.setattr(
             session_mod,

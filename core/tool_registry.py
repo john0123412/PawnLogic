@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from core.trust import TrustBoundaryKind
@@ -32,6 +32,9 @@ class ToolSpec:
             )
         if not self.phases:
             raise ValueError("tool phases cannot be empty")
+
+
+ResolvedTool = tuple[ToolSpec, str]
 
 
 class ToolRegistry:
@@ -161,6 +164,28 @@ class ToolRegistry:
     def get_spec(self, name: str) -> ToolSpec | None:
         return self._specs.get(name)
 
+    def resolve_for_execution(self, name: str) -> ResolvedTool | None:
+        """Return a complete ToolSpec and owner for a host execution boundary.
+
+        The legacy live handler map may replace a handler for an already
+        complete ToolSpec. Preserve that compatibility only by carrying the
+        existing spec's metadata and owner into a snapshot; a handler with no
+        complete spec remains unresolvable.
+        """
+        spec = self._specs.get(name)
+        owner = self._owners.get(name)
+        handler = self._tool_map.get(name)
+        if (
+            spec is None
+            or not isinstance(owner, str)
+            or not owner
+            or not callable(handler)
+        ):
+            return None
+        if handler is not spec.handler:
+            spec = replace(spec, handler=handler)
+        return spec, owner
+
     def get_capabilities(self, name: str) -> frozenset[str]:
         spec = self._specs.get(name)
         if spec is not None:
@@ -213,4 +238,4 @@ class ToolRegistry:
                 )
 
 
-__all__ = ["Handler", "ToolRegistry", "ToolSpec"]
+__all__ = ["Handler", "ResolvedTool", "ToolRegistry", "ToolSpec"]

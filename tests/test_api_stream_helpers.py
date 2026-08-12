@@ -9,8 +9,10 @@ class _FakeStreamResponse:
     def __init__(self, lines: list[bytes], error_after_lines: Exception | None = None):
         self._lines = list(lines)
         self._error_after_lines = error_after_lines
+        self.readline_calls = 0
 
     def readline(self):
+        self.readline_calls += 1
         if self._lines:
             return self._lines.pop(0)
         if self._error_after_lines is not None:
@@ -71,6 +73,7 @@ def test_read_openai_sse_lines_yields_usage_and_stops_on_done():
         {"_usage": {"prompt_tokens": 1}},
         {"choices": [{"delta": {"content": "ok"}}], "usage": {"prompt_tokens": 1}},
     ]
+    assert response.readline_calls == 2
 
 
 def test_read_openai_sse_lines_text_delta_contract_exact_shape():
@@ -90,6 +93,58 @@ def test_read_openai_sse_lines_text_delta_contract_exact_shape():
     ]
     assert set(events[0]) == {"choices"}
     assert set(events[0]["choices"][0]) == {"delta", "finish_reason"}
+
+
+def test_read_openai_sse_lines_tolerates_one_or_two_empty_reads_before_next_event():
+    for empty_reads in ([b""], [b"", b""]):
+        response = _FakeStreamResponse([
+            b'data: {"choices":[{"delta":{"content":"first"}}]}\r\n',
+            *empty_reads,
+            b'data: {"choices":[{"delta":{"content":"second"}}]}\r\n',
+            b"data: [DONE]\r\n",
+        ])
+
+        events = list(provider_streams.read_openai_sse_lines(
+            response,
+            read_timeout=60,
+            raise_if_interrupted=lambda: None,
+        ))
+
+        assert events == [
+            {"choices": [{"delta": {"content": "first"}}]},
+            {"choices": [{"delta": {"content": "second"}}]},
+        ], empty_reads
+
+
+def test_read_openai_sse_lines_ends_after_three_empty_reads_without_pseudo_event():
+    response = _FakeStreamResponse([
+        b"",
+        b"",
+        b"",
+        b'data: {"choices":[{"delta":{"content":"ignored"}}]}\r\n',
+    ])
+
+    events = list(provider_streams.read_openai_sse_lines(
+        response,
+        read_timeout=60,
+        raise_if_interrupted=lambda: None,
+    ))
+
+    assert events == []
+    assert response.readline_calls == 3
+
+
+def test_read_openai_sse_lines_empty_eof_emits_no_pseudo_event():
+    response = _FakeStreamResponse([])
+
+    events = list(provider_streams.read_openai_sse_lines(
+        response,
+        read_timeout=60,
+        raise_if_interrupted=lambda: None,
+    ))
+
+    assert events == []
+    assert response.readline_calls == 3
 
 
 def test_read_openai_sse_lines_usage_chunk_contract_exact_shape():
@@ -154,6 +209,63 @@ def test_read_anthropic_sse_lines_text_delta_contract_exact_shape():
     ]
     assert set(events[0]) == {"choices"}
     assert set(events[0]["choices"][0]) == {"delta", "finish_reason"}
+
+
+def test_read_anthropic_sse_lines_tolerates_one_or_two_empty_reads_before_data_event():
+    for empty_reads in ([b""], [b"", b""]):
+        response = _FakeStreamResponse([
+            b"event: content_block_delta\r\n",
+            *empty_reads,
+            (
+                b'data: {"type":"content_block_delta","index":0,'
+                b'"delta":{"type":"text_delta","text":"resumed"}}\r\n'
+            ),
+        ])
+
+        events = list(provider_streams.read_anthropic_sse_lines(
+            response,
+            read_timeout=60,
+            raise_if_interrupted=lambda: None,
+        ))
+
+        assert events == [
+            {"choices": [{"delta": {"content": "resumed"}, "finish_reason": None}]},
+        ], empty_reads
+
+
+def test_read_anthropic_sse_lines_ends_after_three_empty_reads_without_pseudo_event():
+    response = _FakeStreamResponse([
+        b"event: content_block_delta\r\n",
+        b"",
+        b"",
+        b"",
+        (
+            b'data: {"type":"content_block_delta","index":0,'
+            b'"delta":{"type":"text_delta","text":"ignored"}}\r\n'
+        ),
+    ])
+
+    events = list(provider_streams.read_anthropic_sse_lines(
+        response,
+        read_timeout=60,
+        raise_if_interrupted=lambda: None,
+    ))
+
+    assert events == []
+    assert response.readline_calls == 4
+
+
+def test_read_anthropic_sse_lines_empty_eof_emits_no_pseudo_event():
+    response = _FakeStreamResponse([])
+
+    events = list(provider_streams.read_anthropic_sse_lines(
+        response,
+        read_timeout=60,
+        raise_if_interrupted=lambda: None,
+    ))
+
+    assert events == []
+    assert response.readline_calls == 3
 
 
 def test_anthropic_message_delta_usage_and_finish_contract_exact_shape():

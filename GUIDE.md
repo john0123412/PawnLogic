@@ -252,6 +252,28 @@ into `~/.pawnlogic/skills`, for example:
 Git-backed skill-pack installs accept only `https://`, `ssh://`, or
 `git@host:owner/repo.git` remotes.
 
+#### Skill Pack Management
+
+Installed skill packs can be individually enabled or disabled. New packs default
+to disabled; only enabled packs are visible to the agent and matched during
+search. State persists in `~/.pawnlogic/skills_enabled.json`.
+
+```bash
+# Interactive TUI (space to toggle, / to search, a=all, c=clear, i=invert)
+/skills manage
+
+# Command line
+/sp enable <name>       # enable by display name or folder name
+/sp disable <name>      # disable
+/sp enable all          # enable all
+/sp disable all         # disable all
+/sp status              # show enabled/disabled status
+/sp list                # list with status indicators
+```
+
+The TUI supports arrow keys and `j`/`k` for navigation, `PgUp`/`PgDn` for
+page scrolling, `Enter` to save, and `Esc` to cancel without saving.
+
 Only redistribute third-party CTF skill content from this repository after the
 upstream license, source URL, commit, and required notices have been recorded in
 `THIRD_PARTY_NOTICES.md`.

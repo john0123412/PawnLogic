@@ -35,7 +35,7 @@ from config import (
     AGENT_PHASES,
     user_friendly_error,
     is_fast_model, find_fast_peer,
-    SKILLS_DIR,
+    SKILLS_DIR, SKILLS_ENABLED_PATH,
 )
 from utils.ansi import c, BOLD, DIM, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
 from core.api_client import stream_request, ensure_tool_call_id
@@ -733,7 +733,7 @@ _tool_call_missing_plan = _plan_guard.tool_call_missing_plan
 # ════════════════════════════════════════════════════════
 
 from core.skill_manager import SkillScanner
-_skill_scanner = SkillScanner(SKILLS_DIR)
+_skill_scanner = SkillScanner(SKILLS_DIR, enabled_path=SKILLS_ENABLED_PATH)
 
 
 def _load_skills_toc() -> str:
@@ -1461,7 +1461,7 @@ class AgentSession:
 
     def _make_tool_executor(self) -> ToolExecutor:
         return ToolExecutor(
-            get_handler=_TOOL_REGISTRY.get_handler,
+            resolve_tool=_TOOL_REGISTRY.resolve_for_execution,
             agent_phases=AGENT_PHASES,
             schema_snapshot=_tool_schema_snapshot,
             check_failure_func=check_failure,
@@ -1709,8 +1709,12 @@ class AgentSession:
         _API_RETRY_MAX = 3
 
         while True:
+            _api_start = time.monotonic()
             _api_result = self._consume_api_stream_attempt(
                 api_msgs, current_tools, current_max_tokens, renderer, iteration
+            )
+            logger.debug(
+                "api_stream {} {:.1f}s", iteration, time.monotonic() - _api_start
             )
             if _api_result.error:
                 self.messages.pop()

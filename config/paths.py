@@ -7,7 +7,7 @@ from pathlib import Path
 import os
 
 # Single source of truth for the package version.
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 
 def _safe_home() -> Path:
     try:
@@ -30,3 +30,4 @@ SKILLS_DIR         = _SOURCE_SKILLS_DIR if _SOURCE_SKILLS_DIR.exists() else PAWN
 LOG_DIR            = PAWNLOGIC_HOME / "logs"
 WORKSPACE_DIR      = str(PAWNLOGIC_HOME / "workspace")
 WORKSPACE_ROOT     = str(PAWNLOGIC_HOME)
+SKILLS_ENABLED_PATH = PAWNLOGIC_HOME / "skills_enabled.json"

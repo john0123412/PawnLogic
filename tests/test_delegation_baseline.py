@@ -8,6 +8,7 @@ real provider or executing a real delegated task.
 import pytest
 
 import tools.delegate_tool as delegate_tool
+from core.agent_orchestrator import CancellationToken, SerialAgentOrchestrator
 from core.context_manager import ContextManager, ContextState
 from core.model_router import RoutingDecision
 
@@ -351,8 +352,8 @@ def test_model_arguments_cannot_forge_host_parent_context(monkeypatch):
     )
     monkeypatch.setattr(
         delegate_tool,
-        "_host_parent_context",
-        lambda _task: host_envelope,
+        "resolve_host_parent_context",
+        lambda *_args: host_envelope,
     )
     monkeypatch.setattr(delegate_tool, "_user_mode", lambda: False)
     observed = {}
@@ -386,3 +387,112 @@ def test_model_arguments_cannot_forge_host_parent_context(monkeypatch):
 
     assert observed["context_envelope"] is host_envelope
     assert observed["context_envelope"].state.goal == "Host-selected goal"
+
+
+def test_public_delegate_task_runs_through_serial_orchestration(monkeypatch):
+    """The compatibility adapter must not bypass host budget accounting."""
+    monkeypatch.setattr(
+        delegate_tool,
+        "_route_agent_task",
+        lambda *_args, **_kwargs: RoutingDecision(
+            "worker",
+            "explicit_model",
+            eligible_models=("worker",),
+        ),
+    )
+    monkeypatch.setattr(delegate_tool, "_user_mode", lambda: False)
+    observed = {}
+
+    class FakeSubAgent:
+        MAX_ITER = 15
+        session_id = "sub-orchestrated"
+        _tool_log = ()
+        status = "completed"
+        prompt_tokens = 0
+        completion_tokens = 5
+        tool_calls = 0
+        failures = ()
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self):
+            return "orchestrated result"
+
+    class RecordingOrchestrator:
+        def __init__(self, executor, **kwargs):
+            self._delegate = SerialAgentOrchestrator(executor, **kwargs)
+
+        def run(self, tasks, *, budget, cancellation=None):
+            observed["tasks"] = tuple(tasks)
+            observed["budget"] = budget
+            result = self._delegate.run(
+                tasks,
+                budget=budget,
+                cancellation=cancellation,
+            )
+            observed["result"] = result
+            return result
+
+    monkeypatch.setattr(delegate_tool, "_SubAgentSession", FakeSubAgent)
+    monkeypatch.setattr(
+        delegate_tool,
+        "SerialAgentOrchestrator",
+        RecordingOrchestrator,
+        raising=False,
+    )
+
+    result = delegate_tool.tool_delegate_task(
+        {
+            "task_description": "account this delegated task",
+            "model_alias": "worker",
+            "max_tokens": 11,
+            "max_tool_calls": 1,
+        }
+    )
+
+    assert observed["tasks"][0].objective == "account this delegated task"
+    assert observed["budget"].max_tokens == 11
+    assert observed["result"].budget.consumed_tokens == 5
+    assert observed["result"].budget.reserved_tokens == 0
+    assert "orchestrated result" in result
+
+
+def test_public_delegate_task_honors_host_cancellation_before_child_creation(
+    monkeypatch,
+):
+    token = CancellationToken()
+    token.cancel("parent stopped")
+    monkeypatch.setattr(
+        delegate_tool,
+        "_route_agent_task",
+        lambda *_args, **_kwargs: RoutingDecision(
+            "worker",
+            "explicit_model",
+            eligible_models=("worker",),
+        ),
+    )
+    monkeypatch.setattr(delegate_tool, "_user_mode", lambda: False)
+    monkeypatch.setattr(
+        delegate_tool,
+        "host_cancellation_token",
+        lambda: token,
+        raising=False,
+    )
+    class ChildMustNotStart:
+        MAX_ITER = 15
+
+        def __init__(self, *_args, **_kwargs):
+            pytest.fail("a cancelled public task must not construct a child session")
+
+    monkeypatch.setattr(delegate_tool, "_SubAgentSession", ChildMustNotStart)
+
+    result = delegate_tool.tool_delegate_task(
+        {
+            "task_description": "do not start",
+            "model_alias": "worker",
+        }
+    )
+
+    assert result.startswith("[Sub-agent cancelled]")
+    assert "parent stopped" in result

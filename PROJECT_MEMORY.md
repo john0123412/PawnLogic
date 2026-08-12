@@ -11,21 +11,17 @@ release history.
 
 ## Current Release State
 
-- Current public release: `0.3.0`. PyPI, the GitHub Release, and the latest tag
-  are `v0.3.0`, published from reviewed `main` commit `75d249b` on 2026-07-27.
-- Runtime version source of truth: `config/paths.py:VERSION`.
-- The production workflow run `30246474406` passed source ancestry, 1186
-  release tests, Dynamic E2E, artifact identity, Trusted Publishing, a
-  hash-pinned fresh PyPI install, and GitHub Release creation. The first PyPI
-  smoke attempt observed inconsistent simple-index propagation after upload;
-  the served wheel later matched the built SHA-256 exactly and the failed job
-  rerun passed.
+- Current public release: `0.3.0` (tag and GitHub Release: `v0.3.0`).
+- Runtime version source of truth: `config/paths.py:VERSION`, currently
+  `0.3.1` as an unreleased release candidate. Do not create a `v0.3.1` tag,
+  publish packages, or create a GitHub Release without explicit authorization.
 - Most recent completed plan:
-  `docs/plans/0.2.3-autonomous-runtime-reliability-deepening.md`.
-- Active plan:
   `docs/plans/0.3.0-extensible-agent-platform-and-security-distribution.md`.
-  The core 0.3.0 work and release are complete, as is the independent
-  `pawnlogic-security` 0.1.0 package release described below.
+- Active plan:
+  `docs/plans/0.3.1-runtime-hardening-and-release-preparation.md`.
+  The 0.3.1 candidate contains bounded streaming and file-discovery recovery,
+  execution-boundary hardening, and documented release preparation. The
+  independent `pawnlogic-security` 0.1.0 package release is described below.
 - PR 1 contracts are recorded in commit `7ff8c27`: ADR 0007, ADR 0008, and
   focused delegation/MCP characterization tests.
 - The merged 0.3.0 core delivers the Extension Runtime, Extension
@@ -130,6 +126,10 @@ These contracts are more important than local refactoring convenience:
   capability-only authorization gates. Capability approval is not target
   approval.
 - Third-party skill packs must not be included in wheels or sdists by default.
+- The repository language scan enforces English outside `_zh-CN` documentation
+  while excluding optional source-checkout `skills/` assets. Those assets remain
+  governed by attribution and export-ignore rules; first-party source, tests,
+  and product documentation do not inherit that exception.
 - Proposed Extensions must remain disabled until explicitly enabled; installing
   a distribution is not authorization to load or execute it.
 - An enabled Extension may rebuild its contributions through

@@ -8,7 +8,7 @@ Patch support:
   - Legacy old_content/new_content arguments remain supported.
 """
 
-import fnmatch, os, re, difflib, subprocess
+import fnmatch, os, re, difflib, subprocess, time
 from pathlib import Path
 from core.path_policy import resolve_within
 from config import (
@@ -96,10 +96,26 @@ def _emit_run_shell_warning() -> None:
 # Security checks.
 # ════════════════════════════════════════════════════════
 
+# Resolve blacklist paths once per READ_BLACKLIST identity. On WSL2, resolving
+# a symlink to a Windows mount (e.g. ~/.aws -> /mnt/c/Users/...) costs ~18ms
+# per call. Without caching, _read_block_reason re-resolves all entries for
+# every file candidate, turning a 34k-file walk into a 60+ minute hang.
+_resolved_blacklist_cache: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+
+
+def _resolved_blacklist() -> tuple[str, ...]:
+    global _resolved_blacklist_cache
+    bl_id = id(READ_BLACKLIST)
+    if _resolved_blacklist_cache is not None and _resolved_blacklist_cache[0] == (bl_id,):
+        return _resolved_blacklist_cache[1]
+    resolved = tuple(str(Path(bl).expanduser().resolve()) for bl in READ_BLACKLIST)
+    _resolved_blacklist_cache = ((bl_id,), resolved)
+    return resolved
+
+
 def _read_block_reason(path, action: str) -> str:
     abs_p = str(Path(path).expanduser().resolve())
-    for bl in READ_BLACKLIST:
-        bl_p = str(Path(bl).expanduser().resolve())
+    for bl_p in _resolved_blacklist():
         try:
             is_blocked = os.path.commonpath([abs_p, bl_p]) == bl_p
         except ValueError:
@@ -111,16 +127,12 @@ def _read_block_reason(path, action: str) -> str:
 
 def _check_read(path: str):
     reason = _read_block_reason(path, "read denied")
-    if reason:
-        return False, reason
-    return True, ""
+    return (False, reason) if reason else (True, "")
 
 
 def _check_directory_listing(path: Path) -> tuple[bool, str]:
     reason = _read_block_reason(path, "directory enumeration denied")
-    if reason:
-        return False, reason
-    return True, ""
+    return (False, reason) if reason else (True, "")
 
 
 def _is_read_blacklisted(path: Path) -> bool:
@@ -514,29 +526,55 @@ def tool_find_files(a: dict) -> str:
     pattern = a["pattern"]
     root    = Path(a.get("root", _session_cwd[0])).expanduser()
     max_r   = int(a.get("max_results", 50))
+    timeout = int(a.get("timeout", 10))  # seconds
     results = []
     try:
         ok, reason = _check_directory_listing(root)
         if not ok:
             return reason
         pattern_path = pattern.replace("\\", "/").lstrip("/")
-        if any(ch in pattern for ch in "*?["):
-            matches = []
-            for candidate in _iter_visible_paths(root):
-                rel = str(candidate.relative_to(root)).replace(os.sep, "/")
+        deadline = time.monotonic() + timeout
+        matches = []
+        timed_out = False
+        paths = iter(_iter_visible_paths(root))
+        while True:
+            # This prevents starting another Python-level iteration after the
+            # deadline. A single blocked iterator step cannot be interrupted.
+            if time.monotonic() >= deadline:
+                timed_out = True
+                break
+            try:
+                candidate = next(paths)
+            except StopIteration:
+                timed_out = time.monotonic() >= deadline
+                break
+            if time.monotonic() >= deadline:
+                timed_out = True
+                break
+            rel = str(candidate.relative_to(root)).replace(os.sep, "/")
+            if any(ch in pattern for ch in "*?["):
                 target = rel if "/" in pattern_path else candidate.name
                 if fnmatch.fnmatch(target, pattern_path):
                     matches.append(candidate)
-        else:
-            matches = [p for p in _iter_visible_paths(root) if pattern.lower() in p.name.lower()]
+            else:
+                if pattern.lower() in candidate.name.lower():
+                    matches.append(candidate)
         matches.sort(key=lambda x: x.stat().st_mtime, reverse=True)
         for m in matches[:max_r]:
             rel = m.relative_to(root) if m.is_relative_to(root) else m
             tag = c(BLUE, "[DIR] ") if m.is_dir() else ""
             results.append(f"  {tag}{rel}  {c(GRAY, str(m.stat().st_size)+'B')}")
         if not results:
+            if timed_out:
+                return (
+                    f"Search timed out after {timeout}s before finding a match "
+                    f"for '{pattern}' under {root}"
+                )
             return f"No files matched '{pattern}' under {root}"
-        return c(GRAY, f"  Found {min(len(matches),max_r)} results under {root}:\n") + "\n".join(results)
+        header = f"  Found {min(len(matches),max_r)} results under {root}"
+        if timed_out:
+            header += f" (search timed out after {timeout}s; showing partial results)"
+        return c(GRAY, header + ":\n") + "\n".join(results)
     except Exception as e:
         return f"ERROR: {e}"
 

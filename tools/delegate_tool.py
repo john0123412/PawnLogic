@@ -27,6 +27,7 @@ Import cycle avoidance:
 
 import json
 import threading
+from dataclasses import replace
 from config import (
     DEFAULT_MODEL, MODELS, validate_api_key, is_fast_model, find_fast_peer,
 )
@@ -34,18 +35,21 @@ from core.delegation import (
     AgentBudget,
     AgentResult,
     AgentTask,
-    AgentUsage,
     DelegationModelPolicy,
     FailureRecord,
     default_delegation_policy_store,
 )
 from core import delegation as delegation_events
+from core.agent_orchestrator import SerialAgentOrchestrator
 from core.delegation_runtime import (
     CAPABILITY_PROFILES,
+    DelegationTaskExecutor,
     SubAgentSession as _SubAgentSession,
+    host_cancellation_token,
     make_sub_executor as _make_sub_executor,
     _tool_map,
     _tools_schema,
+    resolve_host_parent_context,
     resolve_allowed_tools,
     tool_allowed,
 )
@@ -53,7 +57,6 @@ from core.model_router import ModelRouter, RoutingDecision
 from core.state import (
     state as _runtime_state, get_dynamic_config_value,
 )
-from core.runtime_context import current_runtime_context
 from core.trust import subagent_notice
 from utils.ansi      import c, YELLOW, GRAY, GREEN, MAGENTA
 
@@ -206,18 +209,6 @@ def _rejected_result(decision: RoutingDecision) -> str:
     )
 
 
-def _host_parent_context(task: AgentTask):
-    """Resolve child context only through the active host RuntimeContext."""
-    context = current_runtime_context()
-    provider = getattr(context, "context_provider", None)
-    if not callable(provider):
-        return None
-    try:
-        return provider(task.context_mode)
-    except (TypeError, ValueError):
-        return None
-
-
 def tool_delegate_task(a: dict) -> str:
     """Run a structured delegated task through host-owned model policy."""
     if not str(a.get("objective") or a.get("task_description") or "").strip():
@@ -230,6 +221,7 @@ def tool_delegate_task(a: dict) -> str:
     verbose = bool(a.get("verbose", False))
     parent_model = str(_runtime_state.current_model or DEFAULT_MODEL)
     policy = _policy_store().load()
+    cancellation = host_cancellation_token()
     decision = _route_agent_task(
         task,
         parent_model=parent_model,
@@ -275,65 +267,67 @@ def tool_delegate_task(a: dict) -> str:
         ModelRouter.effective_max_tokens(task, policy)
         or task.budget.max_tokens
     )
-    session_options = {
-        "role": task.role,
-        "instructions": task.instructions,
-        "context_mode": task.context_mode,
-        "max_tokens": effective_tokens,
-        "max_tool_calls": task.budget.max_tool_calls,
-    }
-    parent_context = _host_parent_context(task)
-    if parent_context is not None:
-        session_options["context_envelope"] = parent_context
-    sub = _SubAgentSession(
-        task.objective,
-        worker_model,
-        capability=task.capability_profile,
-        allowlist=task.allowed_tools or None,
-        **session_options,
+    effective_budget = AgentBudget(
+        max_tokens=effective_tokens,
+        max_cost=ModelRouter.effective_max_cost(task, policy),
+        max_tool_calls=task.budget.max_tool_calls,
     )
-    child_agent_id = str(getattr(sub, "session_id", "delegated-agent"))
-    delegation_events.publish_delegation_started(
-        task, decision, child_agent_id=child_agent_id, effective_tokens=effective_tokens
+    effective_task = replace(task, budget=effective_budget)
+    parent_context = resolve_host_parent_context(effective_task, cancellation)
+
+    def _started(child_agent_id: str) -> None:
+        delegation_events.publish_delegation_started(
+            effective_task,
+            decision,
+            child_agent_id=child_agent_id,
+            effective_tokens=effective_tokens,
+        )
+
+    executor = DelegationTaskExecutor(
+        worker_model,
+        context_envelope=parent_context,
+        session_factory=_SubAgentSession,
+        on_started=_started,
     )
 
     _delegate_ctx.depth = current_depth + 1
     try:
-        result = sub.run()
+        orchestration = SerialAgentOrchestrator(executor).run(
+            (effective_task,),
+            budget=effective_budget,
+            cancellation=cancellation,
+        )
     finally:
         _delegate_ctx.depth = current_depth
+    agent_result = replace(
+        orchestration.results[0],
+        model_alias=orchestration.results[0].model_alias or worker_model,
+        routing_reason=(
+            orchestration.results[0].routing_reason or decision.reason
+        ),
+    )
+    sub = executor.subagent
+    child_agent_id = executor.child_agent_id or "delegated-agent"
 
     # Report tool-call summary.
-    if sub._tool_log:
-        tool_summary = "\n".join(sub._tool_log[-10:])
+    tool_log = tuple(getattr(sub, "_tool_log", ())) if sub is not None else ()
+    if tool_log:
+        tool_summary = "\n".join(tool_log[-10:])
         print(c(GRAY, f"\n  [Sub-agent tool-call summary]\n{tool_summary}"))
 
-    status = str(getattr(sub, "status", "completed"))
-    usage = AgentUsage(
-        prompt_tokens=int(getattr(sub, "prompt_tokens", 0)),
-        completion_tokens=int(getattr(sub, "completion_tokens", 0)),
-        tool_calls=int(getattr(sub, "tool_calls", len(sub._tool_log))),
-    )
-    agent_result = AgentResult(
-        task_id=task.task_id, parent_task_id=task.parent_task_id,
-        status=status,
-        summary=result,
-        model_alias=worker_model,
-        routing_reason=decision.reason,
-        failures=tuple(getattr(sub, "failures", ())),
-        usage=usage,
-    )
     delegation_events.publish_delegation_result(agent_result, child_agent_id)
 
     print(c(
         GREEN,
-        f"  [Sub-agent] {status}, result length: {len(result)} chars",
+        f"  [Sub-agent] {agent_result.status}, result length: "
+        f"{len(agent_result.summary)} chars",
     ))
     metadata = (
         f"Model: {worker_model}\n"
         f"Routing: {decision.reason}\n"
-        f"Usage: prompt={usage.prompt_tokens}, "
-        f"completion={usage.completion_tokens}, tools={usage.tool_calls}"
+        f"Usage: prompt={agent_result.usage.prompt_tokens}, "
+        f"completion={agent_result.usage.completion_tokens}, "
+        f"tools={agent_result.usage.tool_calls}"
     )
     structured = json.dumps(
         agent_result.to_dict(),
@@ -343,16 +337,16 @@ def tool_delegate_task(a: dict) -> str:
 
     if verbose:
         return (
-            f"[Sub-agent {status}]\n"
+            f"[Sub-agent {agent_result.status}]\n"
             f"{metadata}\n"
             f"Structured: {structured}\n"
             f"--- Tool-call log ---\n"
-            f"{chr(10).join(sub._tool_log) or '(no tool calls)'}\n\n"
+            f"{chr(10).join(tool_log) or '(no tool calls)'}\n\n"
             f"--- Final result ---\n"
             f"{agent_result.summary}"
         )
     return (
-        f"[Sub-agent {status}]\n{metadata}\n"
+        f"[Sub-agent {agent_result.status}]\n{metadata}\n"
         f"Structured: {structured}\n{agent_result.summary}"
     )
 

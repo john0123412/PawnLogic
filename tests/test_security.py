@@ -8,6 +8,7 @@ Covers:
   - READ_BLACKLIST / WRITE_BLACKLIST contain expected sensitive paths
 """
 
+import os
 import re
 import socket
 import sys
@@ -333,3 +334,108 @@ def test_find_files_skips_sensitive_children(tmp_path, monkeypatch):
 
     assert "public/id_rsa" in result
     assert ".ssh" not in result
+
+
+def test_find_files_reports_the_default_deadline_at_its_boundary(tmp_path, monkeypatch):
+    late_match = tmp_path / "late.txt"
+    late_match.write_text("late", encoding="utf-8")
+    clock_values = [100.0, 100.0, 110.0]
+
+    def monotonic():
+        return clock_values.pop(0) if clock_values else 110.0
+
+    monkeypatch.setattr(file_ops, "_iter_visible_paths", lambda _root: iter([late_match]))
+    monkeypatch.setattr(file_ops.time, "monotonic", monotonic)
+
+    result = file_ops.tool_find_files({"root": str(tmp_path), "pattern": "*.txt"})
+
+    assert "timed out after 10s" in result
+    assert "late.txt" not in result
+
+
+def test_find_files_no_match_does_not_report_timeout_before_deadline(tmp_path, monkeypatch):
+    non_match = tmp_path / "notes.md"
+    non_match.write_text("notes", encoding="utf-8")
+    monkeypatch.setattr(file_ops, "_iter_visible_paths", lambda _root: iter([non_match]))
+    monkeypatch.setattr(file_ops.time, "monotonic", lambda: 100.0)
+
+    result = file_ops.tool_find_files({"root": str(tmp_path), "pattern": "*.txt"})
+
+    assert result.startswith("No files matched")
+    assert "timed out" not in result
+
+
+def test_find_files_reports_deadline_after_a_late_empty_iteration(tmp_path, monkeypatch):
+    clock_values = [100.0, 100.0, 110.0]
+
+    def monotonic():
+        return clock_values.pop(0) if clock_values else 110.0
+
+    monkeypatch.setattr(file_ops, "_iter_visible_paths", lambda _root: iter(()))
+    monkeypatch.setattr(file_ops.time, "monotonic", monotonic)
+
+    result = file_ops.tool_find_files({"root": str(tmp_path), "pattern": "*.txt"})
+
+    assert result.startswith("Search timed out after 10s")
+
+
+def test_find_files_match_does_not_report_timeout_before_deadline(tmp_path, monkeypatch):
+    match = tmp_path / "report.txt"
+    match.write_text("report", encoding="utf-8")
+    monkeypatch.setattr(file_ops, "_iter_visible_paths", lambda _root: iter([match]))
+    monkeypatch.setattr(file_ops.time, "monotonic", lambda: 100.0)
+
+    result = file_ops.tool_find_files({"root": str(tmp_path), "pattern": "*.txt"})
+
+    assert "report.txt" in result
+    assert "timed out" not in result
+
+
+def test_find_files_marks_existing_results_as_partial_after_deadline(tmp_path, monkeypatch):
+    early_match = tmp_path / "early.txt"
+    late_match = tmp_path / "late.txt"
+    early_match.write_text("early", encoding="utf-8")
+    late_match.write_text("late", encoding="utf-8")
+    clock_values = [100.0, 100.0, 100.0, 100.0, 110.0]
+
+    def monotonic():
+        return clock_values.pop(0) if clock_values else 110.0
+
+    monkeypatch.setattr(
+        file_ops,
+        "_iter_visible_paths",
+        lambda _root: iter([early_match, late_match]),
+    )
+    monkeypatch.setattr(file_ops.time, "monotonic", monotonic)
+
+    result = file_ops.tool_find_files({"root": str(tmp_path), "pattern": "*.txt"})
+
+    assert "early.txt" in result
+    assert "late.txt" not in result
+    assert "timed out after 10s" in result
+    assert "partial results" in result
+
+
+def test_find_files_keeps_newest_results_from_the_full_tree(tmp_path, monkeypatch):
+    oldest = tmp_path / "oldest.txt"
+    older = tmp_path / "older.txt"
+    newest = tmp_path / "newest.txt"
+    for path in (oldest, older, newest):
+        path.write_text(path.name, encoding="utf-8")
+    os.utime(oldest, (1, 1))
+    os.utime(older, (2, 2))
+    os.utime(newest, (3, 3))
+    monkeypatch.setattr(
+        file_ops,
+        "_iter_visible_paths",
+        lambda _root: iter([oldest, older, newest]),
+    )
+    monkeypatch.setattr(file_ops.time, "monotonic", lambda: 100.0)
+
+    result = file_ops.tool_find_files(
+        {"root": str(tmp_path), "pattern": "*.txt", "max_results": 1}
+    )
+
+    assert "newest.txt" in result
+    assert "oldest.txt" not in result
+    assert "older.txt" not in result

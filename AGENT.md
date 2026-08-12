@@ -109,9 +109,14 @@ The repository has one CLI runtime implementation.
 - Chinese is allowed only in repository files whose filename stem ends with
   `_zh-CN` (for example `README_zh-CN.md` and `GUIDE_zh-CN.md`), where it must match
   the English documentation semantically.
-- Do not introduce Chinese text anywhere else in the repository, including
-  Python source, shell scripts, tests, fixtures, config files, commit-facing
-  templates, or agent instructions.
+- Checked-in `skills/` assets are optional source-checkout material governed by
+  the Third-Party Skill Pack Policy. They may retain their upstream language,
+  but must remain export-ignored and must not be used to add first-party Chinese
+  source, tests, or product documentation.
+- Outside translated `_zh-CN` documentation and the approved `skills/`
+  exception, do not introduce Chinese text in Python source, shell scripts,
+  tests, fixtures, config files, commit-facing templates, or agent
+  instructions.
 - Default `pawn` startup is user-friendly mode. It must hide raw tool-call
   internals, parser diagnostics, detailed reasoning streams, and low-level API
   errors unless the user explicitly enables debug output.

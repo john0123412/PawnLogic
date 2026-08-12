@@ -8,6 +8,7 @@ import json
 import time
 from typing import Any
 
+from core.tool_registry import ResolvedTool, ToolSpec
 from core.tool_routing import phase_tool_names, select_phase_tools
 
 
@@ -26,6 +27,20 @@ class ToolExecutionContext:
     def session_label(self) -> str:
         """Return the short session id used by existing logs."""
         return self.session_id[:8]
+
+
+ToolExecutionPolicy = Callable[
+    [ToolSpec, str, Mapping[str, Any], ToolExecutionContext], str | None
+]
+
+
+def allow_registered_tool_execution(
+    _spec: ToolSpec,
+    _owner: str,
+    _arguments: Mapping[str, Any],
+    _context: ToolExecutionContext,
+) -> None:
+    """Allow a complete, owned ToolSpec when no host policy is installed."""
 
 
 @dataclass(slots=True)
@@ -350,11 +365,29 @@ def execute_phase_switch(
     )
 
 
+def _blocked_tool_execution(
+    *,
+    tool_call_id: str,
+    tool_name: str,
+    content: str,
+    args_preview: str,
+    error_type: str,
+) -> ToolExecutionResult:
+    return ToolExecutionResult(
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        content=content,
+        audit_ok=False,
+        args_preview=args_preview,
+        error_type=error_type,
+    )
+
+
 @dataclass(slots=True)
 class ToolExecutor:
     """Thin orchestration layer over extracted tool execution helpers."""
 
-    get_handler: Callable[[str], Callable[[dict], object] | None]
+    resolve_tool: Callable[[str], ResolvedTool | None]
     agent_phases: Mapping[str, Sequence[str]]
     schema_snapshot: Callable[[], Sequence[dict]]
     check_failure_func: Callable[..., Sequence[object]]
@@ -363,6 +396,7 @@ class ToolExecutor:
     count_failure_func: Callable[[str, str], int]
     sink_failure_func: Callable[..., tuple[bool, str]]
     user_error_formatter: Callable[[str], str] | None = None
+    execution_policy: ToolExecutionPolicy = allow_registered_tool_execution
 
     def execute_phase_switch(
         self,
@@ -401,11 +435,96 @@ class ToolExecutor:
         context: ToolExecutionContext,
         args_preview: str = "",
     ) -> ToolExecutionResult:
+        try:
+            resolved = self.resolve_tool(tool_name)
+        except Exception:
+            return _blocked_tool_execution(
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                content=(
+                    f"ERROR: Tool '{tool_name}' blocked because metadata "
+                    "resolution failed."
+                ),
+                args_preview=args_preview,
+                error_type="ToolResolutionError",
+            )
+
+        if resolved is None:
+            return _blocked_tool_execution(
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                content=f"ERROR: Unknown tool '{tool_name}'",
+                args_preview=args_preview,
+                error_type="UnknownTool",
+            )
+
+        try:
+            spec, owner = resolved
+        except Exception:
+            return _blocked_tool_execution(
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                content=(
+                    f"ERROR: Tool '{tool_name}' blocked because executable "
+                    "metadata is incomplete."
+                ),
+                args_preview=args_preview,
+                error_type="ToolMetadataError",
+            )
+
+        if (
+            not isinstance(spec, ToolSpec)
+            or spec.name != tool_name
+            or not isinstance(owner, str)
+            or not owner
+        ):
+            return _blocked_tool_execution(
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                content=(
+                    f"ERROR: Tool '{tool_name}' blocked because executable "
+                    "metadata is incomplete."
+                ),
+                args_preview=args_preview,
+                error_type="ToolMetadataError",
+            )
+
+        try:
+            policy_result = self.execution_policy(spec, owner, fn_args, context)
+        except Exception:
+            return _blocked_tool_execution(
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                content=(
+                    f"ERROR: Tool '{tool_name}' blocked because execution "
+                    "policy failed."
+                ),
+                args_preview=args_preview,
+                error_type="ToolExecutionPolicyError",
+            )
+
+        if policy_result is not None:
+            reason = (
+                policy_result
+                if isinstance(policy_result, str) and policy_result
+                else "policy rejected execution"
+            )
+            return _blocked_tool_execution(
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                content=(
+                    f"ERROR: Tool '{tool_name}' blocked by execution policy: "
+                    f"{reason}"
+                ),
+                args_preview=args_preview,
+                error_type="ToolExecutionPolicyDenied",
+            )
+
         return execute_tool_handler(
             tool_call_id=tool_call_id,
             tool_name=tool_name,
             fn_args=fn_args,
-            handler=self.get_handler(tool_name),
+            handler=spec.handler,
             context=context,
             args_preview=args_preview,
             user_error_formatter=self.user_error_formatter,
@@ -439,10 +558,12 @@ __all__ = [
     "PhaseSwitchResult",
     "ToolExecutionContext",
     "ToolExecutionOutcome",
+    "ToolExecutionPolicy",
     "ToolExecutionResult",
     "ToolExecutor",
     "ToolFailurePrecheckResult",
     "ToolFailureRecordResult",
+    "allow_registered_tool_execution",
     "classify_tool_failure",
     "execute_phase_switch",
     "execute_tool_handler",
