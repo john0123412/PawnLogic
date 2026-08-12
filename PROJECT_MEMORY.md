@@ -25,9 +25,9 @@ release history.
 - Most recent completed plan:
   `docs/plans/0.3.1-runtime-hardening-and-release-preparation.md`.
 - Active plan:
-  `docs/plans/0.3.2-bounded-concurrency-two.md`. Its implementation is under
-  review as PR #99 against `test/release-0.3.2`; it does not authorize a tag,
-  package publication, or GitHub Release.
+  `docs/plans/0.3.2-bounded-concurrency-two.md`. Its candidate implementation
+  merged through PR #99 and PR #101 to `main` at `867e56b`; it does not
+  authorize a tag, package publication, or GitHub Release.
 - The 0.3.2 candidate adds bounded two-worker delegation only for supported
   batch callers. It requires isolated child context/workspace/output/cancel
   state and fails closed for concurrent non-isolated Tools. The independent
