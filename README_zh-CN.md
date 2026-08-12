@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.1**。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.1**。版本 **0.3.2** 是尚未发布的候选版本，用于有界的双 worker 委派。
 
 ## 系统要求
 
@@ -90,12 +90,12 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 
 ## 新特性
 
-0.3.1 在保持现有公共 contract 不变的前提下，强化运行时流处理、文件发现和 Tool 执行安全性：
+0.3.2 在保持现有公共 contract 不变的前提下，引入经过隔离证明的有界双 worker 委派：
 
-- SSE reader 可容忍 chunked transport 中最多两次瞬时空 `readline()` 结果；第三次空读结束流，避免无界轮询循环。
-- `find_files` 默认使用 10 秒 monotonic 遍历 deadline；到期时结果会标记为 partial。
-- active network probe 必须先拥有有效 Engagement Scope，才能允许已授权的 private target。
-- Host 只会通过 policy seam 执行完整且有 owner 的 ToolSpec；缺少 metadata 的 handler 会 fail closed。公开委派任务现在经由 serial orchestrator 执行，并使用协作式取消和共享 budget。
+- 支持的 batch caller 最多可并行运行两个委派 task，同时保留 FIFO 准入和按输入顺序返回结果；`delegate_task` 仍是单 task 兼容 Adapter，不会隐式 fan-out。
+- 每个并发 child 都获得复制的 RuntimeContext、唯一的 `.tasks/` workspace、有界 output collector 与 task-local cancellation token。
+- 共享 Token、Tool Call 和成本 budget 在排队、完成、取消和 deadline 到期时仍保持原子 claim 与 settle 行为。
+- 并发 child 只能使用完成 task 隔离的文件 Tool。shell、network、container、extension、MCP、browser、pwn、sandbox 及其他未隔离 Tool 会在 handler 执行前 fail closed。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -104,7 +104,7 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 | 能力 | 描述 |
 |------|------|
 | 多 Provider 模型 | 内置 DeepSeek、OpenAI、Anthropic 别名，并可通过 `/provider` 添加自定义 OpenAI-compatible 或 Anthropic-style Provider。 |
-| 委派 Agent | 有界 sub-agent 使用由 host 控制的动态模型路由、用户 allow/deny 策略、Token/工具/成本预算、按能力过滤的工具，以及带 task lineage 的确定性串行编排。 |
+| 委派 Agent | 有界 sub-agent 使用由 host 控制的动态模型路由、用户 allow/deny 策略、Token/工具/成本预算、按能力过滤的工具、task-local workspace，以及带 task lineage 的一至两个 worker 编排。 |
 | 结构化上下文 | 版本化任务状态、保持 Tool Call 完整性的裁剪、`ctx_trim_to` 目标和由 host 选择的委派上下文，使长会话保持有界且不会复制原始父级历史。 |
 | 持久化工作区 | 基于 SQLite 的会话、可搜索历史、memory 命令、有界且携带来源信息的知识检索、每会话 workspace 和 `~/.pawnlogic/` 下的审计日志。 |
 | 真实工具执行 | Host shell、代码沙箱、文件操作、URL fetch、浏览器自动化、Docker 容器和 CTF helper。 |
@@ -128,9 +128,11 @@ PawnLogic 自带预配置模型别名。只有 active 且已配置 API Key 的 P
 
 未指定模型请求时，委派任务会自动优先选择符合条件的快速 worker，而不会默认复用当前对话模型。`/worker` 会列出当前可通过 `/model` 看见的全部模型，包括符合条件的自定义 Provider 别名。`/agent policy` 可以 allow 或 deny 模型别名、选择默认路由模式，并限制成本或并发。显式模型请求只是偏好；Provider 可见性、用户策略、能力和预算检查始终由 host 决定。
 结构化 task 和 result 携带 task/parent ID、deadline、usage 与 failure record。
-共享编排预算通过原子方式预留，取消采用协作式机制。当前 core orchestrator 有意保持
-串行：持久化的 `max-concurrency=2` 只是未来隔离 executor 的 policy ceiling，
-不授权当前共享 Workspace 和 RuntimeContext 并发执行。
+共享编排预算通过原子方式预留，取消采用协作式机制。core orchestrator 最多准入两个
+worker；每个并发 child 都有复制的 RuntimeContext、隔离 workspace、有界 output
+collector 和 task-local cancellation token。并发 child 只允许使用已做 task 隔离的文件
+工具。`delegate_task` 仍是单任务兼容 Adapter：`max-concurrency=2` 只对支持的 batch
+caller 生效，绝不会隐式 fan-out。
 
 ## Provider 管理
 

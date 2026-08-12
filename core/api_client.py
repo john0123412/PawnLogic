@@ -11,6 +11,7 @@ and exponential backoff.
 
 import json, os, ssl, socket, time, threading
 import http.client
+from collections.abc import Callable
 from urllib.parse import urlparse
 from config import get_provider_config, MODELS, DEFAULT_MODEL, DYNAMIC_CONFIG
 from core.api_payloads import (
@@ -37,6 +38,12 @@ from core.api_retry import (
     retry_policy_from_env,
 )
 from core.interrupts import clear_cancel_callback, raise_if_interrupted, set_cancel_callback
+from core.stream_cancellation import (
+    StreamCancellation,
+    StreamCancellationError,
+    cancel_connection as _cancel_connection,
+    raise_if_task_cancelled as _raise_if_task_cancelled,
+)
 from core import provider_streams
 from core.provider_runtime import maybe_warn_insecure_provider
 from core.runtime_metrics import RuntimeMetrics, RuntimeMetricsSnapshot
@@ -143,56 +150,36 @@ def api_runtime_metrics_snapshot() -> RuntimeMetricsSnapshot:
     return _API_RUNTIME_METRICS.snapshot()
 
 
-def _interruptible_sleep(delay: float) -> None:
-    """Sleep in short slices so Ctrl+C during retry backoff is processed promptly."""
+def _raise_if_stream_interrupted(cancellation: StreamCancellation | None = None) -> None:
+    """Preserve SIGINT behavior while checking an optional task-local token."""
+    raise_if_interrupted()
+    _raise_if_task_cancelled(cancellation)
+
+
+def _interruptible_sleep(
+    delay: float,
+    cancellation: StreamCancellation | None = None,
+) -> None:
+    """Sleep in short slices so global or task-local cancellation is prompt."""
     deadline = time.monotonic() + max(0.0, delay)
     while True:
-        raise_if_interrupted()
+        _raise_if_stream_interrupted(cancellation)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
         time.sleep(min(0.1, remaining))
-    raise_if_interrupted()
+    _raise_if_stream_interrupted(cancellation)
 
 
-def _cancel_connection(
-    conn: http.client.HTTPConnection,
-    response: http.client.HTTPResponse | None = None,
+def _stream_retry_sleep(
+    delay: float,
+    cancellation: StreamCancellation | None,
 ) -> None:
-    """Close the active streaming connection from the SIGINT path."""
-    sockets = []
-    sock = getattr(conn, "sock", None)
-    if sock:
-        sockets.append(sock)
-    if response is not None:
-        fp = getattr(response, "fp", None)
-        raw = getattr(fp, "raw", None)
-        for owner in (raw, fp):
-            if owner is None:
-                continue
-            response_sock = getattr(owner, "_sock", None) or getattr(owner, "sock", None)
-            if response_sock:
-                sockets.append(response_sock)
-
-    for active_sock in sockets:
-        try:
-            active_sock.shutdown(socket.SHUT_RDWR)
-        except Exception:
-            pass
-        try:
-            active_sock.close()
-        except Exception:
-            pass
-
-    try:
-        if response is not None:
-            response.close()
-    except Exception:
-        pass
-    try:
-        conn.close()
-    except Exception:
-        pass
+    """Keep the legacy one-argument retry seam when no task token is present."""
+    if cancellation is None:
+        _interruptible_sleep(delay)
+        return
+    _interruptible_sleep(delay, cancellation)
 
 
 # ── per-read / connect timeout ────────────────────────────
@@ -235,6 +222,7 @@ def _open_connection(
     target_host = parsed.hostname
     target_port = parsed.port or (443 if is_https else 80)
     path        = parsed.path or "/"
+    conn: http.client.HTTPConnection
     if parsed.query:
         path += "?" + parsed.query
 
@@ -344,28 +332,41 @@ def _stream_interruption_delta(error: OSError, partial_text: str) -> dict[str, o
     return provider_streams.stream_interruption_delta(error, partial_text)
 
 
-def _read_anthropic_sse_lines(resp):
+def _read_anthropic_sse_lines(
+    resp,
+    *,
+    cancellation: StreamCancellation | None = None,
+):
     yield from provider_streams.read_anthropic_sse_lines(
         resp,
         read_timeout=_READ_TIMEOUT,
-        raise_if_interrupted=raise_if_interrupted,
+        raise_if_interrupted=lambda: _raise_if_stream_interrupted(cancellation),
     )
 
 
-def _read_openai_sse_lines(resp):
+def _read_openai_sse_lines(
+    resp,
+    *,
+    cancellation: StreamCancellation | None = None,
+):
     yield from provider_streams.read_openai_sse_lines(
         resp,
         read_timeout=_READ_TIMEOUT,
-        raise_if_interrupted=raise_if_interrupted,
+        raise_if_interrupted=lambda: _raise_if_stream_interrupted(cancellation),
     )
 
 
-def _read_sse_lines(resp, api_fmt: str):
+def _read_sse_lines(
+    resp,
+    api_fmt: str,
+    *,
+    cancellation: StreamCancellation | None = None,
+):
     yield from provider_streams.read_sse_lines(
         resp,
         api_fmt,
         read_timeout=_READ_TIMEOUT,
-        raise_if_interrupted=raise_if_interrupted,
+        raise_if_interrupted=lambda: _raise_if_stream_interrupted(cancellation),
     )
 
 # ════════════════════════════════════════════════════════
@@ -379,6 +380,7 @@ def stream_request(
     max_tokens: int | None = None,
     tool_choice: str = "auto",
     response_format: dict | None = None,
+    cancellation: StreamCancellation | None = None,
 ):
     """
     Streaming SSE generator with circuit breaker, exponential backoff, and
@@ -414,7 +416,7 @@ def stream_request(
     max_attempts = policy.max_attempts
 
     for attempt in range(max_attempts):
-        raise_if_interrupted()
+        _raise_if_stream_interrupted(cancellation)
         # Circuit-breaker check.
         if not _cb_allow(provider):
             yield {"_error": f"circuit open: {provider} (consecutive failures; paused {_CB_RESET_SEC}s)"}
@@ -422,6 +424,7 @@ def stream_request(
 
         conn: http.client.HTTPConnection | None = None
         cancel_callback = None
+        unregister_task_abort: Callable[[], None] | None = None
         partial_emitted = False
         try:
             conn, path = _open_connection(
@@ -435,6 +438,13 @@ def stream_request(
                 response_ref["response"],
             )
             set_cancel_callback(cancel_callback)
+            if cancellation is not None:
+                register_abort = getattr(cancellation, "register_abort", None)
+                if callable(register_abort):
+                    unregister = register_abort(cancel_callback)
+                    if callable(unregister):
+                        unregister_task_abort = unregister
+            _raise_if_stream_interrupted(cancellation)
 
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             if api_fmt == "anthropic":
@@ -460,7 +470,7 @@ def stream_request(
                 retry_after = resp.headers.get("Retry-After")
                 delay = _retry_delay(attempt, retry_after, retry_after_max=policy.retry_after_cap_seconds)
                 yield {"_retry": retry_notice(err_msg, attempt, max_attempts, delay)}
-                _interruptible_sleep(delay)
+                _stream_retry_sleep(delay, cancellation)
                 continue
 
             if resp.status != 200:
@@ -470,12 +480,13 @@ def stream_request(
                 return
 
             partial_terminal = False
-            for delta in _read_sse_lines(resp, api_fmt):
+            for delta in _read_sse_lines(resp, api_fmt, cancellation=cancellation):
                 if not any(key in delta for key in ("_retry", "_error")):
                     partial_emitted = True
                 if delta.get("_partial_end"):
                     partial_terminal = True
                 yield delta
+            _raise_if_stream_interrupted(cancellation)
             if partial_terminal:
                 _cb_record_failure(provider)
             else:
@@ -484,7 +495,7 @@ def stream_request(
             return
 
         except socket.timeout:
-            raise_if_interrupted()
+            _raise_if_stream_interrupted(cancellation)
             _cb_record_failure(provider)
             err_msg = format_transport_error(
                 TimeoutError(
@@ -500,15 +511,15 @@ def stream_request(
             if attempt < max_attempts - 1:
                 delay = _retry_delay(attempt)
                 yield {"_retry": retry_notice(err_msg, attempt, max_attempts, delay)}
-                _interruptible_sleep(delay)
+                _stream_retry_sleep(delay, cancellation)
                 continue
             yield {"_error": err_msg}
         except ssl.SSLError as e:
-            raise_if_interrupted()
+            _raise_if_stream_interrupted(cancellation)
             yield {"_error": f"SSL error: {e}"}
             return
         except (ConnectionError, OSError) as e:
-            raise_if_interrupted()
+            _raise_if_stream_interrupted(cancellation)
             retryable = is_retryable_transport_error(e)
             if retryable:
                 _cb_record_failure(provider)
@@ -523,14 +534,16 @@ def stream_request(
             if retryable and attempt < max_attempts - 1:
                 delay = _retry_delay(attempt)
                 yield {"_retry": retry_notice(err_msg, attempt, max_attempts, delay)}
-                _interruptible_sleep(delay)
+                _stream_retry_sleep(delay, cancellation)
                 continue
             yield {"_error": err_msg}
             return
+        except StreamCancellationError:
+            raise
         except KeyboardInterrupt:
             raise  # Propagate cleanly; finally handles conn cleanup.
         except Exception as e:
-            raise_if_interrupted()
+            _raise_if_stream_interrupted(cancellation)
             yield {
                 "_error": format_transport_error(
                     e,
@@ -540,6 +553,11 @@ def stream_request(
             }
             return
         finally:
+            if unregister_task_abort is not None:
+                try:
+                    unregister_task_abort()
+                except Exception:
+                    pass
             if cancel_callback is not None:
                 clear_cancel_callback(cancel_callback)
             if conn:

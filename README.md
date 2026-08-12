@@ -11,7 +11,8 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.3.1**.
+CTF-oriented toolchain. The current public release is **0.3.1**. Version
+**0.3.2** is an unreleased release candidate for bounded two-worker delegation.
 
 ## System Requirements
 
@@ -100,19 +101,19 @@ use the additive `{"type":"event","data":{...}}` envelope.
 
 ## What's New
 
-Version 0.3.1 hardens runtime streaming, file discovery, and tool-execution
-safety while preserving existing public contracts:
+Version 0.3.2 introduces bounded, isolation-proven two-worker delegation while
+preserving existing public contracts:
 
-- SSE readers tolerate up to two transient empty `readline()` results from
-  chunked transports; a third ends the stream to prevent an unbounded polling
-  loop.
-- `find_files` uses a default 10-second monotonic traversal deadline and marks
-  results as partial when the deadline expires.
-- Active network probes require a valid Engagement Scope before an authorized
-  private target can be allowed.
-- The host executes only complete, owned ToolSpecs through its policy seam;
-  metadata-less handlers fail closed. Public delegated tasks now run through
-  the serial orchestrator with cooperative cancellation and shared budgets.
+- A supported batch caller can run at most two delegated tasks while preserving
+  FIFO admission and input-order results; `delegate_task` remains a one-task
+  compatibility adapter and never creates implicit fan-out.
+- Each concurrent child receives a copied RuntimeContext, unique `.tasks/`
+  workspace, bounded output collector, and task-local cancellation token.
+- Shared token, Tool-call, and cost budgets retain atomic claim and settlement
+  behavior across queued, completed, cancelled, and deadline-expired tasks.
+- Concurrent children may use only task-isolated file Tools. Shell, network,
+  container, extension, MCP, browser, pwn, sandbox, and other non-isolated
+  Tool paths fail closed before handler execution.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
@@ -121,7 +122,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 | Capability | Description |
 |-----------|-------------|
 | Multi-provider models | Built-in DeepSeek, OpenAI, and Anthropic aliases plus custom OpenAI-compatible or Anthropic-style providers through `/provider`. |
-| Delegated agents | Bounded sub-agents use host-controlled dynamic model routing, user allow/deny policy, token/tool/cost budgets, capability-filtered Tools, and deterministic serial orchestration with task lineage. |
+| Delegated agents | Bounded sub-agents use host-controlled dynamic model routing, user allow/deny policy, token/tool/cost budgets, capability-filtered Tools, task-local workspaces, and one-or-two-worker orchestration with task lineage. |
 | Structured context | Versioned task state, Tool-call-safe trimming, `ctx_trim_to` targeting, and host-selected delegated context keep long sessions bounded without copying raw parent history. |
 | Persistent workspace | SQLite-backed sessions, searchable history, memory commands, bounded provenance-aware knowledge retrieval, per-session workspaces, and audit logs under `~/.pawnlogic/`. |
 | Real tool execution | Host shell, code sandbox, file operations, URL fetch, browser automation, Docker containers, and CTF helpers. |
@@ -156,10 +157,12 @@ requests are preferences: provider visibility, user policy, capability, and
 budget checks remain authoritative.
 Structured tasks and results carry task/parent IDs, deadlines, usage, and
 failure records. Shared orchestration budgets are reserved atomically, and
-cancellation is cooperative. The current core orchestrator is deliberately
-serial: a persisted `max-concurrency` value of `2` is a policy ceiling for a
-future isolated executor, not permission to run the current shared Workspace
-and RuntimeContext concurrently.
+cancellation is cooperative. The core orchestrator admits at most two workers;
+each concurrent child has a copied RuntimeContext, an isolated workspace, a
+bounded output collector, and a task-local cancellation token. Concurrent
+children may use only task-isolated file Tools. `delegate_task` remains a
+single-task compatibility Adapter: a policy value of `max-concurrency=2` takes
+effect only for a supported batch caller and never causes implicit fan-out.
 
 ## Provider Management
 

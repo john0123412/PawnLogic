@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+from pathlib import Path
 
 from core.state import (
+    bind_dynamic_config,
     dynamic_config_snapshot,
     get_dynamic_config_value,
     runtime_config,
@@ -53,6 +55,359 @@ def test_runtime_context_for_test_is_isolated(tmp_path):
     assert ctx.debug_mode is True
     assert ctx.user_mode is False
     assert ctx.dynamic_config is cfg
+
+
+def test_fork_for_task_creates_an_isolated_safe_workspace(tmp_path):
+    from core.delegation import AgentTask
+
+    parent_workspace = tmp_path / "workspace"
+    parent_workspace.mkdir()
+    parent = RuntimeContext.for_test(
+        cwd=tmp_path / "project",
+        workspace_dir=parent_workspace,
+        sink=CaptureSink(),
+        debug_mode=True,
+        user_mode=False,
+        dynamic_config={"max_iter": 11},
+    )
+    task = AgentTask(objective="inspect the project", task_id="../sibling/../../escape")
+    child_sink = CaptureSink()
+
+    child = parent.fork_for_task(task, sink=child_sink)
+
+    assert child.isolated_workspace is True
+    assert child.cwd == child.workspace_dir
+    assert child.workspace_dir != parent.workspace_dir
+    assert Path(child.workspace_dir).resolve().is_relative_to(parent_workspace.resolve())
+    assert ".." not in Path(child.workspace_dir).name
+    assert child.sink is child_sink
+    assert child.debug_mode is True
+    assert child.user_mode is False
+    assert child.dynamic_config == parent.dynamic_config
+    assert child.dynamic_config is not parent.dynamic_config
+    assert child.event_publisher is not parent.event_publisher
+
+
+def test_fork_for_task_accepts_an_explicit_task_id_keyword(tmp_path):
+    parent = RuntimeContext.for_test(
+        cwd=tmp_path / "project",
+        workspace_dir=tmp_path / "workspace",
+        sink=CaptureSink(),
+    )
+
+    child = parent.fork_for_task(task_id="keyword-task", sink=CaptureSink())
+
+    assert child.isolated_workspace is True
+    assert Path(child.workspace_dir).is_dir()
+
+
+def test_isolated_child_activation_does_not_mirror_legacy_runtime_state(tmp_path):
+    config = _current_config()
+    old_state = (
+        state.debug_mode,
+        state.user_mode,
+        state.dynamic_config,
+        state.current_worker,
+        state.time_budget_sec,
+    )
+    old_config = (config.USER_MODE, config.QUIET_MODE)
+    old_file_paths = (file_ops._session_cwd[0], file_ops._session_workspace_dir[0])
+    parent = RuntimeContext.for_test(
+        cwd=tmp_path / "project",
+        workspace_dir=tmp_path / "workspace",
+        sink=CaptureSink(),
+        debug_mode=True,
+        user_mode=False,
+        dynamic_config={"preferred_worker": "parent", "time_budget_sec": 10},
+    )
+    child = parent.fork_for_task("child-task", sink=CaptureSink())
+
+    try:
+        parent.sync_legacy_state()
+        file_ops.sync_runtime_context(parent)
+        legacy_worker = state.current_worker
+        legacy_budget = state.time_budget_sec
+        legacy_paths = (file_ops._session_cwd[0], file_ops._session_workspace_dir[0])
+
+        with child.activate():
+            child.set_output_mode(debug_mode=False, user_mode=True)
+            set_dynamic_config_value("preferred_worker", "child")
+            set_dynamic_config_value("time_budget_sec", 99)
+
+            assert current_runtime_context() is child
+            assert state.debug_mode is True
+            assert state.user_mode is False
+            assert config.USER_MODE is False
+            assert state.dynamic_config is parent.dynamic_config
+            assert state.current_worker == legacy_worker
+            assert state.time_budget_sec == legacy_budget
+            assert (file_ops._session_cwd[0], file_ops._session_workspace_dir[0]) == legacy_paths
+
+        assert child.debug_mode is False
+        assert child.user_mode is True
+        assert child.dynamic_config["preferred_worker"] == "child"
+        assert child.dynamic_config["time_budget_sec"] == 99
+    finally:
+        (
+            state.debug_mode,
+            state.user_mode,
+            state.dynamic_config,
+            state.current_worker,
+            state.time_budget_sec,
+        ) = old_state
+        config.USER_MODE, config.QUIET_MODE = old_config
+        file_ops._session_cwd[0], file_ops._session_workspace_dir[0] = old_file_paths
+
+
+def test_activate_can_explicitly_disable_legacy_mirroring(tmp_path):
+    config = _current_config()
+    old_state = (state.debug_mode, state.user_mode, state.dynamic_config)
+    old_config = (config.USER_MODE, config.QUIET_MODE)
+    context = RuntimeContext.for_test(
+        cwd=tmp_path / "project",
+        workspace_dir=tmp_path / "workspace",
+        sink=CaptureSink(),
+        debug_mode=False,
+        user_mode=True,
+        dynamic_config={"preferred_worker": "context"},
+    )
+
+    try:
+        state.debug_mode = True
+        state.user_mode = False
+        config.USER_MODE = False
+        with context.activate(mirror_legacy=False):
+            context.set_output_mode(debug_mode=False, user_mode=True)
+            set_dynamic_config_value("preferred_worker", "isolated-write")
+
+            assert state.debug_mode is True
+            assert state.user_mode is False
+            assert config.USER_MODE is False
+            assert state.dynamic_config is old_state[2]
+
+        assert context.dynamic_config["preferred_worker"] == "isolated-write"
+    finally:
+        state.debug_mode, state.user_mode, state.dynamic_config = old_state
+        config.USER_MODE, config.QUIET_MODE = old_config
+
+
+def test_bind_dynamic_config_is_context_local_without_legacy_mirroring(tmp_path):
+    config = _current_config()
+    old_state = (
+        state.debug_mode,
+        state.user_mode,
+        state.dynamic_config,
+        state.current_worker,
+        state.time_budget_sec,
+    )
+    old_config = (config.USER_MODE, config.QUIET_MODE)
+    parent = RuntimeContext.for_test(
+        cwd=tmp_path / "project",
+        workspace_dir=tmp_path / "workspace",
+        sink=CaptureSink(),
+        dynamic_config={"preferred_worker": "parent"},
+    )
+    child = parent.fork_for_task("child", sink=CaptureSink())
+    child_config = {"preferred_worker": "child"}
+
+    try:
+        parent.sync_legacy_state()
+        with child.activate(mirror_legacy=False):
+            assert bind_dynamic_config(child_config) is child_config
+            assert child.dynamic_config is child_config
+            assert state.dynamic_config is parent.dynamic_config
+    finally:
+        (
+            state.debug_mode,
+            state.user_mode,
+            state.dynamic_config,
+            state.current_worker,
+            state.time_budget_sec,
+        ) = old_state
+        config.USER_MODE, config.QUIET_MODE = old_config
+
+
+def test_isolated_child_file_writes_use_only_its_workspace(tmp_path):
+    parent_workspace = tmp_path / "workspace"
+    parent_workspace.mkdir()
+    parent = RuntimeContext.for_test(
+        cwd=tmp_path / "project",
+        workspace_dir=parent_workspace,
+        sink=CaptureSink(),
+    )
+    child = parent.fork_for_task("first-child", sink=CaptureSink())
+    sibling = parent.fork_for_task("second-child", sink=CaptureSink())
+    old_file_paths = (file_ops._session_cwd[0], file_ops._session_workspace_dir[0])
+
+    try:
+        file_ops.sync_runtime_context(parent)
+
+        with child.activate():
+            result = file_ops.tool_write_file({"path": "shared.txt", "content": "child"})
+            sibling_result = file_ops.tool_write_file(
+                {"path": str(Path(sibling.workspace_dir) / "shared.txt"), "content": "blocked"}
+            )
+
+        assert result.startswith("OK:")
+        assert (Path(child.workspace_dir) / "shared.txt").read_text(encoding="utf-8") == "child"
+        assert not (parent_workspace / "shared.txt").exists()
+        assert sibling_result.startswith("SECURITY BLOCK")
+        assert not (Path(sibling.workspace_dir) / "shared.txt").exists()
+    finally:
+        file_ops._session_cwd[0], file_ops._session_workspace_dir[0] = old_file_paths
+
+
+def test_isolated_child_relative_files_round_trip_in_its_workspace(tmp_path):
+    parent_workspace = tmp_path / "workspace"
+    parent_workspace.mkdir()
+    parent = RuntimeContext.for_test(
+        cwd=tmp_path / "project",
+        workspace_dir=parent_workspace,
+        sink=CaptureSink(),
+    )
+    child = parent.fork_for_task("round-trip", sink=CaptureSink())
+
+    with child.activate():
+        write = file_ops.tool_write_file({"path": "round-trip.txt", "content": "child"})
+        read = file_ops.tool_read_file({"path": "round-trip.txt"})
+        listing = file_ops.tool_list_dir({"path": "."})
+        found = file_ops.tool_find_files({"pattern": "round-trip.txt"})
+
+    assert child.cwd == child.workspace_dir
+    assert write.startswith("OK:")
+    assert read == "child"
+    assert "round-trip.txt" in listing
+    assert "round-trip.txt" in found
+
+
+def test_isolated_child_reads_source_path_but_not_a_sibling_workspace(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "source.txt").write_text("source", encoding="utf-8")
+    parent_workspace = tmp_path / "workspace"
+    parent_workspace.mkdir()
+    parent = RuntimeContext.for_test(
+        cwd=project,
+        workspace_dir=parent_workspace,
+        sink=CaptureSink(),
+    )
+    child = parent.fork_for_task("first-child", sink=CaptureSink())
+    sibling = parent.fork_for_task("second-child", sink=CaptureSink())
+    sibling_file = Path(sibling.workspace_dir) / "secret.txt"
+    sibling_file.write_text("sibling", encoding="utf-8")
+
+    with child.activate():
+        source = file_ops.tool_read_file({"path": str(project / "source.txt")})
+        blocked_read = file_ops.tool_read_file({"path": str(sibling_file)})
+        blocked_list = file_ops.tool_list_dir({"path": str(Path(sibling.workspace_dir))})
+        blocked_find = file_ops.tool_find_files(
+            {"root": str(Path(sibling.workspace_dir)), "pattern": "secret.txt"}
+        )
+        ancestor_list = file_ops.tool_list_dir(
+            {"path": str(parent_workspace), "recursive": True}
+        )
+        ancestor_find = file_ops.tool_find_files(
+            {"root": str(parent_workspace), "pattern": "secret.txt"}
+        )
+
+    assert source == "source"
+    assert blocked_read.startswith("SECURITY BLOCK")
+    assert blocked_list.startswith("SECURITY BLOCK")
+    assert blocked_find.startswith("SECURITY BLOCK")
+    assert "secret.txt" not in ancestor_list
+    assert ancestor_find.startswith("No files matched")
+
+
+def test_isolated_child_shells_run_in_its_workspace_and_reject_sibling_cwd(
+    tmp_path, monkeypatch
+):
+    parent_workspace = tmp_path / "workspace"
+    parent_workspace.mkdir()
+    parent = RuntimeContext.for_test(
+        cwd=tmp_path / "project",
+        workspace_dir=parent_workspace,
+        sink=CaptureSink(),
+        dynamic_config={"tool_max_chars": 1_000},
+    )
+    child = parent.fork_for_task("first-child", sink=CaptureSink())
+    sibling = parent.fork_for_task("second-child", sink=CaptureSink())
+    calls = []
+
+    class FakeStdout:
+        def read(self, _size):
+            return b""
+
+    class FakeStdin:
+        def write(self, _data):
+            return None
+
+        def flush(self):
+            return None
+
+    class FakeProcess:
+        returncode = 0
+        stdin = FakeStdin()
+        stdout = FakeStdout()
+
+        def communicate(self, timeout=None):
+            return b"ok\n", b""
+
+        def wait(self, timeout=None):
+            return 0
+
+        def terminate(self):
+            return None
+
+        def kill(self):
+            return None
+
+    def fake_popen(*args, **kwargs):
+        calls.append((args, kwargs))
+        return FakeProcess()
+
+    monkeypatch.setattr(file_ops.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(file_ops, "_emit_run_shell_warning", lambda: None)
+    monkeypatch.setattr(file_ops, "_get_shell_env", lambda: {})
+    monkeypatch.setattr(file_ops.time, "sleep", lambda _seconds: None)
+
+    with child.activate():
+        shell = file_ops.tool_run_shell({"command": "pwd"})
+        interactive = file_ops.tool_run_interactive({"command": "pwd", "inputs": []})
+        blocked_shell = file_ops.tool_run_shell(
+            {"command": "pwd", "cwd": sibling.workspace_dir}
+        )
+        blocked_interactive = file_ops.tool_run_interactive(
+            {"command": "pwd", "cwd": sibling.workspace_dir, "inputs": []}
+        )
+
+    assert shell == "ok\n"
+    assert interactive == "(no output)"
+    assert [call[1]["cwd"] for call in calls] == [
+        child.workspace_dir,
+        child.workspace_dir,
+    ]
+    assert blocked_shell.startswith("SECURITY BLOCK")
+    assert blocked_interactive.startswith("SECURITY BLOCK")
+
+
+def test_file_ops_without_context_uses_legacy_path_fallbacks(tmp_path, monkeypatch):
+    legacy_cwd = tmp_path / "legacy-cwd"
+    legacy_workspace = tmp_path / "legacy-workspace"
+    legacy_cwd.mkdir()
+    (legacy_cwd / "visible.txt").write_text("visible", encoding="utf-8")
+    monkeypatch.setattr(file_ops, "_session_cwd", [str(legacy_cwd)])
+    monkeypatch.setattr(file_ops, "_session_workspace_dir", [str(legacy_workspace)])
+
+    read_result = file_ops.tool_read_file({"path": "visible.txt"})
+    list_result = file_ops.tool_list_dir({"path": "."})
+    find_result = file_ops.tool_find_files({"pattern": "visible.txt"})
+    write_result = file_ops.tool_write_file({"path": "output.txt", "content": "output"})
+
+    assert read_result == "visible"
+    assert "visible.txt" in list_result
+    assert "visible.txt" in find_result
+    assert write_result.startswith("OK:")
+    assert (legacy_workspace / "output.txt").read_text(encoding="utf-8") == "output"
 
 
 def test_runtime_context_activation_isolates_mode_config_paths_and_sink(tmp_path):

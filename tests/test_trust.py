@@ -62,8 +62,8 @@ def test_static_trust_notices_match_existing_user_facing_text():
         "Requests and API keys are not protected by TLS."
     )
     assert trust_notice_for(TrustLevel.SUBAGENT) == (
-        "  [Trust Boundary] delegate_task is a non-isolated sub-agent; "
-        "tool side effects are real and run with parent permissions."
+        "  [Trust Boundary] delegate_task uses a task-isolated context and "
+        "workspace; allowed tool side effects are real and run with parent permissions."
     )
 
 
@@ -99,8 +99,8 @@ def test_named_trust_boundaries_match_stable_categories_and_text():
         ),
         TrustBoundaryKind.DELEGATE: (
             TrustLevel.SUBAGENT,
-            "  [Trust Boundary] delegate_task is a non-isolated sub-agent; "
-            "tool side effects are real and run with parent permissions.",
+            "  [Trust Boundary] delegate_task uses a task-isolated context and "
+            "workspace; allowed tool side effects are real and run with parent permissions.",
         ),
     }
 
@@ -120,8 +120,9 @@ def test_named_browser_sandbox_notice_is_stable():
 
 def test_subagent_notice_includes_capability_profile():
     assert subagent_notice("read_only") == (
-        "  [Trust Boundary] delegate_task is a non-isolated sub-agent; "
-        "tool side effects are real and run with parent permissions (capability=read_only)."
+        "  [Trust Boundary] delegate_task uses a task-isolated context and "
+        "workspace; allowed tool side effects are real and run with parent permissions "
+        "(capability=read_only)."
     )
 
 

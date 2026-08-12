@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 from dataclasses import dataclass, field
+import threading
 
-from core.output import HumanSink, JsonSink
+from core.output import HumanSink, JsonSink, TaskOutputCollector, capture_stdout
 
 
 @dataclass(frozen=True)
@@ -99,4 +101,27 @@ def test_human_sink_consumes_lifecycle_event_without_terminal_noise(capsys):
 
     sink.emit(event)
 
+    assert capsys.readouterr().out == ""
+
+
+def test_task_output_capture_is_thread_scoped(capsys):
+    barrier = threading.Barrier(2, timeout=2)
+
+    def emit(marker: str) -> str:
+        collector = TaskOutputCollector()
+        with capture_stdout(collector):
+            print(f"{marker}-before")
+            barrier.wait()
+            print(f"{marker}-after")
+        return collector.text
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, second = tuple(pool.map(emit, ("first", "second")))
+
+    assert "first-before" in first
+    assert "first-after" in first
+    assert "second-" not in first
+    assert "second-before" in second
+    assert "second-after" in second
+    assert "first-" not in second
     assert capsys.readouterr().out == ""

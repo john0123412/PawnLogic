@@ -33,10 +33,135 @@ from __future__ import annotations
 import builtins
 import json
 import sys
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from core.agent_events import AgentEvent
+
+
+class TaskOutputCollector:
+    """Bounded per-task collector for delegated worker terminal output."""
+
+    def __init__(self, *, max_chars: int = 16_000) -> None:
+        if isinstance(max_chars, bool) or not isinstance(max_chars, int):
+            raise TypeError("max_chars must be an integer")
+        if max_chars < 1:
+            raise ValueError("max_chars must be positive")
+        self._max_chars = max_chars
+        self._parts: list[str] = []
+        self._events: list[AgentEvent] = []
+        self._size = 0
+        self._truncated = False
+        self._lock = threading.Lock()
+
+    @property
+    def text(self) -> str:
+        """Return the captured text, with a marker when it was bounded."""
+        with self._lock:
+            suffix = "\n...[delegated output truncated]...\n" if self._truncated else ""
+            return "".join(self._parts) + suffix
+
+    @property
+    def truncated(self) -> bool:
+        with self._lock:
+            return self._truncated
+
+    @property
+    def events(self) -> tuple[AgentEvent, ...]:
+        """Return task-local structural events for ordered parent forwarding."""
+        with self._lock:
+            return tuple(self._events)
+
+    def print(self, text: str) -> None:
+        self.write(f"{text}\n")
+
+    def print_json(self, data: dict) -> None:
+        self.write(json.dumps(data, ensure_ascii=False) + "\n")
+
+    def write(self, text: str) -> int:
+        value = str(text)
+        with self._lock:
+            remaining = self._max_chars - self._size
+            if remaining <= 0:
+                self._truncated = True
+                return len(value)
+            kept = value[:remaining]
+            self._parts.append(kept)
+            self._size += len(kept)
+            if len(kept) != len(value):
+                self._truncated = True
+        return len(value)
+
+    def flush(self) -> None:
+        """Match the stdout-like sink interface without exposing worker output."""
+
+    def emit(self, event: AgentEvent) -> None:
+        """Collect typed child events without writing from a worker thread."""
+        with self._lock:
+            self._events.append(event)
+
+
+_TASK_OUTPUT: ContextVar[TaskOutputCollector | None] = ContextVar(
+    "pawnlogic_task_output",
+    default=None,
+)
+_CAPTURE_LOCK = threading.RLock()
+_CAPTURE_USERS = 0
+_CAPTURE_PROXY: _TaskOutputProxy | None = None
+_CAPTURE_TARGET: Any = None
+
+
+class _TaskOutputProxy:
+    """Route direct ``print`` calls to a task-local collector when bound."""
+
+    def __init__(self, target: Any) -> None:
+        self._target = target
+
+    def write(self, text: str) -> int:
+        collector = _TASK_OUTPUT.get()
+        if collector is not None:
+            return collector.write(text)
+        return self._target.write(text)
+
+    def flush(self) -> None:
+        collector = _TASK_OUTPUT.get()
+        if collector is not None:
+            collector.flush()
+            return
+        self._target.flush()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._target, name)
+
+
+@contextmanager
+def capture_stdout(collector: TaskOutputCollector) -> Iterator[TaskOutputCollector]:
+    """Capture direct stdout writes for one task without cross-thread redirects."""
+    if not isinstance(collector, TaskOutputCollector):
+        raise TypeError("collector must be a TaskOutputCollector")
+    token = _TASK_OUTPUT.set(collector)
+    global _CAPTURE_USERS, _CAPTURE_PROXY, _CAPTURE_TARGET
+    with _CAPTURE_LOCK:
+        if _CAPTURE_USERS == 0:
+            _CAPTURE_TARGET = sys.stdout
+            _CAPTURE_PROXY = _TaskOutputProxy(_CAPTURE_TARGET)
+            sys.stdout = _CAPTURE_PROXY
+        _CAPTURE_USERS += 1
+    try:
+        yield collector
+    finally:
+        _TASK_OUTPUT.reset(token)
+        with _CAPTURE_LOCK:
+            _CAPTURE_USERS -= 1
+            if _CAPTURE_USERS == 0:
+                if sys.stdout is _CAPTURE_PROXY:
+                    sys.stdout = _CAPTURE_TARGET
+                _CAPTURE_PROXY = None
+                _CAPTURE_TARGET = None
 
 
 # ────────────────────────────────────────────────────────
@@ -135,4 +260,10 @@ def runtime_print(
         context.sink.write(text + end)
 
 
-__all__ = ["HumanSink", "JsonSink", "runtime_print"]
+__all__ = [
+    "HumanSink",
+    "JsonSink",
+    "TaskOutputCollector",
+    "capture_stdout",
+    "runtime_print",
+]

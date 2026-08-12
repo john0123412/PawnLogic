@@ -21,7 +21,7 @@ class RuntimeState:
     current_worker: str = "auto"
 
     # Compute tier, initialized from config.tiers and mutable at runtime.
-    dynamic_config: dict = field(default_factory=dict)
+    dynamic_config: MutableMapping[str, Any] = field(default_factory=dict)
 
     # Time budget.
     time_budget_sec: int = 0
@@ -40,6 +40,16 @@ state = RuntimeState()
 
 def bind_dynamic_config(config: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
     """Bind the shared runtime config mapping used by legacy config imports."""
+    try:
+        from core.runtime_context import current_runtime_context
+
+        context = current_runtime_context()
+    except Exception:
+        context = None
+    if context is not None:
+        context.dynamic_config = config
+        if not _legacy_mirroring_enabled():
+            return config
     state.dynamic_config = config
     _sync_dynamic_state_fields()
     return config
@@ -68,7 +78,8 @@ def update_dynamic_config(values: Mapping[str, Any]) -> MutableMapping[str, Any]
     """Update dynamic config through the runtime-state write path."""
     cfg = runtime_config()
     cfg.update(values)
-    _sync_dynamic_state_fields(cfg)
+    if _legacy_mirroring_enabled():
+        _sync_dynamic_state_fields(cfg)
     return cfg
 
 
@@ -76,7 +87,8 @@ def set_dynamic_config_value(key: str, value: Any) -> MutableMapping[str, Any]:
     """Set one dynamic config value through the runtime-state write path."""
     cfg = runtime_config()
     cfg[key] = value
-    _sync_dynamic_state_fields(cfg)
+    if _legacy_mirroring_enabled():
+        _sync_dynamic_state_fields(cfg)
     return cfg
 
 
@@ -101,6 +113,8 @@ def set_output_mode(*, debug_mode: bool, user_mode: bool | None = None, quiet_mo
     if context is not None:
         context.debug_mode = bool(debug_mode)
         context.user_mode = (not context.debug_mode) if user_mode is None else bool(user_mode)
+        if not _legacy_mirroring_enabled():
+            return
     state.debug_mode = bool(debug_mode)
     state.user_mode = (not state.debug_mode) if user_mode is None else bool(user_mode)
     if quiet_mode is not None:
@@ -115,6 +129,8 @@ def set_output_mode(*, debug_mode: bool, user_mode: bool | None = None, quiet_mo
 
 def mirror_runtime_context(context: Any) -> None:
     """Mirror a RuntimeContext into globals retained for legacy call sites."""
+    if getattr(context, "isolated_workspace", False) or not _legacy_mirroring_enabled():
+        return
     state.debug_mode = bool(context.debug_mode)
     state.user_mode = bool(context.user_mode)
     state.dynamic_config = context.dynamic_config
@@ -126,6 +142,16 @@ def mirror_runtime_context(context: Any) -> None:
         config.QUIET_MODE = state.quiet_mode
     except Exception:
         pass
+
+
+def _legacy_mirroring_enabled() -> bool:
+    """Return whether the active RuntimeContext may update legacy globals."""
+    try:
+        from core.runtime_context import active_runtime_context_mirrors_legacy
+
+        return active_runtime_context_mirrors_legacy()
+    except Exception:
+        return True
 
 
 def _sync_dynamic_state_fields(config: Mapping[str, Any] | None = None) -> None:

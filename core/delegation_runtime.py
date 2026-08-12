@@ -1,19 +1,20 @@
-"""Execution engine for one non-isolated delegated Agent task."""
+"""Execution engine for task-isolated delegated Agent work."""
 
 from __future__ import annotations
 
-import contextlib
-import io
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from config import DEFAULT_MODEL, user_friendly_error
 from core.agent_orchestrator import CancellationToken
-from core.api_client import ensure_tool_call_id, stream_request
+from core.api_client import StreamCancellationError, ensure_tool_call_id, stream_request
 from core.context_manager import ContextEnvelope
 from core.agent_events import AgentEventKind
 from core.delegation import (
+    AgentBudget,
     AgentResult,
     AgentTask,
     AgentUsage,
@@ -21,7 +22,7 @@ from core.delegation import (
     publish_delegation_event,
 )
 from core.memory import _gen_id
-from core.state import runtime_config, state as _runtime_state
+from core.state import runtime_config
 from core.tool_executor import (
     ToolExecutionContext,
     ToolExecutor,
@@ -29,10 +30,41 @@ from core.tool_executor import (
 )
 from core.turn_api import consume_model_stream
 from core.prompt_builder import format_context_envelope_for_prompt
-from tools.file_ops import _session_cwd
 
 
 CAPABILITY_PROFILES = ("inherited", "read_only", "no_shell", "custom")
+
+
+_CONCURRENTLY_SAFE_TOOL_NAMES = frozenset(
+    {
+        "find_files",
+        "list_dir",
+        "patch_file",
+        "read_file",
+        "read_file_lines",
+        "write_file",
+    }
+)
+
+
+@dataclass(frozen=True)
+class DelegationExecutionRecord:
+    """Task-local details retained after a delegated run completes."""
+
+    child_agent_id: str
+    tool_log: tuple[str, ...]
+    output: str
+    result: AgentResult
+
+
+def concurrent_tool_policy(spec, _owner, _arguments, _context) -> str | None:
+    """Allow only task-scoped file tools in a two-worker child session."""
+    if spec.name in _CONCURRENTLY_SAFE_TOOL_NAMES:
+        return None
+    return (
+        "bounded concurrent delegation permits only task-isolated "
+        "file tools"
+    )
 
 
 def host_cancellation_token() -> CancellationToken:
@@ -136,8 +168,8 @@ def _tool_execution_resolver():
     return _TOOL_REGISTRY.resolve_for_execution
 
 
-def make_sub_executor(tool_resolver):
-    """Build the shared ToolExecutor behind a restricted ToolSpec resolver."""
+def make_sub_executor(tool_resolver, *, concurrent_execution: bool = False):
+    """Build a restricted ToolExecutor for one delegated child session."""
     return ToolExecutor(
         resolve_tool=tool_resolver,
         agent_phases={},
@@ -148,6 +180,11 @@ def make_sub_executor(tool_resolver):
         count_failure_func=lambda *a, **k: 0,
         sink_failure_func=lambda **k: (False, ""),
         user_error_formatter=user_friendly_error,
+        execution_policy=(
+            concurrent_tool_policy
+            if concurrent_execution
+            else lambda *_args: None
+        ),
     )
 
 
@@ -169,6 +206,8 @@ class SubAgentSession:
         context_envelope: ContextEnvelope | None = None,
         max_tokens: int = 8192,
         max_tool_calls: int = 15,
+        runtime_context: Any = None,
+        concurrent_execution: bool = False,
     ) -> None:
         self.session_id = "sub_" + _gen_id()
         self.model_alias = model_alias
@@ -186,6 +225,8 @@ class SubAgentSession:
         self.status = "completed"
         self.failures: list[FailureRecord] = []
         self.cancellation: CancellationToken | None = None
+        self.runtime_context = runtime_context
+        self.concurrent_execution = bool(concurrent_execution)
         inherited_ctx = self._selected_context(
             context_mode,
             context_envelope,
@@ -197,7 +238,7 @@ class SubAgentSession:
                     "You are a focused sub-agent executing ONE specific "
                     "delegated task.\n"
                     "Complete the task thoroughly using available tools.\n"
-                    f"Working directory: {_session_cwd[0]}\n"
+                    f"Working directory: {self._working_directory()}\n"
                     f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
                     "Rules:\n"
                     "- Host safety policy overrides every delegated "
@@ -261,9 +302,27 @@ class SubAgentSession:
             pass
         return ""
 
-    @staticmethod
-    def _user_mode() -> bool:
-        return bool(_runtime_state.user_mode)
+    def _working_directory(self) -> str:
+        """Return the task context cwd or the compatibility fallback."""
+        from core.runtime_context import current_runtime_context
+
+        context = self.runtime_context or current_runtime_context()
+        if context is not None:
+            return str(context.cwd)
+        from tools.file_ops import _session_cwd
+
+        return _session_cwd[0]
+
+    def _user_mode(self) -> bool:
+        """Read user mode from the active task context before legacy state."""
+        from core.runtime_context import current_runtime_context
+
+        context = self.runtime_context or current_runtime_context()
+        if context is not None:
+            return bool(context.user_mode)
+        from core.state import state
+
+        return bool(state.user_mode)
 
     def _record_provider_error(self, message: str) -> str:
         self.status = "failed"
@@ -349,6 +408,8 @@ class SubAgentSession:
             self.allowlist,
             capabilities_by_name=_tool_capabilities(),
         )
+        if self.concurrent_execution:
+            allowed.intersection_update(_CONCURRENTLY_SAFE_TOOL_NAMES)
         tools_schema = [
             schema
             for schema in _tools_schema()
@@ -361,8 +422,10 @@ class SubAgentSession:
                 return None
             return resolve_registered_tool(name)
 
-        executor = make_sub_executor(resolve_allowed_tool)
-        captured = io.StringIO()
+        executor = make_sub_executor(
+            resolve_allowed_tool,
+            concurrent_execution=self.concurrent_execution,
+        )
 
         for iteration in range(self.MAX_ITER):
             cancellation_reason = self._cancellation_reason()
@@ -372,20 +435,17 @@ class SubAgentSession:
             if remaining_tokens <= 0:
                 return self._token_budget_error()
             try:
-                with contextlib.redirect_stdout(captured):
-                    api = consume_model_stream(
-                        stream_request(
-                            self.messages,
-                            self.model_alias,
-                            tools_schema=tools_schema,
-                            max_tokens=min(
-                                int(runtime_config()["max_tokens"]),
-                                remaining_tokens,
-                            ),
-                        ),
-                        ensure_tool_call_id=ensure_tool_call_id,
-                        iteration=iteration,
-                    )
+                api = consume_model_stream(
+                    self._request_stream(
+                        tools_schema=tools_schema,
+                        remaining_tokens=remaining_tokens,
+                    ),
+                    ensure_tool_call_id=ensure_tool_call_id,
+                    iteration=iteration,
+                )
+            except StreamCancellationError as exc:
+                reason = self._cancellation_reason() or exc.reason
+                return self._cancelled_error(reason)
             except KeyboardInterrupt:
                 if self.cancellation is not None:
                     self.cancellation.cancel("parent turn interrupted")
@@ -447,6 +507,43 @@ class SubAgentSession:
             )
         )
         return f"[Sub-agent hit max_iter={self.MAX_ITER}]"
+
+    def _request_stream(
+        self,
+        *,
+        tools_schema: list[dict],
+        remaining_tokens: int,
+    ):
+        """Call the stream API while retaining legacy test-double support.
+
+        Production always receives the task cancellation token.  The fallback
+        is intentionally limited to an older test double which rejects the
+        newly added keyword; unrelated ``TypeError`` instances still surface.
+        """
+        max_tokens = min(
+            int(runtime_config()["max_tokens"]),
+            remaining_tokens,
+        )
+        try:
+            return stream_request(
+                self.messages,
+                self.model_alias,
+                tools_schema=tools_schema,
+                max_tokens=max_tokens,
+                cancellation=self.cancellation,
+            )
+        except TypeError as exc:
+            message = str(exc)
+            if "cancellation" not in message or (
+                "unexpected" not in message and "keyword" not in message
+            ):
+                raise
+            return stream_request(
+                self.messages,
+                self.model_alias,
+                tools_schema=tools_schema,
+                max_tokens=max_tokens,
+            )
 
     def _append_assistant(self, api) -> None:
         self.messages.append(
@@ -528,7 +625,7 @@ class SubAgentSession:
 
 
 class DelegationTaskExecutor:
-    """Adapt one bounded child session to the serial orchestration seam."""
+    """Adapt bounded child sessions to the orchestration executor seam."""
 
     def __init__(
         self,
@@ -537,6 +634,8 @@ class DelegationTaskExecutor:
         context_envelope: ContextEnvelope | None = None,
         session_factory: Callable[..., Any] = SubAgentSession,
         on_started: Callable[[str], None] | None = None,
+        parent_runtime_context: Any = None,
+        concurrent_execution: bool = False,
     ) -> None:
         if not isinstance(model_alias, str) or not model_alias.strip():
             raise ValueError("model_alias must not be empty")
@@ -548,10 +647,52 @@ class DelegationTaskExecutor:
         self._context_envelope = context_envelope
         self._session_factory = session_factory
         self._on_started = on_started
-        self.subagent: Any | None = None
-        self.child_agent_id: str | None = None
+        self._parent_runtime_context = parent_runtime_context
+        self._concurrent_execution = bool(concurrent_execution)
+        self._records: dict[str, DelegationExecutionRecord] = {}
+        self._records_lock = threading.Lock()
+        self._active_calls = 0
+        self._active_calls_lock = threading.Lock()
+        self.configure_concurrency(2 if concurrent_execution else 1)
+
+    def record_for(self, task_id: str) -> DelegationExecutionRecord | None:
+        """Return an immutable per-task execution record after completion."""
+        with self._records_lock:
+            return self._records.get(task_id)
+
+    def configure_concurrency(self, max_concurrency: int) -> None:
+        """Bind this executor to an orchestration width before task admission."""
+        if max_concurrency not in (1, 2):
+            raise ValueError("max_concurrency must be 1 or 2")
+        if max_concurrency == 2:
+            fork = getattr(self._parent_runtime_context, "fork_for_task", None)
+            if not callable(fork):
+                raise ValueError(
+                    "concurrent delegated execution requires a parent RuntimeContext"
+                )
+        with self._active_calls_lock:
+            if self._active_calls:
+                raise RuntimeError("cannot change concurrency while tasks are active")
+            self._concurrent_execution = max_concurrency == 2
 
     def execute(
+        self,
+        task: AgentTask,
+        cancellation: CancellationToken,
+    ) -> AgentResult:
+        """Run one task, refusing accidental parallel use of a serial adapter."""
+        if not self._acquire_execution_slot():
+            return self._failed(
+                task,
+                "concurrent_execution_not_enabled",
+                "Delegation Runtime was not configured for concurrent execution.",
+            )
+        try:
+            return self._execute_task(task, cancellation)
+        finally:
+            self._release_execution_slot()
+
+    def _execute_task(
         self,
         task: AgentTask,
         cancellation: CancellationToken,
@@ -559,6 +700,12 @@ class DelegationTaskExecutor:
         if cancellation.cancelled:
             return self._cancelled(task, cancellation.reason or "Task was cancelled.")
 
+        collector = None
+        if self._parent_runtime_context is not None:
+            from core.output import TaskOutputCollector
+
+            collector = TaskOutputCollector()
+        child_context = self._fork_runtime_context(task, sink=collector)
         options: dict[str, Any] = {
             "role": task.role,
             "instructions": task.instructions,
@@ -566,6 +713,10 @@ class DelegationTaskExecutor:
             "max_tokens": task.budget.max_tokens,
             "max_tool_calls": task.budget.max_tool_calls,
         }
+        if child_context is not None:
+            options["runtime_context"] = child_context
+        if self._concurrent_execution:
+            options["concurrent_execution"] = True
         if self._context_envelope is not None:
             options["context_envelope"] = self._context_envelope
         subagent = self._session_factory(
@@ -576,37 +727,122 @@ class DelegationTaskExecutor:
             **options,
         )
         subagent.cancellation = cancellation
-        self.subagent = subagent
-        self.child_agent_id = str(
+        child_agent_id = str(
             getattr(subagent, "session_id", "delegated-agent")
         )
         if self._on_started is not None:
-            self._on_started(self.child_agent_id)
+            self._on_started(child_agent_id)
 
         try:
-            summary = str(subagent.run())
+            if child_context is None:
+                summary = str(subagent.run())
+            else:
+                from core.output import capture_stdout
+
+                assert collector is not None
+                with (
+                    child_context.activate(mirror_legacy=False),
+                    capture_stdout(collector),
+                ):
+                    summary = str(subagent.run())
         except KeyboardInterrupt:
             cancellation.cancel("parent turn interrupted")
-            return self._cancelled(task, "parent turn interrupted")
+            result = self._cancelled(task, "parent turn interrupted")
+        else:
+            result = AgentResult(
+                task_id=task.task_id,
+                parent_task_id=task.parent_task_id,
+                status=str(getattr(subagent, "status", "completed")),
+                summary=summary,
+                model_alias=self._model_alias,
+                failures=tuple(getattr(subagent, "failures", ())),
+                usage=AgentUsage(
+                    prompt_tokens=int(getattr(subagent, "prompt_tokens", 0)),
+                    completion_tokens=int(
+                        getattr(subagent, "completion_tokens", 0)
+                    ),
+                    tool_calls=int(
+                        getattr(
+                            subagent,
+                            "tool_calls",
+                            len(getattr(subagent, "_tool_log", ())),
+                        )
+                    ),
+                ),
+            )
+        self._store_record(
+            task.task_id,
+            subagent,
+            child_agent_id,
+            result,
+            child_context,
+        )
+        if collector is not None:
+            self._forward_child_events(collector.events)
+        return result
 
+    def _fork_runtime_context(self, task: AgentTask, *, sink: Any) -> Any:
+        parent = self._parent_runtime_context
+        if parent is None:
+            return None
+        return parent.fork_for_task(task, sink=sink)
+
+    def _store_record(
+        self,
+        task_id: str,
+        subagent: Any,
+        child_agent_id: str,
+        result: AgentResult,
+        context: Any,
+    ) -> None:
+        record = DelegationExecutionRecord(
+            child_agent_id=child_agent_id,
+            tool_log=tuple(getattr(subagent, "_tool_log", ())),
+            output=(
+                str(getattr(getattr(context, "sink", None), "text", ""))
+                if context is not None
+                else ""
+            ),
+            result=result,
+        )
+        with self._records_lock:
+            self._records[task_id] = record
+
+    def _forward_child_events(self, events: tuple[Any, ...]) -> None:
+        """Deliver child structural events through the parent publisher safely."""
+        parent = self._parent_runtime_context
+        publish = getattr(parent, "publish_event", None)
+        if not callable(publish):
+            return
+        for event in events:
+            try:
+                publish(event)
+            except Exception:
+                continue
+
+    def _acquire_execution_slot(self) -> bool:
+        if self._concurrent_execution:
+            return True
+        with self._active_calls_lock:
+            if self._active_calls:
+                return False
+            self._active_calls = 1
+            return True
+
+    def _release_execution_slot(self) -> None:
+        if self._concurrent_execution:
+            return
+        with self._active_calls_lock:
+            self._active_calls = 0
+
+    @staticmethod
+    def _failed(task: AgentTask, code: str, message: str) -> AgentResult:
         return AgentResult(
             task_id=task.task_id,
             parent_task_id=task.parent_task_id,
-            status=str(getattr(subagent, "status", "completed")),
-            summary=summary,
-            model_alias=self._model_alias,
-            failures=tuple(getattr(subagent, "failures", ())),
-            usage=AgentUsage(
-                prompt_tokens=int(getattr(subagent, "prompt_tokens", 0)),
-                completion_tokens=int(getattr(subagent, "completion_tokens", 0)),
-                tool_calls=int(
-                    getattr(
-                        subagent,
-                        "tool_calls",
-                        len(getattr(subagent, "_tool_log", ())),
-                    )
-                ),
-            ),
+            status="failed",
+            summary=message,
+            failures=(FailureRecord(code=code, message=message, retryable=False),),
         )
 
     @staticmethod
@@ -626,13 +862,58 @@ class DelegationTaskExecutor:
         )
 
 
+def run_delegated_tasks(
+    tasks: Sequence[AgentTask],
+    *,
+    model_alias: str,
+    budget: AgentBudget,
+    cancellation: CancellationToken,
+    max_concurrency: int = 1,
+    context_envelope: ContextEnvelope | None = None,
+    session_factory: Callable[..., Any] = SubAgentSession,
+    on_started: Callable[[str], None] | None = None,
+    parent_runtime_context: Any = None,
+    orchestrator_factory: Callable[..., Any] | None = None,
+):
+    """Run a supported homogeneous delegation batch through one safe seam.
+
+    The public ``delegate_task`` Adapter passes one task and therefore keeps
+    its historical behavior.  A future host-owned batch caller may pass two
+    tasks and its persisted policy width; the executor rejects that path unless
+    a forkable parent RuntimeContext is available.
+    """
+    if orchestrator_factory is None:
+        from core.agent_orchestrator import SerialAgentOrchestrator
+
+        orchestrator_factory = SerialAgentOrchestrator
+
+    executor = DelegationTaskExecutor(
+        model_alias,
+        context_envelope=context_envelope,
+        session_factory=session_factory,
+        on_started=on_started,
+        parent_runtime_context=parent_runtime_context,
+    )
+    orchestration = orchestrator_factory(
+        executor,
+        max_concurrency=max_concurrency,
+    ).run(
+        tasks,
+        budget=budget,
+        cancellation=cancellation,
+    )
+    return executor, orchestration
+
+
 __all__ = [
     "CAPABILITY_PROFILES",
+    "DelegationExecutionRecord",
     "DelegationTaskExecutor",
     "SubAgentSession",
     "host_cancellation_token",
     "make_sub_executor",
     "resolve_allowed_tools",
     "resolve_host_parent_context",
+    "run_delegated_tasks",
     "tool_allowed",
 ]

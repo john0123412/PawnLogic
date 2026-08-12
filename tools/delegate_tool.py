@@ -18,7 +18,7 @@ Shared execution path:
   - Tools run through a core.tool_executor.ToolExecutor, so unknown-tool and
     exception handling match the main loop.
   - The capability profile (inherited / read_only / no_shell / custom) narrows
-    which registry tools the non-isolated sub-agent may see and execute.
+    which registry tools the task-isolated sub-agent may see and execute.
 
 Import cycle avoidance:
   - This module does not import core/session.py at top level.
@@ -43,7 +43,6 @@ from core import delegation as delegation_events
 from core.agent_orchestrator import SerialAgentOrchestrator
 from core.delegation_runtime import (
     CAPABILITY_PROFILES,
-    DelegationTaskExecutor,
     SubAgentSession as _SubAgentSession,
     host_cancellation_token,
     make_sub_executor as _make_sub_executor,
@@ -51,9 +50,11 @@ from core.delegation_runtime import (
     _tools_schema,
     resolve_host_parent_context,
     resolve_allowed_tools,
+    run_delegated_tasks,
     tool_allowed,
 )
 from core.model_router import ModelRouter, RoutingDecision
+from core.runtime_context import current_runtime_context
 from core.state import (
     state as _runtime_state, get_dynamic_config_value,
 )
@@ -274,6 +275,7 @@ def tool_delegate_task(a: dict) -> str:
     )
     effective_task = replace(task, budget=effective_budget)
     parent_context = resolve_host_parent_context(effective_task, cancellation)
+    parent_runtime_context = current_runtime_context()
 
     def _started(child_agent_id: str) -> None:
         delegation_events.publish_delegation_started(
@@ -283,19 +285,19 @@ def tool_delegate_task(a: dict) -> str:
             effective_tokens=effective_tokens,
         )
 
-    executor = DelegationTaskExecutor(
-        worker_model,
-        context_envelope=parent_context,
-        session_factory=_SubAgentSession,
-        on_started=_started,
-    )
-
     _delegate_ctx.depth = current_depth + 1
     try:
-        orchestration = SerialAgentOrchestrator(executor).run(
+        executor, orchestration = run_delegated_tasks(
             (effective_task,),
+            model_alias=worker_model,
             budget=effective_budget,
             cancellation=cancellation,
+            max_concurrency=1,
+            context_envelope=parent_context,
+            session_factory=_SubAgentSession,
+            on_started=_started,
+            parent_runtime_context=parent_runtime_context,
+            orchestrator_factory=SerialAgentOrchestrator,
         )
     finally:
         _delegate_ctx.depth = current_depth
@@ -306,11 +308,13 @@ def tool_delegate_task(a: dict) -> str:
             orchestration.results[0].routing_reason or decision.reason
         ),
     )
-    sub = executor.subagent
-    child_agent_id = executor.child_agent_id or "delegated-agent"
+    record = executor.record_for(effective_task.task_id)
+    child_agent_id = (
+        record.child_agent_id if record is not None else "delegated-agent"
+    )
 
     # Report tool-call summary.
-    tool_log = tuple(getattr(sub, "_tool_log", ())) if sub is not None else ()
+    tool_log = record.tool_log if record is not None else ()
     if tool_log:
         tool_summary = "\n".join(tool_log[-10:])
         print(c(GRAY, f"\n  [Sub-agent tool-call summary]\n{tool_summary}"))

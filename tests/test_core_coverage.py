@@ -874,6 +874,176 @@ def test_interrupt_cancel_callback_stale_clear_keeps_current_callback(monkeypatc
     assert calls == ["b"]
 
 
+def test_interrupt_cancel_callbacks_fan_out_and_unregister_independently(monkeypatch):
+    _drop_project_modules("core.interrupts", force=True)
+    from core import interrupts
+
+    calls = []
+
+    def callback_a():
+        calls.append("a")
+
+    def callback_b():
+        calls.append("b")
+
+    try:
+        interrupts.set_cancel_callback(callback_a)
+        interrupts.set_cancel_callback(callback_b)
+
+        interrupts.cancel_blocking_io()
+        assert calls == ["a", "b"]
+
+        interrupts.clear_cancel_callback(callback_a)
+        interrupts.cancel_blocking_io()
+        assert calls == ["a", "b", "b"]
+    finally:
+        interrupts.clear_cancel_callback(callback_a)
+        interrupts.clear_cancel_callback(callback_b)
+
+    interrupts.cancel_blocking_io()
+    assert calls == ["a", "b", "b"]
+
+
+def test_task_stream_cancellation_closes_only_its_own_connection(monkeypatch):
+    _drop_project_modules("config", "core.api_client", "core.interrupts", force=True)
+    from core.agent_orchestrator import CancellationToken
+    from core import api_client
+    from core import interrupts
+    import threading
+
+    class FakeSocket:
+        def __init__(self):
+            self.shutdowns = []
+            self.closed = 0
+
+        def settimeout(self, _timeout):
+            pass
+
+        def shutdown(self, how):
+            self.shutdowns.append(how)
+
+        def close(self):
+            self.closed += 1
+
+    class FakeResponse:
+        status = 200
+
+        def __init__(self, chunks):
+            self.headers = {}
+            self._chunks = iter(chunks)
+            self.closed = 0
+
+        def readline(self):
+            return next(self._chunks)
+
+        def close(self):
+            self.closed += 1
+
+    class BlockingResponse(FakeResponse):
+        def __init__(self):
+            super().__init__([
+                b'data: {"choices":[{"delta":{"content":"a1"}}]}\r\n',
+            ])
+            self._first_read = True
+            self.read_started = threading.Event()
+            self.released = threading.Event()
+
+        def readline(self):
+            if self._first_read:
+                self._first_read = False
+                return super().readline()
+            self.read_started.set()
+            if not self.released.wait(timeout=2):
+                raise AssertionError("task cancellation did not close the blocked response")
+            raise ConnectionResetError("closed by task cancellation")
+
+        def close(self):
+            super().close()
+            self.released.set()
+
+    class FakeConnection:
+        def __init__(self, response):
+            self.sock = FakeSocket()
+            self.response = response
+            self.closed = 0
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return self.response
+
+        def close(self):
+            self.closed += 1
+
+    conn_a = FakeConnection(BlockingResponse())
+    conn_b = FakeConnection(FakeResponse([
+        b'data: {"choices":[{"delta":{"content":"b1"}}]}\r\n',
+        b'data: {"choices":[{"delta":{"content":"b2"}}]}\r\n',
+        b"data: [DONE]\r\n",
+    ]))
+    connections = iter((conn_a, conn_b))
+    monkeypatch.setattr(
+        api_client,
+        "_open_connection",
+        lambda *_args, **_kwargs: (next(connections), "/v1/chat/completions"),
+    )
+
+    cancellation_a = CancellationToken()
+    cancellation_b = CancellationToken()
+    stream_a = api_client.stream_request(
+        [{"role": "user", "content": "a"}],
+        "ds-v4-flash",
+        cancellation=cancellation_a,
+    )
+    stream_b = api_client.stream_request(
+        [{"role": "user", "content": "b"}],
+        "ds-v4-flash",
+        cancellation=cancellation_b,
+    )
+    reader = None
+
+    try:
+        assert next(stream_a)["choices"][0]["delta"]["content"] == "a1"
+        assert next(stream_b)["choices"][0]["delta"]["content"] == "b1"
+
+        errors = []
+
+        def consume_blocked_a():
+            try:
+                next(stream_a)
+            except BaseException as exc:
+                errors.append(exc)
+
+        reader = threading.Thread(target=consume_blocked_a)
+        reader.start()
+        assert conn_a.response.read_started.wait(timeout=1)
+
+        cancellation_a.cancel("cancel A")
+        reader.join(timeout=1)
+
+        assert conn_a.closed >= 1
+        assert conn_a.response.closed >= 1
+        assert conn_b.closed == 0
+        assert conn_b.response.closed == 0
+        assert interrupts.interrupted() is False
+        assert not reader.is_alive()
+        assert len(errors) == 1
+        assert isinstance(errors[0], api_client.StreamCancellationError)
+        assert str(errors[0]) == "cancel A"
+
+        assert next(stream_b)["choices"][0]["delta"]["content"] == "b2"
+        assert list(stream_b) == []
+    finally:
+        cancellation_a.cancel("test cleanup")
+        if reader is not None:
+            reader.join(timeout=1)
+        if reader is None or not reader.is_alive():
+            stream_a.close()
+        stream_b.close()
+        interrupts.clear_interrupt()
+
+
 def test_turn_interrupt_handler_prints_feedback_once(monkeypatch):
     _drop_project_modules("core.interrupts", force=True)
     from core import interrupts
@@ -1012,6 +1182,65 @@ def test_api_client_retry_sleep_is_interruptible(monkeypatch):
         with pytest.raises(KeyboardInterrupt):
             next(gen)
     finally:
+        interrupts.clear_interrupt()
+
+
+def test_api_client_task_retry_sleep_is_cancellable(monkeypatch):
+    _drop_project_modules("config", "core.api_client", "core.interrupts", force=True)
+    from core.agent_orchestrator import CancellationToken
+    from core import api_client
+    from core import interrupts
+
+    class FakeSocket:
+        def settimeout(self, _timeout):
+            pass
+
+    class FakeResponse:
+        status = 502
+
+        def __init__(self):
+            self.headers = {}
+
+        def read(self, _limit=-1):
+            return b'{"error":{"message":"upstream unavailable"}}'
+
+    class FakeConn:
+        sock = FakeSocket()
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return FakeResponse()
+
+        def close(self):
+            pass
+
+    cancellation = CancellationToken()
+    monkeypatch.setattr(
+        api_client,
+        "_open_connection",
+        lambda *_args, **_kwargs: (FakeConn(), "/v1/chat/completions"),
+    )
+    monkeypatch.setattr(api_client, "_retry_delay", lambda *_args, **_kwargs: 1.0)
+    monkeypatch.setattr(
+        api_client.time,
+        "sleep",
+        lambda _seconds: cancellation.cancel("retry cancelled"),
+    )
+
+    stream = api_client.stream_request(
+        [{"role": "user", "content": "hi"}],
+        "ds-v4-flash",
+        cancellation=cancellation,
+    )
+    try:
+        assert next(stream)["_retry"].startswith("HTTP 502")
+        with pytest.raises(api_client.StreamCancellationError, match="retry cancelled"):
+            next(stream)
+        assert interrupts.interrupted() is False
+    finally:
+        stream.close()
         interrupts.clear_interrupt()
 
 
