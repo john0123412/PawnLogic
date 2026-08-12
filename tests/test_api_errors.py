@@ -69,7 +69,9 @@ def test_transport_retry_classification_is_shared_and_fail_closed():
     assert not any(is_retryable_transport_error(exc) for exc in non_retryable)
 
 
-def test_retry_delay_honors_bounded_retry_after():
+def test_retry_delay_honors_bounded_retry_after(monkeypatch):
+    monkeypatch.delenv("PAWNLOGIC_API_RETRY_AFTER_MAX", raising=False)
+
     assert _retry_delay(0, "3") == 3
     assert _retry_delay(0, "999") == 10
     assert _retry_delay(0, "-2") == 0

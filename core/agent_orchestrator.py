@@ -1,11 +1,13 @@
-"""Bounded serial orchestration for delegated Agent tasks."""
+"""Bounded FIFO orchestration for delegated Agent tasks and shared budgets."""
 
 from __future__ import annotations
 
+import contextvars
 import math
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Iterable, Sequence
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from typing import Protocol
 
@@ -16,6 +18,21 @@ from core.delegation import (
     AgentUsage,
     FailureRecord,
 )
+
+
+_DEADLINE_CANCEL_REASON = "deadline exceeded"
+_HOST_INTERRUPT_REASON = "parent turn interrupted"
+_INTERRUPT_POLL_SECONDS = 0.05
+
+
+def _host_interrupt_requested() -> bool:
+    """Read the host interrupt signal without adding a runtime import edge."""
+    try:
+        from core.interrupts import interrupted
+
+        return bool(interrupted())
+    except Exception:
+        return False
 
 
 def _amount(value: object, name: str) -> int:
@@ -36,12 +53,20 @@ def _cost(value: object) -> float:
 
 
 class CancellationToken:
-    """Thread-safe cooperative cancellation signal."""
+    """Thread-safe cooperative cancellation signal with one-way child links."""
 
-    def __init__(self) -> None:
+    def __init__(self, parent: CancellationToken | None = None) -> None:
+        if parent is not None and not isinstance(parent, CancellationToken):
+            raise TypeError("parent must be a CancellationToken or None")
         self._event = threading.Event()
         self._lock = threading.Lock()
         self._reason: str | None = None
+        self._children: set[CancellationToken] = set()
+        self._parent = parent
+        self._abort_callbacks: dict[int, Callable[[], object]] = {}
+        self._next_abort_callback = 0
+        if parent is not None:
+            parent._register_child(self)
 
     @property
     def cancelled(self) -> bool:
@@ -58,12 +83,74 @@ class CancellationToken:
     def cancel(self, reason: str = "cancelled") -> bool:
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("reason must not be empty")
+        normalized = reason.strip()
         with self._lock:
             if self._event.is_set():
                 return False
-            self._reason = reason.strip()
+            self._reason = normalized
             self._event.set()
-            return True
+            children = tuple(self._children)
+            callbacks = tuple(self._abort_callbacks.values())
+            self._abort_callbacks.clear()
+        for callback in callbacks:
+            self._invoke_abort(callback)
+        for child in children:
+            child.cancel(normalized)
+        return True
+
+    def child(self) -> CancellationToken:
+        """Create a token cancelled by this token but isolated from siblings."""
+        return CancellationToken(parent=self)
+
+    def detach(self) -> None:
+        """Remove this completed child token from its parent fan-out set."""
+        parent = self._parent
+        if parent is not None:
+            parent._unregister_child(self)
+            self._parent = None
+
+    def register_abort(self, callback: Callable[[], object]) -> Callable[[], None]:
+        """Register a best-effort abort callback and return an idempotent remover."""
+        if not callable(callback):
+            raise TypeError("callback must be callable")
+        with self._lock:
+            cancelled = self._event.is_set()
+            if cancelled:
+                callback_id: int | None = None
+            else:
+                callback_id = self._next_abort_callback
+                self._next_abort_callback += 1
+                self._abort_callbacks[callback_id] = callback
+        if cancelled:
+            self._invoke_abort(callback)
+
+        def unregister() -> None:
+            if callback_id is None:
+                return
+            with self._lock:
+                self._abort_callbacks.pop(callback_id, None)
+
+        return unregister
+
+    def _register_child(self, child: CancellationToken) -> None:
+        with self._lock:
+            cancelled = self._event.is_set()
+            reason = self._reason
+            if not cancelled:
+                self._children.add(child)
+        if cancelled:
+            child.cancel(reason or "cancelled")
+
+    def _unregister_child(self, child: CancellationToken) -> None:
+        with self._lock:
+            self._children.discard(child)
+
+    @staticmethod
+    def _invoke_abort(callback: Callable[[], object]) -> None:
+        try:
+            callback()
+        except Exception:
+            return
 
     def wait(self, timeout: float | None = None) -> bool:
         if timeout is not None:
@@ -261,7 +348,11 @@ class BudgetLedger:
 
 
 class AgentTaskExecutor(Protocol):
-    """Delegation Runtime seam consumed by the serial orchestrator."""
+    """Delegation Runtime seam consumed by the bounded orchestrator.
+
+    Executors used with ``max_concurrency=2`` must support concurrent calls;
+    each call receives an independent child cancellation token.
+    """
 
     def execute(
         self,
@@ -291,8 +382,22 @@ class OrchestrationResult:
         }
 
 
+@dataclass
+class _InFlightTask:
+    index: int
+    task: AgentTask
+    claim: BudgetClaim
+    cancellation: CancellationToken
+    deadline_processed: bool = False
+    deadline_cancelled: bool = False
+
+
 class SerialAgentOrchestrator:
-    """Execute tasks in input order with shared atomic admission budgets."""
+    """Execute tasks with FIFO admission and one or two synchronous workers.
+
+    The legacy public name remains for compatibility. Results preserve input
+    order even when up to two independently cancellable executor calls run.
+    """
 
     def __init__(
         self,
@@ -301,14 +406,17 @@ class SerialAgentOrchestrator:
         max_concurrency: int = 1,
         clock=time.monotonic,
     ) -> None:
-        if max_concurrency != 1:
-            raise ValueError(
-                "max_concurrency must remain 1 until Workspace and "
-                "RuntimeContext isolation is proven"
-            )
+        if isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int):
+            raise TypeError("max_concurrency must be an integer")
+        if max_concurrency not in (1, 2):
+            raise ValueError("max_concurrency must be 1 or 2")
         if not callable(getattr(executor, "execute", None)):
             raise TypeError("executor must implement execute(task, cancellation)")
+        configure_concurrency = getattr(executor, "configure_concurrency", None)
+        if callable(configure_concurrency):
+            configure_concurrency(max_concurrency)
         self._executor = executor
+        self._max_concurrency = max_concurrency
         self._clock = clock
 
     def run(
@@ -326,50 +434,208 @@ class SerialAgentOrchestrator:
             raise ValueError("task IDs must be unique")
         token = cancellation or CancellationToken()
         ledger = BudgetLedger(budget)
-        results: list[AgentResult] = []
-        for task in normalized:
-            terminal = self._preflight(task, token)
-            if terminal is not None:
-                results.append(terminal)
-                continue
-            claim = ledger.try_claim(
-                tokens=task.budget.max_tokens,
-                tool_calls=task.budget.max_tool_calls,
-                cost=task.budget.max_cost,
-            )
-            if claim is None:
-                results.append(
-                    self._terminal(
-                        task,
-                        "budget_exhausted",
-                        "shared_budget_exhausted",
-                        "Shared orchestration budget could not admit this task.",
+        results: list[AgentResult | None] = [None] * len(normalized)
+        inflight: dict[Future[AgentResult], _InFlightTask] = {}
+        next_index = 0
+
+        with ThreadPoolExecutor(max_workers=self._max_concurrency) as pool:
+            while next_index < len(normalized) or inflight:
+                self._propagate_host_interrupt(token)
+                while (
+                    next_index < len(normalized)
+                    and len(inflight) < self._max_concurrency
+                ):
+                    self._propagate_host_interrupt(token)
+                    task = normalized[next_index]
+                    terminal = self._preflight(task, token)
+                    if terminal is not None:
+                        results[next_index] = terminal
+                        next_index += 1
+                        continue
+                    claim = ledger.try_claim(
+                        tokens=task.budget.max_tokens,
+                        tool_calls=task.budget.max_tool_calls,
+                        cost=task.budget.max_cost,
                     )
-                )
-                continue
-            result = self._execute(task, token)
-            usage = result.usage
-            try:
-                claim.settle(
-                    tokens=usage.prompt_tokens + usage.completion_tokens,
-                    tool_calls=usage.tool_calls,
-                    cost=usage.cost,
-                )
-            except ValueError:
-                claim.release()
-                result = self._terminal(
-                    task,
-                    "budget_exhausted",
-                    "reported_usage_exceeded_reservation",
-                    "Delegation Runtime reported usage above its reservation.",
-                )
-            result = self._postflight(task, token, result)
-            results.append(result)
+                    if claim is None:
+                        if inflight:
+                            break
+                        results[next_index] = self._terminal(
+                            task,
+                            "budget_exhausted",
+                            "shared_budget_exhausted",
+                            "Shared orchestration budget could not admit this task.",
+                        )
+                        next_index += 1
+                        continue
+
+                    child = token.child()
+                    try:
+                        # Each worker receives a snapshot of the caller's
+                        # ContextVars.  A concurrent executor must still fork
+                        # mutable RuntimeContext state before changing it.
+                        context = contextvars.copy_context()
+                        future = pool.submit(
+                            context.run,
+                            self._execute_admitted,
+                            task,
+                            child,
+                        )
+                    except Exception:
+                        self._release_claim(claim)
+                        child.detach()
+                        results[next_index] = self._terminal(
+                            task,
+                            "failed",
+                            "executor_submit_error",
+                            "Delegation Runtime could not start the task.",
+                        )
+                    else:
+                        inflight[future] = _InFlightTask(
+                            index=next_index,
+                            task=task,
+                            claim=claim,
+                            cancellation=child,
+                        )
+                    next_index += 1
+
+                if not inflight:
+                    continue
+                completed = {future for future in inflight if future.done()}
+                if not completed:
+                    timeout = self._wait_timeout(inflight.values())
+                    completed, _ = wait(
+                        inflight,
+                        timeout=timeout,
+                        return_when=FIRST_COMPLETED,
+                    )
+                self._propagate_host_interrupt(token)
+                if not completed:
+                    self._cancel_expired_tasks(inflight.values())
+                    continue
+                for future in completed:
+                    scheduled = inflight.pop(future)
+                    results[scheduled.index] = self._collect_result(
+                        future,
+                        scheduled,
+                    )
+
+        ordered_results = tuple(result for result in results if result is not None)
         return OrchestrationResult(
-            status=self._status(results),
-            results=tuple(results),
+            status=self._status(ordered_results),
+            results=ordered_results,
             budget=ledger.snapshot(),
         )
+
+    def _execute_admitted(
+        self,
+        task: AgentTask,
+        cancellation: CancellationToken,
+    ) -> AgentResult:
+        terminal = self._preflight(task, cancellation)
+        if terminal is not None:
+            return terminal
+        return self._execute(task, cancellation)
+
+    def _collect_result(
+        self,
+        future: Future[AgentResult],
+        scheduled: _InFlightTask,
+    ) -> AgentResult:
+        task = scheduled.task
+        try:
+            result = future.result()
+        except Exception:
+            result = self._terminal(
+                task,
+                "failed",
+                "executor_error",
+                "Delegation Runtime failed while executing the task.",
+            )
+        if not isinstance(result, AgentResult):
+            result = self._terminal(
+                task,
+                "failed",
+                "invalid_executor_result",
+                "Delegation Runtime returned an invalid result.",
+            )
+
+        try:
+            usage = result.usage
+            scheduled.claim.settle(
+                tokens=usage.prompt_tokens + usage.completion_tokens,
+                tool_calls=usage.tool_calls,
+                cost=usage.cost,
+            )
+        except ValueError:
+            result = self._terminal(
+                task,
+                "budget_exhausted",
+                "reported_usage_exceeded_reservation",
+                "Delegation Runtime reported usage above its reservation.",
+            )
+        except Exception:
+            result = self._terminal(
+                task,
+                "failed",
+                "budget_settlement_error",
+                "Delegation Runtime usage could not be settled safely.",
+            )
+        finally:
+            self._release_claim(scheduled.claim)
+            scheduled.cancellation.detach()
+        return self._postflight(
+            task,
+            scheduled.cancellation,
+            result,
+            deadline_cancelled=scheduled.deadline_cancelled,
+        )
+
+    @staticmethod
+    def _release_claim(claim: BudgetClaim) -> None:
+        if not claim.settled:
+            claim.release()
+
+    def _wait_timeout(
+        self,
+        scheduled_tasks: Iterable[_InFlightTask],
+    ) -> float:
+        deadlines = [
+            scheduled.task.deadline
+            for scheduled in scheduled_tasks
+            if (
+                scheduled.task.deadline is not None
+                and not scheduled.deadline_processed
+            )
+        ]
+        if not deadlines:
+            return _INTERRUPT_POLL_SECONDS
+        return min(
+            _INTERRUPT_POLL_SECONDS,
+            max(0.0, min(deadlines) - self._clock()),
+        )
+
+    def _cancel_expired_tasks(
+        self,
+        scheduled_tasks: Iterable[_InFlightTask],
+    ) -> None:
+        now = self._clock()
+        for scheduled in scheduled_tasks:
+            deadline = scheduled.task.deadline
+            if (
+                deadline is not None
+                and now >= deadline
+                and not scheduled.deadline_processed
+            ):
+                scheduled.deadline_processed = True
+                scheduled.deadline_cancelled = scheduled.cancellation.cancel(
+                    _DEADLINE_CANCEL_REASON
+                )
+
+    @staticmethod
+    def _propagate_host_interrupt(cancellation: CancellationToken) -> None:
+        if _host_interrupt_requested():
+            cancellation.cancel(_HOST_INTERRUPT_REASON)
 
     def _preflight(
         self,
@@ -397,7 +663,17 @@ class SerialAgentOrchestrator:
         task: AgentTask,
         cancellation: CancellationToken,
         result: AgentResult,
+        *,
+        deadline_cancelled: bool = False,
     ) -> AgentResult:
+        if deadline_cancelled and result.status in {"completed", "cancelled"}:
+            return self._terminal(
+                task,
+                "timed_out",
+                "deadline_exceeded",
+                "Task deadline elapsed during execution.",
+                usage=result.usage,
+            )
         if cancellation.cancelled and result.status == "completed":
             return self._terminal(
                 task,

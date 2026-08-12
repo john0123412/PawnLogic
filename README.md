@@ -113,8 +113,8 @@ public contracts:
 - Active network probes require a valid Engagement Scope before an authorized
   private target can be allowed.
 - The host executes only complete, owned ToolSpecs through its policy seam;
-  metadata-less handlers fail closed. Public delegated tasks now run through
-  the serial orchestrator with cooperative cancellation and shared budgets.
+  metadata-less handlers fail closed. Public delegated tasks run through the
+  serial orchestrator with cooperative cancellation and shared budgets.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
@@ -123,7 +123,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 | Capability | Description |
 |-----------|-------------|
 | Multi-provider models | Built-in DeepSeek, OpenAI, and Anthropic aliases plus custom OpenAI-compatible or Anthropic-style providers through `/provider`. |
-| Delegated agents | Bounded sub-agents use host-controlled dynamic model routing, user allow/deny policy, token/tool/cost budgets, capability-filtered Tools, and deterministic serial orchestration with task lineage. |
+| Delegated agents | Bounded sub-agents use host-controlled dynamic model routing, user allow/deny policy, token/tool/cost budgets, capability-filtered Tools, task-local workspaces, and one-or-two-worker orchestration with task lineage. |
 | Structured context | Versioned task state, Tool-call-safe trimming, `ctx_trim_to` targeting, and host-selected delegated context keep long sessions bounded without copying raw parent history. |
 | Persistent workspace | SQLite-backed sessions, searchable history, memory commands, bounded provenance-aware knowledge retrieval, per-session workspaces, and audit logs under `~/.pawnlogic/`. |
 | Real tool execution | Host shell, code sandbox, file operations, URL fetch, browser automation, Docker containers, and CTF helpers. |
@@ -158,10 +158,12 @@ requests are preferences: provider visibility, user policy, capability, and
 budget checks remain authoritative.
 Structured tasks and results carry task/parent IDs, deadlines, usage, and
 failure records. Shared orchestration budgets are reserved atomically, and
-cancellation is cooperative. The current core orchestrator is deliberately
-serial: a persisted `max-concurrency` value of `2` is a policy ceiling for a
-future isolated executor, not permission to run the current shared Workspace
-and RuntimeContext concurrently.
+cancellation is cooperative. The core orchestrator admits at most two workers;
+each concurrent child has a copied RuntimeContext, an isolated workspace, a
+bounded output collector, and a task-local cancellation token. Concurrent
+children may use only task-isolated file Tools. `delegate_task` remains a
+single-task compatibility Adapter: a policy value of `max-concurrency=2` takes
+effect only for a supported batch caller and never causes implicit fan-out.
 
 ## Provider Management
 

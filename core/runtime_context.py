@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, MutableMapping
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import MutableMapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from core.runtime_context_scope import (
+    activate_runtime_context,
+    active_runtime_context_mirrors_legacy,
+    context_allows_legacy_mirror,
+    current_runtime_context,
+    fork_task_context,
+)
 
 
 @dataclass
@@ -26,6 +33,7 @@ class RuntimeContext:
     session_id: str = ""
     agent_id: str = ""
     active_turn_id: str = "turn-inactive"
+    isolated_workspace: bool = False
 
     def __post_init__(self) -> None:
         if self.event_publisher is None:
@@ -99,30 +107,57 @@ class RuntimeContext:
             dynamic_config=dynamic_config,
         )
 
-    @contextmanager
-    def activate(self) -> Iterator[RuntimeContext]:
-        """Make this context authoritative for the current execution scope."""
-        token = _ACTIVE_RUNTIME_CONTEXT.set(self)
-        self.sync_legacy_state()
-        try:
-            yield self
-        finally:
-            _ACTIVE_RUNTIME_CONTEXT.reset(token)
-            previous = current_runtime_context()
-            if previous is not None:
-                previous.sync_legacy_state()
+    def activate(
+        self,
+        *,
+        mirror_legacy: bool | None = None,
+    ) -> AbstractContextManager[RuntimeContext]:
+        """Make this context authoritative for the current execution scope.
+
+        ``mirror_legacy=False`` keeps compatibility globals untouched.  Isolated
+        child workspaces always use that mode, even if a caller requests a
+        mirror, because process-wide pointers cannot identify a concurrent child.
+        """
+        return activate_runtime_context(self, mirror_legacy=mirror_legacy)
 
     def set_output_mode(self, *, debug_mode: bool, user_mode: bool | None = None) -> None:
         """Update this context's output mode and its compatibility mirrors."""
         self.debug_mode = bool(debug_mode)
         self.user_mode = (not self.debug_mode) if user_mode is None else bool(user_mode)
-        self.sync_legacy_state()
+        if self._allows_legacy_mirror():
+            self.sync_legacy_state()
+
+    def fork_for_task(
+        self,
+        task: Any = None,
+        *,
+        sink: Any = None,
+        task_id: str | None = None,
+    ) -> RuntimeContext:
+        """Create an isolated child context for one delegated task.
+
+        Child workspaces are unique descendants of the parent workspace.  The
+        task identifier is only used as a sanitized filename fragment, never as
+        a path, so an untrusted task id cannot traverse into a sibling workspace.
+        """
+        return fork_task_context(
+            self,
+            task,
+            sink=sink,
+            task_id=task_id,
+        )
 
     def sync_legacy_state(self) -> None:
         """Mirror authoritative context values into transitional process globals."""
+        if not self._allows_legacy_mirror():
+            return
         from core.state import mirror_runtime_context
 
         mirror_runtime_context(self)
+
+    def _allows_legacy_mirror(self) -> bool:
+        """Return whether this context may update process-global mirrors."""
+        return context_allows_legacy_mirror(self)
 
     def update_paths(
         self,
@@ -137,12 +172,6 @@ class RuntimeContext:
             self.workspace_dir = str(Path(workspace_dir).expanduser())
 
 
-_ACTIVE_RUNTIME_CONTEXT: ContextVar[RuntimeContext | None] = ContextVar(
-    "pawnlogic_runtime_context",
-    default=None,
-)
-
-
 def _default_sink() -> Any:
     try:
         from core.commands._common import get_active_sink
@@ -151,10 +180,8 @@ def _default_sink() -> Any:
         from core.output import HumanSink
         return HumanSink()
 
-
-def current_runtime_context() -> RuntimeContext | None:
-    """Return the context active in the current thread or async task."""
-    return _ACTIVE_RUNTIME_CONTEXT.get()
-
-
-__all__ = ["RuntimeContext", "current_runtime_context"]
+__all__ = [
+    "RuntimeContext",
+    "active_runtime_context_mirrors_legacy",
+    "current_runtime_context",
+]

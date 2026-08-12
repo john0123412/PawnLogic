@@ -8,7 +8,7 @@ Patch support:
   - Legacy old_content/new_content arguments remain supported.
 """
 
-import fnmatch, os, re, difflib, subprocess, time
+import fnmatch, os, difflib, subprocess, time
 from pathlib import Path
 from core.path_policy import resolve_within
 from config import (
@@ -28,6 +28,8 @@ from core.operation_policy import (
     prompt_for_confirmation,
 )
 from tools.shell_ops import authorize_shell_operation
+from tools.file_shell import run_interactive as _run_interactive_process
+from tools.file_shell import run_shell as _run_shell_process
 from tools.text_patch import apply_patch_blocks as _text_apply_patch_blocks
 
 # Current session cwd/workspace references.
@@ -37,8 +39,106 @@ _session_workspace_dir = [WORKSPACE_DIR]
 
 def sync_runtime_context(ctx) -> None:
     """Sync the active RuntimeContext into legacy file-tool pointers."""
+    if getattr(ctx, "isolated_workspace", False):
+        return
     _session_cwd[0] = str(ctx.cwd)
     _session_workspace_dir[0] = str(ctx.workspace_dir)
+
+
+def _active_runtime_context():
+    """Return the scoped context without making file tools own runtime state."""
+    try:
+        from core.runtime_context import current_runtime_context
+
+        return current_runtime_context()
+    except Exception:
+        return None
+
+
+def _path_is_within(root: Path, candidate: Path) -> bool:
+    """Return whether a resolved candidate is contained by a resolved root."""
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _context_cwd() -> Path:
+    """Return the active context cwd or the legacy session cwd fallback."""
+    context = _active_runtime_context()
+    cwd = context.cwd if context is not None else _session_cwd[0]
+    return Path(cwd).expanduser().resolve()
+
+
+def _context_workspace_dir() -> Path:
+    """Return the active context workspace or the legacy workspace fallback."""
+    context = _active_runtime_context()
+    workspace = (
+        context.workspace_dir
+        if context is not None
+        else _session_workspace_dir[0] or WORKSPACE_DIR
+    )
+    return Path(workspace).expanduser().resolve()
+
+
+def _is_other_isolated_child_path(path: Path) -> bool:
+    """Return whether a path enters a sibling child workspace namespace."""
+    context = _active_runtime_context()
+    if context is None or not context.isolated_workspace:
+        return False
+    child_workspace = _context_workspace_dir()
+    candidate = path.expanduser().resolve()
+    return _path_is_within(child_workspace.parent, candidate) and not _path_is_within(
+        child_workspace, candidate
+    )
+
+
+def _resolve_read_path(path: str | Path) -> tuple[Path | None, str]:
+    """Resolve one read/list/search path against the active context cwd.
+
+    Relative reads resolve inside the child workspace.  Absolute source paths
+    remain readable, but sibling workspaces under the task namespace do not.
+    """
+    context = _active_runtime_context()
+    candidate = Path(path).expanduser()
+    resolved = (
+        candidate.resolve()
+        if candidate.is_absolute()
+        else (_context_cwd() / candidate).resolve()
+    )
+    if context is not None and context.isolated_workspace:
+        if _is_other_isolated_child_path(resolved):
+            return None, (
+                f"SECURITY BLOCK: '{path}' belongs to another isolated child workspace."
+            )
+    return resolved, ""
+
+
+def _resolve_shell_cwd(cwd: str | None = None) -> tuple[str, str]:
+    """Resolve shell cwd from the active context with child containment."""
+    context = _active_runtime_context()
+    if context is not None and context.isolated_workspace:
+        workspace = _context_workspace_dir()
+        if not cwd:
+            return str(workspace), ""
+        try:
+            return str(resolve_within(workspace, Path(cwd).expanduser())), ""
+        except ValueError:
+            return "", (
+                f"SECURITY BLOCK: shell cwd '{cwd}' is outside the isolated child workspace."
+            )
+
+    base = _context_cwd()
+    if not cwd:
+        return str(base), ""
+    candidate = Path(cwd).expanduser()
+    resolved = (
+        candidate.resolve()
+        if candidate.is_absolute()
+        else (base / candidate).resolve()
+    )
+    return str(resolved), ""
 
 # Persistent environment cache for shell tools.
 _env_cache: dict = {}
@@ -86,8 +186,14 @@ def _emit_run_shell_warning() -> None:
     global _run_shell_warning_emitted
     if _run_shell_warning_emitted:
         return
-    from core.state import state as _runtime_state
-    if not _runtime_state.user_mode:
+    context = _active_runtime_context()
+    if context is not None:
+        user_mode = context.user_mode
+    else:
+        from core.state import state as _runtime_state
+
+        user_mode = _runtime_state.user_mode
+    if not user_mode:
         return
     _run_shell_warning_emitted = True
     print(c(YELLOW, trust_notice_for_boundary(TrustBoundaryKind.HOST_SHELL)))
@@ -146,15 +252,24 @@ def _is_read_blacklisted(path: Path) -> bool:
 def _iter_visible_paths(root: Path):
     for current, dirs, files in os.walk(root):
         current_path = Path(current)
-        if _is_read_blacklisted(current_path):
+        if _is_read_blacklisted(current_path) or _is_other_isolated_child_path(
+            current_path
+        ):
             dirs[:] = []
             continue
-        dirs[:] = sorted(d for d in dirs if not _is_read_blacklisted(current_path / d))
+        dirs[:] = sorted(
+            d
+            for d in dirs
+            if not _is_read_blacklisted(current_path / d)
+            and not _is_other_isolated_child_path(current_path / d)
+        )
         for d in dirs:
             yield current_path / d
         for f in sorted(files):
             candidate = current_path / f
-            if not _is_read_blacklisted(candidate):
+            if not _is_read_blacklisted(candidate) and not _is_other_isolated_child_path(
+                candidate
+            ):
                 yield candidate
 
 def _resolve_write_path(path: str) -> tuple:
@@ -166,8 +281,18 @@ def _resolve_write_path(path: str) -> tuple:
     directory only after validation succeeds.
     """
     p = Path(path).expanduser()
+    context = _active_runtime_context()
     workspace_root = Path(WORKSPACE_DIR).expanduser().resolve()
-    session_workspace = Path(_session_workspace_dir[0] or str(workspace_root)).expanduser().resolve()
+    session_workspace = _context_workspace_dir()
+
+    if context is not None and context.isolated_workspace:
+        try:
+            resolved = resolve_within(session_workspace, p)
+        except ValueError:
+            return "", (
+                f"SECURITY BLOCK: '{path}' is outside the isolated child workspace."
+            )
+        return str(resolved), ""
 
     # Absolute paths must stay inside the workspace root.
     if p.is_absolute():
@@ -214,7 +339,7 @@ def _run_operation_policy(cmd: str, work_dir: str, *, operation_type: str):
     return authorize_shell_operation(
         cmd,
         work_dir,
-        workspace_dir=_session_workspace_dir[0] or work_dir,
+        workspace_dir=str(_context_workspace_dir()),
         operation_type=operation_type,
         interactive=is_confirmation_available(),
         confirmer=prompt_for_confirmation,
@@ -223,129 +348,42 @@ def _run_operation_policy(cmd: str, work_dir: str, *, operation_type: str):
     )
 
 
-def _run(cmd: str, timeout: int = 15, cwd: str = None, env=None) -> str:
-    """
-    Low-level shell command runner.
-
-    Blocking safeguards:
-      - Operation policy classification before subprocess execution.
-      - stdin=DEVNULL to avoid hanging interactive programs.
-      - Timeout fail-fast behavior.
-      - Cached HOST_IP/proxy environment injection.
-      - Path hints when files are missing.
-      - Timeout cleanup with partial output collection.
-    """
-    work_dir = cwd or _session_cwd[0]
-    exec_env = env if env is not None else _get_shell_env()
-
-    ok, policy_decision = _run_operation_policy(cmd, work_dir, operation_type="run_shell")
-    if not ok:
-        return _format_policy_block(policy_decision)
-
-    logger.debug(
-        "[run_shell] executing | risk={} rule={} cmd={!r} timeout={} cwd={}",
-        policy_decision.risk.value,
-        policy_decision.matched_rule,
-        policy_decision.redacted_command,
-        timeout,
-        work_dir,
+def _run(cmd: str, timeout: int = 15, cwd: str | None = None, env=None) -> str:
+    """Run a non-interactive command through the context-aware shell adapter."""
+    work_dir, cwd_error = _resolve_shell_cwd(cwd)
+    if cwd_error:
+        return cwd_error
+    return _run_shell_process(
+        cmd,
+        timeout=timeout,
+        work_dir=work_dir,
+        env=env if env is not None else _get_shell_env(),
+        authorize=lambda command, directory: _run_operation_policy(
+            command,
+            directory,
+            operation_type="run_shell",
+        ),
+        format_policy_block=_format_policy_block,
+        logger=logger,
+        emit_warning=_emit_run_shell_warning,
+        announce=lambda command: print(c(YELLOW, f"  ⚡ $ {command[:120]}")),
+        max_chars=lambda: runtime_config().get("tool_max_chars", 10_000),
+        popen=subprocess.Popen,
+        timeout_error=subprocess.TimeoutExpired,
     )
-    _emit_run_shell_warning()
-    print(c(YELLOW, f"  ⚡ $ {cmd[:120]}"))
-
-    proc = None
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            cwd=work_dir,
-            env=exec_env,
-            start_new_session=True,
-        )
-        stdout, stderr = proc.communicate(timeout=timeout)
-        out = stdout.decode("utf-8", errors="ignore") + stderr.decode("utf-8", errors="ignore")
-
-        limit = runtime_config()["tool_max_chars"]
-        if len(out) > limit:
-            half = limit // 2
-            out = out[:half] + f"\n...[{len(out)} chars total, truncated to {limit}]...\n" + out[-half // 4:]
-
-        if proc.returncode != 0:
-            logger.warning(
-                f"[run_shell] command returned non-zero exit code {proc.returncode}: {cmd!r}\n"
-                f"  stderr: {stderr[:300]!r}"
-            )
-
-        # Path hints for missing files.
-        if out and "No such file or directory" in out:
-            # Try to extract a likely filename from the command.
-            _fname_match = re.search(r'(?:/|^)([a-zA-Z0-9_.\-]+)(?:\s|$)', cmd)
-            _fname = _fname_match.group(1) if _fname_match else ""
-            _suggestions = (
-                "\n[Path Hint] File not found. Try:\n"
-                f"  - find / -name '{_fname}' 2>/dev/null   # global search\n"
-                "  - ls -la /proc/self/cwd                  # confirm current working directory\n"
-                "  - readlink -f /proc/self/exe              # confirm binary location\n"
-            ) if _fname else (
-                "\n[Path Hint] File not found. Try:\n"
-                "  - ls -la /proc/self/cwd                  # confirm current working directory\n"
-                "  - find / -name '<filename>' 2>/dev/null   # global search\n"
-            )
-            out += _suggestions
-
-        return out or "(no output)"
-
-    except subprocess.TimeoutExpired:
-        # Timeout cleanup: SIGTERM, wait, then SIGKILL while collecting partial output.
-        _partial = ""
-        if proc:
-            try:
-                # Try to collect anything already emitted.
-                proc.terminate()
-                try:
-                    _stdout, _stderr = proc.communicate(timeout=3)
-                    _partial = _stdout.decode("utf-8", errors="ignore")
-                    if _stderr:
-                        _partial += _stderr.decode("utf-8", errors="ignore")
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    _stdout, _stderr = proc.communicate()
-                    _partial = _stdout.decode("utf-8", errors="ignore")
-                    if _stderr:
-                        _partial += _stderr.decode("utf-8", errors="ignore")
-            except Exception:
-                pass
-
-        _partial_hint = ""
-        if _partial.strip():
-            _partial_hint = f"\n\n[Partial output received before timeout]:\n{_partial[:500]}"
-
-        msg = (
-            f"ERROR: command timed out (>{timeout}s); process terminated.{_partial_hint}\n\n"
-            "Did you run an interactive program such as gdb, python, vim, or nc?\n"
-            "  - For GDB, use -batch, e.g. gdb -batch -ex 'run' ./binary\n"
-            "  - For interactive processes, use run_interactive with scripted inputs.\n"
-            f"  - If the command legitimately takes longer, increase timeout (current: {timeout}s)."
-        )
-        logger.warning(f"[run_shell] timeout ({timeout}s): {cmd!r}")
-        return msg
-
-    except Exception as e:
-        logger.error(f"[run_shell] execution error: {cmd!r} - {type(e).__name__}: {e}")
-        return f"ERROR: {type(e).__name__}: {e}"
 
 # ════════════════════════════════════════════════════════
 # File reading tools.
 # ════════════════════════════════════════════════════════
 
 def tool_read_file(a: dict) -> str:
-    ok, reason = _check_read(a["path"])
+    p, path_error = _resolve_read_path(a["path"])
+    if path_error:
+        return path_error
+    assert p is not None
+    ok, reason = _check_read(str(p))
     if not ok: return reason
     try:
-        p = Path(a["path"]).expanduser()
         if not p.exists(): return f"ERROR: file does not exist: {a['path']}"
         size = p.stat().st_size
         if size > 2_000_000:
@@ -356,10 +394,13 @@ def tool_read_file(a: dict) -> str:
         return f"ERROR: {e}"
 
 def tool_read_file_lines(a: dict) -> str:
-    ok, reason = _check_read(a["path"])
+    p, path_error = _resolve_read_path(a["path"])
+    if path_error:
+        return path_error
+    assert p is not None
+    ok, reason = _check_read(str(p))
     if not ok: return reason
     try:
-        p = Path(a["path"]).expanduser()
         if not p.exists(): return f"ERROR: file does not exist: {a['path']}"
         start = int(a["start_line"]) - 1
         end   = int(a["end_line"])
@@ -490,7 +531,10 @@ def tool_patch_file(a: dict) -> str:
 
 def tool_list_dir(a: dict) -> str:
     try:
-        p = Path(a.get("path", ".")).expanduser()
+        p, path_error = _resolve_read_path(a.get("path", "."))
+        if path_error:
+            return path_error
+        assert p is not None
         ok, reason = _check_directory_listing(p)
         if not ok:
             return reason
@@ -500,11 +544,23 @@ def tool_list_dir(a: dict) -> str:
         if recursive:
             for root, dirs, files in os.walk(p):
                 root_path = Path(root)
-                if _is_read_blacklisted(root_path):
+                if _is_read_blacklisted(root_path) or _is_other_isolated_child_path(
+                    root_path
+                ):
                     dirs[:] = []
                     continue
-                dirs[:] = sorted(d for d in dirs if not _is_read_blacklisted(root_path / d))
-                files = sorted(f for f in files if not _is_read_blacklisted(root_path / f))
+                dirs[:] = sorted(
+                    d
+                    for d in dirs
+                    if not _is_read_blacklisted(root_path / d)
+                    and not _is_other_isolated_child_path(root_path / d)
+                )
+                files = sorted(
+                    f
+                    for f in files
+                    if not _is_read_blacklisted(root_path / f)
+                    and not _is_other_isolated_child_path(root_path / f)
+                )
                 level  = len(Path(root).relative_to(p).parts)
                 indent = "  " * level
                 rel    = Path(root).relative_to(p)
@@ -518,7 +574,7 @@ def tool_list_dir(a: dict) -> str:
         else:
             entries = sorted(p.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
             for e in entries[:200]:
-                if _is_read_blacklisted(e):
+                if _is_read_blacklisted(e) or _is_other_isolated_child_path(e):
                     continue
                 if e.is_dir(): lines.append(c(BLUE,  f"  📁 {e.name}/"))
                 else:          lines.append(f"  📄 {e.name}  {c(GRAY, str(e.stat().st_size)+'B')}")
@@ -528,7 +584,10 @@ def tool_list_dir(a: dict) -> str:
 
 def tool_find_files(a: dict) -> str:
     pattern = a["pattern"]
-    root    = Path(a.get("root", _session_cwd[0])).expanduser()
+    root, path_error = _resolve_read_path(a.get("root", "."))
+    if path_error:
+        return path_error
+    assert root is not None
     max_r   = int(a.get("max_results", 50))
     timeout = int(a.get("timeout", 10))  # seconds
     results = []
@@ -583,118 +642,40 @@ def tool_find_files(a: dict) -> str:
         return f"ERROR: {e}"
 
 def tool_run_shell(a: dict) -> str:
-    return _run(a["command"], int(a.get("timeout", 30)))
+    return _run(a["command"], int(a.get("timeout", 30)), cwd=a.get("cwd"))
 
 
 def tool_run_interactive(a: dict) -> str:
-    """
-    Run a stateful interactive process (nc, gdb, custom CLI) with a scripted
-    input sequence. Solves the problem of nc/gdb hanging because stdin is never
-    fed after launch.
-
-    'inputs' is a list of strings. Special entry "SLEEP:N" pauses N seconds.
-    Example:
-        command = "nc target.ctf.site 1337"
-        inputs  = ["1\n", "SLEEP:0.5", "2\n", "cat /flag\n"]
-
-    Returns: all stdout/stderr collected during the interaction.
-    """
-    import threading, queue, time as _time
-
+    """Run a scripted interactive command through the shell-process adapter."""
     command = a.get("command", "").strip()
-    inputs  = a.get("inputs", [])          # list[str] — "SLEEP:N" for delays
+    inputs = a.get("inputs", [])
     timeout = int(a.get("timeout", 30))
-    cwd     = a.get("cwd") or _session_cwd[0]
+    cwd, cwd_error = _resolve_shell_cwd(a.get("cwd"))
 
     if not command:
         return "ERROR: 'command' parameter is required"
-    ok, policy_decision = _run_operation_policy(
+    if cwd_error:
+        return cwd_error
+    return _run_interactive_process(
         command,
-        cwd,
-        operation_type="run_interactive",
+        inputs,
+        timeout=timeout,
+        work_dir=cwd,
+        authorize=lambda command, directory: _run_operation_policy(
+            command,
+            directory,
+            operation_type="run_interactive",
+        ),
+        format_policy_block=_format_policy_block,
+        get_shell_env=_get_shell_env,
+        announce=lambda command: print(c(YELLOW, f"  🔌 [interactive] $ {command[:100]}")),
+        announce_input=lambda item: print(c(GRAY, f"    → send: {repr(item)[:60]}")),
+        max_chars=lambda: runtime_config().get("tool_max_chars", 10_000),
+        popen=subprocess.Popen,
+        timeout_error=subprocess.TimeoutExpired,
+        sleep=time.sleep,
+        clock=time.time,
     )
-    if not ok:
-        return _format_policy_block(policy_decision)
-
-    print(c(YELLOW, f"  🔌 [interactive] $ {command[:100]}"))
-    output_q: queue.Queue = queue.Queue()
-
-    try:
-        proc = subprocess.Popen(
-            command, shell=True,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            cwd=cwd, bufsize=0,
-            env=_get_shell_env(),
-        )
-    except Exception as e:
-        return f"ERROR: failed to start process: {e}"
-
-    def _reader():
-        """Background thread: pump stdout into queue."""
-        try:
-            while True:
-                chunk = proc.stdout.read(512)
-                if not chunk:
-                    break
-                output_q.put(chunk.decode("utf-8", errors="ignore"))
-        except Exception:
-            pass
-
-    threading.Thread(target=_reader, daemon=True).start()
-
-    def _drain(wait: float = 0.3) -> str:
-        """Collect everything available after a short wait."""
-        _time.sleep(wait)
-        parts = []
-        while not output_q.empty():
-            try:    parts.append(output_q.get_nowait())
-            except queue.Empty: break
-        return "".join(parts)
-
-    output_chunks: list[str] = []
-    deadline = _time.time() + timeout
-    try:
-        # Collect initial banner / prompt
-        output_chunks.append(_drain(0.6))
-
-        for inp in inputs:
-            if _time.time() > deadline:
-                output_chunks.append("\n[TIMEOUT REACHED: Interactive script aborted]")
-                break
-            if isinstance(inp, str) and inp.upper().startswith("SLEEP:"):
-                try:    _time.sleep(float(inp.split(":", 1)[1]))
-                except Exception: pass
-                output_chunks.append(_drain(0.1))
-                continue
-
-            data = inp.encode() if isinstance(inp, str) else inp
-            print(c(GRAY, f"    → send: {repr(inp)[:60]}"))
-            try:
-                proc.stdin.write(data)
-                proc.stdin.flush()
-            except BrokenPipeError:
-                output_chunks.append("[process closed stdin early]")
-                break
-            output_chunks.append(_drain(0.4))
-
-        # Final drain + wait for graceful exit
-        try:    proc.wait(timeout=2)
-        except subprocess.TimeoutExpired: proc.terminate()
-        output_chunks.append(_drain(0.3))
-
-    except Exception as e:
-        output_chunks.append(f"\n[ERROR during interaction: {e}]")
-    finally:
-        try: proc.terminate()
-        except Exception: pass
-
-    full  = "".join(output_chunks)
-    limit = runtime_config()["tool_max_chars"]
-    if len(full) > limit:
-        full = full[:limit // 2] + "\n...[truncated]...\n" + full[-limit // 4:]
-    return full or "(no output)"
 
 
 # ════════════════════════════════════════════════════════
@@ -773,6 +754,7 @@ FILE_SCHEMAS = [
         "description":"Run a shell command in the current working directory. Use git_op for git operations.",
         "parameters":{"type":"object","properties":{
             "command":{"type":"string"},
+            "cwd":{"type":"string"},
             "timeout":{"type":"integer"}},
         "required":["command"]}}},
 

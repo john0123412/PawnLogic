@@ -375,9 +375,10 @@ MYRELAY_API_KEY=...
 委派 Agent 使用与 `/model` 相同的实时模型可见性契约。没有新增路由字段时，`delegate_task` 保持自动选择快速 worker 的兼容行为。父 Agent 可以请求 `auto`、`fast`、`reasoning`、`vision`、`same`、`same_provider` 或某个可见别名，但 host 会在创建 sub-agent 前应用用户策略和预算。配置成本上限后，没有显式成本元数据的模型会 fail closed。
 结构化 task/result 增加自动生成的 task ID、可选 parent ID、deadline、usage 和标准化
 failure。共享 budget ledger 会原子预留 Token、Tool Call 和成本容量，取消采用协作式
-机制。Core 编排当前按确定性顺序串行执行。`max-concurrency=2` 可以作为向前兼容的
-policy ceiling 持久化，但在 Workspace 和 RuntimeContext 隔离得到证明前，当前
-executor 会拒绝大于一的并发。
+机制。Core 编排可准入一个或两个 worker，同时保持输入顺序的 result。并发 child 使用
+复制的 RuntimeContext、唯一 workspace、有界 output collector 和 task-local
+cancellation token；该模式仅允许已 task 隔离的文件工具。`delegate_task` 仍是单任务
+Adapter，因此 `max-concurrency=2` 只由支持的 batch caller 使用，不会隐式创建工作。
 
 | 命令 | 说明 |
 |------|------|

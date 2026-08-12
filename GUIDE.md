@@ -422,10 +422,12 @@ fails closed for models without explicit cost metadata.
 Structured tasks/results add generated task IDs, optional parent IDs,
 deadlines, usage, and normalized failures. The shared budget ledger reserves
 token, Tool Call, and cost capacity atomically, while cancellation is
-cooperative. Core orchestration currently executes in deterministic serial
-order. `max-concurrency=2` may be persisted as a forward-compatible policy
-ceiling, but the current executor rejects concurrency above one until Workspace
-and RuntimeContext isolation is proven.
+cooperative. Core orchestration admits one or two workers while preserving
+input-order results. A concurrent child receives a copied RuntimeContext,
+unique workspace, bounded output collector, and task-local cancellation token;
+only task-isolated file Tools are available in that mode. `delegate_task`
+remains a single-task Adapter, so `max-concurrency=2` is used only by a
+supported batch caller and never creates implicit work.
 
 | Command | Description |
 |---------|-------------|

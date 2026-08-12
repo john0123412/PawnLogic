@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterator
 
 _INTERRUPT_EVENT = threading.Event()
 _CANCEL_LOCK = threading.RLock()
-_current_cancel: Callable[[], None] | None = None
+_active_cancels: dict[int, Callable[[], None]] = {}
 
 
 def _event() -> threading.Event:
@@ -42,30 +42,28 @@ def raise_if_interrupted() -> None:
 
 
 def set_cancel_callback(callback: Callable[[], None]) -> None:
-    """Register a process-wide callback that aborts the active blocking I/O."""
-    global _current_cancel
+    """Register one process-wide callback that aborts blocking I/O."""
     with _CANCEL_LOCK:
-        _current_cancel = callback
+        _active_cancels[id(callback)] = callback
 
 
 def clear_cancel_callback(callback: Callable[[], None]) -> None:
-    """Clear the active I/O cancel callback only when it still matches."""
-    global _current_cancel
+    """Unregister one I/O callback only when its identity still matches."""
     with _CANCEL_LOCK:
-        if _current_cancel is callback:
-            _current_cancel = None
+        callback_id = id(callback)
+        if _active_cancels.get(callback_id) is callback:
+            del _active_cancels[callback_id]
 
 
 def cancel_blocking_io() -> None:
-    """Abort the active blocking I/O operation, if one is registered."""
+    """Abort every active blocking I/O operation registered in this process."""
     with _CANCEL_LOCK:
-        callback = _current_cancel
-    if callback is None:
-        return
-    try:
-        callback()
-    except Exception:
-        pass
+        callbacks = tuple(_active_cancels.values())
+    for callback in callbacks:
+        try:
+            callback()
+        except Exception:
+            pass
 
 
 @contextmanager

@@ -22,13 +22,17 @@ release history.
   The 0.3.1 candidate contains bounded streaming and file-discovery recovery,
   execution-boundary hardening, and documented release preparation. The
   independent `pawnlogic-security` 0.1.0 package release is described below.
+- Proposed follow-up plan:
+  `docs/plans/0.3.2-bounded-concurrency-two.md`. Its implementation is a
+  stacked review branch above the unreleased 0.3.1 candidate; it does not
+  authorize a version bump, tag, package publication, or GitHub Release.
 - PR 1 contracts are recorded in commit `7ff8c27`: ADR 0007, ADR 0008, and
   focused delegation/MCP characterization tests.
 - The merged 0.3.0 core delivers the Extension Runtime, Extension
   commands/startup, Network Policy, installed-layout security compatibility
   fixture, policy-driven Delegation Runtime, Structured Context Manager,
   bounded provenance-aware knowledge retrieval with SQLite as the durable
-  authority, the versioned Agent Event Interface, bounded serial multi-Agent
+  authority, the versioned Agent Event Interface, bounded multi-Agent
   orchestration, and the integration/release documentation, CLI Agent help,
   live policy completions, and core distribution gates.
 - Merged `main` was verified directly, not only per-branch: 1178 non-E2E tests
@@ -159,13 +163,16 @@ These contracts are more important than local refactoring convenience:
   `none`, `minimal`, and `selected` cannot be forged by Tool arguments, and raw
   parent system messages/full history are not copied to child Providers.
 - Delegated tasks and results carry generated task IDs, optional parent task
-  IDs, deadlines, and structured token, Tool Call, and cost usage. The serial
+  IDs, deadlines, and structured token, Tool Call, and cost usage. The
   orchestrator admits each task through an atomic shared budget claim and
   supports cooperative cancellation without exposing executor exceptions.
-- Multi-Agent execution remains deterministic and serial. Requests for
-  concurrency above one fail closed until Workspace and RuntimeContext
-  isolation tests pass. A task graph remains deferred until two concrete
-  callers require it; `delegate_task` remains the compatibility Adapter.
+- Multi-Agent orchestration permits one or two workers only. Two-worker
+  execution requires a forkable parent RuntimeContext and gives each task a
+  copied context, unique `.tasks/` workspace, bounded output collector,
+  thread-safe event forwarding, and child cancellation token. The concurrent
+  Tool boundary is fail-closed except task-isolated file Tools. A task graph,
+  non-isolated Tool concurrency, and automatic `delegate_task` fan-out remain
+  deferred; `delegate_task` is still the one-task compatibility Adapter.
 - Knowledge retrieval uses immutable `KnowledgeRecord`, `KnowledgeQuery`, and
   `RetrievalHit` contracts. `core/knowledge_sqlite.py` owns bounded FTS5 and
   keyword fallback over the authoritative SQLite corpus. Optional vector

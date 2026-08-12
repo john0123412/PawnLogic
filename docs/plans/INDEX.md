@@ -14,7 +14,9 @@ and its release is published, it moves to Completed below.
 
 ## Proposed Plans
 
-There are no proposed plans.
+| Version | Plan | Status |
+|---------|------|--------|
+| 0.3.2 | [0.3.2-bounded-concurrency-two.md](0.3.2-bounded-concurrency-two.md) | Proposed; implementation is a stacked review branch and cannot become active until the 0.3.1 candidate is released or superseded. It does not authorize a tag or package publication. |
 
 ## Completed Plans
 
