@@ -7,7 +7,7 @@
 
 | Version | Plan | Status |
 |---------|------|--------|
-| 0.3.1 | [0.3.1-runtime-hardening-and-release-preparation.md](0.3.1-runtime-hardening-and-release-preparation.md) | Active; the version remains an unreleased candidate. Scope is bounded stream and file recovery, execution-boundary hardening, and release readiness only; do not tag or publish without explicit authorization. |
+| 0.3.1 | [0.3.1-runtime-hardening-and-release-preparation.md](0.3.1-runtime-hardening-and-release-preparation.md) | Release finalization pending. The exact-version marker and public docs are staged for 0.3.1, but the tag, package publication, and GitHub Release remain explicitly authorized follow-up actions. |
 
 There is exactly one active plan at a time. When the active plan is completed
 and its release is published, it moves to Completed below.

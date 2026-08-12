@@ -169,6 +169,22 @@ def test_pre_publish_tests_fetch_release_tags():
     assert "fetch-depth: 0" in test_job
 
 
+def test_pre_publish_tests_run_release_documentation_gates():
+    """A tag must not bypass release consistency or translated-doc guards."""
+    test_job = _job_section(_workflow_text(), "test-before-publish")
+
+    assert "Validate release consistency" in test_job
+    assert "python3 tools/check_release_consistency.py" in test_job
+    assert "Validate translated document structure" in test_job
+    assert "python3 tools/check_doc_structure.py" in test_job
+    assert test_job.index("python3 tools/check_release_consistency.py") < test_job.index(
+        "Run tests"
+    )
+    assert test_job.index("python3 tools/check_doc_structure.py") < test_job.index(
+        "Run tests"
+    )
+
+
 def test_build_pins_artifact_identity_for_post_upload_comparison():
     """skip-existing must not be able to leave a stale file and still pass."""
     build_job = _job_section(_workflow_text(), "build-distributions")

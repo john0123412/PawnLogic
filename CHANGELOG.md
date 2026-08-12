@@ -7,7 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-## [0.3.1] - 2026-08-11
+## [0.3.1] - 2026-08-12
 
 ### Added
 - Added skill pack enable/disable mechanism with persistent state in

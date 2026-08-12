@@ -11,17 +11,25 @@ release history.
 
 ## Current Release State
 
-- Current public release: `0.3.0` (tag and GitHub Release: `v0.3.0`).
-- Runtime version source of truth: `config/paths.py:VERSION`, currently
-  `0.3.1` as an unreleased release candidate. Do not create a `v0.3.1` tag,
-  publish packages, or create a GitHub Release without explicit authorization.
+- Latest published release: `0.3.0` (tag and GitHub Release: `v0.3.0`).
+- Pre-tag finalization is pending for `0.3.1`. The runtime version source of
+  truth is `config/paths.py:VERSION`; its exact-version `.release-ready`
+  marker and the public READMEs are staged for `0.3.1`. This is a reviewed
+  pre-publication state, not evidence of a `v0.3.1` tag, package upload, or
+  GitHub Release. Do not perform any of those actions without explicit
+  authorization and passing release gates.
 - Most recent completed plan:
   `docs/plans/0.3.0-extensible-agent-platform-and-security-distribution.md`.
 - Active plan:
   `docs/plans/0.3.1-runtime-hardening-and-release-preparation.md`.
-  The 0.3.1 candidate contains bounded streaming and file-discovery recovery,
-  execution-boundary hardening, and documented release preparation. The
-  independent `pawnlogic-security` 0.1.0 package release is described below.
+  Its runtime work is complete; only pre-tag finalization and the separately
+  authorized release remain. The plan contains bounded streaming and
+  file-discovery recovery, execution-boundary hardening, and documented release
+  preparation. The independent `pawnlogic-security` 0.1.0 package release is
+  described below.
+- The `0.3.2` bounded-concurrency follow-up (PR #99) remains unmerged and
+  unreleased. It is not part of the `0.3.1` release tree and must not change
+  the staged version, tag, package, or release notes for this release.
 - PR 1 contracts are recorded in commit `7ff8c27`: ADR 0007, ADR 0008, and
   focused delegation/MCP characterization tests.
 - The merged 0.3.0 core delivers the Extension Runtime, Extension

@@ -92,6 +92,12 @@ jobs:
       - name: Lint
         run: python3 -m ruff check . --output-format=github
 
+      - name: Validate release consistency
+        run: python3 tools/check_release_consistency.py
+
+      - name: Validate translated document structure
+        run: python3 tools/check_doc_structure.py
+
       - name: Syntax check
         run: python3 -m compileall -q core/ tools/ utils/ tests/
 
