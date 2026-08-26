@@ -1423,9 +1423,21 @@ class AgentSession:
             print(
                 c(
                     GRAY,
-                    "  ⚙ [XML Parser] Unclosed </call> detected; tolerant completion enabled",
+                    "  ⚙ [XML Parser] Unclosed </call> detected; attempting tolerant completion",
                 )
             )
+            # Attempt to auto-close unclosed </call> tags for better recovery
+            import re as _re
+            # Find unclosed <call name= patterns
+            last_call_match = _re.search(r'<call\s+name="[^"]*"[^>]*>', text_buf)
+            if last_call_match:
+                after_pos = last_call_match.end()
+                after_text = text_buf[after_pos:]
+                if '</call>' not in after_text:
+                    insert_pos = text_buf.rfind('</call>')
+                    if insert_pos == -1 or insert_pos < text_buf.rfind('<call'):
+                        text_buf = text_buf.rstrip() + ' </call>'
+                        print(c(GRAY, "    → Auto-appended </call> for recovery"))
 
         def on_dirty_json_rescued() -> None:
             print(c(YELLOW, "  ⚠ [Hybrid Parser] Dirty JSON detected and rescued with regex"))
