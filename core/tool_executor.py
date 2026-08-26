@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 import json
+import threading
 import time
 from typing import Any
 
@@ -236,6 +237,68 @@ def precheck_tool_failures(
         return ToolFailurePrecheckResult()
 
 
+DEFAULT_TOOL_WATCHDOG_SECONDS = 600.0
+
+
+def _resolve_hard_timeout(explicit: float | None) -> float | None:
+    """Resolve the watchdog limit: explicit value, else runtime config.
+
+    ``None`` means "use the configured default" so production executors get
+    watchdog protection without every construction site wiring config. The
+    import stays local to avoid a configuration-module cycle.
+    """
+    if explicit is not None:
+        return explicit
+    from core.state import runtime_config
+
+    return float(
+        runtime_config().get("tool_watchdog_sec", DEFAULT_TOOL_WATCHDOG_SECONDS)
+    )
+
+
+def _run_handler_with_watchdog(
+    handler: Callable[[dict], object],
+    fn_args: dict,
+    tool_name: str,
+    timeout_seconds: float,
+) -> str:
+    """Run one sync handler on a daemon thread under a hard deadline.
+
+    A wedged handler must never freeze the agent loop. Python threads cannot
+    be killed, so on expiry the worker thread is abandoned (it may keep
+    running in the background until process exit) and a synthetic error
+    result is returned so the model can continue the task.
+    """
+    finished = threading.Event()
+    result_holder: list[object] = []
+    error_holder: list[BaseException] = []
+
+    def _worker() -> None:
+        try:
+            result_holder.append(handler(fn_args))
+        except BaseException as exc:  # Relay KeyboardInterrupt too.
+            error_holder.append(exc)
+        finally:
+            finished.set()
+
+    worker = threading.Thread(
+        target=_worker,
+        name=f"pawn-tool-{tool_name}",
+        daemon=True,
+    )
+    worker.start()
+    if not finished.wait(timeout_seconds):
+        return (
+            f"ERROR: Tool '{tool_name}' hit its hard timeout "
+            f"({timeout_seconds:g}s watchdog limit) and was abandoned. Its "
+            "background thread may still be running. Continue the task with "
+            "other approaches; avoid re-running the same blocking call unchanged."
+        )
+    if error_holder:
+        raise error_holder[0]
+    return str(result_holder[0]) if result_holder else ""
+
+
 def execute_tool_handler(
     *,
     tool_call_id: str,
@@ -246,12 +309,27 @@ def execute_tool_handler(
     args_preview: str = "",
     user_error_formatter: Callable[[str], str] | None = None,
     clock: Callable[[], float] = time.monotonic,
+    hard_timeout_seconds: float | None = None,
 ) -> ToolExecutionResult:
-    """Execute one non-phase tool handler and return its result envelope."""
+    """Execute one non-phase tool handler and return its result envelope.
+
+    When ``hard_timeout_seconds`` is set, the handler runs on a daemon thread
+    under a watchdog; a wedged handler is abandoned with an error result so
+    the agent loop keeps running instead of freezing forever.
+    """
     started_at = clock()
     audit_ok = True
     try:
-        content = handler(fn_args) if handler else f"ERROR: Unknown tool '{tool_name}'"
+        content: object
+        timeout_seconds = _resolve_hard_timeout(hard_timeout_seconds)
+        if handler is None:
+            content = f"ERROR: Unknown tool '{tool_name}'"
+        elif timeout_seconds is not None:
+            content = _run_handler_with_watchdog(
+                handler, fn_args, tool_name, timeout_seconds
+            )
+        else:
+            content = handler(fn_args)
         if result_has_semantic_failure(content):
             audit_ok = False
     except Exception as exc:
@@ -397,6 +475,7 @@ class ToolExecutor:
     sink_failure_func: Callable[..., tuple[bool, str]]
     user_error_formatter: Callable[[str], str] | None = None
     execution_policy: ToolExecutionPolicy = allow_registered_tool_execution
+    hard_timeout_seconds: float | None = None
 
     def execute_phase_switch(
         self,
@@ -528,6 +607,7 @@ class ToolExecutor:
             context=context,
             args_preview=args_preview,
             user_error_formatter=self.user_error_formatter,
+            hard_timeout_seconds=self.hard_timeout_seconds,
         )
 
     def record_failure(
@@ -554,6 +634,7 @@ class ToolExecutor:
 
 
 __all__ = [
+    "DEFAULT_TOOL_WATCHDOG_SECONDS",
     "SEMANTIC_FAILURE_SIGNALS",
     "PhaseSwitchResult",
     "ToolExecutionContext",

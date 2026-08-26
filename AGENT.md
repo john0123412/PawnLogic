@@ -610,6 +610,8 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   Network Policy checks.
 - Delegated-agent requests bypassing Provider visibility, allowlists, budgets,
   or capability filtering.
+- Tool watchdog abandons wedged tool threads instead of blocking the session;
+  abandoned threads keep running until process exit and their results are lost.
 - English and zh-CN docs drifting in structure or command examples.
 - Release prep editing version literals outside fixed locations.
 - Packaging accidentally including `skills/` content.

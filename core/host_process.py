@@ -11,7 +11,8 @@ import contextlib
 import os
 import signal
 import subprocess
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -96,6 +97,59 @@ def _terminate_process_group(proc: subprocess.Popen, timeout: float = 5.0) -> No
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=2.0)
+
+
+def run_bounded_argv(args: Sequence[str], timeout_seconds: float) -> tuple[int | None, str]:
+    """Run a simple argv command and never block indefinitely.
+
+    Unlike ``subprocess.run(..., timeout=...)``, this helper stays bounded even
+    when the child becomes uninterruptible (D state): ``subprocess.run`` reaps
+    the child with an unbounded blocking wait after its timeout fires, which
+    hangs forever on such processes. Here stdout is drained by a daemon reader
+    thread, the timeout path terminates and force-kills the whole process
+    group with bounded waits, and the reader join is bounded as well.
+
+    Returns ``(returncode, stdout_text)``; ``returncode`` is ``None`` when the
+    child had to be abandoned (killed but not reaped). The escalation grace
+    adds at most a few seconds beyond ``timeout_seconds``.
+    """
+    proc = subprocess.Popen(
+        list(args),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    chunks: list[bytes] = []
+
+    def _drain_stdout() -> None:
+        try:
+            stream = proc.stdout
+            if stream is None:
+                return
+            while True:
+                piece = stream.read(65536)
+                if not piece:
+                    return
+                chunks.append(piece)
+        except Exception:
+            return
+
+    reader = threading.Thread(
+        target=_drain_stdout,
+        daemon=True,
+        name="pawn-bounded-argv-reader",
+    )
+    reader.start()
+    try:
+        proc.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        _terminate_process_group(proc)
+    # If the child is stuck in D state it can never be reaped and the pipe
+    # never reaches EOF; abandon the daemon reader instead of blocking.
+    reader.join(timeout=2.0)
+    output = b"".join(chunks).decode("utf-8", errors="ignore")
+    return proc.poll(), output
 
 
 # Type for authorization callback: receives the decision, returns True to proceed.

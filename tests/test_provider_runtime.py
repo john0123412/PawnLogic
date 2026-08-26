@@ -331,3 +331,31 @@ def test_fetch_models_skips_entries_with_missing_id(monkeypatch):
     assert "relay-chat" in model_ids
     # Entries with missing or empty id must be skipped.
     assert len(model_ids) == 2
+
+
+def test_probe_openai_chat_model_treats_5xx_as_pass():
+    """5xx responses indicate transient server unavailability, not an unsupported
+    model.  The probe must treat all 5xx status codes as PASS so that temporarily
+    unavailable models are not permanently excluded from the selection list.
+    """
+    import asyncio
+    from types import SimpleNamespace
+    from core import provider_runtime
+
+    for status in (500, 502, 503, 504):
+        fixed_resp = SimpleNamespace(
+            status_code=status,
+            text="Service Unavailable",
+        )
+
+        class FakeClient:
+            async def post(self, *_a, _resp=fixed_resp, **_kw):
+                return _resp
+
+        ok, reason = asyncio.run(
+            provider_runtime.probe_openai_chat_model(
+                FakeClient(), "https://api.example.com/v1/chat/completions", "test-key", "some-model"
+            )
+        )
+        assert ok is True, f"Expected PASS for HTTP {status}, got FAIL with reason={reason!r}"
+        assert reason == ""

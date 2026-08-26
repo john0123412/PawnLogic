@@ -285,7 +285,7 @@ async def probe_openai_chat_model(
     reason = model_rejection_reason(resp.text)
     if reason:
         return False, reason
-    if resp.status_code in (400, 401, 403):
+    if resp.status_code in (400, 401, 403) or resp.status_code >= 500:
         return True, ""
     return False, f"HTTP {resp.status_code}"
 
