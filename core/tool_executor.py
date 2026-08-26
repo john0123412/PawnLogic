@@ -240,6 +240,22 @@ def precheck_tool_failures(
 DEFAULT_TOOL_WATCHDOG_SECONDS = 600.0
 
 
+def _resolve_hard_timeout(explicit: float | None) -> float | None:
+    """Resolve the watchdog limit: explicit value, else runtime config.
+
+    ``None`` means "use the configured default" so production executors get
+    watchdog protection without every construction site wiring config. The
+    import stays local to avoid a configuration-module cycle.
+    """
+    if explicit is not None:
+        return explicit
+    from core.state import runtime_config
+
+    return float(
+        runtime_config().get("tool_watchdog_sec", DEFAULT_TOOL_WATCHDOG_SECONDS)
+    )
+
+
 def _run_handler_with_watchdog(
     handler: Callable[[dict], object],
     fn_args: dict,
@@ -305,11 +321,12 @@ def execute_tool_handler(
     audit_ok = True
     try:
         content: object
+        timeout_seconds = _resolve_hard_timeout(hard_timeout_seconds)
         if handler is None:
             content = f"ERROR: Unknown tool '{tool_name}'"
-        elif hard_timeout_seconds is not None:
+        elif timeout_seconds is not None:
             content = _run_handler_with_watchdog(
-                handler, fn_args, tool_name, hard_timeout_seconds
+                handler, fn_args, tool_name, timeout_seconds
             )
         else:
             content = handler(fn_args)

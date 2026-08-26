@@ -757,3 +757,25 @@ def test_tool_executor_passes_hard_timeout_to_handler_execution():
 
     assert result.audit_ok is False
     assert "watchdog" in result.content.lower()
+
+
+def test_execute_tool_handler_watchdog_defaults_to_runtime_config(monkeypatch):
+    """Without an explicit limit the watchdog reads tool_watchdog_sec."""
+    import time
+
+    monkeypatch.setattr(
+        "core.state.runtime_config",
+        lambda: {"tool_watchdog_sec": 0.2},
+    )
+    context = ToolExecutionContext("session123", "model", 0, "RECON")
+
+    result = execute_tool_handler(
+        tool_call_id="call_cfg",
+        tool_name="run_shell",
+        fn_args={},
+        handler=lambda _args: time.sleep(5),
+        context=context,
+    )
+
+    assert result.audit_ok is False
+    assert "watchdog" in result.content.lower()

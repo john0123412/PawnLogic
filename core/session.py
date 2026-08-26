@@ -63,7 +63,6 @@ from core.prompt_builder import (
 )
 from core.tool_calls import extract_tool_calls
 from core.tool_executor import (
-    DEFAULT_TOOL_WATCHDOG_SECONDS,
     ToolExecutionOutcome,
     ToolExecutor,
     ToolExecutionContext,
@@ -1471,11 +1470,6 @@ class AgentSession:
             count_failure_func=count_failure,
             sink_failure_func=sink_failure_to_gsa,
             user_error_formatter=user_friendly_error,
-            hard_timeout_seconds=float(
-                runtime_config().get(
-                    "tool_watchdog_sec", DEFAULT_TOOL_WATCHDOG_SECONDS
-                )
-            ),
         )
 
     def _make_result_processor(self) -> ToolResultProcessor:
