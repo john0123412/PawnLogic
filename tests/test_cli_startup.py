@@ -167,7 +167,8 @@ def test_tool_call_display_hides_argument_preview_until_debug(capsys):
             return ProcessedToolResult(content="ok")
 
     def _fake_execute_one_tool_call(
-        i, tc, *, iteration, max_iter, tool_executor, result_processor, current_tools
+        i, tc, *, iteration, max_iter, tool_executor, result_processor,
+        current_tools, plan_notice=False,
     ):
         from core.state import state as _st
 

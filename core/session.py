@@ -711,15 +711,10 @@ _URGENT_SIGNAL = (
     "  5. If a tool call fails, do NOT retry — report partial results.\n"
 )
 
-# PLAN_MISSING signal.
-# Injected after tool results rather than as a user message, keeping attention
-# close to the current reasoning layer and improving correction quality.
-_PLAN_MISSING_SIGNAL = (
-    "[SYSTEM: PLAN_MISSING — your last tool call was intercepted by the executor]\n"
-    "The tool executor requires a <plan> block to authorize tool usage.\n"
-    "Recovery: output <plan><intent>your original intent</intent></plan> "
-    "then re-emit your tool call. Do NOT apologize or repeat previous text."
-)
+# PLAN_MISSING signal: injected after tool results so attention stays close to
+# the current reasoning layer. Defined in core/plan_guard.py with the guard's
+# other contracts.
+_PLAN_MISSING_SIGNAL = _plan_guard.PLAN_MISSING_SIGNAL
 
 _is_plan_exempt = _plan_guard.is_plan_exempt
 _tool_call_missing_plan = _plan_guard.tool_call_missing_plan
@@ -1873,6 +1868,7 @@ class AgentSession:
         tool_executor: ToolExecutor,
         result_processor: ToolResultProcessor,
         current_tools: list | None,
+        plan_notice: bool = False,
     ) -> tuple[list | None, ToolExecutionOutcome]:
         name = tc["name"]
         self._event_emitter().tool_started(tc, iteration)
@@ -2020,7 +2016,10 @@ class AgentSession:
 
             self._record_tool_metrics(elapsed_ms=_elapsed_ms)
             self.messages.append({
-                "role": "tool", "tool_call_id": tc["id"], "content": processed.content,
+                "role": "tool", "tool_call_id": tc["id"],
+                "content": _plan_guard.with_plan_notice(
+                    processed.content, flagged=plan_notice
+                ),
             })
             for _injection in processed.injections:
                 self.messages.append({"role": "user", "content": _injection})
@@ -2071,6 +2070,7 @@ class AgentSession:
                 tool_executor=tool_executor,
                 result_processor=result_processor,
                 current_tools=tools,
+                plan_notice=plan_signal_injected,
             ),
             plan_signal_injected=plan_signal_injected,
             inject_plan_signal=self._inject_plan_missing_signal,
