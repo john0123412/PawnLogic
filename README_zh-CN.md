@@ -177,6 +177,7 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 /extension enable <name>          # 显式启用 Extension
 /extension disable <name>         # 禁用 Extension
 /worker [alias|auto]              # 查看或设置首选 worker
+/planguard [strict|advisory|status]  # CoT plan 守卫模式；不带参数默认 advisory
 /agent policy show                # 查看委派 Agent 策略
 /agent run <role> <objective>     # 输出安全的 delegate_task 请求模板
 ```

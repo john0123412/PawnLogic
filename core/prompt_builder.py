@@ -244,8 +244,9 @@ def build_session_prompt(
 
         "ARCHITECTURE NOTE: You are the 'Brain' in a pipeline:\n"
         "  User Input → [YOU] → <plan> parser → tool executor → result injector → [YOU again]\n"
-        "The <plan> tag is NOT a formality. It is the KEY that unlocks the tool executor.\n"
-        "Without <plan>, the executor cannot receive your intent and will return an error.\n\n"
+        "The <plan> tag anchors your intent across long tasks. A single short line is enough:\n"
+        "  <plan><intent>what to do next and why</intent></plan>\n"
+        "Tool calls emitted without <plan> are flagged and trigger a self-correction signal.\n\n"
 
         "Thinking Process: You are an autonomous agent. Like a human expert, you MUST think\n"
         "step-by-step. Before any tool_use or code block, output a <plan> to decompose\n"

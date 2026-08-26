@@ -218,6 +218,7 @@ connection and response wait times.
 /extension enable <name>          # explicitly enable an Extension
 /extension disable <name>         # disable an Extension
 /worker [alias|auto]              # inspect or set the preferred worker
+/planguard [strict|advisory|status]  # CoT plan-guard mode; no arg means advisory
 /agent policy show                # inspect delegated-agent policy
 /agent run <role> <objective>     # print a safe delegate_task request template
 ```

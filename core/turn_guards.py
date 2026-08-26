@@ -118,10 +118,17 @@ def decide_plan_guard(
     missing_required_plan: bool,
     plan_rejected: int,
     max_soft: int,
+    mode: str = "advisory",
 ) -> PlanGuardDecision:
-    """Advance the plan-guard state machine for one model response."""
+    """Advance the plan-guard state machine for one model response.
+
+    The default ``mode="advisory"`` never escalates to ``hard``: tools keep
+    running and the correction signal keeps nudging, so weak models cannot
+    lose a task to plan formatting. Pass ``mode="strict"`` for hard-stop
+    enforcement. Safety stays with the operation policy, not here.
+    """
     new_count = plan_rejected + 1 if missing_required_plan else 0
-    if new_count > max_soft:
+    if new_count > max_soft and mode != "advisory":
         return PlanGuardDecision(plan_rejected=new_count, action="hard")
     if new_count > 0:
         return PlanGuardDecision(plan_rejected=new_count, action="soft")

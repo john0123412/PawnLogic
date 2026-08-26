@@ -37,3 +37,36 @@ def test_plan_present_satisfies_guard_for_any_tool():
 
 def test_empty_tool_buffer_never_requires_plan():
     assert tool_call_missing_plan("", {}) is False
+
+
+def test_web_retrieval_tools_are_plan_exempt():
+    """Information retrieval has no local side effects, like check_service."""
+    assert "web_search" in PLAN_EXEMPT_TOOLS
+    assert "web_fetch" in PLAN_EXEMPT_TOOLS
+    assert is_plan_exempt(_calls("web_search", "search_skills"))
+    assert tool_call_missing_plan("no plan text", _calls("web_fetch")) is False
+
+
+def test_web_tools_still_require_plan_when_mixed_with_side_effects():
+    assert tool_call_missing_plan(
+        "no plan text", _calls("web_search", "run_shell")
+    ) is True
+
+
+def test_with_plan_notice_appends_only_when_flagged():
+    from core.plan_guard import TOOL_PLAN_NOTICE, with_plan_notice
+
+    assert with_plan_notice("result body", flagged=False) == "result body"
+    noticed = with_plan_notice("result body", flagged=True)
+    assert noticed.startswith("result body\n\n")
+    assert noticed.endswith(TOOL_PLAN_NOTICE)
+
+
+def test_plan_signals_never_claim_interception():
+    """Soft mode really executes tools; the signal must not contradict that."""
+    from core.session import _PLAN_MISSING_SIGNAL
+    from core.plan_guard import TOOL_PLAN_NOTICE
+
+    for text in (_PLAN_MISSING_SIGNAL, TOOL_PLAN_NOTICE):
+        assert "intercept" not in text.lower()
+        assert "<plan>" in text

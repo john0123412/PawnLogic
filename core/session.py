@@ -711,15 +711,8 @@ _URGENT_SIGNAL = (
     "  5. If a tool call fails, do NOT retry — report partial results.\n"
 )
 
-# PLAN_MISSING signal.
-# Injected after tool results rather than as a user message, keeping attention
-# close to the current reasoning layer and improving correction quality.
-_PLAN_MISSING_SIGNAL = (
-    "[SYSTEM: PLAN_MISSING — your last tool call was intercepted by the executor]\n"
-    "The tool executor requires a <plan> block to authorize tool usage.\n"
-    "Recovery: output <plan><intent>your original intent</intent></plan> "
-    "then re-emit your tool call. Do NOT apologize or repeat previous text."
-)
+# PLAN_MISSING signal lives in core/plan_guard.py with the guard's contracts.
+_PLAN_MISSING_SIGNAL = _plan_guard.PLAN_MISSING_SIGNAL
 
 _is_plan_exempt = _plan_guard.is_plan_exempt
 _tool_call_missing_plan = _plan_guard.tool_call_missing_plan
@@ -1810,10 +1803,11 @@ class AgentSession:
         plan_rejected: int,
         iteration: int,
     ) -> tuple[str, int, bool]:
+        guard_mode = str(runtime_config().get("plan_guard_mode", "advisory"))
         plan_decision = TurnToolLoop.plan_guard(
             missing_required_plan=_tool_call_missing_plan(text_buf, tc_buf),
-            plan_rejected=plan_rejected,
-            max_soft=_MAX_SOFT_CORRECTIONS,
+            plan_rejected=plan_rejected, max_soft=_MAX_SOFT_CORRECTIONS,
+            mode=guard_mode,
         )
         plan_rejected = plan_decision.plan_rejected
 
@@ -1833,15 +1827,18 @@ class AgentSession:
             return "hard", plan_rejected, False
 
         if plan_decision.action == "soft":
-            if _debug_mode():
-                print(c(YELLOW,
-                    f"  💭 [CoT Soft #{plan_rejected}/{_MAX_SOFT_CORRECTIONS}] "
-                    "Missing <plan> detected; tools will run and the correction signal will be injected after results..."
-                ))
             logger.debug(
-                "CoT Guard: soft intercept #{} | model={} session={} iteration={}",
-                plan_rejected, self.model_alias, self.session_id[:8], iteration,
+                "CoT Guard: soft intercept | mode={} model={} session={} iteration={} rejected={}",
+                guard_mode, self.model_alias, self.session_id[:8], iteration, plan_rejected,
             )
+            if _debug_mode():
+                if guard_mode == "advisory" and plan_rejected > _MAX_SOFT_CORRECTIONS:
+                    print(c(YELLOW, f"  💭 [CoT Nudge #{plan_rejected}] Plan missing; continuing (advisory tier)."))
+                else:
+                    print(c(YELLOW,
+                        f"  💭 [CoT Soft #{plan_rejected}/{_MAX_SOFT_CORRECTIONS}] Missing <plan>; "
+                        "tools will run and the correction signal will be injected after results..."
+                    ))
             return "soft", plan_rejected, True
 
         return "ok", plan_rejected, False
@@ -1873,6 +1870,7 @@ class AgentSession:
         tool_executor: ToolExecutor,
         result_processor: ToolResultProcessor,
         current_tools: list | None,
+        plan_notice: bool = False,
     ) -> tuple[list | None, ToolExecutionOutcome]:
         name = tc["name"]
         self._event_emitter().tool_started(tc, iteration)
@@ -2019,9 +2017,8 @@ class AgentSession:
                     pass  # Audit logging must not block the main flow.
 
             self._record_tool_metrics(elapsed_ms=_elapsed_ms)
-            self.messages.append({
-                "role": "tool", "tool_call_id": tc["id"], "content": processed.content,
-            })
+            notice_content = _plan_guard.with_plan_notice(processed.content, flagged=plan_notice)
+            self.messages.append({"role": "tool", "tool_call_id": tc["id"], "content": notice_content})
             for _injection in processed.injections:
                 self.messages.append({"role": "user", "content": _injection})
 
@@ -2071,6 +2068,7 @@ class AgentSession:
                 tool_executor=tool_executor,
                 result_processor=result_processor,
                 current_tools=tools,
+                plan_notice=plan_signal_injected,
             ),
             plan_signal_injected=plan_signal_injected,
             inject_plan_signal=self._inject_plan_missing_signal,

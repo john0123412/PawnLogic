@@ -374,6 +374,25 @@ async def cmd_toolsize(ctx: CommandContext) -> None:
         _print(c(RED, "  ✗ Invalid number"))
 
 
+@register("/planguard")
+async def cmd_planguard(ctx: CommandContext) -> None:
+    """Show or switch CoT plan-guard enforcement; no argument means advisory."""
+    current = str(runtime_config().get("plan_guard_mode", "advisory"))
+    arg = (ctx.arg or "").strip().lower()
+    if not arg:
+        set_dynamic_config_value("plan_guard_mode", "advisory")
+        _print(c(GREEN, f"  ✓ plan_guard_mode=advisory (was {current})  [/planguard strict|status]"))
+        return
+    if arg == "status":
+        _print(c(GRAY, f"  Current: plan_guard_mode={current}"))
+        return
+    if arg not in ("strict", "advisory"):
+        _print(c(RED, "  ✗ Usage: /planguard [strict|advisory|status]"))
+        return
+    set_dynamic_config_value("plan_guard_mode", arg)
+    _print(c(GREEN, f"  ✓ plan_guard_mode={arg} (was {current})"))
+
+
 @register("/fetchsize")
 async def cmd_fetchsize(ctx: CommandContext) -> None:
     arg = ctx.arg
