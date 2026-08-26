@@ -74,7 +74,7 @@ EXPECTED_VERBS_BY_MODULE: dict[str, set[str]] = {
         "/clear", "/context", "/ctx", "/history",
         "/ping", "/state", "/stats", "/time", "/failures",
         "/low", "/mid", "/deep", "/max", "/normal", "/limits",
-        "/tokens", "/iter", "/toolsize", "/fetchsize",
+        "/tokens", "/iter", "/toolsize", "/fetchsize", "/planguard",
     },
     "session": {
         "/chat", "/save", "/load", "/resume", "/sessions", "/rename", "/del",
@@ -100,9 +100,9 @@ EXPECTED_ALL: set[str] = {v for verbs in EXPECTED_VERBS_BY_MODULE.values() for v
 
 
 def test_registry_has_expected_verb_count(cmd_pkg):
-    assert len(EXPECTED_ALL) == 56, "Test harness expects 56 distinct verbs"
-    assert len(cmd_pkg.COMMANDS) >= 56, (
-        f"Expected at least 56 registered commands, got {len(cmd_pkg.COMMANDS)}"
+    assert len(EXPECTED_ALL) == 57, "Test harness expects 57 distinct verbs"
+    assert len(cmd_pkg.COMMANDS) >= 57, (
+        f"Expected at least 57 registered commands, got {len(cmd_pkg.COMMANDS)}"
     )
 
 
@@ -311,3 +311,43 @@ def test_keys_command_emits_json_with_jsonsink(cmd_pkg, fake_session, capsys):
     for env, status in payload["data"].items():
         assert env.endswith("_API_KEY") or env.endswith("_KEY"), env
         assert isinstance(status, bool)
+
+
+def test_planguard_without_arg_defaults_to_advisory(monkeypatch, capsys):
+    import asyncio
+
+    from config import DYNAMIC_CONFIG
+    from core.commands import CommandContext, system as system_cmds
+
+    monkeypatch.setitem(DYNAMIC_CONFIG, "plan_guard_mode", "strict")
+    asyncio.run(
+        system_cmds.cmd_planguard(
+            CommandContext(verb="/planguard", arg="", arg2="", session=None)
+        )
+    )
+
+    assert DYNAMIC_CONFIG["plan_guard_mode"] == "advisory"
+    assert "advisory" in capsys.readouterr().out
+
+
+def test_planguard_switches_modes_explicitly(monkeypatch, capsys):
+    import asyncio
+
+    from config import DYNAMIC_CONFIG
+    from core.commands import CommandContext, system as system_cmds
+
+    monkeypatch.setitem(DYNAMIC_CONFIG, "plan_guard_mode", "advisory")
+    asyncio.run(
+        system_cmds.cmd_planguard(
+            CommandContext(verb="/planguard", arg="strict", arg2="", session=None)
+        )
+    )
+    assert DYNAMIC_CONFIG["plan_guard_mode"] == "strict"
+
+    asyncio.run(
+        system_cmds.cmd_planguard(
+            CommandContext(verb="/planguard", arg="status", arg2="", session=None)
+        )
+    )
+    out = capsys.readouterr().out
+    assert "strict" in out

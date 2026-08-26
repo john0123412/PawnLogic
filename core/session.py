@@ -1803,7 +1803,7 @@ class AgentSession:
         plan_rejected: int,
         iteration: int,
     ) -> tuple[str, int, bool]:
-        guard_mode = str(runtime_config().get("plan_guard_mode", "strict"))
+        guard_mode = str(runtime_config().get("plan_guard_mode", "advisory"))
         plan_decision = TurnToolLoop.plan_guard(
             missing_required_plan=_tool_call_missing_plan(text_buf, tc_buf),
             plan_rejected=plan_rejected, max_soft=_MAX_SOFT_CORRECTIONS,

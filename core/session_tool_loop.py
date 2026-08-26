@@ -37,7 +37,7 @@ class TurnToolLoop:
         missing_required_plan: bool,
         plan_rejected: int,
         max_soft: int,
-        mode: str = "strict",
+        mode: str = "advisory",
     ) -> PlanGuardDecision:
         return decide_plan_guard(
             missing_required_plan=missing_required_plan,

@@ -143,7 +143,7 @@ def test_plan_guard_stays_soft_up_to_threshold():
 
 def test_plan_guard_hard_kills_past_threshold():
     decision = decide_plan_guard(
-        missing_required_plan=True, plan_rejected=2, max_soft=2
+        missing_required_plan=True, plan_rejected=2, max_soft=2, mode="strict"
     )
     assert decision.plan_rejected == 3
     assert decision.action == "hard"
@@ -193,8 +193,8 @@ def test_plan_guard_strict_mode_still_hard_kills():
     assert decision.action == "hard"
 
 
-def test_plan_guard_default_mode_is_strict():
+def test_plan_guard_default_mode_is_advisory():
     decision = decide_plan_guard(
         missing_required_plan=True, plan_rejected=5, max_soft=2
     )
-    assert decision.action == "hard"
+    assert decision.action == "soft"
