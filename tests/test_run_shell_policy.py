@@ -1,6 +1,12 @@
+import signal
+import subprocess
 import sys
+import threading
+import time
 
 import pytest
+
+from tools import file_shell
 
 from core.operation_policy import OperationAction, RiskLevel
 from tools import file_ops
@@ -357,3 +363,81 @@ def test_run_interactive_policy_audit_uses_redacted_command(
     assert secret not in redacted
     assert "hunter2" not in redacted
     assert "<redacted>" in redacted
+
+
+class _UnkillableProc:
+    """Fake child stuck in an uninterruptible (D state) kernel wait.
+
+    communicate() always raises TimeoutExpired while the pipes are open;
+    a no-timeout communicate() blocks forever, exactly like a real
+    uninterruptible process holding the pipe write ends.
+    """
+
+    returncode = None
+    pid = 999_999
+
+    def __init__(self):
+        self.signals: list[str] = []
+        self._never = threading.Event()
+
+    def communicate(self, timeout=None):
+        if timeout is None:
+            # The historical deadlock: unbounded reaping waits on pipe EOF
+            # that never arrives from an uninterruptible child.
+            self._never.wait()
+        raise subprocess.TimeoutExpired(cmd="hang", timeout=timeout)
+
+    def terminate(self):
+        self.signals.append("terminate")
+
+    def kill(self):
+        self.signals.append("kill")
+
+
+def test_run_shell_timeout_path_returns_even_when_child_is_unkillable(
+    shell_workspace,
+    monkeypatch,
+):
+    """Regression: a D-state `hostname -I` froze run_shell for 40+ minutes.
+
+    The timeout path must escalate SIGTERM -> SIGKILL with bounded waits and
+    return instead of blocking forever on unreapable pipes.
+    """
+    _set_tty(monkeypatch, False)
+    monkeypatch.setattr(sys, "argv", ["pawn"])
+    proc = _UnkillableProc()
+    monkeypatch.setattr(file_ops.subprocess, "Popen", lambda *a, **k: proc)
+    # getpgid is unavailable for the fake; exercise the terminate/kill fallback.
+    monkeypatch.setattr(file_shell, "_process_group_id", lambda _p: None)
+
+    started = time.monotonic()
+    output = file_ops._run("hostname -I", cwd=str(shell_workspace), env={})
+    elapsed = time.monotonic() - started
+
+    assert "timed out" in output
+    assert proc.signals == ["terminate", "kill"]
+    assert elapsed < 15.0, f"run_shell blocked {elapsed:.1f}s on unkillable child"
+
+
+def test_run_shell_timeout_path_signals_whole_process_group(
+    shell_workspace,
+    monkeypatch,
+):
+    """With a live group id, cleanup must signal the group, not just the child."""
+    _set_tty(monkeypatch, False)
+    monkeypatch.setattr(sys, "argv", ["pawn"])
+    proc = _UnkillableProc()
+    monkeypatch.setattr(file_ops.subprocess, "Popen", lambda *a, **k: proc)
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr(file_shell, "_process_group_id", lambda _p: 4242)
+    monkeypatch.setattr(
+        file_shell,
+        "_signal_group",
+        lambda pgid, sig: sent.append((pgid, int(sig))),
+    )
+
+    output = file_ops._run("nmap -sV 10.0.0.1", cwd=str(shell_workspace), env={})
+
+    assert "timed out" in output
+    assert sent[0] == (4242, int(signal.SIGTERM))
+    assert sent[-1] == (4242, int(signal.SIGKILL))

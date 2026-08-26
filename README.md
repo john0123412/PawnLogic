@@ -265,6 +265,14 @@ critical operations are denied by default. Non-interactive execution, including
 confirmation. `DANGEROUS_PATTERNS` remains only one misuse/risk classifier; it
 is not a sandbox boundary and cannot stop a malicious local user.
 
+Host shell execution is hard-bounded: on timeout the whole process group
+receives SIGTERM and then SIGKILL, and cleanup never waits forever even if a
+child becomes uninterruptible (for example a WSL2 kernel stall). Registered
+tools additionally run under a watchdog (`tool_watchdog_sec`, default 600
+seconds): a tool call that exceeds the limit is abandoned with an ERROR result
+so the session continues instead of freezing. An abandoned background thread
+may keep running until the process exits.
+
 ## Optional Extensions
 
 Python distributions may advertise Extension metadata through the

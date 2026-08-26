@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,6 +11,7 @@ from core.host_process import (
     HostProcessRequest,
     HostProcessRunner,
     classify_host_process,
+    run_bounded_argv,
     run_with_policy,
     scrub_environment,
 )
@@ -250,3 +253,47 @@ class TestHostProcessRunner:
             outcome = runner.run(request)
             assert outcome.returncode == -1
             assert "Denied" in outcome.output
+
+
+class TestRunBoundedArgv:
+    """run_bounded_argv must never block indefinitely on a stuck child."""
+
+    def test_captures_stdout_of_fast_command(self) -> None:
+        rc, out = run_bounded_argv([sys.executable, "-c", "print('bounded-ok')"], 15.0)
+
+        assert rc == 0
+        assert "bounded-ok" in out
+
+    def test_escalates_to_sigkill_when_child_ignores_sigterm(self) -> None:
+        code = (
+            "import signal, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "print('ready', flush=True)\n"
+            "time.sleep(30)\n"
+        )
+        started = time.monotonic()
+
+        rc, out = run_bounded_argv([sys.executable, "-c", code], 0.5)
+        elapsed = time.monotonic() - started
+
+        assert "ready" in out
+        assert rc != 0
+        # SIGTERM grace (5s) + SIGKILL reaping grace must stay bounded.
+        assert elapsed < 20.0, f"run_bounded_argv blocked for {elapsed:.1f}s"
+
+    def test_survives_pipe_flood_from_stubborn_child(self) -> None:
+        code = (
+            "import signal, sys, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "sys.stdout.write('x' * 200000)\n"
+            "sys.stdout.flush()\n"
+            "time.sleep(30)\n"
+        )
+        started = time.monotonic()
+
+        rc, out = run_bounded_argv([sys.executable, "-c", code], 0.5)
+        elapsed = time.monotonic() - started
+
+        assert len(out) >= 100_000
+        assert rc != 0
+        assert elapsed < 20.0, f"run_bounded_argv blocked for {elapsed:.1f}s"

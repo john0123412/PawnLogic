@@ -31,6 +31,7 @@ from tools.shell_ops import authorize_shell_operation
 from tools.file_shell import run_interactive as _run_interactive_process
 from tools.file_shell import run_shell as _run_shell_process
 from tools.text_patch import apply_patch_blocks as _text_apply_patch_blocks
+from core.host_process import run_bounded_argv
 
 # Current session cwd/workspace references.
 _session_cwd = [os.getcwd()]
@@ -155,15 +156,17 @@ def _init_env_cache():
     _env_cache = scrub_sensitive_env(os.environ)
 
     # Detect HOST_IP for container and security-lab workflows.
+    # run_bounded_argv instead of subprocess.run: on WSL2, `hostname -I`
+    # can wedge in an uninterruptible kernel netlink dump, and
+    # subprocess.run's post-timeout reaping blocks forever on such a child.
     try:
-        _ip_res = subprocess.run(
-            ["hostname", "-I"], capture_output=True, text=True,
-            timeout=3, errors="ignore",
-        )
-        _ip = _ip_res.stdout.strip().split()[0] if _ip_res.stdout.strip() else ""
-        if _ip:
+        _rc, _ip_out = run_bounded_argv(["hostname", "-I"], timeout_seconds=3.0)
+        _ip = _ip_out.strip().split()[0] if _ip_out.strip() else ""
+        if _rc == 0 and _ip:
             _env_cache["HOST_IP"] = _ip
             logger.debug(f"[env_cache] HOST_IP detected: {_ip}")
+        elif not _ip:
+            logger.debug(f"[env_cache] HOST_IP detection empty (rc={_rc})")
     except Exception:
         pass
 

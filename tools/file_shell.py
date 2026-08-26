@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from contextlib import suppress
+import os
 import queue
 import re
+import signal
 import subprocess
 import threading
 import time
@@ -196,24 +198,71 @@ def _add_missing_path_hint(output: str, command: str) -> str:
     )
 
 
+def _process_group_id(process: Any) -> int | None:
+    """Return the child's process group id, or None when unavailable."""
+    try:
+        return os.getpgid(process.pid)
+    except Exception:
+        return None
+
+
+def _signal_group(pgid: int, sig: int) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except Exception:
+        return
+
+
+def _communicate_bounded(
+    process: Any,
+    *,
+    timeout_error: type[BaseException],
+) -> str | None:
+    """Collect output with a hard bound.
+
+    Returns the decoded output, ``""`` when the pipes closed without data,
+    or ``None`` when the attempt timed out again (pipes still open).
+    """
+    try:
+        stdout, stderr = process.communicate(timeout=3)
+    except timeout_error:
+        return None
+    except Exception:
+        return ""
+    output = stdout.decode("utf-8", errors="ignore")
+    return output + (stderr.decode("utf-8", errors="ignore") if stderr else "")
+
+
 def _timeout_output(
     process: Any,
     *,
     timeout_error: type[BaseException],
 ) -> str:
+    """Collect output from a timed-out child without ever blocking forever.
+
+    The whole process group gets SIGTERM then SIGKILL, and every communicate()
+    attempt is bounded. A child stuck in an uninterruptible kernel wait keeps
+    the pipe ends open forever even after SIGKILL; in that case the pipes are
+    abandoned and whatever was captured so far is returned.
+    """
     if process is None:
         return ""
-    try:
-        process.terminate()
-        try:
-            stdout, stderr = process.communicate(timeout=3)
-        except timeout_error:
+    pgid = _process_group_id(process)
+    if pgid is not None:
+        _signal_group(pgid, signal.SIGTERM)
+    else:
+        with suppress(Exception):
+            process.terminate()
+    partial = _communicate_bounded(process, timeout_error=timeout_error)
+    if partial is not None:
+        return partial
+    if pgid is not None:
+        _signal_group(pgid, signal.SIGKILL)
+    else:
+        with suppress(Exception):
             process.kill()
-            stdout, stderr = process.communicate()
-        output = stdout.decode("utf-8", errors="ignore")
-        return output + (stderr.decode("utf-8", errors="ignore") if stderr else "")
-    except Exception:
-        return ""
+    partial = _communicate_bounded(process, timeout_error=timeout_error)
+    return partial if partial is not None else ""
 
 
 def _start_reader(process: Any, output_queue: queue.Queue[str]) -> None:

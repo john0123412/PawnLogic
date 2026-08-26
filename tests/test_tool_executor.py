@@ -652,3 +652,108 @@ def test_execute_phase_switch_reports_unknown_phase_without_active_tools():
     assert result.reason == "(no reason provided)"
     assert result.active_tools == []
     assert result.content == "ERROR: Unknown phase 'MISSING'. Available: RECON"
+
+
+def test_execute_tool_handler_watchdog_abandons_hung_handler():
+    """A handler stuck past the hard deadline must not block the agent loop."""
+    import time
+
+    context = ToolExecutionContext(
+        session_id="1234567890abcdef",
+        model_alias="test-model",
+        iteration=0,
+        current_phase="GENERAL",
+    )
+    started = time.monotonic()
+
+    result = execute_tool_handler(
+        tool_call_id="call_hang",
+        tool_name="run_shell",
+        fn_args={},
+        handler=lambda _args: time.sleep(5),
+        context=context,
+        hard_timeout_seconds=0.2,
+    )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 4, f"watchdog did not return promptly ({elapsed:.1f}s)"
+    assert result.audit_ok is False
+    assert "watchdog" in result.content.lower()
+    assert "run_shell" in result.content
+    # classify_tool_failure must label the abandoned call as a timeout.
+    assert classify_tool_failure(result.content) == "Timeout"
+
+
+def test_execute_tool_handler_watchdog_returns_fast_result_unchanged():
+    context = ToolExecutionContext(
+        session_id="1234567890abcdef",
+        model_alias="test-model",
+        iteration=0,
+        current_phase="GENERAL",
+    )
+
+    result = execute_tool_handler(
+        tool_call_id="call_fast",
+        tool_name="read_file",
+        fn_args={},
+        handler=lambda _args: "file body",
+        context=context,
+        hard_timeout_seconds=5.0,
+    )
+
+    assert result.audit_ok is True
+    assert result.content == "file body"
+
+
+def test_execute_tool_handler_watchdog_relays_handler_exception():
+    def _boom(_args):
+        raise ValueError("handler exploded")
+
+    context = ToolExecutionContext(
+        session_id="1234567890abcdef",
+        model_alias="test-model",
+        iteration=0,
+        current_phase="GENERAL",
+    )
+
+    result = execute_tool_handler(
+        tool_call_id="call_err",
+        tool_name="run_shell",
+        fn_args={},
+        handler=_boom,
+        context=context,
+        hard_timeout_seconds=5.0,
+    )
+
+    assert result.audit_ok is False
+    assert "ValueError" in result.content
+
+
+def test_tool_executor_passes_hard_timeout_to_handler_execution():
+    def _hang(_args):
+        import time
+
+        time.sleep(30)
+
+    spec = ToolSpec(
+        name="run_shell",
+        handler=_hang,
+        schema=_schema("run_shell"),
+        trust=TrustBoundaryKind.HOST_SHELL,
+    )
+
+    executor = _make_tool_executor(
+        resolve_tool=lambda name: (spec, "core") if name == "run_shell" else None,
+        hard_timeout_seconds=0.2,
+    )
+    context = ToolExecutionContext("session123", "model", 0, "RECON")
+
+    result = executor.execute_handler(
+        tool_call_id="call_x",
+        tool_name="run_shell",
+        fn_args={},
+        context=context,
+    )
+
+    assert result.audit_ok is False
+    assert "watchdog" in result.content.lower()

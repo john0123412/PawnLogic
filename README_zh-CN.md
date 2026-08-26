@@ -206,6 +206,8 @@ Docker `bridge`/`host` 网络和 legacy `uvx mcp-server-fetch` 启动在授权 g
 
 Host shell 执行现在会在启动子进程前经过 operation policy。低风险命令正常执行，中等风险命令会被分类并写入审计，高风险命令需要明确的交互确认，critical 操作默认拒绝。非交互执行，包括 `pawn --eval`，在高风险命令需要确认时会 fail closed。`DANGEROUS_PATTERNS` 只是误操作/风险分类的一部分，不是 sandbox 边界，也不能阻止恶意本地用户。
 
+Host shell 执行是硬性限时的：超时后会先向整个进程组发送 SIGTERM，再发送 SIGKILL；即使子进程进入不可中断状态（例如 WSL2 内核卡死），清理流程也永远不会无限等待。注册工具还受看门狗约束（`tool_watchdog_sec`，默认 600 秒）：超过上限的工具调用会被放弃并返回 ERROR 结果，会话将继续运行而不是永久卡住。被放弃的后台线程可能持续运行到进程退出为止。
+
 ## 可选 Extension
 
 Python distribution 可以通过 `pawnlogic.extensions` entry-point group 声明
