@@ -4,10 +4,12 @@ import json
 
 
 PLAN_EXEMPT_TOOLS = {
-    "pwn_env",        # Environment probing; no side effects.
-    "list_dir",       # Directory listing; no side effects.
-    "search_skills",  # P6 skill-pack retrieval; read-only.
-    "check_service",  # P6 environment sniffing; read-only.
+    "pwn_env",         # Environment probing; no side effects.
+    "list_dir",        # Directory listing; no side effects.
+    "read_file",       # File reading; no side effects.
+    "read_file_lines", # Chunked file reading; no side effects.
+    "search_skills",   # P6 skill-pack retrieval; read-only.
+    "check_service",   # P6 environment sniffing; read-only.
     # git_op is exempt only for read-only actions; see is_plan_exempt.
 }
 
