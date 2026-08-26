@@ -165,6 +165,9 @@ def test_ctx_chars_empty():
 
 def test_run_turn_hard_stops_after_soft_plan_corrections(monkeypatch, capsys):
     s, session_mod = _prepare_run_turn_session(monkeypatch)
+    from config import DYNAMIC_CONFIG
+
+    monkeypatch.setitem(DYNAMIC_CONFIG, "plan_guard_mode", "strict")
     tool_runs = []
 
     def fake_write(_args):

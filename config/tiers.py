@@ -11,6 +11,7 @@ TIER_LOW = {
     "time_budget_sec":  300,
     "ctx_sliding_turns": 4,
     "ctx_summary_threshold": 6,
+    "plan_guard_mode":  "advisory",
 }
 TIER_MID = {
     "max_tokens":      8_192,
@@ -23,6 +24,7 @@ TIER_MID = {
     "time_budget_sec":  600,
     "ctx_sliding_turns": 5,
     "ctx_summary_threshold": 8,
+    "plan_guard_mode":  "advisory",
 }
 TIER_DEEP = {
     "max_tokens":      32_768,
@@ -35,6 +37,7 @@ TIER_DEEP = {
     "time_budget_sec":  1800,
     "ctx_sliding_turns": 8,
     "ctx_summary_threshold": 12,
+    "plan_guard_mode":  "strict",
 }
 TIER_MAX = {
     "max_tokens":      32_768,
@@ -47,4 +50,5 @@ TIER_MAX = {
     "time_budget_sec":  3600,
     "ctx_sliding_turns": 10,
     "ctx_summary_threshold": 15,
+    "plan_guard_mode":  "strict",
 }

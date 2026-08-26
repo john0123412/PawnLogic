@@ -175,3 +175,26 @@ def test_concurrency_handles_unsorted_keys():
 def test_decision_dataclass_shapes():
     assert UrgentModeDecision(activate=False).target_model is None
     assert EmptyResponseDecision(action="retry").wait_seconds == 0
+
+
+def test_plan_guard_advisory_mode_never_escalates_to_hard():
+    """Advisory tiers keep nudging instead of killing the task."""
+    decision = decide_plan_guard(
+        missing_required_plan=True, plan_rejected=50, max_soft=2, mode="advisory"
+    )
+    assert decision.plan_rejected == 51
+    assert decision.action == "soft"
+
+
+def test_plan_guard_strict_mode_still_hard_kills():
+    decision = decide_plan_guard(
+        missing_required_plan=True, plan_rejected=2, max_soft=2, mode="strict"
+    )
+    assert decision.action == "hard"
+
+
+def test_plan_guard_default_mode_is_strict():
+    decision = decide_plan_guard(
+        missing_required_plan=True, plan_rejected=5, max_soft=2
+    )
+    assert decision.action == "hard"
