@@ -1664,6 +1664,45 @@ class AgentSession:
             if trim and extracted:
                 text_buf = text_buf[:trim.start()]
 
+        # P2: ToolCallValidator - Additional recovery for malformed tool calls
+        # If we still have no tool calls but see evidence of tool call attempts,
+        # try to validate and repair the text
+        if not tc_buf and (
+            '<call name="' in text_buf or "<tool_call>" in text_buf
+        ):
+            from core.tool_calls import ToolCallValidator
+            is_valid, repaired_text = ToolCallValidator.validate_and_repair(text_buf)
+            if is_valid and repaired_text != text_buf:
+                # Validator found a repair that yields valid tool calls
+                text_buf = repaired_text
+                # Re-extract with the repaired text
+                extracted = self._extract_calls(text_buf)
+                for i, call in enumerate(extracted):
+                    source = call["_source"]
+                    call_id = (
+                        f"call_xml_{iteration}_{i}"
+                        if source == "xml"
+                        else f"call_fallback_{iteration}_{i}"
+                    )
+                    tc_buf[i] = {
+                        "id":           call_id,
+                        "name":         call["name"],
+                        "args":         json.dumps(call["args"], ensure_ascii=False),
+                        "_args_parsed": call["args"],
+                    }
+                    label = "XML" if source == "xml" else "JSON"
+                    if _debug_mode():
+                        print(c(GRAY,
+                            f"  🔧 [Hybrid Parser/{label}] Recovered tool call: {call['name']} "
+                            f"(params: {list(call['args'].keys())}) [VALIDATOR]"
+                        ))
+                    logger.info(
+                        "Hybrid Parser/{} intercepted via validator | "
+                        "model={} session={} iteration={} tool={}",
+                        label, self.model_alias, self.session_id[:8],
+                        iteration, call["name"],
+                    )
+
         return text_buf, tc_buf, reasoning_buf
 
     def _prepare_turn(self, user_input: str) -> dict | None:
