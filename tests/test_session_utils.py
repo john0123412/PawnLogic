@@ -361,6 +361,12 @@ def _make_session():
         s._naming_attempted_at = 0.0
         s._urgent_mode = False
         s._loaded_skill_packs = []
+        # Initialize new fields for breakpoint resume
+        s._session_status = "idle"
+        s._interrupted_at = None
+        s._executing = False
+        from core.message_queue import MessageQueue
+        s._message_queue = MessageQueue()
         return s
 
 

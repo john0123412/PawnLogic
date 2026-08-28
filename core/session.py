@@ -28,6 +28,7 @@ auto-intuition features are preserved.
 
 import itertools
 import os, json, sys, threading, time
+from datetime import datetime
 from pathlib import Path
 from config import (
     DYNAMIC_CONFIG, MODELS, DEFAULT_MODEL,
@@ -951,6 +952,12 @@ class AgentSession:
         # Sliding window + history summary state.
         self._history_summary: str = ""          # current effective history summary
         self._summary_turn_count: int = 0        # turn count when summary was last generated
+        # ── Breakpoint resume: message queue and session status ──
+        from core.message_queue import MessageQueue
+        self._message_queue = MessageQueue()
+        self._session_status = "idle"
+        self._interrupted_at: float | None = None
+        self._executing = False
         self.runtime_context.context_provider = self._select_delegation_context
         # Call last because it depends on all attributes above.
         self._reset_system_prompt()
@@ -2223,9 +2230,50 @@ class AgentSession:
 
     # Main turn loop.
     def run_turn(self, user_input: str):
+        """Queue a user input and process all queued messages.
+
+        Supports breakpoint resume: while one turn runs, the caller can queue
+        additional user inputs. Each queued input is processed in FIFO order
+        after the current turn finishes. Ctrl+C pauses execution and saves
+        the queue state, allowing the caller to resume later.
+        """
+        if not user_input.strip():
+            return
+        # Enqueue the new input.
+        self._message_queue.enqueue(user_input)
+        if self._executing:
+            # Another turn is already running; it will pick up our message.
+            return
         self._sync_runtime_context()
         with self.runtime_context.activate():
-            return self._run_turn_active(user_input)
+            self._executing = True
+            try:
+                while not self._message_queue.is_empty:
+                    msg = self._message_queue.dequeue()
+                    if msg is None:
+                        break
+                    self._session_status = "running"
+                    try:
+                        self._run_turn_active(msg.content)
+                    except TurnInterrupted:
+                        # Requeue the pending message so resume can pick it up.
+                        self._message_queue.requeue_pending()
+                        self._session_status = "interrupted"
+                        self._interrupted_at = time.time()
+                        self._autosave(turn_status="interrupted")
+                        raise
+                    except Exception:
+                        # Drop the failed message; do not block the rest of the queue.
+                        self._message_queue.complete_pending()
+                        self._session_status = "failed"
+                        self._autosave(turn_status="failed")
+                        raise
+                    self._message_queue.complete_pending()
+                self._session_status = "completed" if self._message_queue.is_empty else "idle"
+                if not self._interrupted_at:
+                    self._session_status = "completed"
+            finally:
+                self._executing = False
 
     def _run_turn_active(self, user_input: str):
         dynamic_cfg = self._prepare_turn(user_input)
@@ -2335,6 +2383,8 @@ class AgentSession:
                 turn_state.update_tools(current_tools)
 
             except KeyboardInterrupt:
+                self._session_status = "interrupted"
+                self._interrupted_at = time.time()
                 self._autosave(turn_status="interrupted")
                 raise TurnInterrupted()
 
@@ -2345,6 +2395,39 @@ class AgentSession:
         )
         self._print_turn_summary()
         self._autosave(turn_status="failed")
+
+    def abort(self) -> int:
+        """Abort the current execution and clear the queue.
+
+        Returns the number of queued messages that were cleared.
+        """
+        count = self._message_queue.clear()
+        self._session_status = "aborted"
+        return count
+
+    def queue_status(self) -> dict:
+        """Return a snapshot of the queue and session state.
+
+        Returns:
+            A dict with keys: status, queue_depth, pending_count, interrupted_at.
+        """
+        return {
+            "status": self._session_status,
+            "queue_depth": self._message_queue.size(),
+            "pending_count": self._message_queue.pending_count,
+            "interrupted_at": self._interrupted_at,
+        }
+
+    def peek_queue(self, n: int = 5) -> list[str]:
+        """Return the contents of the next n queued messages.
+
+        Args:
+            n: Maximum number of messages to peek at.
+
+        Returns:
+            A list of message content strings.
+        """
+        return [msg.content for msg in self._message_queue.peek(n)]
 
     # ── Per-turn usage summary ───────────────────────────
     def _print_turn_summary(self):
@@ -2375,6 +2458,13 @@ class AgentSession:
             cwd=self.cwd,
             workspace_dir=self.workspace_dir,
             config=dict(_dynamic_config()),
+            status=self._session_status,
+            interrupted_at=(
+                datetime.fromtimestamp(self._interrupted_at).isoformat()
+                if self._interrupted_at is not None
+                else None
+            ),
+            queue_depth=self._message_queue.size(),
         )
         msgs_snapshot = list(snapshot.messages)
         sid = snapshot.session_id

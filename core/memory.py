@@ -116,7 +116,10 @@ def _create_core_tables():
             workspace_alias TEXT DEFAULT '',
             name_source TEXT DEFAULT 'auto',
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            status     TEXT DEFAULT 'idle',          -- idle/running/completed/interrupted
+            interrupted_at TEXT,                    -- timestamp when interrupted
+            queue_depth INTEGER DEFAULT 0           -- number of messages in queue
         );
 
         CREATE TABLE IF NOT EXISTS messages (
@@ -197,6 +200,9 @@ def _create_core_tables():
             "workspace_dir": "ALTER TABLE sessions ADD COLUMN workspace_dir TEXT DEFAULT ''",
             "workspace_alias": "ALTER TABLE sessions ADD COLUMN workspace_alias TEXT DEFAULT ''",
             "name_source": "ALTER TABLE sessions ADD COLUMN name_source TEXT DEFAULT 'auto'",
+            "status": "ALTER TABLE sessions ADD COLUMN status TEXT DEFAULT 'idle'",
+            "interrupted_at": "ALTER TABLE sessions ADD COLUMN interrupted_at TEXT",
+            "queue_depth": "ALTER TABLE sessions ADD COLUMN queue_depth INTEGER DEFAULT 0",
         }
         for col, ddl in migrations.items():
             if col not in cols:
@@ -267,6 +273,9 @@ def upsert_session(
     workspace_dir: str = "",
     workspace_alias: str = "",
     name_source: str = "",
+    status: str = "idle",
+    interrupted_at: str | None = None,
+    queue_depth: int = 0,
 ):
     now = _now()
     with get_conn() as conn:
@@ -296,29 +305,46 @@ def upsert_session(
             conn.execute("""
                 UPDATE sessions
                 SET name=?, model=?, cwd=?, config=?, tags=?, auto_name=?,
-                    workspace_dir=?, workspace_alias=?, name_source=?, updated_at=?
+                    workspace_dir=?, workspace_alias=?, name_source=?, updated_at=?,
+                    status=?, interrupted_at=?, queue_depth=?
                 WHERE id=?
             """, (
                 final_name, model, cwd, json.dumps(config_dict), final_tags, final_auto,
-                final_workspace, final_alias, final_source, now, session_id,
+                final_workspace, final_alias, final_source, now,
+                status, interrupted_at, queue_depth, session_id,
             ))
         else:
             conn.execute("""
                 INSERT INTO sessions
                     (id, name, model, cwd, config, tags, auto_name, workspace_dir,
-                     workspace_alias, name_source, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     workspace_alias, name_source, created_at, updated_at,
+                     status, interrupted_at, queue_depth)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 session_id, final_name, model, cwd, json.dumps(config_dict), final_tags,
                 final_auto, final_workspace, final_alias, final_source, created, now,
+                status, interrupted_at, queue_depth,
             ))
 
-def list_sessions(limit: int = 20) -> list[sqlite3.Row]:
+def list_sessions(limit: int = 20, status: str | None = None) -> list[sqlite3.Row]:
     with get_conn() as conn:
+        if status:
+            return conn.execute("""
+                SELECT s.id, s.name, s.model, s.cwd, s.tags, s.auto_name,
+                       s.workspace_dir, s.workspace_alias, s.name_source,
+                       s.created_at, s.updated_at, s.status, s.queue_depth,
+                       COUNT(m.id) AS msg_count
+                FROM sessions s
+                LEFT JOIN messages m ON s.id = m.session_id
+                WHERE s.status = ?
+                GROUP BY s.id
+                ORDER BY s.updated_at DESC
+                LIMIT ?
+            """, (status, limit,)).fetchall()
         return conn.execute("""
             SELECT s.id, s.name, s.model, s.cwd, s.tags, s.auto_name,
                    s.workspace_dir, s.workspace_alias, s.name_source,
-                   s.created_at, s.updated_at,
+                   s.created_at, s.updated_at, s.status, s.queue_depth,
                    COUNT(m.id) AS msg_count
             FROM sessions s
             LEFT JOIN messages m ON s.id = m.session_id

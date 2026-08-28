@@ -64,6 +64,9 @@ def save_snapshot(snapshot: SessionSnapshot, *, name: str = "") -> None:
         config_dict = dict(snapshot.runtime.get("config", {})),
         workspace_dir = str(snapshot.runtime.get("workspace_dir", "")),
         name_source = "manual" if manual_name else "",
+        status      = snapshot.status,
+        interrupted_at = snapshot.interrupted_at,
+        queue_depth = snapshot.queue_depth,
     )
     save_messages(snapshot.session_id, list(snapshot.messages))
 
@@ -88,6 +91,9 @@ def load_snapshot(session_id: str) -> SessionSnapshot | None:
         cwd=full["cwd"],
         workspace_dir=full["workspace_dir"] or "",
         config=config_dict,
+        status=full["status"] if full["status"] else "idle",
+        interrupted_at=full["interrupted_at"] if full["interrupted_at"] else None,
+        queue_depth=full["queue_depth"] if full["queue_depth"] is not None else 0,
     )
 
 
@@ -100,6 +106,9 @@ def session_save(session, name: str = "") -> str:
         cwd=session.cwd,
         workspace_dir=getattr(session, "workspace_dir", ""),
         config=dynamic_config_snapshot(),
+        status=getattr(session, "_session_status", "idle"),
+        interrupted_at=getattr(session, "_interrupted_at", None),
+        queue_depth=getattr(session, "_message_queue", None).size() if hasattr(session, "_message_queue") else 0,
     )
     save_snapshot(snapshot, name=name)
     return session.session_id
