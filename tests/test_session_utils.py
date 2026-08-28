@@ -1475,6 +1475,31 @@ def test_finalize_api_stream_recovers_all_wrapped_json_calls(monkeypatch, capsys
     assert "JSON fallback parse failed" not in output
 
 
+def test_finalize_api_stream_preserves_native_tool_calls(monkeypatch):
+    from core.turn_api import TurnApiResult
+    import core.session as session_mod
+
+    s = _make_session()
+    monkeypatch.setattr(session_mod, "_debug_mode", lambda: False)
+    native_calls = {
+        0: {"id": "call_native", "name": "list_dir", "args": '{"path":"."}'},
+    }
+    result = TurnApiResult(text="native tool call", tool_calls=native_calls)
+
+    text_buf, tc_buf, reasoning_buf = s._finalize_api_stream_result(
+        result,
+        _PlanRenderer(),
+        iteration=7,
+    )
+
+    assert text_buf == "native tool call"
+    assert tc_buf is result.tool_calls is native_calls
+    assert result.tool_calls == {
+        0: {"id": "call_native", "name": "list_dir", "args": '{"path":"."}'},
+    }
+    assert reasoning_buf == ""
+
+
 def test_extract_calls_json_fallback():
     s = _make_session()
     import json

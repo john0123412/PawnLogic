@@ -1431,17 +1431,6 @@ class AgentSession:
             if _debug_mode():
                 print(c(GRAY, "  ✂ [Hybrid Parser] Repaired tool-call output before parsing"))
 
-        def on_partial_xml() -> None:
-            """Notification callback when unclosed XML is detected (informational only)."""
-            # The repair has already been done above, this is just a notification
-            import re as _re
-            last_call_match = _re.search(r'<call\s+name="[^"]*"[^>]*>', text_buf)
-            if last_call_match:
-                after_pos = last_call_match.end()
-                after_text = text_buf[after_pos:]
-                if '</call>' not in after_text and _debug_mode():
-                    print(c(GRAY, "    → Already repaired via ToolCallValidator"))
-
         def on_dirty_json_rescued() -> None:
             if _debug_mode():
                 print(c(YELLOW, "  ⚠ [Hybrid Parser] Dirty JSON detected and rescued with regex"))
@@ -1461,13 +1450,11 @@ class AgentSession:
             else:
                 print(c(RED, f"  ✗ [Hybrid Parser] JSON fallback parse failed: {exc}"))
 
-        extracted = extract_tool_calls(
+        return extract_tool_calls(
             text_buf,
-            on_partial_xml=on_partial_xml,
             on_dirty_json_rescued=on_dirty_json_rescued,
             on_json_error=on_json_error,
         )
-        return extracted
 
     def _make_tool_executor(self) -> ToolExecutor:
         return ToolExecutor(
@@ -1640,10 +1627,10 @@ class AgentSession:
         ):
             extracted = self._extract_calls(text_buf)
             for i, call in enumerate(extracted):
-                source = call["_source"]
+                label = "XML" if call["_source"] == "xml" else "JSON"
                 call_id = (
                     f"call_xml_{iteration}_{i}"
-                    if source == "xml"
+                    if label == "XML"
                     else f"call_fallback_{iteration}_{i}"
                 )
                 tc_buf[i] = {
@@ -1652,7 +1639,6 @@ class AgentSession:
                     "args":         json.dumps(call["args"], ensure_ascii=False),
                     "_args_parsed": call["args"],
                 }
-                label = "XML" if source == "xml" else "JSON"
                 if _debug_mode():
                     print(c(GRAY,
                         f"  ⚙ [Hybrid Parser/{label}] Intercepted tool call: {call['name']} "
@@ -1668,45 +1654,6 @@ class AgentSession:
             trim = _re.search(r'<call\s+name="|<tool_call>', text_buf)
             if trim and extracted:
                 text_buf = text_buf[:trim.start()]
-
-        # P2: ToolCallValidator - Additional recovery for malformed tool calls
-        # If we still have no tool calls but see evidence of tool call attempts,
-        # try to validate and repair the text
-        if not tc_buf and (
-            '<call name="' in text_buf or "<tool_call>" in text_buf
-        ):
-            from core.tool_calls import ToolCallValidator
-            is_valid, repaired_text = ToolCallValidator.validate_and_repair(text_buf)
-            if is_valid and repaired_text != text_buf:
-                # Validator found a repair that yields valid tool calls
-                text_buf = repaired_text
-                # Re-extract with the repaired text
-                extracted = self._extract_calls(text_buf)
-                for i, call in enumerate(extracted):
-                    source = call["_source"]
-                    call_id = (
-                        f"call_xml_{iteration}_{i}"
-                        if source == "xml"
-                        else f"call_fallback_{iteration}_{i}"
-                    )
-                    tc_buf[i] = {
-                        "id":           call_id,
-                        "name":         call["name"],
-                        "args":         json.dumps(call["args"], ensure_ascii=False),
-                        "_args_parsed": call["args"],
-                    }
-                    label = "XML" if source == "xml" else "JSON"
-                    if _debug_mode():
-                        print(c(GRAY,
-                            f"  🔧 [Hybrid Parser/{label}] Recovered tool call: {call['name']} "
-                            f"(params: {list(call['args'].keys())}) [VALIDATOR]"
-                        ))
-                    logger.info(
-                        "Hybrid Parser/{} intercepted via validator | "
-                        "model={} session={} iteration={} tool={}",
-                        label, self.model_alias, self.session_id[:8],
-                        iteration, call["name"],
-                    )
 
         return text_buf, tc_buf, reasoning_buf
 
