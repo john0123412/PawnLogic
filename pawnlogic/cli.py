@@ -449,22 +449,26 @@ def render_agent_output(text: str) -> None:
 # highlighting directly.
 # ════════════════════════════════════════════════════════
 
-def _pawn_fuzzy_match(query: str, candidate: str) -> bool:
+def _pawn_fuzzy_match(query: str, candidate: str) -> tuple[bool, list[int]]:
     """
     Case-insensitive subsequence fuzzy match.
-    Return True if ``query`` is a subsequence of ``candidate`` (case-insensitive).
+    Return ``(True, indices)`` if ``query`` is a subsequence of ``candidate``
+    (case-insensitive), where ``indices`` is the list of matched character
+    positions in ``candidate``.  Return ``(False, [])`` otherwise.
     Used for fuzzy verb matching in command dispatch, allowing partial type-ahead
     such as ``/plang`` → ``/planguard``.
     """
     q, c = query.lower(), candidate.lower()
     ci = 0
+    indices: list[int] = []
     for qc in q:
         while ci < len(c) and c[ci] != qc:
             ci += 1
         if ci >= len(c):
-            return False
+            return False, []
+        indices.append(ci)
         ci += 1
-    return True
+    return True, indices
 
 
 class PawnCompleter(Completer):

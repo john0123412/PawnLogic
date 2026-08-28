@@ -162,6 +162,28 @@ def test_packaged_cli_completer_includes_live_visible_models_without_rebuild():
     assert "/agent policy model deny 1:gpt-5.5" in words
 
 
+def _assert_fuzzy_command_completion(completer_cls):
+    query = "/plg"
+    completer = completer_cls(
+        ["/plan", "/planguard", "/provider"],
+        meta_dict={"/planguard": "Configure plan guard"},
+    )
+
+    completions = list(completer.get_completions(Document(query), None))
+
+    assert [completion.text for completion in completions] == ["/planguard"]
+    assert completions[0].start_position == -len(query)
+    assert completions[0].display_meta_text == "Configure plan guard"
+
+
+def test_main_pawn_completer_supports_fuzzy_command_completion():
+    _assert_fuzzy_command_completion(pawn_main.PawnCompleter)
+
+
+def test_packaged_cli_completer_supports_fuzzy_command_completion():
+    _assert_fuzzy_command_completion(pawn_cli.PawnCompleter)
+
+
 def test_packaged_cli_completer_refreshes_extension_names_and_subcommands_live():
     visible = {"security": "Extension (disabled)"}
     completer = pawn_cli.PawnCompleter(
