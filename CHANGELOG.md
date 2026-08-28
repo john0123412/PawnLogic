@@ -7,6 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-28
+
+### Fixed
+- Standardized model-facing text tool calls on wrapped JSON and repaired
+  malformed plan-following XML or JSON calls before session extraction.
+- Kept parser-recovery diagnostics in debug mode while preserving concise
+  user-facing failures for malformed calls that cannot be recovered.
+- Restored fuzzy completion match metadata and isolated CLI transcripts from
+  provider keys and runtime provider configuration.
+
+### Tests
+- Added regression coverage for multiple wrapped calls, quote-aware JSON
+  repair, plan-following malformed calls, native provider tool calls, fuzzy
+  completion entry points, and deterministic CLI transcripts.
+
 ## [0.3.2] - 2026-08-12
 
 ### Added
