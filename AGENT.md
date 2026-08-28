@@ -565,16 +565,14 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.3.2`. PyPI, GitHub Release, and latest tag
-  are `v0.3.2`.
-- Release finalization: `v0.3.2` was published on 2026-08-12 through Trusted
+- Current published release: `0.3.3`. PyPI, GitHub Release, and latest tag
+  are `v0.3.3`.
+- Release finalization: `v0.3.3` was published on 2026-08-28 through Trusted
   Publishing. The release workflow completed its full test gate, Dynamic E2E,
   distribution build, PyPI fresh-install smoke, and GitHub Release creation;
   the one-time `.release-ready` marker was then removed.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Active plan: the `0.3.3` release-finalization commit is being validated on
-  `test/release-0.3.3-finalize`; the version remains unpublished until the
-  tag-triggered release workflow completes. `docs/plans/0.3.2-bounded-concurrency-two.md`
+- Active plan: the `0.3.3` release is complete. `docs/plans/0.3.2-bounded-concurrency-two.md`
   records the completed 0.3.2 implementation and release evidence. Independent
   `pawnlogic-security` 0.1.0 published from `john0123412/pawnlogic-security`
   on 2026-07-28.
