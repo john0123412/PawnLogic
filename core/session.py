@@ -1408,9 +1408,11 @@ class AgentSession:
         """
         Hybrid v2 dual-protocol parser.
 
-        Priority:
-          1. XML <call name="...">...</call>   — no escaping, works with multiline text
-          2. JSON <tool_call>{...}</tool_call> — compact, for single-line ASCII args
+        Accepted protocols:
+          1. Wrapped JSON <tool_call>{...}</tool_call> — primary protocol;
+             requires the envelope and supports escaped content.
+          2. XML <call name="...">...</call> — legacy compatibility for
+             older model output.
 
         Returns:
           [{"name": str, "args": dict, "_source": "xml"|"json"}, ...]
@@ -1419,28 +1421,30 @@ class AgentSession:
           · If XML misses </call>, parse through the end of the string.
           · JSON uses strict=False to allow real newline characters in arguments.
         """
+        from core.tool_calls import ToolCallValidator
+
+        # Normalize the full response before extraction. A valid first wrapper
+        # must not prevent repair of a later malformed wrapper in the same turn.
+        is_valid, repaired_text = ToolCallValidator.validate_and_repair(text_buf)
+        if is_valid and repaired_text != text_buf:
+            text_buf = repaired_text
+            if _debug_mode():
+                print(c(GRAY, "  ✂ [Hybrid Parser] Repaired tool-call output before parsing"))
+
         def on_partial_xml() -> None:
-            print(
-                c(
-                    GRAY,
-                    "  ⚙ [XML Parser] Unclosed </call> detected; attempting tolerant completion",
-                )
-            )
-            # Attempt to auto-close unclosed </call> tags for better recovery
+            """Notification callback when unclosed XML is detected (informational only)."""
+            # The repair has already been done above, this is just a notification
             import re as _re
-            # Find unclosed <call name= patterns
             last_call_match = _re.search(r'<call\s+name="[^"]*"[^>]*>', text_buf)
             if last_call_match:
                 after_pos = last_call_match.end()
                 after_text = text_buf[after_pos:]
-                if '</call>' not in after_text:
-                    insert_pos = text_buf.rfind('</call>')
-                    if insert_pos == -1 or insert_pos < text_buf.rfind('<call'):
-                        text_buf = text_buf.rstrip() + ' </call>'
-                        print(c(GRAY, "    → Auto-appended </call> for recovery"))
+                if '</call>' not in after_text and _debug_mode():
+                    print(c(GRAY, "    → Already repaired via ToolCallValidator"))
 
         def on_dirty_json_rescued() -> None:
-            print(c(YELLOW, "  ⚠ [Hybrid Parser] Dirty JSON detected and rescued with regex"))
+            if _debug_mode():
+                print(c(YELLOW, "  ⚠ [Hybrid Parser] Dirty JSON detected and rescued with regex"))
 
         def on_json_error(exc: json.JSONDecodeError, json_str: str) -> None:
             logger.error(
@@ -1457,12 +1461,13 @@ class AgentSession:
             else:
                 print(c(RED, f"  ✗ [Hybrid Parser] JSON fallback parse failed: {exc}"))
 
-        return extract_tool_calls(
+        extracted = extract_tool_calls(
             text_buf,
             on_partial_xml=on_partial_xml,
             on_dirty_json_rescued=on_dirty_json_rescued,
             on_json_error=on_json_error,
         )
+        return extracted
 
     def _make_tool_executor(self) -> ToolExecutor:
         return ToolExecutor(
