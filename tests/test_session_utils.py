@@ -1403,6 +1403,103 @@ def test_extract_calls_xml_bool_coercion():
     assert calls[0]["args"]["use_venv"] is True
 
 
+def test_extract_calls_recovers_plan_followed_by_unclosed_xml_call(monkeypatch, capsys):
+    import core.session as session_mod
+
+    s = _make_session()
+    monkeypatch.setattr(session_mod, "_debug_mode", lambda: False)
+    text = (
+        "<plan><intent>Inspect the workspace</intent></plan>"
+        '<call name="run_shell"><command>pwd</command>'
+    )
+
+    calls = s._extract_calls(text)
+
+    assert calls == [
+        {
+            "name": "run_shell",
+            "args": {"command": "pwd"},
+            "_source": "xml",
+        }
+    ]
+    assert capsys.readouterr().out == ""
+
+
+def test_finalize_api_stream_recovers_plan_followed_by_unclosed_xml_call(monkeypatch):
+    from core.turn_api import TurnApiResult
+    import core.session as session_mod
+
+    s = _make_session()
+    monkeypatch.setattr(session_mod, "_debug_mode", lambda: False)
+    plan = "<plan><intent>Inspect the workspace</intent></plan>"
+    result = TurnApiResult(
+        text=plan + '<call name="run_shell"><command>pwd</command>'
+    )
+
+    text_buf, tc_buf, reasoning_buf = s._finalize_api_stream_result(
+        result,
+        _PlanRenderer(),
+        iteration=4,
+    )
+
+    assert text_buf == plan
+    assert reasoning_buf == ""
+    assert tc_buf[0]["id"] == "call_xml_4_0"
+    assert tc_buf[0]["name"] == "run_shell"
+    assert tc_buf[0]["_args_parsed"] == {"command": "pwd"}
+
+
+def test_finalize_api_stream_recovers_all_wrapped_json_calls(monkeypatch, capsys):
+    from core.turn_api import TurnApiResult
+    import core.session as session_mod
+
+    s = _make_session()
+    monkeypatch.setattr(session_mod, "_debug_mode", lambda: False)
+    valid = '<tool_call>{"name":"list_dir","arguments":{"path":"."}}</tool_call>'
+    repairable = (
+        '<tool_call>{"name":"run_shell","arguments":'
+        '{"items":[{"id":"second",}]</tool_call>'
+    )
+
+    _, tc_buf, _ = s._finalize_api_stream_result(
+        TurnApiResult(text=valid + repairable),
+        _PlanRenderer(),
+        iteration=6,
+    )
+
+    assert [call["name"] for call in tc_buf.values()] == ["list_dir", "run_shell"]
+    assert tc_buf[0]["_args_parsed"] == {"path": "."}
+    assert tc_buf[1]["_args_parsed"] == {"items": [{"id": "second"}]}
+    output = capsys.readouterr().out
+    assert "could not be parsed" not in output
+    assert "JSON fallback parse failed" not in output
+
+
+def test_finalize_api_stream_preserves_native_tool_calls(monkeypatch):
+    from core.turn_api import TurnApiResult
+    import core.session as session_mod
+
+    s = _make_session()
+    monkeypatch.setattr(session_mod, "_debug_mode", lambda: False)
+    native_calls = {
+        0: {"id": "call_native", "name": "list_dir", "args": '{"path":"."}'},
+    }
+    result = TurnApiResult(text="native tool call", tool_calls=native_calls)
+
+    text_buf, tc_buf, reasoning_buf = s._finalize_api_stream_result(
+        result,
+        _PlanRenderer(),
+        iteration=7,
+    )
+
+    assert text_buf == "native tool call"
+    assert tc_buf is result.tool_calls is native_calls
+    assert result.tool_calls == {
+        0: {"id": "call_native", "name": "list_dir", "args": '{"path":"."}'},
+    }
+    assert reasoning_buf == ""
+
+
 def test_extract_calls_json_fallback():
     s = _make_session()
     import json
@@ -1422,6 +1519,20 @@ def test_extract_calls_json_error_message_does_not_mask_as_busy(capsys):
     assert "could not be parsed" in out
     assert "debug" in out
     assert "System is busy" not in out
+
+
+def test_extract_calls_hides_dirty_json_repair_diagnostic_in_user_mode(monkeypatch, capsys):
+    import core.session as session_mod
+
+    s = _make_session()
+    monkeypatch.setattr(session_mod, "_debug_mode", lambda: False)
+
+    calls = s._extract_calls(
+        '<tool_call>{"name":"write_file","arguments":{"content":"say "hello""}}</tool_call>'
+    )
+
+    assert calls[0]["args"]["content"] == 'say "hello"'
+    assert capsys.readouterr().out == ""
 
 
 def test_extract_calls_empty():

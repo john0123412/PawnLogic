@@ -20,6 +20,24 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Awaitable, Callable
 
 
+def _pawn_fuzzy_match(query: str, candidate: str) -> bool:
+    """Case-insensitive subsequence fuzzy match.
+
+    Return True if ``query`` is a subsequence of ``candidate`` (case-insensitive).
+    Used for fuzzy verb matching in command dispatch, allowing partial type-ahead
+    such as ``/plang`` → ``/planguard``.
+    """
+    q, c = query.lower(), candidate.lower()
+    ci = 0
+    for qc in q:
+        while ci < len(c) and c[ci] != qc:
+            ci += 1
+        if ci >= len(c):
+            return False
+        ci += 1
+    return True
+
+
 @dataclass
 class CommandContext:
     """Context passed to every slash command handler.
@@ -137,12 +155,12 @@ def register(*verbs: str) -> Callable[[Handler], Handler]:
 async def dispatch(ctx: CommandContext) -> Any:
     """Route a slash command to its handler.
 
-    Looks up `ctx.verb` in COMMANDS (populated by @register decorators).
-    If unknown, prints a friendly error consistent with the legacy
-    behavior and returns None.
+    Looks up ``ctx.verb`` in COMMANDS (populated by @register decorators).
+    If unknown, attempts a fuzzy match against registered verbs before
+    reporting unknown — this allows partial-typeahead such as ``/plang`` → ``/planguard``.
 
     The owning session RuntimeContext is active while the handler runs. If
-    `ctx.sink` is None, its sink is preferred over the process-wide fallback.
+    ``ctx.sink`` is None, its sink is preferred over the process-wide fallback.
     """
     from contextlib import nullcontext
 
@@ -159,6 +177,36 @@ async def dispatch(ctx: CommandContext) -> Any:
             from core.commands._common import set_active_sink, swap_active_sink
             old_sink = swap_active_sink(ctx.sink)
             try:
+                return await handler(ctx)
+            finally:
+                set_active_sink(old_sink)
+
+        # Fuzzy-match unknown verbs against registered commands.
+        best_match: str | None = None
+        best_score: int = 0
+        for verb in COMMANDS:
+            # Score: number of matching subsequence characters (higher is better)
+            score = 0
+            if _pawn_fuzzy_match(ctx.verb, verb):
+                # Count how many of the query chars matched in order
+                q, v = ctx.verb.lower(), verb.lower()
+                ci = 0
+                for qc in q:
+                    while ci < len(v) and v[ci] != qc:
+                        ci += 1
+                    if ci < len(v):
+                        score += 1
+                        ci += 1
+                if score > best_score:
+                    best_score = score
+                    best_match = verb
+
+        if best_match is not None and best_score >= 2:
+            from core.commands._common import set_active_sink, swap_active_sink
+            old_sink = swap_active_sink(ctx.sink)
+            try:
+                ctx.verb = best_match
+                handler = COMMANDS[best_match]
                 return await handler(ctx)
             finally:
                 set_active_sink(old_sink)

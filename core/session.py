@@ -1408,9 +1408,11 @@ class AgentSession:
         """
         Hybrid v2 dual-protocol parser.
 
-        Priority:
-          1. XML <call name="...">...</call>   — no escaping, works with multiline text
-          2. JSON <tool_call>{...}</tool_call> — compact, for single-line ASCII args
+        Accepted protocols:
+          1. Wrapped JSON <tool_call>{...}</tool_call> — primary protocol;
+             requires the envelope and supports escaped content.
+          2. XML <call name="...">...</call> — legacy compatibility for
+             older model output.
 
         Returns:
           [{"name": str, "args": dict, "_source": "xml"|"json"}, ...]
@@ -1419,16 +1421,19 @@ class AgentSession:
           · If XML misses </call>, parse through the end of the string.
           · JSON uses strict=False to allow real newline characters in arguments.
         """
-        def on_partial_xml() -> None:
-            print(
-                c(
-                    GRAY,
-                    "  ⚙ [XML Parser] Unclosed </call> detected; tolerant completion enabled",
-                )
-            )
+        from core.tool_calls import ToolCallValidator
+
+        # Normalize the full response before extraction. A valid first wrapper
+        # must not prevent repair of a later malformed wrapper in the same turn.
+        is_valid, repaired_text = ToolCallValidator.validate_and_repair(text_buf)
+        if is_valid and repaired_text != text_buf:
+            text_buf = repaired_text
+            if _debug_mode():
+                print(c(GRAY, "  ✂ [Hybrid Parser] Repaired tool-call output before parsing"))
 
         def on_dirty_json_rescued() -> None:
-            print(c(YELLOW, "  ⚠ [Hybrid Parser] Dirty JSON detected and rescued with regex"))
+            if _debug_mode():
+                print(c(YELLOW, "  ⚠ [Hybrid Parser] Dirty JSON detected and rescued with regex"))
 
         def on_json_error(exc: json.JSONDecodeError, json_str: str) -> None:
             logger.error(
@@ -1447,7 +1452,6 @@ class AgentSession:
 
         return extract_tool_calls(
             text_buf,
-            on_partial_xml=on_partial_xml,
             on_dirty_json_rescued=on_dirty_json_rescued,
             on_json_error=on_json_error,
         )
@@ -1623,10 +1627,10 @@ class AgentSession:
         ):
             extracted = self._extract_calls(text_buf)
             for i, call in enumerate(extracted):
-                source = call["_source"]
+                label = "XML" if call["_source"] == "xml" else "JSON"
                 call_id = (
                     f"call_xml_{iteration}_{i}"
-                    if source == "xml"
+                    if label == "XML"
                     else f"call_fallback_{iteration}_{i}"
                 )
                 tc_buf[i] = {
@@ -1635,7 +1639,6 @@ class AgentSession:
                     "args":         json.dumps(call["args"], ensure_ascii=False),
                     "_args_parsed": call["args"],
                 }
-                label = "XML" if source == "xml" else "JSON"
                 if _debug_mode():
                     print(c(GRAY,
                         f"  ⚙ [Hybrid Parser/{label}] Intercepted tool call: {call['name']} "

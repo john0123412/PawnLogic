@@ -93,6 +93,9 @@ python -m pawnlogic --help
 
 Default `pawn` uses user-friendly output and hides raw tool-call internals,
 parser diagnostics, detailed reasoning streams, and low-level API errors.
+Tool-call recovery is best effort, not a guarantee. If a malformed tool-call
+attempt cannot be parsed, it produces no tool call and is not executed;
+detailed parser diagnostics remain hidden in user-friendly mode.
 Use `pawn --debug` or `/mode` when you need detailed diagnostics.
 With `--json`, each line is an independent NDJSON record. Existing `text`,
 `chunk`, and `json` records remain stable; versioned Agent lifecycle records

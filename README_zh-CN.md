@@ -83,7 +83,9 @@ pawn --eval "summarize this repository" --json
 python -m pawnlogic --help
 ```
 
-默认 `pawn` 使用用户友好的输出，会隐藏原始工具调用细节、解析器诊断、详细 reasoning 流和底层 API 错误。需要详细诊断时，使用 `pawn --debug` 或 `/mode`。
+默认 `pawn` 使用用户友好的输出，会隐藏原始工具调用细节、解析器诊断、详细 reasoning 流和底层 API 错误。
+工具调用恢复仅为尽力而为，不作保证。若格式错误的工具调用尝试无法解析，则不会产生或执行工具调用；用户友好模式仍会隐藏详细的解析器诊断信息。
+需要详细诊断时，使用 `pawn --debug` 或 `/mode`。
 使用 `--json` 时，每一行都是独立的 NDJSON record。现有 `text`、`chunk` 和 `json`
 record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 `{"type":"event","data":{...}}` envelope。

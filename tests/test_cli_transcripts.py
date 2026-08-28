@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from config.providers import PROVIDERS
+from config import providers as provider_config
+from core.commands import provider as provider_cmd
 from tools.cli_transcript_runner import run_transcript
 
 
@@ -14,12 +17,6 @@ def test_transcript_runner_covers_core_cli_commands(tmp_path):
             "/exit",
         ],
         cwd=tmp_path,
-        env={
-            "DEEPSEEK_API_KEY": "",
-            "OPENAI_API_KEY": "",
-            "ANTHROPIC_API_KEY": "",
-            "PROMPT_TOOLKIT_ENABLED": "0",
-        },
     )
 
     assert result.exit_requested is True
@@ -42,6 +39,36 @@ def test_transcript_runner_covers_core_cli_commands(tmp_path):
     assert "Providers:" in transcript
     assert "deepseek" in transcript
     assert "No models with configured API keys are available" in transcript
+
+
+def test_transcript_runner_isolates_registered_provider_api_keys(tmp_path, monkeypatch):
+    async def unexpected_model_selector(*_args, **_kwargs):
+        raise AssertionError("/model must not open an interactive selector in transcripts")
+
+    monkeypatch.setattr(provider_cmd, "cc_style_model_selector", unexpected_model_selector)
+
+    provider_env = {
+        str(provider["api_key_env"]): "test-transcript-key"
+        for provider in PROVIDERS.values()
+        if provider.get("api_key_env")
+    }
+    result = run_transcript(["/model"], cwd=tmp_path, env=provider_env)
+
+    assert "No models with configured API keys are available" in result.output
+    assert "Available models" not in result.output
+
+
+def test_transcript_runner_does_not_initialize_runtime_provider_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(provider_config, "_providers_initialized", False)
+
+    def unexpected_provider_load():
+        raise AssertionError("transcripts must not load runtime provider configuration")
+
+    monkeypatch.setattr(provider_config, "load_custom_providers", unexpected_provider_load)
+
+    result = run_transcript(["/model"], cwd=tmp_path)
+
+    assert "No models with configured API keys are available" in result.output
 
 
 def test_transcript_runner_keeps_unknown_command_user_visible(tmp_path):

@@ -65,6 +65,37 @@ class TranscriptSession(SimpleNamespace):
         return None
 
 
+def _isolated_provider_key_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Return empty values for registered and conventionally named provider keys."""
+    from config.providers import PROVIDERS
+
+    key_names = {
+        str(provider["api_key_env"])
+        for provider in PROVIDERS.values()
+        if provider.get("api_key_env")
+    }
+    key_names.update(
+        key
+        for key in set(os.environ) | set(env or {})
+        if key.endswith(("_API_KEY", "_KEY"))
+    )
+    return {key: "" for key in key_names}
+
+
+@contextmanager
+def _freeze_provider_initialization():
+    """Keep a transcript from loading a runtime provider config or its .env file."""
+    from config import providers as provider_config
+
+    was_initialized = provider_config._providers_initialized
+    if not was_initialized:
+        provider_config._providers_initialized = True
+    try:
+        yield
+    finally:
+        provider_config._providers_initialized = was_initialized
+
+
 @contextmanager
 def _patched_env(env: Mapping[str, str] | None):
     if not env:
@@ -122,8 +153,10 @@ def run_transcript(
     command_list = list(commands)
     sink = TranscriptSink()
     transcript_session = session or TranscriptSession((cwd or Path.cwd()).resolve())
+    transcript_env = dict(env or {})
+    transcript_env.update(_isolated_provider_key_env(transcript_env))
 
-    with _patched_env(env):
+    with _patched_env(transcript_env), _freeze_provider_initialization():
         set_active_sink(sink)
         set_output_mode(debug_mode=False)
         try:
