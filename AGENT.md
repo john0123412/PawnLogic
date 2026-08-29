@@ -572,7 +572,9 @@ are source-checkout or user-installed assets; pip/curl installations should use
   distribution build, PyPI fresh-install smoke, and GitHub Release creation;
   the one-time `.release-ready` marker was then removed.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Active plan: the `0.3.3` release is complete. `docs/plans/0.3.2-bounded-concurrency-two.md`
+- Active plan: the `0.3.4` release-finalization commit is being validated on
+  `test/release-0.3.4`; the version remains unpublished until the tag-triggered
+  release workflow completes. `docs/plans/0.3.2-bounded-concurrency-two.md`
   records the completed 0.3.2 implementation and release evidence. Independent
   `pawnlogic-security` 0.1.0 published from `john0123412/pawnlogic-security`
   on 2026-07-28.

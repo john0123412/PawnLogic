@@ -7,6 +7,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-08-29
+
+### Added
+- Added persisted FIFO message-queue state, including queued and pending
+  messages, plus `/queue` and `/abort` controls for inspecting or clearing it.
+
+### Fixed
+- Recovered native tool execution when a plan-only response precedes the next
+  eligible tool batch, while keeping the recovery bounded to avoid loops.
+- Correctly merge provider tool-name deltas delivered as repeated complete
+  names, incremental fragments, or cumulative snapshots.
+
+### Tests
+- Added regression coverage for message-queue persistence and recovery,
+  plan-only native tool flows, and provider tool-name delta protocols.
+
 ## [0.3.3] - 2026-08-28
 
 ### Fixed
