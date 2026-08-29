@@ -24,6 +24,8 @@ Commands in this module:
     /compact              summarize → clear (preserve pins)
     /think <prompt>       single-turn reasoning-mode invocation
     /mode                 toggle USER ↔ DEV output mode
+    /queue [clear]        inspect or clear interrupted-turn messages
+    /abort                clear queued messages and mark the session aborted
 
 Module-private helpers (only used by these commands; intentionally kept
 out of `_common.py`):
@@ -703,9 +705,10 @@ async def cmd_queue(ctx: CommandContext) -> None:
 # ── /abort ───────────────────────────────────────────────────
 @register("/abort")
 async def cmd_abort(ctx: CommandContext) -> None:
-    """Abort the current execution and clear the message queue.
+    """Clear queued messages and mark the session aborted.
 
-    This stops any running turn and clears all queued messages.
+    A synchronous provider request already in progress must be interrupted
+    with Ctrl+C.
     """
     count = ctx.session.abort()
-    _print(c(RED, f"  ✗ Aborted execution and cleared {count} queued message(s)"))
+    _print(c(RED, f"  ✗ Cleared {count} queued message(s); session marked aborted"))

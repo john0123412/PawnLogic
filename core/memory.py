@@ -119,7 +119,8 @@ def _create_core_tables():
             updated_at TEXT NOT NULL,
             status     TEXT DEFAULT 'idle',          -- idle/running/completed/interrupted
             interrupted_at TEXT,                    -- timestamp when interrupted
-            queue_depth INTEGER DEFAULT 0           -- number of messages in queue
+            queue_depth INTEGER DEFAULT 0,          -- number of messages in queue
+            queue_state TEXT DEFAULT ''             -- serialized queued and pending messages
         );
 
         CREATE TABLE IF NOT EXISTS messages (
@@ -203,6 +204,7 @@ def _create_core_tables():
             "status": "ALTER TABLE sessions ADD COLUMN status TEXT DEFAULT 'idle'",
             "interrupted_at": "ALTER TABLE sessions ADD COLUMN interrupted_at TEXT",
             "queue_depth": "ALTER TABLE sessions ADD COLUMN queue_depth INTEGER DEFAULT 0",
+            "queue_state": "ALTER TABLE sessions ADD COLUMN queue_state TEXT DEFAULT ''",
         }
         for col, ddl in migrations.items():
             if col not in cols:
@@ -276,6 +278,7 @@ def upsert_session(
     status: str = "idle",
     interrupted_at: str | None = None,
     queue_depth: int = 0,
+    queue_state: str = "",
 ):
     now = _now()
     with get_conn() as conn:
@@ -306,24 +309,24 @@ def upsert_session(
                 UPDATE sessions
                 SET name=?, model=?, cwd=?, config=?, tags=?, auto_name=?,
                     workspace_dir=?, workspace_alias=?, name_source=?, updated_at=?,
-                    status=?, interrupted_at=?, queue_depth=?
+                    status=?, interrupted_at=?, queue_depth=?, queue_state=?
                 WHERE id=?
             """, (
                 final_name, model, cwd, json.dumps(config_dict), final_tags, final_auto,
                 final_workspace, final_alias, final_source, now,
-                status, interrupted_at, queue_depth, session_id,
+                status, interrupted_at, queue_depth, queue_state, session_id,
             ))
         else:
             conn.execute("""
                 INSERT INTO sessions
                     (id, name, model, cwd, config, tags, auto_name, workspace_dir,
                      workspace_alias, name_source, created_at, updated_at,
-                     status, interrupted_at, queue_depth)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     status, interrupted_at, queue_depth, queue_state)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 session_id, final_name, model, cwd, json.dumps(config_dict), final_tags,
                 final_auto, final_workspace, final_alias, final_source, created, now,
-                status, interrupted_at, queue_depth,
+                status, interrupted_at, queue_depth, queue_state,
             ))
 
 def list_sessions(limit: int = 20, status: str | None = None) -> list[sqlite3.Row]:
@@ -614,104 +617,29 @@ def _extract_snippet(content: str, keywords: list[str], window: int = 80) -> str
 # ════════════════════════════════════════════════════════
 
 def get_session_messages_pretty(session_id: str) -> list[dict]:
-    """
-    Read all messages from a session and return display-friendly entries.
-    Each entry: {seq, role, content_preview, content_full, is_pinned, created_at}
-    """
+    """Read stored messages and delegate their display formatting."""
     with get_conn() as conn:
         rows = conn.execute("""
             SELECT seq, role, content, tool_calls, tool_call_id, is_pinned, created_at
             FROM messages WHERE session_id=?
             ORDER BY seq ASC
         """, (session_id,)).fetchall()
+    from core.persistence import format_session_messages_pretty
 
-    result = []
-    for r in rows:
-        content = r["content"] or ""
-        if not content and r["tool_calls"]:
-            # Assistant tool-call message: show tool names.
-            try:
-                calls = json.loads(r["tool_calls"])
-                names = [c["function"]["name"] for c in calls if "function" in c]
-                content = f"[Tool calls: {', '.join(names)}]"
-            except Exception:
-                content = "[tool_calls]"
-        if r["role"] == "tool":
-            content = f"[Tool result call_id={r['tool_call_id']}] " + content[:200]
-
-        result.append({
-            "seq":          r["seq"],
-            "role":         r["role"],
-            "content_full": r["content"] or "",
-            "preview":      content[:120].replace("\n", " "),
-            "is_pinned":    bool(r["is_pinned"]),
-            "created_at":   r["created_at"],
-        })
-    return result
+    return format_session_messages_pretty(rows)
 
 def export_session_to_markdown(session_id: str) -> str:
-    """
-    Export a session to a Markdown string.
-    /chat export can write it to a local file.
-    """
+    """Export one session through the shared persistence renderer."""
     meta = get_session(session_id)
     if not meta:
         return f"ERROR: session {session_id} does not exist"
+    from core.persistence import render_session_markdown_export
 
-    lines = [
-        f"# PawnLogic Conversation Export",
-        f"",
-        f"| Field | Value |",
-        f"|------|----|",
-        f"| session_id | `{session_id}` |",
-        f"| Name | {meta['name'] or meta['auto_name'] or meta['workspace_alias'] or '(unnamed)'} |",
-        f"| Model | {meta['model']} |",
-        f"| Directory | `{meta['cwd']}` |",
-        f"| Tags | {meta['tags'] or '-'} |",
-        f"| Created | {meta['created_at']} |",
-        f"| Updated | {meta['updated_at']} |",
-        f"",
-        f"---",
-        f"",
-    ]
-
-    msgs = get_session_messages_pretty(session_id)
-    for m in msgs:
-        role    = m["role"]
-        pinned  = " 📌" if m["is_pinned"] else ""
-        ts      = m["created_at"][11:16] if m["created_at"] else ""
-        content = m["content_full"]
-
-        if role == "user":
-            lines.append(f"## 🧑 User  `[{m['seq']}]`{pinned}  {ts}")
-            lines.append(f"")
-            lines.append(content)
-            lines.append(f"")
-        elif role == "assistant":
-            if content.startswith("[Tool calls:"):
-                lines.append(f"## 🔧 Tool Call  `[{m['seq']}]`  {ts}")
-                lines.append(f"")
-                lines.append(f"> {m['preview']}")
-                lines.append(f"")
-            else:
-                lines.append(f"## 🤖 Assistant  `[{m['seq']}]`{pinned}  {ts}")
-                lines.append(f"")
-                lines.append(content)
-                lines.append(f"")
-        elif role == "tool":
-            lines.append(f"<details><summary>🔩 Tool Result [{m['seq']}]</summary>")
-            lines.append(f"")
-            lines.append(f"```")
-            lines.append(content[:1000])
-            if len(content) > 1000:
-                lines.append(f"...[{len(content)} chars total, truncated]...")
-            lines.append(f"```")
-            lines.append(f"</details>")
-            lines.append(f"")
-        lines.append("---")
-        lines.append("")
-
-    return "\n".join(lines)
+    return render_session_markdown_export(
+        session_id,
+        meta,
+        get_session_messages_pretty(session_id),
+    )
 
 # ════════════════════════════════════════════════════════
 # Messages CRUD with incremental saving.

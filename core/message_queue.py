@@ -229,22 +229,32 @@ class MessageQueue:
             A restored MessageQueue instance.
         """
         queue = cls()
-        for msg_data in state.get("queue", []):
-            msg = QueuedMessage(
-                content=msg_data["content"],
-                timestamp=msg_data["timestamp"],
-                priority=msg_data.get("priority", 0),
-                metadata=msg_data.get("metadata", {}),
-            )
-            queue._queue.append(msg)
-        for msg_data in state.get("pending", []):
-            msg = QueuedMessage(
-                content=msg_data["content"],
-                timestamp=msg_data["timestamp"],
-                priority=msg_data.get("priority", 0),
-                metadata=msg_data.get("metadata", {}),
-            )
-            queue._pending.append(msg)
+        if not isinstance(state, dict):
+            return queue
+
+        for key, target in (("queue", queue._queue), ("pending", queue._pending)):
+            entries = state.get(key, [])
+            if not isinstance(entries, list):
+                continue
+            for msg_data in entries[:queue._max_size]:
+                if not isinstance(msg_data, dict):
+                    continue
+                content = msg_data.get("content")
+                if not isinstance(content, str):
+                    continue
+                timestamp = msg_data.get("timestamp", time.time())
+                if not isinstance(timestamp, (int, float)):
+                    timestamp = time.time()
+                priority = msg_data.get("priority", 0)
+                if not isinstance(priority, int):
+                    priority = 0
+                metadata = msg_data.get("metadata", {})
+                target.append(QueuedMessage(
+                    content=content,
+                    timestamp=timestamp,
+                    priority=priority,
+                    metadata=dict(metadata) if isinstance(metadata, dict) else {},
+                ))
         return queue
 
 

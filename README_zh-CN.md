@@ -167,6 +167,8 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 /think <prompt>                   # 执行一次更深推理
 /compact                          # 总结并压缩上下文
 /undo [n]                         # 回滚最近轮次
+/queue [clear]                    # 查看或清除中断后排队的消息
+/abort                            # 清除排队消息并将会话标记为已中止
 /deep                             # full-power 模式
 /init_project [desc]              # 初始化项目状态
 /pwnenv                           # 检查 CTF 工具链完整性

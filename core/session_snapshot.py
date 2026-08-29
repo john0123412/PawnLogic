@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,6 +16,7 @@ class SessionSnapshot:
     status: str = "idle"
     interrupted_at: str | None = field(default=None)
     queue_depth: int = 0
+    queue_state: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def capture(
@@ -29,6 +31,7 @@ class SessionSnapshot:
         status: str = "idle",
         interrupted_at: str | None = None,
         queue_depth: int = 0,
+        queue_state: dict[str, Any] | None = None,
     ) -> SessionSnapshot:
         return cls(
             session_id=session_id,
@@ -42,6 +45,7 @@ class SessionSnapshot:
             status=status,
             interrupted_at=interrupted_at,
             queue_depth=queue_depth,
+            queue_state=deepcopy(queue_state) if queue_state else {},
         )
 
 

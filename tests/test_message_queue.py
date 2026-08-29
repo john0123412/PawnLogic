@@ -211,6 +211,19 @@ class TestMessageQueuePersistence:
         assert q.size() == 0
         assert q.pending_count == 0
 
+    def test_from_state_ignores_malformed_entries(self):
+        q = MessageQueue.from_state({
+            "queue": [
+                {"content": "valid", "timestamp": 1.0, "metadata": "bad"},
+                {"timestamp": 2.0},
+                "not a message",
+            ],
+            "pending": "not a list",
+        })
+
+        assert q.to_list() == ["valid"]
+        assert q.peek(1)[0].metadata == {}
+
     def test_enqueue_many(self):
         q = MessageQueue()
         size = q.enqueue_many(["a", "b", "c"])

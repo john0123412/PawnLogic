@@ -9,14 +9,26 @@ through the API and stores it in the knowledge table.
 import os
 import sys
 import json
+import threading
+import time
+from contextlib import suppress
+from datetime import datetime
 from config import DEFAULT_MODEL, MODELS, PROVIDERS
 from core.api_client import call_once
 from core.state import dynamic_config_snapshot
 from core.memory import (
     init_db, upsert_session, list_sessions, get_session, delete_session,
     rename_session, save_messages, load_messages, add_knowledge,
+    update_session_naming,
 )
-from core.naming import stable_workspace_dir
+from core.naming import (
+    create_workspace_alias,
+    generate_session_name,
+    pick_naming_model,
+    should_name_session,
+    stable_workspace_dir,
+)
+from core.logger import logger
 from core.runtime_context import RuntimeContext
 from core.message_history import repair_dangling_tool_calls
 from core.session_snapshot import SessionSnapshot
@@ -52,6 +64,28 @@ except Exception:
 # Session save / load.
 # ════════════════════════════════════════════════════════
 
+
+def _serialize_interrupted_at(value: object) -> str | None:
+    """Normalize runtime interruption state for the SQLite text column."""
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return datetime.fromtimestamp(value).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
+    return None
+
+
+def _restore_interrupted_at(value: str | None) -> float | None:
+    """Restore the runtime timestamp representation from a saved snapshot."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except ValueError:
+        return None
+
 def save_snapshot(snapshot: SessionSnapshot, *, name: str = "") -> None:
     """Persist one immutable session snapshot through the SQLite adapter."""
     init_db()
@@ -67,6 +101,7 @@ def save_snapshot(snapshot: SessionSnapshot, *, name: str = "") -> None:
         status      = snapshot.status,
         interrupted_at = snapshot.interrupted_at,
         queue_depth = snapshot.queue_depth,
+        queue_state = json.dumps(snapshot.queue_state, ensure_ascii=False, default=str),
     )
     save_messages(snapshot.session_id, list(snapshot.messages))
 
@@ -84,6 +119,14 @@ def load_snapshot(session_id: str) -> SessionSnapshot | None:
         config_dict = json.loads(full["config"])
     except Exception:
         config_dict = {}
+    raw_queue_state = dict(full).get("queue_state", "")
+    try:
+        queue_state = json.loads(raw_queue_state) if raw_queue_state else {}
+    except (TypeError, json.JSONDecodeError):
+        queue_state = {}
+    if not isinstance(queue_state, dict):
+        queue_state = {}
+
     return SessionSnapshot.capture(
         session_id=session_id,
         model_alias=full["model"],
@@ -94,11 +137,13 @@ def load_snapshot(session_id: str) -> SessionSnapshot | None:
         status=full["status"] if full["status"] else "idle",
         interrupted_at=full["interrupted_at"] if full["interrupted_at"] else None,
         queue_depth=full["queue_depth"] if full["queue_depth"] is not None else 0,
+        queue_state=queue_state,
     )
 
 
 def session_save(session, name: str = "") -> str:
     """Write the current session through the shared snapshot interface."""
+    message_queue = getattr(session, "_message_queue", None)
     snapshot = SessionSnapshot.capture(
         session_id=session.session_id,
         model_alias=session.model_alias,
@@ -107,11 +152,293 @@ def session_save(session, name: str = "") -> str:
         workspace_dir=getattr(session, "workspace_dir", ""),
         config=dynamic_config_snapshot(),
         status=getattr(session, "_session_status", "idle"),
-        interrupted_at=getattr(session, "_interrupted_at", None),
-        queue_depth=getattr(session, "_message_queue", None).size() if hasattr(session, "_message_queue") else 0,
+        interrupted_at=_serialize_interrupted_at(
+            getattr(session, "_interrupted_at", None)
+        ),
+        queue_depth=message_queue.size() if message_queue is not None else 0,
+        queue_state=message_queue.save_state() if message_queue is not None else {},
     )
     save_snapshot(snapshot, name=name)
     return session.session_id
+
+
+def autosave_agent_session(
+    session,
+    *,
+    config: dict,
+    turn_status: str | None = None,
+) -> None:
+    """Persist an AgentSession checkpoint and trigger its naming workflow.
+
+    The session owns runtime state; this persistence seam owns snapshot capture,
+    asynchronous database writes, and the optional naming persistence workflow.
+    """
+    if turn_status == "completed":
+        session._turn_count += 1
+        session._runtime_metrics.record_turn_completed()
+    elif turn_status == "interrupted":
+        session._runtime_metrics.record_turn_interrupted()
+    elif turn_status == "failed":
+        session._runtime_metrics.record_turn_failed()
+    if turn_status is not None:
+        session._event_emitter().finish(
+            turn_status,
+            session._runtime_metrics_snapshot(),
+        )
+    session._runtime_metrics.record_autosave()
+    snapshot = SessionSnapshot.capture(
+        session_id=session.session_id,
+        model_alias=session.model_alias,
+        messages=session.messages,
+        cwd=session.cwd,
+        workspace_dir=session.workspace_dir,
+        config=config,
+        status=session._session_status,
+        interrupted_at=_serialize_interrupted_at(session._interrupted_at),
+        queue_depth=session._message_queue.size(),
+        queue_state=session._message_queue.save_state(),
+    )
+    messages_snapshot = list(snapshot.messages)
+    session_id = snapshot.session_id
+
+    def _save() -> None:
+        if not session._save_lock.acquire(blocking=False):
+            return
+        try:
+            save_snapshot(snapshot)
+        except Exception as exc:
+            logger.error(
+                "Autosave failed | session={} model={} exc={!r}",
+                session_id[:8],
+                snapshot.model_alias,
+                exc,
+            )
+        finally:
+            session._save_lock.release()
+
+    worker = threading.Thread(
+        target=_save,
+        daemon=True,
+        name=f"save-{session_id[:8]}",
+    )
+    worker.start()
+    worker.join(timeout=3.0)
+    session._maybe_autoname(messages_snapshot)
+
+
+def maybe_autoname_agent_session(session, messages_snapshot: list) -> None:
+    """Schedule one best-effort automatic naming update for a completed session."""
+    if session._naming_done or session._turn_count < 2:
+        return
+    if not should_name_session(messages_snapshot):
+        return
+    session_id, model_alias, cwd, workspace_dir = (
+        session.session_id,
+        session.model_alias,
+        session.cwd,
+        session.workspace_dir,
+    )
+
+    def _name() -> None:
+        if not session._naming_lock.acquire(blocking=False):
+            return
+        try:
+            now = time.monotonic()
+            if now - session._naming_attempted_at < 10:
+                return
+            session._naming_attempted_at = now
+            try:
+                naming_alias = pick_naming_model(model_alias)
+            except Exception as exc:
+                logger.warning(
+                    "pick_naming_model fallback | session={} exc={!r}",
+                    session_id[:8],
+                    exc,
+                )
+                naming_alias = model_alias
+
+            result = generate_session_name(
+                messages=messages_snapshot,
+                model_alias=naming_alias,
+                session_id=session_id,
+                cwd=cwd,
+            )
+            title = result.get("title", "").strip()
+            slug = result.get("slug", "").strip()
+            if not slug:
+                logger.warning(
+                    "Auto naming produced empty slug | session={} model={}",
+                    session_id[:8],
+                    naming_alias,
+                )
+                return
+
+            try:
+                final_dirname, new_abs = session._swap_workspace_dir(slug)
+            except Exception as exc:
+                logger.warning(
+                    "Workspace swap threw unexpected | session={} exc={!r}",
+                    session_id[:8],
+                    exc,
+                )
+                final_dirname, new_abs = "", ""
+
+            if new_abs:
+                persisted_workspace = new_abs
+                persisted_alias = final_dirname
+            else:
+                persisted_workspace = workspace_dir
+                try:
+                    persisted_alias = create_workspace_alias(
+                        session_id,
+                        slug,
+                        workspace_dir,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "create_workspace_alias fallback failed | exc={!r}",
+                        exc,
+                    )
+                    persisted_alias = slug
+
+            try:
+                update_session_naming(
+                    session_id,
+                    title=title,
+                    auto_name=slug,
+                    workspace_dir=persisted_workspace,
+                    workspace_alias=persisted_alias,
+                    name_source="auto",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "update_session_naming failed | session={} exc={!r}",
+                    session_id[:8],
+                    exc,
+                )
+
+            session._naming_done = True
+            with suppress(Exception):
+                session._print_naming_banner(title, slug, final_dirname, new_abs)
+        except Exception as exc:
+            logger.warning(
+                "Auto naming top-level failure (non-fatal) | session={} exc={!r}",
+                session_id[:8],
+                exc,
+            )
+        except BaseException as exc:
+            logger.warning(
+                "Auto naming interrupted (non-fatal) | session={} exc={!r}",
+                session_id[:8],
+                exc,
+            )
+        finally:
+            with suppress(Exception):
+                session._naming_lock.release()
+
+    threading.Thread(
+        target=_name,
+        daemon=True,
+        name=f"name-{session_id[:8]}",
+    ).start()
+
+
+def format_session_messages_pretty(rows: list) -> list[dict]:
+    """Turn persisted message rows into the display format used by /chat."""
+    result = []
+    for row in rows:
+        content = row["content"] or ""
+        if not content and row["tool_calls"]:
+            try:
+                calls = json.loads(row["tool_calls"])
+                names = [
+                    call["function"]["name"]
+                    for call in calls
+                    if "function" in call
+                ]
+                content = f"[Tool calls: {', '.join(names)}]"
+            except Exception:
+                content = "[tool_calls]"
+        if row["role"] == "tool":
+            content = f"[Tool result call_id={row['tool_call_id']}] {content[:200]}"
+
+        result.append({
+            "seq": row["seq"],
+            "role": row["role"],
+            "content_full": row["content"] or "",
+            "preview": content[:120].replace("\n", " "),
+            "is_pinned": bool(row["is_pinned"]),
+            "created_at": row["created_at"],
+        })
+    return result
+
+
+def render_session_markdown_export(
+    session_id: str,
+    meta,
+    messages: list[dict],
+) -> str:
+    """Render one session's already-loaded metadata and messages as Markdown."""
+    lines = [
+        "# PawnLogic Conversation Export",
+        "",
+        "| Field | Value |",
+        "|------|----|",
+        f"| session_id | `{session_id}` |",
+        "| Name | "
+        f"{meta['name'] or meta['auto_name'] or meta['workspace_alias'] or '(unnamed)'} |",
+        f"| Model | {meta['model']} |",
+        f"| Directory | `{meta['cwd']}` |",
+        f"| Tags | {meta['tags'] or '-'} |",
+        f"| Created | {meta['created_at']} |",
+        f"| Updated | {meta['updated_at']} |",
+        "",
+        "---",
+        "",
+    ]
+
+    for message in messages:
+        role = message["role"]
+        pinned = " 📌" if message["is_pinned"] else ""
+        timestamp = message["created_at"][11:16] if message["created_at"] else ""
+        content = message["content_full"]
+
+        if role == "user":
+            lines.extend([
+                f"## 🧑 User  `[{message['seq']}]`{pinned}  {timestamp}",
+                "",
+                content,
+                "",
+            ])
+        elif role == "assistant":
+            if content.startswith("[Tool calls:"):
+                lines.extend([
+                    f"## 🔧 Tool Call  `[{message['seq']}]`  {timestamp}",
+                    "",
+                    f"> {message['preview']}",
+                    "",
+                ])
+            else:
+                lines.extend([
+                    f"## 🤖 Assistant  `[{message['seq']}]`{pinned}  {timestamp}",
+                    "",
+                    content,
+                    "",
+                ])
+        elif role == "tool":
+            lines.extend([
+                f"<details><summary>🔩 Tool Result [{message['seq']}]</summary>",
+                "",
+                "```",
+                content[:1000],
+            ])
+            if len(content) > 1000:
+                lines.append(f"...[{len(content)} chars total, truncated]...")
+            lines.extend(["```", "</details>", ""])
+        lines.extend(["---", ""])
+
+    return "\n".join(lines)
+
 
 def session_load(session, query: str) -> str:
     """Load a session by list index or name substring."""
@@ -191,6 +518,22 @@ def session_load(session, query: str) -> str:
     session._reset_system_prompt()
     session.messages.extend(msgs)
     session.session_id = sid
+    if hasattr(session, "_message_queue"):
+        from core.message_queue import MessageQueue
+
+        restored_queue = MessageQueue.from_state(snapshot.queue_state)
+        # A persisted pending item belongs to an interrupted execution. It must
+        # become runnable again after /load rather than remain invisible forever.
+        restored_queue.requeue_pending()
+        session._message_queue = restored_queue
+    if hasattr(session, "_session_status"):
+        session._session_status = (
+            "interrupted"
+            if session._message_queue.size() or snapshot.status == "running"
+            else snapshot.status
+        )
+    if hasattr(session, "_interrupted_at"):
+        session._interrupted_at = _restore_interrupted_at(snapshot.interrupted_at)
     if hasattr(session, "_naming_done"):
         session._naming_done = bool(full["auto_name"])
     if hasattr(session, "_naming_attempted_at"):
@@ -216,6 +559,7 @@ def session_list() -> str:
                     f"{r['updated_at'][:16]}  {r['msg_count']}msgs  model={r['model']}")
         )
     return "\n".join(lines)
+
 
 def session_delete(session, query: str) -> str:
     rows = list_sessions(50)

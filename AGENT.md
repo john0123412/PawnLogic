@@ -616,6 +616,9 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 - Advisory plan-guard tiers (LOW/MID, `plan_guard_mode`) let weak models run
   side-effect tools without plan blocks; Operation Policy remains the actual
   safety gate, not the CoT Guard.
+- `/abort` clears queued input but cannot cancel a provider request already
+  handed to a synchronous stream; Ctrl+C remains the in-flight interruption
+  path.
 - English and zh-CN docs drifting in structure or command examples.
 - Release prep editing version literals outside fixed locations.
 - Packaging accidentally including `skills/` content.

@@ -53,6 +53,46 @@ def test_database_runtime_files_are_private(isolated_memory):
     assert stat.S_IMODE(memory.DB_PATH.stat().st_mode) == 0o600
 
 
+def test_session_display_and_markdown_export_use_shared_formatters(
+    isolated_memory,
+    tmp_path,
+):
+    memory = isolated_memory
+    session_id = "session-display"
+    memory.upsert_session(
+        session_id=session_id,
+        name="Display test",
+        model="ds-v4-flash",
+        cwd=str(tmp_path),
+        config_dict={},
+    )
+    memory.save_messages(
+        session_id,
+        [
+            {"role": "user", "content": "show the report"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"function": {"name": "read_file"}}],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "report contents",
+            },
+        ],
+    )
+
+    pretty = memory.get_session_messages_pretty(session_id)
+    exported = memory.export_session_to_markdown(session_id)
+
+    assert pretty[1]["preview"] == "[Tool calls: read_file]"
+    assert pretty[2]["preview"] == "[Tool result call_id=call_1] report contents"
+    assert "# PawnLogic Conversation Export" in exported
+    assert "show the report" in exported
+    assert "report contents" in exported
+
+
 def test_save_messages_handles_concurrent_writes(isolated_memory, tmp_path):
     memory = isolated_memory
     session_ids = [f"session-save-{idx}" for idx in range(24)]
