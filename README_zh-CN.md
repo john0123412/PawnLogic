@@ -10,6 +10,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
 PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.3**。
+版本 **0.3.4** 是尚未发布的候选版本。
 
 ## 系统要求
 
