@@ -94,6 +94,61 @@ def test_consume_model_stream_collects_usage_reasoning_text_and_tool_calls():
     }
 
 
+@pytest.mark.parametrize(
+    ("name_deltas", "expected_name"),
+    [
+        pytest.param(
+            ["switch_phase", "switch_phase"],
+            "switch_phase",
+            id="repeated-complete-name",
+        ),
+        pytest.param(
+            ["read_", "file"],
+            "read_file",
+            id="incremental-name-fragments",
+        ),
+        pytest.param(
+            ["switch", "switch_phase"],
+            "switch_phase",
+            id="cumulative-name-snapshots",
+        ),
+    ],
+)
+def test_consume_model_stream_merges_tool_name_delta_protocols(
+    name_deltas, expected_name
+):
+    result = consume_model_stream(
+        fake_stream_response(
+            *[
+                {
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "function": {
+                                    "name": name,
+                                    "arguments": arguments,
+                                },
+                            }],
+                        },
+                    }],
+                }
+                for name, arguments in zip(
+                    name_deltas, ['{"phase"', ': "plan"}'], strict=True
+                )
+            ]
+        ),
+        ensure_tool_call_id=_ensure_id,
+        iteration=5,
+    )
+
+    assert result.tool_calls[0] == {
+        "id": "call_5_0",
+        "name": expected_name,
+        "args": '{"phase": "plan"}',
+    }
+
+
 def test_consume_model_stream_propagates_keyboard_interrupt():
     def deltas():
         raise KeyboardInterrupt

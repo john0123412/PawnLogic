@@ -87,7 +87,6 @@ from core.turn_guards import (
 )
 from core.memory import (
     init_db, _gen_id, search_knowledge, search_knowledge_records, format_knowledge_for_prompt,
-    update_session_naming,
     # P0: Failure Pattern DB
     write_failure, check_failure, count_failure,
     format_failures_for_prompt,
@@ -98,10 +97,7 @@ from tools.file_ops  import (tool_read_file, tool_read_file_lines, tool_write_fi
                               tool_patch_file, tool_list_dir, tool_find_files,
                               tool_run_shell, tool_run_interactive, sync_runtime_context,
                               FILE_SCHEMAS)
-from core.naming import (
-    stable_workspace_dir, should_name_session, generate_session_name,
-    create_workspace_alias, pick_naming_model,
-)
+from core.naming import stable_workspace_dir
 from core import plan_guard as _plan_guard
 from tools.web_ops   import tool_web_search, tool_fetch_url, tool_git_op, WEB_SCHEMAS
 from tools.sandbox   import tool_run_code, SANDBOX_SCHEMAS
@@ -685,6 +681,7 @@ def detach_external_mcp_tools() -> None:
 _MAX_CONCURRENT_TOOLS  = 3
 _MAX_SOFT_CORRECTIONS  = 2   # max soft intercepts; tools still run and receive correction signal
 _MAX_HARD_KILLS        = 1   # hard-stop threshold after soft intercepts are exhausted
+_MAX_PLAN_ONLY_RECOVERIES = _plan_guard.MAX_PLAN_ONLY_RECOVERIES
 
 # ════════════════════════════════════════════════════════
 # P1: time-aware scheduling constants for URGENT_MODE.
@@ -713,8 +710,12 @@ _URGENT_SIGNAL = (
 
 # PLAN_MISSING signal lives in core/plan_guard.py with the guard's contracts.
 _PLAN_MISSING_SIGNAL = _plan_guard.PLAN_MISSING_SIGNAL
+_PLAN_ONLY_RECOVERY_SIGNAL = _plan_guard.PLAN_ONLY_RECOVERY_SIGNAL
+_PLAN_ONLY_RECOVERY_LIMIT_SIGNAL = _plan_guard.PLAN_ONLY_RECOVERY_LIMIT_SIGNAL
 
 _is_plan_exempt = _plan_guard.is_plan_exempt
+_is_plan_only_response = _plan_guard.is_plan_only_response
+_build_plan_only_message = _plan_guard.build_plan_only_assistant_message
 _tool_call_missing_plan = _plan_guard.tool_call_missing_plan
 
 # ════════════════════════════════════════════════════════
@@ -951,6 +952,12 @@ class AgentSession:
         # Sliding window + history summary state.
         self._history_summary: str = ""          # current effective history summary
         self._summary_turn_count: int = 0        # turn count when summary was last generated
+        # ── Breakpoint resume: message queue and session status ──
+        from core.message_queue import MessageQueue
+        self._message_queue = MessageQueue()
+        self._session_status = "idle"
+        self._interrupted_at: float | None = None
+        self._executing = False
         self.runtime_context.context_provider = self._select_delegation_context
         # Call last because it depends on all attributes above.
         self._reset_system_prompt()
@@ -1677,7 +1684,6 @@ class AgentSession:
                 "API key missing | model={} required_env={}",
                 self.model_alias, env_name,
             )
-            self._event_emitter().finish("failed", self._runtime_metrics_snapshot())
             return None
 
         cfg = self.model
@@ -1799,16 +1805,44 @@ class AgentSession:
         self.messages.append(_asst_msg)
         return True
 
+    def _inject_plan_only_recovery_signal(self, recovery_count: int) -> None:
+        self.messages.append({"role": "user", "content": _PLAN_ONLY_RECOVERY_SIGNAL})
+        print(c(
+            GRAY,
+            "  🔄 [Plan Recovery] A plan without an action was saved; "
+            f"requesting a tool call or final answer ({recovery_count}/"
+            f"{_MAX_PLAN_ONLY_RECOVERIES}).",
+        ))
+
+    def _stop_plan_only_recovery(self, recovery_count: int) -> None:
+        self.messages.append({"role": "user", "content": _PLAN_ONLY_RECOVERY_LIMIT_SIGNAL})
+        print(c(
+            RED,
+            "  Unable to continue: the model repeatedly sent a plan without an "
+            "action. Please rephrase the task or choose another model.",
+        ))
+        logger.warning(
+            "Plan-only recovery limit reached | model={} session={} recoveries={}",
+            self.model_alias,
+            self.session_id[:8],
+            recovery_count,
+        )
+
     def _apply_plan_guard(
         self,
         text_buf: str,
         tc_buf: dict,
         plan_rejected: int,
         iteration: int,
+        *,
+        plan_only_authorized: bool = False,
     ) -> tuple[str, int, bool]:
         guard_mode = str(runtime_config().get("plan_guard_mode", "advisory"))
         plan_decision = TurnToolLoop.plan_guard(
-            missing_required_plan=_tool_call_missing_plan(text_buf, tc_buf),
+            missing_required_plan=(
+                not plan_only_authorized
+                and _tool_call_missing_plan(text_buf, tc_buf)
+            ),
             plan_rejected=plan_rejected, max_soft=_MAX_SOFT_CORRECTIONS,
             mode=guard_mode,
         )
@@ -2223,14 +2257,59 @@ class AgentSession:
 
     # Main turn loop.
     def run_turn(self, user_input: str):
+        """Queue a user input and process all queued messages.
+
+        Supports breakpoint resume: while one turn runs, the caller can queue
+        additional user inputs. Each queued input is processed in FIFO order
+        after the current turn finishes. Ctrl+C pauses execution and saves
+        the queue state, allowing the caller to resume later.
+        """
+        if not user_input.strip():
+            return
+        # Enqueue the new input.
+        self._message_queue.enqueue(user_input)
+        if self._executing:
+            # Another turn is already running; it will pick up our message.
+            return
         self._sync_runtime_context()
         with self.runtime_context.activate():
-            return self._run_turn_active(user_input)
+            self._executing = True
+            try:
+                while not self._message_queue.is_empty:
+                    msg = self._message_queue.dequeue()
+                    if msg is None:
+                        break
+                    self._session_status = "running"
+                    try:
+                        turn_outcome = self._run_turn_active(msg.content)
+                    except TurnInterrupted:
+                        # Requeue the pending message so resume can pick it up.
+                        self._message_queue.requeue_pending()
+                        self._session_status = "interrupted"
+                        self._interrupted_at = time.time()
+                        self._autosave(turn_status="interrupted")
+                        raise
+                    except Exception:
+                        # Drop the failed message; do not block the rest of the queue.
+                        self._message_queue.complete_pending()
+                        self._session_status = "failed"
+                        self._autosave(turn_status="failed")
+                        raise
+                    self._message_queue.complete_pending()
+                    if turn_outcome == "failed":
+                        self._session_status = "failed"
+                        self._autosave(turn_status="failed")
+                        return
+                self._session_status = "completed" if self._message_queue.is_empty else "idle"
+                if self._session_status == "completed":
+                    self._interrupted_at = None
+            finally:
+                self._executing = False
 
-    def _run_turn_active(self, user_input: str):
+    def _run_turn_active(self, user_input: str) -> str | None:
         dynamic_cfg = self._prepare_turn(user_input)
         if dynamic_cfg is None:
-            return
+            return "failed"
 
         renderer           = _PlanRenderer()
         is_vision_model    = self.model.get("vision", False)
@@ -2262,7 +2341,8 @@ class AgentSession:
         # counters previously kept as locals here.
         result_processor = self._make_result_processor()
 
-        for iteration in range(turn_state.max_iter):
+        iteration = 0
+        while iteration < turn_state.max_iter:
             try:
                 turn_state.set_iteration(iteration)
                 should_stop = self._run_iteration_bookkeeping(
@@ -2282,13 +2362,26 @@ class AgentSession:
                     turn_state.iteration,
                 )
                 if model_response is None:
-                    self._event_emitter().finish("failed", self._runtime_metrics_snapshot())
-                    return
+                    return "failed"
                 text_buf, tc_buf, reasoning_buf = model_response
                 if is_empty_response(text_buf, tc_buf):
+                    iteration += 1
                     continue
 
+                if _is_plan_only_response(text_buf, tc_buf):
+                    self.messages.append(_build_plan_only_message(text_buf, reasoning_buf))
+                    recovery_count = turn_state.increment_plan_only_recoveries()
+                    if recovery_count > _MAX_PLAN_ONLY_RECOVERIES:
+                        self._stop_plan_only_recovery(recovery_count)
+                        return "failed"
+                    turn_state.authorize_next_tool_batch_from_plan_only()
+                    self._inject_plan_only_recovery_signal(recovery_count)
+                    continue
+
+                turn_state.reset_plan_only_recoveries()
+
                 if not tc_buf:
+                    turn_state.clear_plan_only_authorization()
                     self._append_assistant_or_tool_call_message(
                         text_buf, tc_buf, reasoning_buf
                     )
@@ -2307,7 +2400,11 @@ class AgentSession:
                 #   · Appends the signal as a "user" role after tool results.
                 # ════════════════════════════════════════════════
                 _plan_action, plan_rejected, _plan_signal_injected = self._apply_plan_guard(
-                    text_buf, tc_buf, turn_state.plan_rejected, turn_state.iteration
+                    text_buf,
+                    tc_buf,
+                    turn_state.plan_rejected,
+                    turn_state.iteration,
+                    plan_only_authorized=turn_state.consume_plan_only_authorization(),
                 )
                 self._event_emitter().plan_guard(_plan_action)
                 turn_state.replace_plan_rejected(plan_rejected)
@@ -2315,8 +2412,7 @@ class AgentSession:
                     # Hard stop after soft intercepts are exhausted.
                     if self.messages and self.messages[-1]["role"] == "user":
                         self.messages.pop()  # Remove the latest user message to keep context clean.
-                    self._event_emitter().finish("failed", self._runtime_metrics_snapshot())
-                    return
+                    return "failed"
 
                 # Module 1B: concurrent call truncation.
                 tc_buf = self._apply_concurrency_limit(tc_buf)
@@ -2333,8 +2429,11 @@ class AgentSession:
                     current_tools=turn_state.current_tools,
                 )
                 turn_state.update_tools(current_tools)
+                iteration += 1
 
             except KeyboardInterrupt:
+                self._session_status = "interrupted"
+                self._interrupted_at = time.time()
                 self._autosave(turn_status="interrupted")
                 raise TurnInterrupted()
 
@@ -2344,7 +2443,43 @@ class AgentSession:
             self.model_alias, self.session_id[:8], turn_state.max_iter,
         )
         self._print_turn_summary()
-        self._autosave(turn_status="failed")
+        return "failed"
+
+    def abort(self) -> int:
+        """Clear queued work and mark the session as aborted.
+
+        A provider request already running in the synchronous stream cannot be
+        cancelled here; Ctrl+C remains the in-flight interruption path.
+
+        Returns the number of queued messages that were cleared.
+        """
+        count = self._message_queue.clear()
+        self._session_status = "aborted"
+        return count
+
+    def queue_status(self) -> dict:
+        """Return a snapshot of the queue and session state.
+
+        Returns:
+            A dict with keys: status, queue_depth, pending_count, interrupted_at.
+        """
+        return {
+            "status": self._session_status,
+            "queue_depth": self._message_queue.size(),
+            "pending_count": self._message_queue.pending_count,
+            "interrupted_at": self._interrupted_at,
+        }
+
+    def peek_queue(self, n: int = 5) -> list[str]:
+        """Return the contents of the next n queued messages.
+
+        Args:
+            n: Maximum number of messages to peek at.
+
+        Returns:
+            A list of message content strings.
+        """
+        return [msg.content for msg in self._message_queue.peek(n)]
 
     # ── Per-turn usage summary ───────────────────────────
     def _print_turn_summary(self):
@@ -2355,162 +2490,18 @@ class AgentSession:
             output=print,
         )
 
-    # Background async autosave.
-    def _autosave(self, *, turn_status: str | None = None):
-        if turn_status == "completed":
-            self._turn_count += 1
-            self._runtime_metrics.record_turn_completed()
-        elif turn_status == "interrupted":
-            self._runtime_metrics.record_turn_interrupted()
-        elif turn_status == "failed":
-            self._runtime_metrics.record_turn_failed()
-        if turn_status is not None:
-            self._event_emitter().finish(turn_status, self._runtime_metrics_snapshot())
-        self._runtime_metrics.record_autosave()
-        from core.session_snapshot import SessionSnapshot
-        snapshot = SessionSnapshot.capture(
-            session_id=self.session_id,
-            model_alias=self.model_alias,
-            messages=self.messages,
-            cwd=self.cwd,
-            workspace_dir=self.workspace_dir,
+    def _autosave(self, *, turn_status: str | None = None) -> None:
+        """Delegate snapshot persistence without expanding the turn-loop module."""
+        from core.persistence import autosave_agent_session
+
+        autosave_agent_session(
+            self,
             config=dict(_dynamic_config()),
-        )
-        msgs_snapshot = list(snapshot.messages)
-        sid = snapshot.session_id
-        def _do():
-            if not self._save_lock.acquire(blocking=False): return
-            try:
-                from core.persistence import save_snapshot
-                save_snapshot(snapshot)
-            except Exception as _autosave_exc:
-                # Log autosave failures instead of silently dropping them.
-                logger.error(
-                    "Autosave failed | session={} model={} exc={!r}",
-                    sid[:8], snapshot.model_alias, _autosave_exc,
-                )
-            finally:
-                self._save_lock.release()
-
-        t = threading.Thread(target=_do, daemon=True, name=f"save-{sid[:8]}")
-        t.start()
-        t.join(timeout=3.0)
-        self._maybe_autoname(msgs_snapshot)
-
-    def _maybe_autoname(self, msgs_snapshot: list):
-        if self._naming_done:
-            return
-        if self._turn_count < 2:
-            return
-        if not should_name_session(msgs_snapshot):
-            return
-        sid, model_alias, cwd, workspace_dir = (
-            self.session_id, self.model_alias, self.cwd, self.workspace_dir
+            turn_status=turn_status,
         )
 
-        def _do():
-            if not self._naming_lock.acquire(blocking=False):
-                return
-            try:
-                # Keep the cooldown gate inside the lock. Failures do not block
-                # the next retry once the lock is released.
-                now = time.monotonic()
-                if now - self._naming_attempted_at < 10:
-                    return
-                self._naming_attempted_at = now
-                try:
-                    naming_alias = pick_naming_model(model_alias)
-                except Exception as exc:
-                    logger.warning(
-                        "pick_naming_model fallback | session={} exc={!r}",
-                        sid[:8], exc,
-                    )
-                    naming_alias = model_alias
+    def _maybe_autoname(self, msgs_snapshot: list) -> None:
+        """Delegate best-effort session naming to the persistence workflow."""
+        from core.persistence import maybe_autoname_agent_session
 
-                # 2. Call the LLM to generate {title, slug}.
-                result = generate_session_name(
-                    messages=msgs_snapshot,
-                    model_alias=naming_alias,
-                    session_id=sid,
-                    cwd=cwd,
-                )
-                title = result.get("title", "").strip()
-                slug  = result.get("slug", "").strip()
-                if not slug:
-                    logger.warning(
-                        "Auto naming produced empty slug | session={} model={}",
-                        sid[:8], naming_alias,
-                    )
-                    return
-
-                # 3. Swap the real workspace directory.
-                try:
-                    final_dirname, new_abs = self._swap_workspace_dir(slug)
-                except Exception as exc:
-                    logger.warning(
-                        "Workspace swap threw unexpected | session={} exc={!r}",
-                        sid[:8], exc,
-                    )
-                    final_dirname, new_abs = "", ""
-
-                # 4. Decide which workspace metadata to persist:
-                #    · swap success -> use new path + final_dirname as alias
-                #    · swap failure -> use old path and still create by-name/<slug>
-                if new_abs:
-                    persist_workspace_dir = new_abs
-                    persist_alias = final_dirname
-                else:
-                    persist_workspace_dir = workspace_dir
-                    try:
-                        persist_alias = create_workspace_alias(sid, slug, workspace_dir)
-                    except Exception as exc:
-                        logger.warning(
-                            "create_workspace_alias fallback failed | exc={!r}", exc,
-                        )
-                        persist_alias = slug
-
-                # 5. Write pawn.db separately so transient DB locks do not affect
-                # previous filesystem changes.
-                try:
-                    update_session_naming(
-                        sid,
-                        title=title,
-                        auto_name=slug,
-                        workspace_dir=persist_workspace_dir,
-                        workspace_alias=persist_alias,
-                        name_source="auto",
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "update_session_naming failed | session={} exc={!r}",
-                        sid[:8], exc,
-                    )
-
-                # 6. Mark done even if DB write failed to avoid repeated renames.
-                # The next autosave upsert_session writes the latest workspace_dir.
-                self._naming_done = True
-
-                # 7. Terminal UX feedback.
-                try:
-                    self._print_naming_banner(title, slug, final_dirname, new_abs)
-                except Exception:
-                    pass   # UI feedback failure is non-critical.
-
-            except Exception as exc:
-                # Top-level fallback: swallow unexpected errors and log a warning.
-                logger.warning(
-                    "Auto naming top-level failure (non-fatal) | session={} exc={!r}",
-                    sid[:8], exc,
-                )
-            except BaseException as exc:
-                logger.warning(
-                    "Auto naming interrupted (non-fatal) | session={} exc={!r}",
-                    sid[:8], exc,
-                )
-            finally:
-                try:
-                    self._naming_lock.release()
-                except Exception:
-                    pass   # Ignore rare cases where the lock was already released.
-
-        threading.Thread(target=_do, daemon=True, name=f"name-{sid[:8]}").start()
+        maybe_autoname_agent_session(self, msgs_snapshot)

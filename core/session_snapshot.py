@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -12,6 +13,10 @@ class SessionSnapshot:
     model_alias: str
     messages: tuple[dict[str, Any], ...]
     runtime: dict[str, Any]
+    status: str = "idle"
+    interrupted_at: str | None = field(default=None)
+    queue_depth: int = 0
+    queue_state: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def capture(
@@ -23,6 +28,10 @@ class SessionSnapshot:
         cwd: str,
         workspace_dir: str,
         config: dict[str, Any],
+        status: str = "idle",
+        interrupted_at: str | None = None,
+        queue_depth: int = 0,
+        queue_state: dict[str, Any] | None = None,
     ) -> SessionSnapshot:
         return cls(
             session_id=session_id,
@@ -33,6 +42,10 @@ class SessionSnapshot:
                 "workspace_dir": workspace_dir,
                 "config": dict(config),
             },
+            status=status,
+            interrupted_at=interrupted_at,
+            queue_depth=queue_depth,
+            queue_state=deepcopy(queue_state) if queue_state else {},
         )
 
 

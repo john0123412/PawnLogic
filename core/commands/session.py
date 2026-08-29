@@ -24,6 +24,8 @@ Commands in this module:
     /compact              summarize → clear (preserve pins)
     /think <prompt>       single-turn reasoning-mode invocation
     /mode                 toggle USER ↔ DEV output mode
+    /queue [clear]        inspect or clear interrupted-turn messages
+    /abort                clear queued messages and mark the session aborted
 
 Module-private helpers (only used by these commands; intentionally kept
 out of `_common.py`):
@@ -658,3 +660,55 @@ async def cmd_mode(ctx: CommandContext) -> None:
         _print(c(GREEN, "  ✓ User-friendly mode enabled (tool details hidden)"))
     else:
         _print(c(CYAN, "  ✓ Debug mode enabled (tool calls and diagnostics visible)"))
+
+
+# ── /queue ───────────────────────────────────────────────────
+@register("/queue")
+async def cmd_queue(ctx: CommandContext) -> None:
+    """Show or manage the message queue for breakpoint resume.
+
+    Usage:
+        /queue            - Show queued messages
+        /queue clear      - Clear all queued messages
+        /queue pause      - Pause queue processing (not implemented)
+        /queue resume     - Resume queue processing (not implemented)
+    """
+    sub = ctx.arg.lower().strip()
+    if sub == "clear":
+        count = ctx.session._message_queue.clear()
+        _print(c(GREEN, f"  ✓ Cleared {count} queued message(s)"))
+        return
+    elif sub in ("pause", "resume"):
+        _print(c(YELLOW, f"  ⚠ Queue {sub} not yet implemented"))
+        return
+
+    status = ctx.session.queue_status()
+    _print(c(BOLD, "  📋 Message Queue Status"))
+    _print(c(GRAY, f"    Status: {status['status']}"))
+    _print(c(GRAY, f"    Queued: {status['queue_depth']} message(s)"))
+    _print(c(GRAY, f"    Pending: {status['pending_count']} message(s)"))
+    if status['interrupted_at']:
+        _print(c(GRAY, f"    Interrupted at: {status['interrupted_at']}"))
+
+    if status['queue_depth'] > 0:
+        peeked = ctx.session.peek_queue(5)
+        _print(c(BOLD, "  📝 Next messages:"))
+        for i, msg in enumerate(peeked, 1):
+            preview = msg[:80] + "..." if len(msg) > 80 else msg
+            _print(c(GRAY, f"    [{i}] {preview}"))
+        if status['queue_depth'] > len(peeked):
+            _print(c(GRAY, f"    ... and {status['queue_depth'] - len(peeked)} more"))
+    else:
+        _print(c(GRAY, "    (queue empty)"))
+
+
+# ── /abort ───────────────────────────────────────────────────
+@register("/abort")
+async def cmd_abort(ctx: CommandContext) -> None:
+    """Clear queued messages and mark the session aborted.
+
+    A synchronous provider request already in progress must be interrupted
+    with Ctrl+C.
+    """
+    count = ctx.session.abort()
+    _print(c(RED, f"  ✗ Cleared {count} queued message(s); session marked aborted"))

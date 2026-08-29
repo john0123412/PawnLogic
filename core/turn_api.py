@@ -32,6 +32,15 @@ def _usage_counts(delta: dict[str, Any]) -> tuple[int, int]:
     return int(prompt_tokens), int(completion_tokens)
 
 
+def _merge_tool_name(existing: str, incoming: str) -> str:
+    """Merge name fragments or a provider's repeated/cumulative snapshot."""
+    if not existing or not incoming:
+        return existing + incoming
+    if incoming.startswith(existing):
+        return incoming
+    return existing + incoming
+
+
 def consume_model_stream(
     deltas: Iterable[dict[str, Any]],
     *,
@@ -100,7 +109,9 @@ def consume_model_stream(
                     "args": "",
                 }
             fn = tool_delta.get("function", {})
-            result.tool_calls[idx]["name"] += fn.get("name") or ""
+            result.tool_calls[idx]["name"] = _merge_tool_name(
+                result.tool_calls[idx]["name"], fn.get("name") or ""
+            )
             result.tool_calls[idx]["args"] += fn.get("arguments") or ""
 
     return result

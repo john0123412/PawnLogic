@@ -1,7 +1,9 @@
 """Tests for the CoT plan guard's read-only exemption behavior."""
 
 from core.plan_guard import (
+    MAX_PLAN_ONLY_RECOVERIES,
     PLAN_EXEMPT_TOOLS,
+    is_plan_only_response,
     is_plan_exempt,
     tool_call_missing_plan,
 )
@@ -39,6 +41,23 @@ def test_empty_tool_buffer_never_requires_plan():
     assert tool_call_missing_plan("", {}) is False
 
 
+def test_complete_plan_only_response_requires_recovery():
+    assert MAX_PLAN_ONLY_RECOVERIES > 0
+    assert is_plan_only_response(
+        "\n<plan><intent>Continue the pending command.</intent></plan>\n", {}
+    )
+
+
+def test_plan_only_detection_does_not_capture_final_text_or_tool_calls():
+    plan = "<plan><intent>Continue the pending command.</intent></plan>"
+
+    assert is_plan_only_response(f"{plan}\nThe command completed.", {}) is False
+    assert is_plan_only_response("I will explain how plans work: " + plan, {}) is False
+    assert is_plan_only_response(f"{plan}\nVisible text\n{plan}", {}) is False
+    assert is_plan_only_response("<plan><intent>Incomplete", {}) is False
+    assert is_plan_only_response(plan, _calls("run_shell")) is False
+
+
 def test_web_retrieval_tools_are_plan_exempt():
     """Information retrieval has no local side effects, like check_service."""
     assert "web_search" in PLAN_EXEMPT_TOOLS
@@ -70,3 +89,5 @@ def test_plan_signals_never_claim_interception():
     for text in (_PLAN_MISSING_SIGNAL, TOOL_PLAN_NOTICE):
         assert "intercept" not in text.lower()
         assert "<plan>" in text
+        assert "current provider's tool interface" in text
+        assert "only a plan" in text

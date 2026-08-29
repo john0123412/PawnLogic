@@ -23,6 +23,8 @@ class TurnState:
     is_vision_model: bool = False
     iteration: int = 0
     plan_rejected: int = 0
+    plan_only_recoveries: int = 0
+    plan_only_authorizes_next_tool_batch: bool = False
     logic_refresh_interval: int = 20
     urgent_mode_active: bool = False
 
@@ -61,6 +63,29 @@ class TurnState:
 
     def increment_plan_rejected(self) -> None:
         self.plan_rejected += 1
+
+    def increment_plan_only_recoveries(self) -> int:
+        """Record one plan-only recovery and return its updated count."""
+        self.plan_only_recoveries += 1
+        return self.plan_only_recoveries
+
+    def reset_plan_only_recoveries(self) -> None:
+        """Clear the consecutive plan-only recovery count after useful output."""
+        self.plan_only_recoveries = 0
+
+    def authorize_next_tool_batch_from_plan_only(self) -> None:
+        """Allow one adjacent native tool batch to consume a saved plan."""
+        self.plan_only_authorizes_next_tool_batch = True
+
+    def consume_plan_only_authorization(self) -> bool:
+        """Consume and return the one-shot authorization from a pure plan."""
+        authorized = self.plan_only_authorizes_next_tool_batch
+        self.plan_only_authorizes_next_tool_batch = False
+        return authorized
+
+    def clear_plan_only_authorization(self) -> None:
+        """Discard a saved-plan authorization after a non-tool response."""
+        self.plan_only_authorizes_next_tool_batch = False
 
     def mark_urgent_mode(self) -> None:
         self.urgent_mode_active = True

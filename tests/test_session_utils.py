@@ -189,7 +189,29 @@ def test_run_turn_hard_stops_after_soft_plan_corrections(monkeypatch, capsys):
 
     assert tool_runs == ["write", "write"]
     assert sum(1 for m in s.messages if m.get("role") == "tool") == 2
+    assert s._session_status == "failed"
+    s._autosave.assert_called_once_with(turn_status="failed")
     assert "Missing <plan>" in capsys.readouterr().out
+
+
+def test_run_turn_marks_iteration_limit_as_failed(monkeypatch):
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 1)
+    monkeypatch.setitem(session_mod.TOOL_MAP, "write_file", lambda _args: "OK")
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_sequence(
+            _tool_call_response("write_file", {"path": "x.txt", "content": "x"}),
+        ),
+    )
+
+    s.run_turn("write one file")
+
+    assert s._session_status == "failed"
+    s._autosave.assert_called_once_with(turn_status="failed")
 
 
 # ══════════════════════════════════════════════════════════
@@ -361,6 +383,12 @@ def _make_session():
         s._naming_attempted_at = 0.0
         s._urgent_mode = False
         s._loaded_skill_packs = []
+        # Initialize new fields for breakpoint resume
+        s._session_status = "idle"
+        s._interrupted_at = None
+        s._executing = False
+        from core.message_queue import MessageQueue
+        s._message_queue = MessageQueue()
         return s
 
 
@@ -685,6 +713,190 @@ def test_run_turn_injects_plan_missing_for_non_exempt_tool(monkeypatch):
         m.get("role") == "user" and "PLAN_MISSING" in str(m.get("content", ""))
         for m in s.messages
     )
+
+
+def test_run_turn_recovers_after_plan_only_response_from_native_tool_call(monkeypatch):
+    """A PLAN_MISSING correction must continue through the provider tool protocol."""
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 4)
+    tool_runs = []
+    monkeypatch.setitem(
+        session_mod.TOOL_MAP,
+        "write_file",
+        lambda _args: tool_runs.append("write_file") or "OK: fake write",
+    )
+    monkeypatch.setitem(
+        session_mod.TOOL_MAP,
+        "run_shell",
+        lambda _args: tool_runs.append("run_shell") or "OK: fake shell",
+    )
+    plan_only = "<plan><intent>Continue with the pending shell check.</intent></plan>"
+
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_sequence(
+            _tool_call_response(
+                "write_file",
+                {"path": "x.txt", "content": "x"},
+                call_id="call_missing_plan",
+                include_plan=False,
+            ),
+            _assistant_done_response(plan_only),
+            _tool_call_response(
+                "run_shell",
+                {"command": "echo recovered"},
+                call_id="call_recovered_shell",
+                include_plan=False,
+            ),
+            _assistant_done_response("recovery complete"),
+        ),
+    )
+
+    s.run_turn("write a file and check it")
+
+    assert tool_runs == ["write_file", "run_shell"]
+    assert any(
+        message.get("role") == "assistant" and message.get("content") == plan_only
+        for message in s.messages
+    )
+    assert any(
+        message.get("role") == "user"
+        and "PLAN_ONLY_RECOVERY" in str(message.get("content", ""))
+        for message in s.messages
+    )
+    assert sum(
+        "PLAN_MISSING" in str(message.get("content", ""))
+        for message in s.messages
+    ) == 1
+    assert s.messages[-1] == {"role": "assistant", "content": "recovery complete"}
+
+
+def test_run_turn_recovers_when_the_initial_response_is_plan_only(monkeypatch):
+    """A turn must not end just because the first provider response is a plan."""
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "plan_guard_mode", "strict")
+    tool_runs = []
+    monkeypatch.setitem(
+        session_mod.TOOL_MAP,
+        "write_file",
+        lambda _args: tool_runs.append("write_file") or "OK: fake write",
+    )
+    monkeypatch.setitem(
+        session_mod.TOOL_MAP,
+        "run_shell",
+        lambda _args: tool_runs.append("run_shell") or "OK: fake shell",
+    )
+    write_plan = "<plan><intent>Write the requested file.</intent></plan>"
+    check_plan = "<plan><intent>Run the requested check.</intent></plan>"
+
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_sequence(
+            _assistant_done_response(write_plan),
+            _tool_call_response(
+                "write_file",
+                {"path": "x.txt", "content": "x"},
+                include_plan=False,
+            ),
+            _assistant_done_response(check_plan),
+            _tool_call_response(
+                "run_shell",
+                {"command": "echo recovered"},
+                include_plan=False,
+            ),
+            _assistant_done_response("check complete"),
+        ),
+    )
+
+    s.run_turn("run the requested check")
+
+    assert tool_runs == ["write_file", "run_shell"]
+    assert any(
+        "PLAN_ONLY_RECOVERY" in str(message.get("content", ""))
+        for message in s.messages
+    )
+    assert not any(
+        "PLAN_MISSING" in str(message.get("content", ""))
+        for message in s.messages
+    )
+    assert s.messages[-1] == {"role": "assistant", "content": "check complete"}
+
+
+def test_run_turn_stops_after_bounded_plan_only_recovery(monkeypatch, capsys):
+    """Repeated plans without an action terminate instead of consuming max_iter."""
+    from config import DYNAMIC_CONFIG
+    from core.plan_guard import MAX_PLAN_ONLY_RECOVERIES
+
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", MAX_PLAN_ONLY_RECOVERIES + 2)
+    tool_runs = []
+    monkeypatch.setitem(
+        session_mod.TOOL_MAP,
+        "write_file",
+        lambda _args: tool_runs.append("write_file") or "OK: fake write",
+    )
+    plan_only = "<plan><intent>Continue the pending action.</intent></plan>"
+
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_sequence(
+            _tool_call_response(
+                "write_file",
+                {"path": "x.txt", "content": "x"},
+                call_id="call_missing_plan",
+                include_plan=False,
+            ),
+            *[_assistant_done_response(plan_only) for _ in range(MAX_PLAN_ONLY_RECOVERIES + 1)],
+        ),
+    )
+
+    s.run_turn("write a file")
+
+    assert tool_runs == ["write_file"]
+    assert s._session_status == "failed"
+    assert sum(
+        message.get("role") == "user"
+        and str(message.get("content", "")).startswith("[SYSTEM: PLAN_ONLY_RECOVERY]")
+        for message in s.messages
+    ) == MAX_PLAN_ONLY_RECOVERIES
+    assert any(
+        message.get("role") == "user"
+        and "PLAN_ONLY_RECOVERY_LIMIT" in str(message.get("content", ""))
+        for message in s.messages
+    )
+    s._autosave.assert_called_once_with(turn_status="failed")
+    assert "repeatedly sent a plan without an action" in capsys.readouterr().out
+
+
+def test_run_turn_clears_interruption_timestamp_after_queue_drains(monkeypatch):
+    s = _make_session()
+    s._interrupted_at = 1_700_000_000.0
+    monkeypatch.setattr(s, "_sync_runtime_context", lambda: None)
+    monkeypatch.setattr(s, "_run_turn_active", lambda _input: None)
+
+    s.run_turn("resume the queued work")
+
+    assert s._message_queue.is_empty
+    assert s._session_status == "completed"
+    assert s._interrupted_at is None
+
+
+def test_abort_clears_queued_messages_and_marks_session_aborted():
+    s = _make_session()
+    s._message_queue.enqueue("queued work")
+
+    cleared = s.abort()
+
+    assert cleared == 1
+    assert s._message_queue.is_empty
+    assert s._session_status == "aborted"
 
 
 def _tool_call_response(name, args=None, *, call_id="call_tool", include_plan=True):
@@ -1035,7 +1247,7 @@ def test_run_turn_interrupt_raises_for_cli_rollback(monkeypatch):
 
 def test_autoname_thread_swallows_keyboard_interrupt(monkeypatch):
     s = _make_session()
-    import core.session as session_mod
+    import core.persistence as persistence_mod
 
     s._turn_count = 2
     s._naming_lock = threading.Lock()
@@ -1046,10 +1258,10 @@ def test_autoname_thread_swallows_keyboard_interrupt(monkeypatch):
         started.set()
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(session_mod, "should_name_session", lambda _msgs: True)
-    monkeypatch.setattr(session_mod, "pick_naming_model", lambda alias: alias)
-    monkeypatch.setattr(session_mod, "generate_session_name", interrupted_name)
-    monkeypatch.setattr(session_mod.logger, "warning", warning_mock)
+    monkeypatch.setattr(persistence_mod, "should_name_session", lambda _msgs: True)
+    monkeypatch.setattr(persistence_mod, "pick_naming_model", lambda alias: alias)
+    monkeypatch.setattr(persistence_mod, "generate_session_name", interrupted_name)
+    monkeypatch.setattr(persistence_mod.logger, "warning", warning_mock)
 
     s._maybe_autoname([{"role": "user", "content": "please solve this"}])
 

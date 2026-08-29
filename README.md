@@ -209,6 +209,8 @@ connection and response wait times.
 /think <prompt>                   # run one deeper reasoning turn
 /compact                          # summarize and compact context
 /undo [n]                         # roll back recent turns
+/queue [clear]                    # inspect or clear messages queued after an interruption
+/abort                            # clear queued messages and mark the session aborted
 /deep                             # full-power mode
 /init_project [desc]              # initialize project state
 /pwnenv                           # check CTF toolchain integrity

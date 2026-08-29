@@ -17,6 +17,8 @@ def test_turn_state_default_initialization_fields():
     assert state.is_vision_model is False
     assert state.iteration == 0
     assert state.plan_rejected == 0
+    assert state.plan_only_recoveries == 0
+    assert state.plan_only_authorizes_next_tool_batch is False
     assert state.logic_refresh_interval == 20
     assert state.urgent_mode_active is False
 
@@ -76,6 +78,20 @@ def test_turn_state_current_max_tokens_can_update():
     state.update_max_tokens(4096)
 
     assert state.current_max_tokens == 4096
+
+
+def test_turn_state_plan_only_authorization_is_one_shot():
+    state = TurnState.for_turn(
+        max_iter=3,
+        max_tokens=2048,
+        is_vision_model=False,
+        current_tools=None,
+    )
+
+    state.authorize_next_tool_batch_from_plan_only()
+
+    assert state.consume_plan_only_authorization() is True
+    assert state.consume_plan_only_authorization() is False
 
 
 def test_turn_state_new_turn_does_not_carry_previous_mutations():

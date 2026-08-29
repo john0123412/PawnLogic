@@ -168,6 +168,81 @@ def test_persistence_save_load_restores_session(isolated_memory, monkeypatch, tm
     assert target.reset_called is True
 
 
+def test_persistence_restores_interrupted_queue_state(isolated_memory, monkeypatch, tmp_path):
+    _drop_project_modules("core.persistence", force=True)
+    from core import persistence
+    from core.message_queue import MessageQueue
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setattr(persistence, "init_db", isolated_memory.init_db)
+
+    source = FakeSession(
+        session_id="session-queue",
+        cwd=str(tmp_path),
+        workspace_dir=str(tmp_path / "workspace"),
+        messages=[{"role": "user", "content": "resume this work"}],
+    )
+    source._message_queue = MessageQueue()
+    source._message_queue.enqueue("resume first")
+    source._message_queue.enqueue("then continue")
+    source._message_queue.dequeue()
+    source._session_status = "interrupted"
+    source._interrupted_at = 1_700_000_000.0
+
+    persistence.session_save(source, "Queued")
+    snapshot = persistence.load_snapshot(source.session_id)
+    assert snapshot is not None
+    assert snapshot.queue_state["queue"][0]["content"] == "then continue"
+    assert snapshot.queue_state["pending"][0]["content"] == "resume first"
+    assert snapshot.interrupted_at is not None
+
+    target = FakeSession(session_id="empty")
+    target._message_queue = MessageQueue()
+    target._session_status = "idle"
+    target._interrupted_at = None
+
+    result = persistence.session_load(target, "Queued")
+
+    assert result.startswith("OK: loaded [session-queue]")
+    assert target._message_queue.to_list() == ["resume first", "then continue"]
+    assert target._message_queue.pending_count == 0
+    assert target._session_status == "interrupted"
+    assert target._interrupted_at == pytest.approx(source._interrupted_at)
+
+
+def test_persistence_load_normalizes_stale_running_status(
+    isolated_memory,
+    monkeypatch,
+    tmp_path,
+):
+    _drop_project_modules("core.persistence", force=True)
+    from core import persistence
+    from core.message_queue import MessageQueue
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setattr(persistence, "init_db", isolated_memory.init_db)
+
+    source = FakeSession(
+        session_id="session-running",
+        cwd=str(tmp_path),
+        workspace_dir=str(tmp_path / "workspace"),
+    )
+    source._message_queue = MessageQueue()
+    source._session_status = "running"
+    source._interrupted_at = None
+    persistence.session_save(source, "Running")
+
+    target = FakeSession(session_id="empty")
+    target._message_queue = MessageQueue()
+    target._session_status = "idle"
+    target._interrupted_at = None
+
+    result = persistence.session_load(target, "Running")
+
+    assert result.startswith("OK: loaded [session-running]")
+    assert target._session_status == "interrupted"
+
+
 def test_persistence_load_drops_and_persists_dangling_tool_calls(isolated_memory, monkeypatch, tmp_path):
     _drop_project_modules("core.persistence", force=True)
     from core import persistence
