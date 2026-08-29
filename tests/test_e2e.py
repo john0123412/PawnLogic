@@ -36,9 +36,8 @@ def _wait_for_prompt(child, timeout=15):
         raise
 
 
-@pytest.fixture
-def spawn_pawnlogic(tmp_path):
-    """Spawn a PawnLogic process with test env vars, yield child, cleanup."""
+def _spawn_pawnlogic_process(tmp_path, *, prompt_toolkit_enabled: bool):
+    """Spawn an isolated PawnLogic process for either terminal input mode."""
     test_home = tmp_path / "home"
     pawnlogic_home = test_home / ".pawnlogic"
     pawnlogic_home.mkdir(parents=True)
@@ -51,21 +50,40 @@ def spawn_pawnlogic(tmp_path):
         "DEEPSEEK_API_KEY": "sk-test-fake-key-for-ci",
         "PAWN_API_KEY": "test-fake-key",
         "ANTHROPIC_API_KEY": "sk-ant-test-fake",
-        "TERM": "dumb",
+        "TERM": "xterm" if prompt_toolkit_enabled else "dumb",
         "NO_COLOR": "1",
         "MCP_ENABLED": "false",  # Skip MCP for faster E2E startup
-        "PROMPT_TOOLKIT_ENABLED": "0",  # Force simple input() mode
     })
+    if prompt_toolkit_enabled:
+        env.pop("PROMPT_TOOLKIT_ENABLED", None)
+    else:
+        env["PROMPT_TOOLKIT_ENABLED"] = "0"  # Force simple input() mode
 
     # Use sys.executable to ensure we use the correct python interpreter
     python_cmd = sys.executable if sys.executable else "python"
-    child = pexpect.spawn(
+    return pexpect.spawn(
         f"{python_cmd} main.py",
         timeout=15,
         encoding="utf-8",
         env=env,
     )
 
+
+@pytest.fixture
+def spawn_pawnlogic(tmp_path):
+    """Spawn a PawnLogic process with simple input() for broad CLI coverage."""
+    child = _spawn_pawnlogic_process(tmp_path, prompt_toolkit_enabled=False)
+    try:
+        yield child
+    finally:
+        if child.isalive():
+            child.close(force=True)
+
+
+@pytest.fixture
+def spawn_pawnlogic_tui(tmp_path):
+    """Spawn a PawnLogic process with Prompt Toolkit enabled."""
+    child = _spawn_pawnlogic_process(tmp_path, prompt_toolkit_enabled=True)
     try:
         yield child
     finally:
@@ -95,6 +113,47 @@ def test_slash_help(spawn_pawnlogic):
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
         pytest.fail(f"/help failed: {e}")
+
+
+def test_slash_fuzzy_planguard(spawn_pawnlogic):
+    """A unique slash-command subsequence reaches the registered handler."""
+    child = spawn_pawnlogic
+    try:
+        _wait_for_prompt(child)
+        child.sendline("/plg")
+        child.expect("Auto-corrected: /plg -> /planguard", timeout=10)
+        child.expect("Interactive plan-guard selector is unavailable", timeout=10)
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"/plg fuzzy dispatch failed: {e}")
+
+
+def test_slash_queue_resume_reports_empty_queue(spawn_pawnlogic):
+    """The documented resume subcommand reaches the real queue handler."""
+    child = spawn_pawnlogic
+    try:
+        _wait_for_prompt(child)
+        child.sendline("/queue resume")
+        child.expect("queue empty", timeout=10)
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"/queue resume failed: {e}")
+
+
+def test_slash_planguard_tui_applies_selected_mode(spawn_pawnlogic_tui):
+    """The interactive selector applies the mode chosen after fuzzy dispatch."""
+    child = spawn_pawnlogic_tui
+    try:
+        _wait_for_prompt(child)
+        child.sendline("/plg")
+        child.expect("Auto-corrected: /plg -> /planguard", timeout=10)
+        child.expect("Plan Guard Mode", timeout=10)
+        child.send("2")
+        child.send("\r")
+        child.expect("plan_guard_mode=strict", timeout=10)
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"/planguard selector failed: {e}")
 
 
 def test_slash_keys(spawn_pawnlogic):

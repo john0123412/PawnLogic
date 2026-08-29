@@ -1,8 +1,8 @@
-"""Merge live model and Extension completion sources."""
+"""Merge live command, model, and Extension completion sources."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 
@@ -10,12 +10,23 @@ def merge_completion_sources(
     base_words: list[str],
     base_meta: Mapping[str, str],
     *,
+    command_provider: Callable[[], Iterable[str]] | None = None,
     model_provider: Callable[[], Mapping[str, Mapping[str, Any]]] | None = None,
     extension_provider: Callable[[], Mapping[str, str]] | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """Return fresh completion words without mutating the static inputs."""
     words = list(base_words)
     meta = dict(base_meta)
+
+    if command_provider is not None:
+        try:
+            commands = command_provider()
+        except Exception:
+            commands = ()
+        for word in commands:
+            if word not in words:
+                words.append(word)
+            meta.setdefault(word, "")
 
     if model_provider is not None:
         try:

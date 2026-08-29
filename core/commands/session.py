@@ -24,7 +24,7 @@ Commands in this module:
     /compact              summarize → clear (preserve pins)
     /think <prompt>       single-turn reasoning-mode invocation
     /mode                 toggle USER ↔ DEV output mode
-    /queue [clear]        inspect or clear interrupted-turn messages
+    /queue [clear|resume] inspect, clear, or resume interrupted-turn messages
     /abort                clear queued messages and mark the session aborted
 
 Module-private helpers (only used by these commands; intentionally kept
@@ -670,16 +670,18 @@ async def cmd_queue(ctx: CommandContext) -> None:
     Usage:
         /queue            - Show queued messages
         /queue clear      - Clear all queued messages
-        /queue pause      - Pause queue processing (not implemented)
-        /queue resume     - Resume queue processing (not implemented)
+        /queue resume     - Process queued messages
     """
     sub = ctx.arg.lower().strip()
     if sub == "clear":
         count = ctx.session._message_queue.clear()
         _print(c(GREEN, f"  ✓ Cleared {count} queued message(s)"))
         return
-    elif sub in ("pause", "resume"):
-        _print(c(YELLOW, f"  ⚠ Queue {sub} not yet implemented"))
+    if sub == "resume":
+        if ctx.session.resume_queued_turns():
+            _print(c(GREEN, "  ✓ Resumed queued messages"))
+        else:
+            _print(c(GRAY, "  (queue empty)"))
         return
 
     status = ctx.session.queue_status()

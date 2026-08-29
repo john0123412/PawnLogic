@@ -2268,6 +2268,39 @@ class AgentSession:
             return
         # Enqueue the new input.
         self._message_queue.enqueue(user_input)
+        self._drain_queued_turns()
+
+    def retry_interrupted_turn(self, user_input: str) -> bool:
+        """Retry an interrupted turn without enqueueing its prompt twice.
+
+        The CLI preserves an interrupted prompt in the queue, then lets the
+        user edit it before retrying. Replacing that queued head preserves FIFO
+        order for messages that arrived later.
+
+        Returns:
+            ``True`` when an interrupted queued prompt was replaced.
+        """
+        if not user_input.strip():
+            return False
+        if self._session_status == "interrupted" and self._message_queue.replace_next(user_input):
+            self._drain_queued_turns()
+            return True
+        self.run_turn(user_input)
+        return False
+
+    def resume_queued_turns(self) -> bool:
+        """Process already-queued messages without adding a new prompt.
+
+        Returns:
+            ``True`` when there was queued work to process.
+        """
+        if self._message_queue.is_empty:
+            return False
+        self._drain_queued_turns()
+        return True
+
+    def _drain_queued_turns(self) -> None:
+        """Process queued messages unless another turn is already active."""
         if self._executing:
             # Another turn is already running; it will pick up our message.
             return

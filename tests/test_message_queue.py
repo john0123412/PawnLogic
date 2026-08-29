@@ -87,6 +87,17 @@ class TestMessageQueuePending:
         msg = q.peek(1)[0]
         assert msg.metadata.get("retried") == 1
 
+    def test_replace_next_updates_only_the_interrupted_head(self):
+        q = MessageQueue()
+        q.enqueue("interrupted prompt")
+        q.enqueue("later prompt")
+
+        assert q.replace_next("edited prompt") is True
+        assert q.to_list() == ["edited prompt", "later prompt"]
+
+    def test_replace_next_returns_false_for_an_empty_queue(self):
+        assert MessageQueue().replace_next("retry") is False
+
 
 class TestMessageQueuePriority:
     """Priority-based ordering."""

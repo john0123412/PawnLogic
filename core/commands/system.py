@@ -29,6 +29,8 @@ Commands in this module:
 
 from __future__ import annotations
 
+import os
+import sys
 import time
 from pathlib import Path
 
@@ -376,12 +378,35 @@ async def cmd_toolsize(ctx: CommandContext) -> None:
 
 @register("/planguard")
 async def cmd_planguard(ctx: CommandContext) -> None:
-    """Show or switch CoT plan-guard enforcement; no argument means advisory."""
+    """Show, select, or switch CoT plan-guard enforcement."""
     current = str(runtime_config().get("plan_guard_mode", "advisory"))
     arg = (ctx.arg or "").strip().lower()
     if not arg:
-        set_dynamic_config_value("plan_guard_mode", "advisory")
-        _print(c(GREEN, f"  ✓ plan_guard_mode=advisory (was {current})  [/planguard strict|status]"))
+        from core.output import JsonSink
+
+        if isinstance(ctx.sink, JsonSink) or not _plan_guard_tui_available():
+            _print(c(
+                GRAY,
+                "  Interactive plan-guard selector is unavailable; "
+                f"current={current}. Use /planguard strict|advisory|status.",
+            ))
+            return
+        try:
+            selected = await _select_plan_guard_mode(current)
+        except (EOFError, KeyboardInterrupt):
+            selected = None
+        except Exception:
+            _print(c(
+                YELLOW,
+                "  Interactive plan-guard selector is unavailable; "
+                f"current={current}. Use /planguard strict|advisory|status.",
+            ))
+            return
+        if selected is None:
+            _print(c(GRAY, f"  Plan-guard mode unchanged ({current})."))
+            return
+        set_dynamic_config_value("plan_guard_mode", selected)
+        _print(c(GREEN, f"  ✓ plan_guard_mode={selected} (was {current})"))
         return
     if arg == "status":
         _print(c(GRAY, f"  Current: plan_guard_mode={current}"))
@@ -391,6 +416,99 @@ async def cmd_planguard(ctx: CommandContext) -> None:
         return
     set_dynamic_config_value("plan_guard_mode", arg)
     _print(c(GREEN, f"  ✓ plan_guard_mode={arg} (was {current})"))
+
+
+def _plan_guard_tui_available() -> bool:
+    """Return whether the interactive plan-guard selector can run safely."""
+    disabled = os.getenv("PROMPT_TOOLKIT_ENABLED", "1").lower() in ("0", "false")
+    return not disabled and sys.stdin.isatty() and sys.stdout.isatty()
+
+
+async def _select_plan_guard_mode(current: str) -> str | None:
+    """Show a two-mode prompt_toolkit selector and return the chosen mode."""
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout
+    from prompt_toolkit.layout.containers import Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.styles import Style
+
+    options = (
+        (
+            "advisory",
+            "Advisory (recommended)",
+            "Warn after missing plan blocks; tool calls continue.",
+        ),
+        (
+            "strict",
+            "Strict",
+            "Stop the third tool-call attempt without a plan before tools run.",
+        ),
+    )
+    selected_idx = next(
+        (index for index, (mode, _, _) in enumerate(options) if mode == current),
+        0,
+    )
+
+    def get_fragments():
+        fragments = [
+            ("class:title", "\n  Plan Guard Mode\n"),
+            ("class:desc", "  Choose how missing <plan> blocks are handled.\n\n"),
+        ]
+        for index, (mode, label, description) in enumerate(options):
+            cursor = "❯" if index == selected_idx else " "
+            marker = "●" if index == selected_idx else "○"
+            style = "class:selected" if index == selected_idx else ""
+            current_marker = "  current" if mode == current else ""
+            fragments.append((style, f"  {cursor} {marker} {index + 1}. {label}{current_marker}\n"))
+            fragments.append(("class:desc", f"      {description}\n"))
+        fragments.append(("class:help", "\n  Up/Down or 1/2 select  Enter apply  Esc cancel\n"))
+        return fragments
+
+    control = FormattedTextControl(get_fragments)
+    key_bindings = KeyBindings()
+
+    @key_bindings.add("up")
+    def _move_up(event):
+        nonlocal selected_idx
+        selected_idx = (selected_idx - 1) % len(options)
+        event.app.invalidate()
+
+    @key_bindings.add("down")
+    def _move_down(event):
+        nonlocal selected_idx
+        selected_idx = (selected_idx + 1) % len(options)
+        event.app.invalidate()
+
+    @key_bindings.add("1")
+    @key_bindings.add("2")
+    def _select_by_number(event):
+        nonlocal selected_idx
+        selected_idx = int(event.key_sequence[-1].key) - 1
+        event.app.invalidate()
+
+    @key_bindings.add("enter")
+    def _apply(event):
+        event.app.exit(result=options[selected_idx][0])
+
+    @key_bindings.add("escape")
+    @key_bindings.add("c-c")
+    def _cancel(event):
+        event.app.exit(result=None)
+
+    app = Application(
+        layout=Layout(Window(content=control, always_hide_cursor=True)),
+        key_bindings=key_bindings,
+        style=Style.from_dict({
+            "title": "#00afff bold",
+            "desc": "#888888",
+            "selected": "#00ff00 bold",
+            "help": "#666666",
+        }),
+        full_screen=False,
+        mouse_support=False,
+    )
+    return await app.run_async()
 
 
 @register("/fetchsize")

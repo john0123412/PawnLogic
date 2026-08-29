@@ -167,7 +167,7 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 /think <prompt>                   # 执行一次更深推理
 /compact                          # 总结并压缩上下文
 /undo [n]                         # 回滚最近轮次
-/queue [clear]                    # 查看或清除中断后排队的消息
+/queue [clear|resume]             # 查看、清除或继续处理中断后排队的消息
 /abort                            # 清除排队消息并将会话标记为已中止
 /deep                             # full-power 模式
 /init_project [desc]              # 初始化项目状态
@@ -181,7 +181,7 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 /extension enable <name>          # 显式启用 Extension
 /extension disable <name>         # 禁用 Extension
 /worker [alias|auto]              # 查看或设置首选 worker
-/planguard [strict|advisory|status]  # CoT plan 守卫模式；不带参数默认 advisory
+/planguard [strict|advisory|status]  # 无参数打开模式选择器；各档位默认 advisory，strict 需显式启用
 /agent policy show                # 查看委派 Agent 策略
 /agent run <role> <objective>     # 输出安全的 delegate_task 请求模板
 ```
@@ -299,6 +299,12 @@ MCP 子进程 stderr 默认写入 `~/.pawnlogic/logs/mcp/<server>.stderr.log`。
 
 **Q: 添加了 Provider 但 `/model` 看不到新模型？**
 A: 配置 Key，运行 `/provider fetch <name>`，选择模型，再 `/provider activate <name>`。
+
+**Q: 可以缩写斜杠命令吗？**
+A: 可以。输入唯一前缀或子序列，例如 `/plg`；按 Tab 会列出 `/planguard`，直接按 Enter 也会规范化该命令。所有已注册的内置命令都会参与 Prompt Toolkit 和 readline 补全。
+
+**Q: 如何选择 plan-guard 模式？**
+A: 在交互式终端运行 `/planguard`（或 `/plg`），用 Up/Down 或 1/2 选择后按 Enter。脚本或非交互环境请使用 `/planguard advisory`、`/planguard strict` 或 `/planguard status`。默认是 advisory；在 strict 模式下，前两批缺少 plan block 的工具调用仍会执行并收到纠正提示，第三次此类尝试会在执行工具前被停止。
 
 **Q: Test Connection 失败但 fetch 成功？**
 A: Fetch 只读 `/v1/models`；Test Connection 发送聊天请求。先加载聊天模型。
