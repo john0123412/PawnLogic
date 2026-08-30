@@ -505,6 +505,20 @@ Git operations require separate explicit flags. See
 - `tests/test_deployment_friendly.py` protects startup, first-run, packaging,
   and deployment behavior.
 
+## Version Numbering Policy
+
+This policy is set by the repository owner and binds every agent and release.
+
+- Never increment the minor (second) version digit without an explicit user
+  instruction given for that specific bump. Only the patch (third) digit may
+  be incremented autonomously.
+- Releases publish strictly in sequence. Never tag, publish, merge, or declare
+  a version that skips or precedes an earlier declared-but-unpublished
+  version; a cycle's version PR must not merge until the previous version's
+  tag and publish have completed.
+- A minor-version bump requires the user's written decision recorded in the
+  active plan before any version file changes.
+
 ## Version Bump Fixed Locations
 
 All agents must treat version updates as a fixed-location operation. Do not add
