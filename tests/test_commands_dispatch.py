@@ -283,6 +283,41 @@ def test_fuzzy_verb_does_not_match_unrelated_query(cmd_pkg, fake_session, capsys
     assert "Unknown command" in captured.out
 
 
+@pytest.mark.parametrize(
+    ("query", "candidates"),
+    [
+        ("/qu", ("/queue", "/quit")),
+        ("/md", ("/mid", "/mode", "/model")),
+    ],
+)
+def test_dispatch_does_not_execute_an_ambiguous_fuzzy_command(
+    cmd_pkg,
+    fake_session,
+    capsys,
+    query,
+    candidates,
+):
+    """Ambiguous fuzzy input lists candidates without running either command."""
+    originals = {verb: cmd_pkg.COMMANDS[verb] for verb in candidates}
+    handlers = {verb: AsyncMock() for verb in candidates}
+    cmd_pkg.COMMANDS.update(handlers)
+    try:
+        ctx = _ctx(cmd_pkg, query, session=fake_session)
+
+        result = asyncio.run(cmd_pkg.dispatch(ctx))
+
+        assert result is None
+        assert ctx.verb == query
+        for handler in handlers.values():
+            handler.assert_not_awaited()
+        output = capsys.readouterr().out
+        assert f"Ambiguous command '{query}'" in output
+        for candidate in candidates:
+            assert candidate in output
+    finally:
+        cmd_pkg.COMMANDS.update(originals)
+
+
 # ════════════════════════════════════════════════════════
 # 3. CommandContext construction
 # ════════════════════════════════════════════════════════

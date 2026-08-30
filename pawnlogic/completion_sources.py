@@ -60,25 +60,10 @@ def merge_completion_sources(
 
 
 def pawn_fuzzy_match(query: str, candidate: str) -> tuple[bool, list[int]]:
-    """
-    Case-insensitive subsequence fuzzy match.
-    Return ``(True, indices)`` if ``query`` is a subsequence of ``candidate``
-    (case-insensitive), where ``indices`` is the list of matched character
-    positions in ``candidate``.  Return ``(False, [])`` otherwise.
-    Used for fuzzy verb matching in command dispatch, allowing partial type-ahead
-    such as ``/plang`` → ``/planguard``.
-    """
-    q, c = query.lower(), candidate.lower()
-    ci = 0
-    indices: list[int] = []
-    for qc in q:
-        while ci < len(c) and c[ci] != qc:
-            ci += 1
-        if ci >= len(c):
-            return False, []
-        indices.append(ci)
-        ci += 1
-    return True, indices
+    """Delegate fuzzy command matching to the command-registry owner."""
+    from core.commands import pawn_fuzzy_match as registry_fuzzy_match
+
+    return registry_fuzzy_match(query, candidate)
 
 
 def builtin_command_completion_words() -> list[str]:
@@ -89,19 +74,10 @@ def builtin_command_completion_words() -> list[str]:
 
 
 def matching_command_words(query: str, candidates: list[str]) -> list[str]:
-    """Return exact-prefix command matches before subsequence matches."""
-    query_lower = query.lower()
-    exact_matches: list[str] = []
-    fuzzy_matches: list[str] = []
-    for candidate in sorted(set(candidates)):
-        matched, _ = pawn_fuzzy_match(query, candidate)
-        if not matched:
-            continue
-        if candidate.lower().startswith(query_lower):
-            exact_matches.append(candidate)
-        else:
-            fuzzy_matches.append(candidate)
-    return exact_matches + fuzzy_matches
+    """Delegate candidate ordering to the command-registry owner."""
+    from core.commands import matching_command_words as registry_matches
+
+    return registry_matches(query, candidates)
 
 
 def readline_command_candidates(static_words: list[str]) -> list[str]:

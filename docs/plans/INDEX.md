@@ -5,7 +5,10 @@
 
 ## Active Plan
 
-No active plan. New scoped work must establish one before implementation begins.
+[0.3.5-command-recovery-hardening.md](0.3.5-command-recovery-hardening.md) is
+active. It closes the remaining fuzzy-command and interrupted-Turn recovery
+gaps plus the localhost network-policy release gate before the 0.3.5 release
+candidate is prepared.
 
 There is exactly one active plan at a time. When the active plan is completed
 and its release is published, it moves to Completed below.

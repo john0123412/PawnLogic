@@ -11,7 +11,7 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.3.4**.
+CTF-oriented toolchain. The current public release is **0.3.5**.
 
 ## System Requirements
 
@@ -239,14 +239,14 @@ accidents; they do not contain a determined attacker.
 
 Web fetches and browser navigation evaluate HTTP(S) targets through the shared
 Network Policy before use. URLs are normalized; embedded credentials,
-cloud-metadata/internal targets, and loopback, link-local, multicast,
-unspecified, or reserved addresses are denied. Private-network targets require
-explicit authorization, and non-interactive requests fail closed when
-confirmation would otherwise be required. Redirect destinations are normalized,
-resolved, and evaluated again before they are followed, including any
-target-scoped authorization. Model-generated Tool arguments cannot grant
-private-network authorization, and confirmed private targets bypass remote
-reader services.
+cloud-metadata/internal targets, the reserved `localhost` namespace (including
+subdomains), and loopback, link-local, multicast, unspecified, or reserved
+addresses are denied. Private-network targets require explicit authorization,
+and non-interactive requests fail closed when confirmation would otherwise be
+required. Redirect destinations are normalized, resolved, and evaluated again
+before they are followed, including any target-scoped authorization.
+Model-generated Tool arguments cannot grant private-network authorization, and
+confirmed private targets bypass remote reader services.
 
 Docker `bridge`/`host` networking and legacy `uvx mcp-server-fetch` startup use
 capability-only authorization because no concrete URL is available at the gate.
@@ -378,13 +378,13 @@ Analyze ./challenge, use pwn_debug to inspect registers at main breakpoint.
 A: Configure its key, run `/provider fetch <name>`, select models, then `/provider activate <name>`.
 
 **Q: Can I abbreviate a slash command?**
-A: Yes. Type a unique prefix or subsequence such as `/plg`; Tab completion lists `/planguard`, and pressing Enter normalizes the command. All registered built-in commands participate in both Prompt Toolkit and readline completion.
+A: Yes. Type a unique prefix or subsequence such as `/plg`; Tab completion lists `/planguard`, and pressing Enter normalizes the command. Only a unique match is dispatched; ambiguous input lists its candidates and runs nothing. All registered built-in commands participate in both Prompt Toolkit and readline completion.
 
 **Q: How do I choose a plan-guard mode?**
 A: Run `/planguard` (or `/plg`) in an interactive terminal, then use Up/Down or 1/2 and press Enter. Use `/planguard advisory`, `/planguard strict`, or `/planguard status` for explicit or non-interactive use. Advisory is the default; in strict mode the first two tool-call batches without a plan block still run with a correction, and the third such attempt is stopped before its tools execute.
 
 **Q: What happens when I interrupt a running turn?**
-A: Pawn preserves the current prompt as queued work. The next input is prefilled: press Enter to retry it once, edit it then press Enter to replace it, use `/queue` to inspect it, `/queue resume` to run it later, or `/abort` to discard queued work.
+A: Pawn preserves the current prompt as queued work. The next input is prefilled: press Enter to retry it once, or edit it then press Enter to replace it (including an edit beginning with `/`). During recovery, `/queue`, `/queue resume`, and `/queue clear` manage the preserved work, while `/abort` discards it.
 
 **Q: Test Connection fails but fetch succeeds?**
 A: Fetch reads `/v1/models`; Test Connection sends a chat request. Load a chat model first.

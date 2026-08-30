@@ -5,7 +5,9 @@ These tests verify the CLI agent can start, process slash commands, and
 exit cleanly without requiring real API keys (PAWNLOGIC_TEST_MODE=true).
 """
 
+import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -85,6 +87,7 @@ def _spawn_interruptible_pawnlogic_process(tmp_path):
     (bootstrap_dir / "sitecustomize.py").write_text(
         """
 import os
+import json
 import time
 from pathlib import Path
 
@@ -94,8 +97,14 @@ from core.interrupts import raise_if_interrupted
 trace_path = Path(os.environ["PAWNLOGIC_INTERRUPT_TRACE"])
 
 def delayed_stream(*_args, **_kwargs):
+    messages = _args[0]
+    last_user = next(
+        (message.get("content", "") for message in reversed(messages)
+         if message.get("role") == "user"),
+        "",
+    )
     with trace_path.open("a", encoding="utf-8") as trace:
-        trace.write("start\\n")
+        trace.write(json.dumps(last_user) + "\\n")
     while True:
         time.sleep(0.02)
         raise_if_interrupted()
@@ -202,6 +211,22 @@ def test_slash_fuzzy_planguard(spawn_pawnlogic):
         pytest.fail(f"/plg fuzzy dispatch failed: {e}")
 
 
+def test_slash_ambiguous_fuzzy_command_lists_candidates(spawn_pawnlogic):
+    """Ambiguous fuzzy input stays in the REPL and executes no candidate."""
+    child = spawn_pawnlogic
+    try:
+        _wait_for_prompt(child)
+        child.sendline("/qu")
+        child.expect("Ambiguous command '/qu'", timeout=10)
+        child.expect("/queue, /quit", timeout=10)
+        _wait_for_prompt(child)
+        child.sendline("/help")
+        child.expect(["Commands", "commands", "model", "/model"], timeout=10)
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"Ambiguous fuzzy dispatch failed: {e}")
+
+
 def test_slash_queue_resume_reports_empty_queue(spawn_pawnlogic):
     """The documented resume subcommand reaches the real queue handler."""
     child = spawn_pawnlogic
@@ -249,6 +274,67 @@ def test_ctrl_c_retry_and_queue_resume_keep_one_recoverable_message(tmp_path):
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
         pytest.fail(f"Ctrl+C recovery flow failed: {e}")
+    finally:
+        if child.isalive():
+            child.close(force=True)
+
+
+@pytest.mark.parametrize("replacement", ["edited prompt", "/replacement prompt"])
+def test_ctrl_c_edit_replaces_the_preserved_prompt(tmp_path, replacement):
+    """Plain and slash-prefixed edits replace the preserved prompt once."""
+    child, trace_path = _spawn_interruptible_pawnlogic_process(tmp_path)
+    try:
+        _wait_for_prompt(child)
+        child.sendline("original prompt")
+        starts = _wait_for_stream_count(trace_path, 1)
+        assert json.loads(starts[-1]) == "original prompt"
+
+        child.sendcontrol("c")
+        child.expect("Saved 1 queued message", timeout=10)
+        child.expect(r"You > .*original prompt", timeout=10)
+
+        child.sendline(replacement)
+        starts = _wait_for_stream_count(trace_path, 2)
+        assert json.loads(starts[-1]) == replacement
+        child.sendcontrol("c")
+        child.expect("Saved 1 queued message", timeout=10)
+        child.expect(rf"You > .*{re.escape(replacement)}", timeout=10)
+
+        # Enter must retry the edited prompt even when it starts with '/'.
+        child.sendline("")
+        starts = _wait_for_stream_count(trace_path, 3)
+        assert json.loads(starts[-1]) == replacement
+        child.sendcontrol("c")
+        child.expect("Saved 1 queued message", timeout=10)
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"Ctrl+C edit recovery failed: {e}")
+    finally:
+        if child.isalive():
+            child.close(force=True)
+
+
+@pytest.mark.parametrize("control", ["/abort", "/queue clear"])
+def test_ctrl_c_clear_control_discards_the_preserved_prompt(tmp_path, control):
+    """Documented clear controls remain available during retry editing."""
+    child, trace_path = _spawn_interruptible_pawnlogic_process(tmp_path)
+    try:
+        _wait_for_prompt(child)
+        child.sendline("discard me")
+        _wait_for_stream_count(trace_path, 1)
+
+        child.sendcontrol("c")
+        child.expect("Saved 1 queued message", timeout=10)
+        child.expect(r"You > .*discard me", timeout=10)
+
+        child.sendline(control)
+        child.expect("Cleared 1 queued message", timeout=10)
+        child.sendline("/queue")
+        child.expect(r"Queued: 0 message\(s\)", timeout=10)
+        assert len(trace_path.read_text(encoding="utf-8").splitlines()) == 1
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"Ctrl+C clear-control recovery failed: {e}")
     finally:
         if child.isalive():
             child.close(force=True)

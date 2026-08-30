@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.4**。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.5**。
 
 ## 系统要求
 
@@ -194,11 +194,12 @@ PawnLogic 是 agent 执行工具，不是安全沙箱。它会在你要求时，
 
 Web fetch 和 browser navigation 会在使用 HTTP(S) target 前通过共享 Network Policy
 进行评估。URL 会被规范化；包含 credential 的 URL、cloud metadata/internal target，
-以及 loopback、link-local、multicast、unspecified 或 reserved address 都会被拒绝。
-Private-network target 需要显式授权；在非交互请求本应要求确认时，系统会 fail closed。
-每个 redirect destination 在跟随前都会重新规范化、解析并评估，包括重新检查
-target-scoped authorization。模型生成的 Tool 参数不能授予 private-network
-权限；已确认的 private target 不会发送给远程 reader service。
+保留的 `localhost` 命名空间（包括其子域），以及 loopback、link-local、multicast、
+unspecified 或 reserved address 都会被拒绝。Private-network target 需要显式授权；
+在非交互请求本应要求确认时，系统会 fail closed。每个 redirect destination
+在跟随前都会重新规范化、解析并评估，包括重新检查 target-scoped authorization。
+模型生成的 Tool 参数不能授予 private-network 权限；已确认的 private target
+不会发送给远程 reader service。
 
 Docker `bridge`/`host` 网络和 legacy `uvx mcp-server-fetch` 启动在授权 gate
 处没有具体 URL，因此使用 capability-only authorization。Docker 网络需要
@@ -301,13 +302,13 @@ MCP 子进程 stderr 默认写入 `~/.pawnlogic/logs/mcp/<server>.stderr.log`。
 A: 配置 Key，运行 `/provider fetch <name>`，选择模型，再 `/provider activate <name>`。
 
 **Q: 可以缩写斜杠命令吗？**
-A: 可以。输入唯一前缀或子序列，例如 `/plg`；按 Tab 会列出 `/planguard`，直接按 Enter 也会规范化该命令。所有已注册的内置命令都会参与 Prompt Toolkit 和 readline 补全。
+A: 可以。输入唯一前缀或子序列，例如 `/plg`；按 Tab 会列出 `/planguard`，直接按 Enter 也会规范化该命令。只有唯一匹配才会被执行；如果存在歧义，Pawn 会列出候选项且不执行任何命令。所有已注册的内置命令都会参与 Prompt Toolkit 和 readline 补全。
 
 **Q: 如何选择 plan-guard 模式？**
 A: 在交互式终端运行 `/planguard`（或 `/plg`），用 Up/Down 或 1/2 选择后按 Enter。脚本或非交互环境请使用 `/planguard advisory`、`/planguard strict` 或 `/planguard status`。默认是 advisory；在 strict 模式下，前两批缺少 plan block 的工具调用仍会执行并收到纠正提示，第三次此类尝试会在执行工具前被停止。
 
 **Q: 中断正在运行的 turn 后会怎样？**
-A: Pawn 会将当前 prompt 保留为队列工作，并把它预填到下一次输入中：按 Enter 只重试一次；编辑后按 Enter 会替换该重试；使用 `/queue` 查看、`/queue resume` 稍后运行，或用 `/abort` 丢弃排队工作。
+A: Pawn 会将当前 prompt 保留为队列工作，并把它预填到下一次输入中：按 Enter 只重试一次；编辑后按 Enter 会替换该重试（包括以 `/` 开头的编辑）。恢复期间，`/queue`、`/queue resume` 和 `/queue clear` 用于管理保留工作，`/abort` 用于丢弃它。
 
 **Q: Test Connection 失败但 fetch 成功？**
 A: Fetch 只读 `/v1/models`；Test Connection 发送聊天请求。先加载聊天模型。

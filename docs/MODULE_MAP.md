@@ -43,6 +43,7 @@
 | `core/api_client.py` | HTTP transport | `APIWrapper` class | `test_api_stream_helpers.py` | Stream and non-stream share classification. Timeout cap enforced. |
 | `core/api_errors.py` | Error formatting | `format_http_error()` | `test_api_errors.py` | User-friendly messages without tracebacks. Retryable status is explicit. |
 | `core/commands/provider.py` | Provider commands | `cmd_provider()`, `cmd_model()` | `test_provider_commands.py` | `_visible_models()` is the single eligibility helper. Active + configured key = visible. |
+| `core/commands/__init__.py` | Command registry and dispatch | `COMMANDS`, `dispatch()`, `matching_command_words()` | `test_commands_dispatch.py`, `test_provider_commands.py` | Registered verbs are authoritative; fuzzy direct dispatch executes only a unique match and reports ambiguity without executing. |
 | `core/commands/extensions.py` | Extension commands | `cmd_extension()` | `test_extension_commands.py`, `test_cli_transcripts.py` | Reads the manager from RuntimeContext. Commands never construct or bypass the Extension Runtime. |
 | `core/provider_tui.py` | Provider TUI | Rendering + key bindings | `test_provider_commands.py` | Thin rendering over `ProviderTUIState`. All mutations through `ProviderRuntime`. |
 | `core/provider_tui_state.py` | TUI state | `ProviderTUIState` class | `test_provider_tui_state.py` | Pure state transitions, no IO. Typed, deterministic methods. |
@@ -53,7 +54,7 @@
 |--------|------|-----------|-------|------------|
 | `core/trust.py` | Trust boundaries | `TrustBoundaryKind` enum | `test_trust.py` | Every named boundary has a standard notice and legacy level. |
 | `core/operation_policy.py` | Operation gating | `OperationPolicy` class | `test_operation_policy.py`, `test_run_shell_policy.py` | Host-shell destructive and interactive operations require explicit authorization. |
-| `core/network_policy.py` | Network authorization Interface | `NetworkPolicy.evaluate()`, `normalize_url()` | `test_network_policy.py`, `test_network_policy_baseline.py`, `test_network_adapter_baseline.py` | Normalize HTTP(S) targets; deny credentials, metadata, and special address ranges; private targets require explicit authorization; every redirect is re-evaluated; non-interactive confirmation fails closed. |
+| `core/network_policy.py` | Network authorization Interface | `NetworkPolicy.evaluate()`, `normalize_url()` | `test_network_policy.py`, `test_network_policy_baseline.py`, `test_network_adapter_baseline.py` | Normalize HTTP(S) targets; deny credentials, metadata, the reserved localhost namespace, and special address ranges; private targets require explicit authorization; every redirect is re-evaluated; non-interactive confirmation fails closed. |
 | `core/path_policy.py` | Path containment | `resolve_within()`, `safe_filename_fragment()` | `test_security.py` | Canonical resolution + `relative_to()` containment. No symlink escapes. |
 | `core/host_process.py` | Process runner | `HostProcessRunner.run()` | `test_host_process.py` | Environment scrubbing, timeout, process-group cleanup. |
 
@@ -98,7 +99,7 @@
 |--------|------|-----------|-------|------------|
 | `pawnlogic/cli.py` | CLI facade | `run()`, `PawnCompleter` | `test_cli_startup.py`, `test_cli_transcripts.py` | Public entry point. Live model and Extension completions; Extension startup failures remain non-fatal. |
 | `pawnlogic/extension_host.py` | Extension startup Adapter | `ExtensionHost` | `test_extension_host.py` | One process-level manager; persisted activation and shutdown failures are isolated. |
-| `pawnlogic/completion_sources.py` | Live completion merge and fuzzy command matching | `merge_completion_sources()`, `pawn_fuzzy_match()`, `matching_command_words()` | `test_completion_sources.py`, `test_provider_commands.py` | Static completion inputs are immutable; model, delegated-policy alias, and Extension sources are read live. |
+| `pawnlogic/completion_sources.py` | Live completion merge and command-matching Adapter | `merge_completion_sources()`, `pawn_fuzzy_match()`, `matching_command_words()` | `test_completion_sources.py`, `test_provider_commands.py` | Static completion inputs are immutable; command matching delegates to the registry owner, while model, delegated-policy alias, and Extension sources are read live. |
 | `pawnlogic/startup.py` | Bootstrap | `setup_environment()` | `test_cli_startup.py` | First-run, env, debug mode. |
 | `pawnlogic/repl.py` | REPL loop | `run_repl()` | `test_cli_startup.py` | Signal handling, input restoration. |
 
