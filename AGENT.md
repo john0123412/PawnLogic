@@ -585,17 +585,16 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.3.4`. PyPI, GitHub Release, and latest tag
-  are `v0.3.4`.
-- Release finalization: `v0.3.4` was published on 2026-08-29 through Trusted
-  Publishing. The release workflow completed its full test gate, Dynamic E2E,
-  distribution build, PyPI fresh-install smoke, and GitHub Release creation;
-  the one-time `.release-ready` marker was then removed.
+- Current published release: `0.3.5`. PyPI, GitHub Release, and latest tag
+  are `v0.3.5`, published 2026-08-30 through Trusted Publishing after the
+  full test gate, Dynamic E2E, distribution build, and PyPI fresh-install
+  smoke. The `0.3.4` release remains complete.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Active plan: the `0.3.5` release-finalization commit is being validated on
-  `test/release-0.3.5`; the version remains unpublished until the tag-triggered
-  release workflow completes. The published 0.3.4 release remains complete.
-  Independent
+- Active plan: `0.3.6-live-turn-control.md` on `feat/live-turn-control-0.3.6`.
+  The working version is declared as unreleased `0.3.6`; per the Version
+  Numbering Policy the cycle's version PR stays unmerged until the previous
+  release completes. The `.release-ready` staging marker for 0.3.5 is removed
+  on that branch. Independent
   `pawnlogic-security` 0.1.0 published from `john0123412/pawnlogic-security`
   on 2026-07-28.
 - `main` protected by branch rule requiring PR, up-to-date branches, and four

@@ -121,6 +121,43 @@ usage, error, or Turn completion.
 Human terminal, NDJSON, and future UI renderers are Output Adapters over Agent
 Events.
 
+## 0.3.6 Terms
+
+The terms below are reserved by the 0.3.6 live turn control plan
+(docs/plans/0.3.6-live-turn-control.md) and ADR 0009. They describe the
+contract the Turn Scheduler implements.
+
+### Turn Scheduler
+
+The Turn Scheduler is the deep module that owns turn execution state for one
+session: the active Turn, the steering queue, the follow-up queue, the
+recovered draft, state transitions, and persistence checkpoints. Its public
+surface is `submit`, `control`, and `view`; nothing outside the scheduler
+mutates session queue state directly.
+
+### Steering Message
+
+A Steering Message is user input submitted while a Turn is running. It takes
+effect at the next safe point, enters context as a new user message, and
+never merges with other submissions.
+
+### Follow-up Message
+
+A Follow-up Message is user input queued to run after the current Turn stops
+naturally. Follow-ups are consumed one per Turn, in submission order.
+
+### Safe Point
+
+A Safe Point is the boundary after the current Tool Call completes where a
+steering message can be applied. Tool calls from the same batch that have not
+started are recorded as protocol-complete skipped results.
+
+### Recovered Draft
+
+A Recovered Draft is an unfinished Turn restored after an interruption or
+process restart. It is presented as editable input and never replays
+side-effect Tools automatically.
+
 ## Runtime State Terms
 
 ### RuntimeContext
