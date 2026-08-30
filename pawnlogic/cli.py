@@ -881,6 +881,24 @@ def _run_repl_turn(session: AgentSession, raw: str, *, retry_interrupted: bool) 
             session.run_turn(raw)
 
 
+def _restore_interrupted_repl_input(session: AgentSession, fallback: str) -> str:
+    """Roll back display state and explain how to resume a preserved prompt."""
+    _removed, last_text = session.undo(1)
+    session._autosave()
+    queue_depth = session.queue_status()["queue_depth"]
+    if queue_depth:
+        suffix = "" if queue_depth == 1 else "s"
+        print(c(
+            YELLOW,
+            "  [interrupted] Saved "
+            f"{queue_depth} queued message{suffix}. Press Enter to retry it, "
+            "edit then press Enter to replace it, or run /queue resume to run it later.",
+        ))
+    else:
+        print(c(YELLOW, "  [interrupted] Edit and press Enter to retry."))
+    return last_text or fallback
+
+
 async def _main_impl():
     prompt_toolkit_enabled = _HAS_PROMPT_TOOLKIT
     # CLI argument parsing.
@@ -1477,7 +1495,12 @@ async def _main_impl():
                         _corrected = _matches[0]
                         raw = f"{_corrected} {_cmd_rest}".strip() if _cmd_rest else _corrected
                         print(c(YELLOW, f"  ✔ Auto-corrected: {_cmd_verb} -> {_corrected}"))
-                result = await handle_slash(raw, session)
+                try:
+                    result = await handle_slash(raw, session)
+                except TurnInterrupted:
+                    _re_edit_default = _restore_interrupted_repl_input(session, raw)
+                    _signal_state.submitted()
+                    continue
                 if result is _EXIT_SENTINEL:
                     print(c(CYAN, "\n  Goodbye! 👋"))
                     break
@@ -1486,14 +1509,8 @@ async def _main_impl():
             try:
                 _run_repl_turn(session, raw, retry_interrupted=_retry_interrupted)
             except TurnInterrupted:
-                removed, last_text = session.undo(1)
-                session._autosave()
-                _re_edit_default = last_text or raw
+                _re_edit_default = _restore_interrupted_repl_input(session, raw)
                 _signal_state.submitted()
-                if removed:
-                    print(c(YELLOW, "  [interrupted] Turn rolled back; edit and press Enter to retry."))
-                else:
-                    print(c(YELLOW, "  [interrupted] Edit and press Enter to retry."))
 
         except KeyboardInterrupt:
             # Idle input state: Ctrl+C only arms the double-press exit flow.

@@ -306,6 +306,9 @@ A: 可以。输入唯一前缀或子序列，例如 `/plg`；按 Tab 会列出 `
 **Q: 如何选择 plan-guard 模式？**
 A: 在交互式终端运行 `/planguard`（或 `/plg`），用 Up/Down 或 1/2 选择后按 Enter。脚本或非交互环境请使用 `/planguard advisory`、`/planguard strict` 或 `/planguard status`。默认是 advisory；在 strict 模式下，前两批缺少 plan block 的工具调用仍会执行并收到纠正提示，第三次此类尝试会在执行工具前被停止。
 
+**Q: 中断正在运行的 turn 后会怎样？**
+A: Pawn 会将当前 prompt 保留为队列工作，并把它预填到下一次输入中：按 Enter 只重试一次；编辑后按 Enter 会替换该重试；使用 `/queue` 查看、`/queue resume` 稍后运行，或用 `/abort` 丢弃排队工作。
+
 **Q: Test Connection 失败但 fetch 成功？**
 A: Fetch 只读 `/v1/models`；Test Connection 发送聊天请求。先加载聊天模型。
 

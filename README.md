@@ -383,6 +383,9 @@ A: Yes. Type a unique prefix or subsequence such as `/plg`; Tab completion lists
 **Q: How do I choose a plan-guard mode?**
 A: Run `/planguard` (or `/plg`) in an interactive terminal, then use Up/Down or 1/2 and press Enter. Use `/planguard advisory`, `/planguard strict`, or `/planguard status` for explicit or non-interactive use. Advisory is the default; in strict mode the first two tool-call batches without a plan block still run with a correction, and the third such attempt is stopped before its tools execute.
 
+**Q: What happens when I interrupt a running turn?**
+A: Pawn preserves the current prompt as queued work. The next input is prefilled: press Enter to retry it once, edit it then press Enter to replace it, use `/queue` to inspect it, `/queue resume` to run it later, or `/abort` to discard queued work.
+
 **Q: Test Connection fails but fetch succeeds?**
 A: Fetch reads `/v1/models`; Test Connection sends a chat request. Load a chat model first.
 

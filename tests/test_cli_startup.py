@@ -40,6 +40,21 @@ def test_repl_retry_uses_interrupted_turn_api(monkeypatch):
     session.run_turn.assert_not_called()
 
 
+def test_interrupted_repl_recovery_explains_preserved_queue(capsys):
+    autosave = MagicMock()
+    session = SimpleNamespace(
+        undo=lambda _count: (1, "retry prompt"),
+        _autosave=autosave,
+        queue_status=lambda: {"queue_depth": 1},
+    )
+
+    restored = cli_mod._restore_interrupted_repl_input(session, "fallback prompt")
+
+    assert restored == "retry prompt"
+    autosave.assert_called_once_with()
+    assert "Saved 1 queued message" in capsys.readouterr().out
+
+
 def test_startup_resume_prompt_warns_and_continues_on_session_lookup_failure(
     monkeypatch,
     capsys,

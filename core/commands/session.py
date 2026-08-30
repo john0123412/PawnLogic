@@ -64,6 +64,7 @@ from core.persistence import (
     session_rename,
     session_save,
 )
+from core.interrupts import turn_interrupt_handler
 from core.session import _ctx_chars
 from core.state import state as _runtime_state, set_output_mode
 from utils.ansi import (
@@ -678,7 +679,9 @@ async def cmd_queue(ctx: CommandContext) -> None:
         _print(c(GREEN, f"  ✓ Cleared {count} queued message(s)"))
         return
     if sub == "resume":
-        if ctx.session.resume_queued_turns():
+        with turn_interrupt_handler():
+            resumed = ctx.session.resume_queued_turns()
+        if resumed:
             _print(c(GREEN, "  ✓ Resumed queued messages"))
         else:
             _print(c(GRAY, "  (queue empty)"))

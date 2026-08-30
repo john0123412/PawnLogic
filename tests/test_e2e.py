@@ -7,9 +7,14 @@ exit cleanly without requiring real API keys (PAWNLOGIC_TEST_MODE=true).
 
 import os
 import sys
+import time
+from pathlib import Path
+
 import pytest
 
 pytestmark = pytest.mark.e2e
+
+ROOT = Path(__file__).resolve().parent.parent
 
 try:
     import pexpect
@@ -67,6 +72,75 @@ def _spawn_pawnlogic_process(tmp_path, *, prompt_toolkit_enabled: bool):
         encoding="utf-8",
         env=env,
     )
+
+
+def _spawn_interruptible_pawnlogic_process(tmp_path):
+    """Spawn the fallback REPL with a stream that waits for Ctrl+C."""
+    test_home = tmp_path / "interrupt-home"
+    pawnlogic_home = test_home / ".pawnlogic"
+    pawnlogic_home.mkdir(parents=True)
+    trace_path = tmp_path / "stream-starts.log"
+    bootstrap_dir = tmp_path / "interrupt-bootstrap"
+    bootstrap_dir.mkdir()
+    (bootstrap_dir / "sitecustomize.py").write_text(
+        """
+import os
+import time
+from pathlib import Path
+
+import core.session
+from core.interrupts import raise_if_interrupted
+
+trace_path = Path(os.environ["PAWNLOGIC_INTERRUPT_TRACE"])
+
+def delayed_stream(*_args, **_kwargs):
+    with trace_path.open("a", encoding="utf-8") as trace:
+        trace.write("start\\n")
+    while True:
+        time.sleep(0.02)
+        raise_if_interrupted()
+        yield {"choices": [{"delta": {"content": ""}}]}
+
+core.session.stream_request = delayed_stream
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env.update({
+        "HOME": str(test_home),
+        "PAWNLOGIC_HOME": str(pawnlogic_home),
+        "PAWNLOGIC_TEST_MODE": "true",
+        "DEEPSEEK_API_KEY": "test-key",
+        "MCP_ENABLED": "false",
+        "PROMPT_TOOLKIT_ENABLED": "0",
+        "TERM": "dumb",
+        "NO_COLOR": "1",
+        "PAWNLOGIC_INTERRUPT_TRACE": str(trace_path),
+    })
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(ROOT), str(bootstrap_dir), existing_pythonpath) if part
+    )
+    return pexpect.spawn(
+        f"{sys.executable} main.py",
+        cwd=str(ROOT),
+        timeout=15,
+        encoding="utf-8",
+        env=env,
+    ), trace_path
+
+
+def _wait_for_stream_count(trace_path: Path, expected: int, timeout: float = 5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if trace_path.exists():
+            starts = trace_path.read_text(encoding="utf-8").splitlines()
+            if len(starts) >= expected:
+                return starts
+        time.sleep(0.05)
+    starts = trace_path.read_text(encoding="utf-8").splitlines() if trace_path.exists() else []
+    raise AssertionError(f"expected {expected} stream starts, got {starts!r}")
 
 
 @pytest.fixture
@@ -138,6 +212,46 @@ def test_slash_queue_resume_reports_empty_queue(spawn_pawnlogic):
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
         pytest.fail(f"/queue resume failed: {e}")
+
+
+def test_ctrl_c_retry_and_queue_resume_keep_one_recoverable_message(tmp_path):
+    """Ctrl+C preserves one retry, whether the user presses Enter or resumes it."""
+    child, trace_path = _spawn_interruptible_pawnlogic_process(tmp_path)
+    try:
+        _wait_for_prompt(child)
+        child.sendline("retry once")
+        _wait_for_stream_count(trace_path, 1)
+
+        child.sendcontrol("c")
+        child.expect("Saved 1 queued message", timeout=10)
+        child.expect(r"You > .*retry once", timeout=10)
+
+        # Pressing Enter consumes the preserved prompt once, rather than adding
+        # a duplicate queue entry.
+        child.sendline("")
+        _wait_for_stream_count(trace_path, 2)
+        time.sleep(0.2)
+        assert len(trace_path.read_text(encoding="utf-8").splitlines()) == 2
+
+        child.sendcontrol("c")
+        child.expect("Saved 1 queued message", timeout=10)
+        child.sendline("/queue")
+        child.expect(r"Queued: 1 message\(s\)", timeout=10)
+
+        # The explicit command follows the same recovery path and is
+        # interruptible without losing or duplicating the queued input.
+        child.sendline("/queue resume")
+        _wait_for_stream_count(trace_path, 3)
+        time.sleep(0.2)
+        assert len(trace_path.read_text(encoding="utf-8").splitlines()) == 3
+        child.sendcontrol("c")
+        child.expect("Saved 1 queued message", timeout=10)
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"Ctrl+C recovery flow failed: {e}")
+    finally:
+        if child.isalive():
+            child.close(force=True)
 
 
 def test_slash_planguard_tui_applies_selected_mode(spawn_pawnlogic_tui):
