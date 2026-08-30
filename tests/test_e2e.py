@@ -428,3 +428,104 @@ def test_clean_exit(spawn_pawnlogic):
     except pexpect.TIMEOUT as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
         pytest.fail(f"Clean exit failed: process didn't exit in 5s: {e}")
+
+
+def _spawn_parked_turn_pawnlogic_process(tmp_path):
+    """Spawn the fallback REPL with a Turn that parks until a sentinel appears."""
+    test_home = tmp_path / "parked-home"
+    pawnlogic_home = test_home / ".pawnlogic"
+    pawnlogic_home.mkdir(parents=True)
+    trace_path = tmp_path / "parked-stream-starts.log"
+    sentinel_path = tmp_path / "release-turn.sentinel"
+    bootstrap_dir = tmp_path / "parked-bootstrap"
+    bootstrap_dir.mkdir()
+    (bootstrap_dir / "sitecustomize.py").write_text(
+        """
+import os
+import json
+import time
+from pathlib import Path
+
+import core.session
+
+trace_path = Path(os.environ["PAWNLOGIC_PARK_TRACE"])
+sentinel_path = Path(os.environ["PAWNLOGIC_PARK_SENTINEL"])
+
+def parked_stream(*_args, **_kwargs):
+    messages = _args[0]
+    last_user = next(
+        (message.get("content", "") for message in reversed(messages)
+         if message.get("role") == "user"),
+        "",
+    )
+    with trace_path.open("a", encoding="utf-8") as trace:
+        trace.write(json.dumps(last_user) + "\\n")
+    while not sentinel_path.exists():
+        time.sleep(0.02)
+    yield {"choices": [{"delta": {"content": "parked turn done"}}]}
+
+core.session.stream_request = parked_stream
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env.update({
+        "HOME": str(test_home),
+        "PAWNLOGIC_HOME": str(pawnlogic_home),
+        "PAWNLOGIC_TEST_MODE": "true",
+        "DEEPSEEK_API_KEY": "test-key",
+        "MCP_ENABLED": "false",
+        "PROMPT_TOOLKIT_ENABLED": "0",
+        "TERM": "dumb",
+        "NO_COLOR": "1",
+        "PAWNLOGIC_PARK_TRACE": str(trace_path),
+        "PAWNLOGIC_PARK_SENTINEL": str(sentinel_path),
+    })
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(ROOT), str(bootstrap_dir), existing_pythonpath) if part
+    )
+    child = pexpect.spawn(
+        f"{sys.executable} main.py",
+        cwd=str(ROOT),
+        timeout=15,
+        encoding="utf-8",
+        env=env,
+    )
+    return child, trace_path, sentinel_path
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="0.3.6 live turn control: input sent during a running Turn is only "
+    "consumed after the Turn ends; steering at a safe point needs the Turn "
+    "Scheduler (ADR 0009)",
+)
+def test_mid_turn_input_steers_at_a_safe_point(tmp_path):
+    """Mid-turn Enter must steer at the next safe point instead of waiting.
+
+    0.3.6 contract: a line submitted while a Turn is running starts a new
+    model request at the next safe point, before the parked Turn is released.
+    Today the REPL reads no input during a Turn, so the submitted line sits in
+    the tty buffer until the Turn finishes; this baseline records that gap and
+    is promoted to a regular passing test once the scheduler lands.
+    """
+    child, trace_path, sentinel = _spawn_parked_turn_pawnlogic_process(tmp_path)
+    try:
+        _wait_for_prompt(child)
+        child.sendline("long running task")
+        starts = _wait_for_stream_count(trace_path, 1)
+        assert json.loads(starts[-1]) == "long running task"
+
+        child.sendline("steer: switch to plan B")
+        starts = _wait_for_stream_count(trace_path, 2, timeout=5.0)
+        assert json.loads(starts[-1]) == "steer: switch to plan B"
+
+        sentinel.write_text("release")
+        child.expect("parked turn done", timeout=10)
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"mid-turn steer failed: {e}")
+    finally:
+        child.close(force=True)
