@@ -1442,15 +1442,12 @@ async def _main_impl():
             _signal_state.submitted()
             if not raw:
                 continue
-            _run_as_recovery_command = (
+            _is_recovery_control = (
                 _retry_interrupted
-                and (
-                    raw == _interrupted_default
-                    or _is_interrupted_recovery_control(raw)
-                )
+                and _is_interrupted_recovery_control(raw)
             )
             if raw.startswith("/") and (
-                not _retry_interrupted or _run_as_recovery_command
+                not _retry_interrupted or _is_recovery_control
             ):
                 # Fuzzy command typo correction.
                 _cmd_parts = raw.split(None, 1)

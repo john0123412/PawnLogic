@@ -7,6 +7,7 @@ exit cleanly without requiring real API keys (PAWNLOGIC_TEST_MODE=true).
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -297,6 +298,14 @@ def test_ctrl_c_edit_replaces_the_preserved_prompt(tmp_path, replacement):
         assert json.loads(starts[-1]) == replacement
         child.sendcontrol("c")
         child.expect("Saved 1 queued message", timeout=10)
+        child.expect(rf"You > .*{re.escape(replacement)}", timeout=10)
+
+        # Enter must retry the edited prompt even when it starts with '/'.
+        child.sendline("")
+        starts = _wait_for_stream_count(trace_path, 3)
+        assert json.loads(starts[-1]) == replacement
+        child.sendcontrol("c")
+        child.expect("Saved 1 queued message", timeout=10)
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
         pytest.fail(f"Ctrl+C edit recovery failed: {e}")
@@ -305,8 +314,9 @@ def test_ctrl_c_edit_replaces_the_preserved_prompt(tmp_path, replacement):
             child.close(force=True)
 
 
-def test_ctrl_c_abort_discards_the_preserved_prompt(tmp_path):
-    """The documented abort control remains available during retry editing."""
+@pytest.mark.parametrize("control", ["/abort", "/queue clear"])
+def test_ctrl_c_clear_control_discards_the_preserved_prompt(tmp_path, control):
+    """Documented clear controls remain available during retry editing."""
     child, trace_path = _spawn_interruptible_pawnlogic_process(tmp_path)
     try:
         _wait_for_prompt(child)
@@ -317,14 +327,14 @@ def test_ctrl_c_abort_discards_the_preserved_prompt(tmp_path):
         child.expect("Saved 1 queued message", timeout=10)
         child.expect(r"You > .*discard me", timeout=10)
 
-        child.sendline("/abort")
+        child.sendline(control)
         child.expect("Cleared 1 queued message", timeout=10)
         child.sendline("/queue")
         child.expect(r"Queued: 0 message\(s\)", timeout=10)
         assert len(trace_path.read_text(encoding="utf-8").splitlines()) == 1
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
-        pytest.fail(f"Ctrl+C abort recovery failed: {e}")
+        pytest.fail(f"Ctrl+C clear-control recovery failed: {e}")
     finally:
         if child.isalive():
             child.close(force=True)
