@@ -15,7 +15,13 @@ from pawnlogic.repl import (
     write_text_cache as _write_text_cache,
 )
 from pawnlogic.extension_host import ExtensionHost
-from pawnlogic.completion_sources import merge_completion_sources
+from pawnlogic.completion_sources import (
+    builtin_command_completion_words as _builtin_command_completion_words,
+    matching_command_words as _matching_command_words,
+    merge_completion_sources,
+    pawn_fuzzy_match as _pawn_fuzzy_match,
+    readline_command_candidates as _readline_command_candidates,
+)
 from pawnlogic.startup import (
     default_pawnlogic_home as _default_pawnlogic_home,
     ensure_runtime_dir_writable,
@@ -276,6 +282,8 @@ HELP_TEXT = f"""
   {c(YELLOW, "/context")}         Show context size and token estimate
   {c(YELLOW, "/pin [n]")}         Pin the last n messages
   {c(YELLOW, "/undo [n]")}        Undo recent turns
+  {c(YELLOW, "/queue [clear|resume]")} Inspect, clear, or resume interrupted work
+  {c(YELLOW, "/abort")}           Clear interrupted work and mark the session aborted
   {c(YELLOW, "/compact")}         Summarize and compact context
   {c(YELLOW, "/think <prompt>")}  Run one deeper reasoning turn
   {c(YELLOW, "/cd <path>")}       Change working directory
@@ -318,6 +326,7 @@ HELP_TEXT = f"""
   {c(MAGENTA, "/deep")} Deep mode
   {c(RED, "/max")}     Maximum mode
   {c(YELLOW, "/limits")} Show current limits
+  {c(YELLOW, "/planguard [mode]")} Select plan-guard mode; no arg opens a selector
   {c(YELLOW, "/webstatus /browserstatus /docker /pwnenv")} Tool status
 
 {c(BOLD, "Projects & History")}
@@ -449,28 +458,6 @@ def render_agent_output(text: str) -> None:
 # highlighting directly.
 # ════════════════════════════════════════════════════════
 
-def _pawn_fuzzy_match(query: str, candidate: str) -> tuple[bool, list[int]]:
-    """
-    Case-insensitive subsequence fuzzy match.
-    Return ``(True, indices)`` if ``query`` is a subsequence of ``candidate``
-    (case-insensitive), where ``indices`` is the list of matched character
-    positions in ``candidate``.  Return ``(False, [])`` otherwise.
-    Used for fuzzy verb matching in command dispatch, allowing partial type-ahead
-    such as ``/plang`` → ``/planguard``.
-    """
-    q, c = query.lower(), candidate.lower()
-    ci = 0
-    indices: list[int] = []
-    for qc in q:
-        while ci < len(c) and c[ci] != qc:
-            ci += 1
-        if ci >= len(c):
-            return False, []
-        indices.append(ci)
-        ci += 1
-    return True, indices
-
-
 class PawnCompleter(Completer):
     """
     PawnLogic completer with built-in fuzzy matching.
@@ -485,11 +472,13 @@ class PawnCompleter(Completer):
         self,
         words: list[str],
         meta_dict: dict[str, str] | None = None,
+        dynamic_command_provider=None,
         dynamic_model_provider=None,
         dynamic_extension_provider=None,
     ):
         self.words    = words
         self.meta_dict = meta_dict or {}
+        self.dynamic_command_provider = dynamic_command_provider
         self.dynamic_model_provider = dynamic_model_provider
         self.dynamic_extension_provider = dynamic_extension_provider
 
@@ -497,6 +486,7 @@ class PawnCompleter(Completer):
         return merge_completion_sources(
             self.words,
             self.meta_dict,
+            command_provider=self.dynamic_command_provider,
             model_provider=self.dynamic_model_provider,
             extension_provider=self.dynamic_extension_provider,
         )
@@ -835,6 +825,33 @@ async def _run_eval_mode(session: AgentSession, args, sink) -> None:
     sys.exit(0)
 
 
+def _run_repl_turn(session: AgentSession, raw: str, *, retry_interrupted: bool) -> None:
+    """Run a REPL turn, replacing rather than duplicating an interrupted prompt."""
+    with turn_interrupt_handler():
+        if retry_interrupted:
+            session.retry_interrupted_turn(raw)
+        else:
+            session.run_turn(raw)
+
+
+def _restore_interrupted_repl_input(session: AgentSession, fallback: str) -> str:
+    """Roll back display state and explain how to resume a preserved prompt."""
+    _removed, last_text = session.undo(1)
+    session._autosave()
+    queue_depth = session.queue_status()["queue_depth"]
+    if queue_depth:
+        suffix = "" if queue_depth == 1 else "s"
+        print(c(
+            YELLOW,
+            "  [interrupted] Saved "
+            f"{queue_depth} queued message{suffix}. Press Enter to retry it, "
+            "edit then press Enter to replace it, or run /queue resume to run it later.",
+        ))
+    else:
+        print(c(YELLOW, "  [interrupted] Edit and press Enter to retry."))
+    return last_text or fallback
+
+
 async def _main_impl():
     prompt_toolkit_enabled = _HAS_PROMPT_TOOLKIT
     # CLI argument parsing.
@@ -1063,17 +1080,7 @@ async def _main_impl():
     # ════════════════════════════════════════════════════════
 
     # Flat command list with gray descriptions on the right.
-    _all_cmd_words = [
-        "/mode", "/model", "/clear", "/context", "/pin", "/unpin", "/cd", "/file",
-        "/undo", "/compact", "/think", "/ping",
-        "/history", "/setkey", "/keys", "/save", "/load", "/resume", "/sessions", "/del",
-        "/memorize", "/knowledge", "/forget", "/init_project", "/state",
-        "/low", "/mid", "/deep", "/max", "/normal", "/limits",
-        "/tokens", "/ctx", "/iter", "/toolsize", "/fetchsize",
-        "/webstatus", "/browserstatus", "/pwnenv", "/stats", "/time", "/docker",
-        "/agent", "/worker", "/failures", "/memo", "/skills", "/ctf",
-        "/chat", "/extension", "/help", "/exit",
-    ]
+    _all_cmd_words = _builtin_command_completion_words()
 
     _cmd_meta = {
         "/mode":          "Toggle user-friendly/debug output",
@@ -1083,6 +1090,8 @@ async def _main_impl():
         "/pin":           "Pin recent messages (/pin msg 5 by index)",
         "/unpin":         "Clear all pinned messages",
         "/undo":          "Undo recent turns (default 1)",
+        "/queue":         "Inspect, clear, or resume interrupted queued messages",
+        "/abort":         "Clear queued messages and mark the session aborted",
         "/compact":       "Compact context with a lightweight summary",
         "/think":         "Single-turn reasoning mode (/think <prompt>)",
         "/ping":          "Keepalive request to refresh cache TTL",
@@ -1112,6 +1121,7 @@ async def _main_impl():
         "/iter":          "Set max iterations",
         "/toolsize":      "Set tool output truncation size",
         "/fetchsize":     "Set web fetch truncation size",
+        "/planguard":     "Open or configure the plan-guard mode selector",
         "/webstatus":     "Jina / Pandoc / Lynx tool status",
         "/browserstatus": "Scrapling browser tool status",
         "/pwnenv":        "CTF/Pwn toolchain integrity check",
@@ -1224,6 +1234,7 @@ async def _main_impl():
         _pawn_completer = PawnCompleter(
             _all_words,
             meta_dict=_all_meta,
+            dynamic_command_provider=_builtin_command_completion_words,
             dynamic_model_provider=_visible_models,
             dynamic_extension_provider=_EXTENSION_HOST.completion_items,
         )
@@ -1337,9 +1348,9 @@ async def _main_impl():
         def _completer_rl(text: str, state: int):
             line = readline.get_line_buffer()
             if line.startswith("/"):
-                matches = [cmd for cmd in _ALL_COMMANDS if cmd.startswith(line)]
-                if not matches:
-                    matches = [cmd for cmd in _ALL_COMMANDS if cmd.startswith(text)]
+                matches = _matching_command_words(
+                    line, _readline_command_candidates(_ALL_COMMANDS)
+                )
             else:
                 import glob
                 matches = glob.glob(text + "*") if text else glob.glob("*")
@@ -1413,6 +1424,12 @@ async def _main_impl():
                 _label = _re_edit_default if _re_edit_default else ""
                 raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ") + _label).strip()
 
+            _retry_interrupted = bool(_re_edit_default)
+            if not raw and _retry_interrupted:
+                # readline cannot place a default value in the editable buffer;
+                # Enter therefore means retry the preserved prompt.
+                raw = _re_edit_default
+
             _re_edit_default = ""    # clear after consuming it
             _signal_state.submitted()
             if not raw:
@@ -1422,33 +1439,31 @@ async def _main_impl():
                 _cmd_parts = raw.split(None, 1)
                 _cmd_verb  = _cmd_parts[0]
                 _cmd_rest  = _cmd_parts[1] if len(_cmd_parts) > 1 else ""
-                if _cmd_verb not in _all_cmd_words and len(_cmd_verb) >= 3:
-                    import difflib
-                    _close = difflib.get_close_matches(
-                        _cmd_verb, _all_cmd_words, n=1, cutoff=0.7
+                _registered_command_words = _builtin_command_completion_words()
+                if _cmd_verb not in _registered_command_words and len(_cmd_verb) >= 3:
+                    _matches = _matching_command_words(
+                        _cmd_verb, _registered_command_words
                     )
-                    if _close:
-                        _corrected = _close[0]
+                    if len(_matches) == 1:
+                        _corrected = _matches[0]
                         raw = f"{_corrected} {_cmd_rest}".strip() if _cmd_rest else _corrected
                         print(c(YELLOW, f"  ✔ Auto-corrected: {_cmd_verb} -> {_corrected}"))
-                result = await handle_slash(raw, session)
+                try:
+                    result = await handle_slash(raw, session)
+                except TurnInterrupted:
+                    _re_edit_default = _restore_interrupted_repl_input(session, raw)
+                    _signal_state.submitted()
+                    continue
                 if result is _EXIT_SENTINEL:
                     print(c(CYAN, "\n  Goodbye! 👋"))
                     break
                 continue
             _write_text_cache(_last_input_path, raw)
             try:
-                with turn_interrupt_handler():
-                    session.run_turn(raw)
+                _run_repl_turn(session, raw, retry_interrupted=_retry_interrupted)
             except TurnInterrupted:
-                removed, last_text = session.undo(1)
-                session._autosave()
-                _re_edit_default = last_text or raw
+                _re_edit_default = _restore_interrupted_repl_input(session, raw)
                 _signal_state.submitted()
-                if removed:
-                    print(c(YELLOW, "  [interrupted] Turn rolled back; edit and press Enter to retry."))
-                else:
-                    print(c(YELLOW, "  [interrupted] Edit and press Enter to retry."))
 
         except KeyboardInterrupt:
             # Idle input state: Ctrl+C only arms the double-press exit flow.

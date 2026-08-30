@@ -38,6 +38,7 @@ def fmt_config() -> str:
         f"  max_iter        : {c(CYAN, str(cfg['max_iter']))}  (tool-call iteration limit)\n"
         f"  tool_max_chars  : {c(CYAN, str(cfg['tool_max_chars']))}\n"
         f"  fetch_max_chars : {c(CYAN, str(cfg['fetch_max_chars']))}\n"
+        f"  plan_guard_mode : {c(CYAN, str(cfg.get('plan_guard_mode', 'advisory')))}  (CoT guard; /planguard strict|advisory)\n"
     )
 
 

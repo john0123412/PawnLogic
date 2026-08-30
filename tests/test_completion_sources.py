@@ -10,12 +10,14 @@ def test_merge_completion_sources_keeps_inputs_and_adds_live_entries():
     merged_words, merged_meta = merge_completion_sources(
         words,
         meta,
+        command_provider=lambda: ["/planguard"],
         model_provider=lambda: {"fast": {"desc": "Fast model"}},
         extension_provider=lambda: {"security": "Extension (disabled)"},
     )
 
     assert words == ["/model", "/extension"]
     assert meta == {"/model": "models"}
+    assert "/planguard" in merged_words
     assert "/model fast" in merged_words
     assert "/agent policy model allow fast" in merged_words
     assert "/agent policy model deny fast" in merged_words

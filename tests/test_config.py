@@ -137,3 +137,8 @@ def test_tier_ordering():
 def test_ctx_trim_less_than_max():
     for tier in (TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX):
         assert tier["ctx_trim_to"] < tier["ctx_max_chars"]
+
+
+def test_tier_plan_guard_defaults_to_advisory():
+    for tier in (TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX):
+        assert tier["plan_guard_mode"] == "advisory"

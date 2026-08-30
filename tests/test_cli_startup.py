@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -17,6 +19,40 @@ from pawnlogic import cli as cli_mod
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_help_text_lists_plan_guard_selector():
+    assert "/planguard [mode]" in cli_mod.HELP_TEXT
+    assert "no arg opens a selector" in cli_mod.HELP_TEXT
+    assert "/queue [clear|resume]" in cli_mod.HELP_TEXT
+
+
+def test_repl_retry_uses_interrupted_turn_api(monkeypatch):
+    session = SimpleNamespace(
+        retry_interrupted_turn=MagicMock(),
+        run_turn=MagicMock(),
+    )
+    monkeypatch.setattr(cli_mod, "turn_interrupt_handler", contextlib.nullcontext)
+
+    cli_mod._run_repl_turn(session, "retry prompt", retry_interrupted=True)
+
+    session.retry_interrupted_turn.assert_called_once_with("retry prompt")
+    session.run_turn.assert_not_called()
+
+
+def test_interrupted_repl_recovery_explains_preserved_queue(capsys):
+    autosave = MagicMock()
+    session = SimpleNamespace(
+        undo=lambda _count: (1, "retry prompt"),
+        _autosave=autosave,
+        queue_status=lambda: {"queue_depth": 1},
+    )
+
+    restored = cli_mod._restore_interrupted_repl_input(session, "fallback prompt")
+
+    assert restored == "retry prompt"
+    autosave.assert_called_once_with()
+    assert "Saved 1 queued message" in capsys.readouterr().out
 
 
 def test_startup_resume_prompt_warns_and_continues_on_session_lookup_failure(

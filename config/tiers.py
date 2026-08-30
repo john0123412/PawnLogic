@@ -37,7 +37,7 @@ TIER_DEEP = {
     "time_budget_sec":  1800,
     "ctx_sliding_turns": 8,
     "ctx_summary_threshold": 12,
-    "plan_guard_mode":  "strict",
+    "plan_guard_mode":  "advisory",
 }
 TIER_MAX = {
     "max_tokens":      32_768,
@@ -50,5 +50,5 @@ TIER_MAX = {
     "time_budget_sec":  3600,
     "ctx_sliding_turns": 10,
     "ctx_summary_threshold": 15,
-    "plan_guard_mode":  "strict",
+    "plan_guard_mode":  "advisory",
 }

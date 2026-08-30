@@ -31,7 +31,7 @@ Public API:
 
 Callers:
   · session.py  → _reset_system_prompt injects TOC and relevant skills.
-  · session.py  → tool_bump_skill in TOOL_MAP.
+  · gsa_tools.py → tool_bump_skill, registered into TOOL_MAP by session.py.
   · main.py     → /memo command.
 
 ─────────────────────────────────────────────────────────────

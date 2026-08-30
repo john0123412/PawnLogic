@@ -155,6 +155,18 @@ def test_undo_command_autosaves_after_removal(capsys):
     assert "Undid 2 messages" in capsys.readouterr().out
 
 
+def test_queue_resume_processes_interrupted_messages(capsys):
+    from core.commands import CommandContext
+    from core.commands.session import cmd_queue
+
+    session = SimpleNamespace(resume_queued_turns=MagicMock(return_value=True))
+
+    asyncio.run(cmd_queue(CommandContext(verb="/queue", arg="resume", arg2="", session=session)))
+
+    session.resume_queued_turns.assert_called_once_with()
+    assert "Resumed queued messages" in capsys.readouterr().out
+
+
 # ════════════════════════════════════════════════════════
 # 2. Dispatch routing
 # ════════════════════════════════════════════════════════
@@ -217,6 +229,7 @@ def test_dispatch_aliases_share_handler(cmd_pkg):
 # ════════════════════════════════════════════════════════
 
 FUZZY_VERB_CASES: list[tuple[str, str]] = [
+    ("/plg", "/planguard"),
     ("/plang", "/planguard"),
     ("/planguard", "/planguard"),
     ("/model", "/model"),
@@ -371,21 +384,70 @@ def test_keys_command_emits_json_with_jsonsink(cmd_pkg, fake_session, capsys):
         assert isinstance(status, bool)
 
 
-def test_planguard_without_arg_defaults_to_advisory(monkeypatch, capsys):
+def test_planguard_without_arg_uses_selector_and_applies_choice(monkeypatch, capsys):
     import asyncio
 
     from config import DYNAMIC_CONFIG
     from core.commands import CommandContext, system as system_cmds
 
-    monkeypatch.setitem(DYNAMIC_CONFIG, "plan_guard_mode", "strict")
+    monkeypatch.setitem(DYNAMIC_CONFIG, "plan_guard_mode", "advisory")
+    monkeypatch.setattr(system_cmds, "_plan_guard_tui_available", lambda: True)
+
+    async def select_mode(current):
+        assert current == "advisory"
+        return "strict"
+
+    monkeypatch.setattr(system_cmds, "_select_plan_guard_mode", select_mode)
     asyncio.run(
         system_cmds.cmd_planguard(
             CommandContext(verb="/planguard", arg="", arg2="", session=None)
         )
     )
 
-    assert DYNAMIC_CONFIG["plan_guard_mode"] == "advisory"
-    assert "advisory" in capsys.readouterr().out
+    assert DYNAMIC_CONFIG["plan_guard_mode"] == "strict"
+    assert "strict" in capsys.readouterr().out
+
+
+def test_planguard_selector_cancel_keeps_current_mode(monkeypatch, capsys):
+    import asyncio
+
+    from config import DYNAMIC_CONFIG
+    from core.commands import CommandContext, system as system_cmds
+
+    monkeypatch.setitem(DYNAMIC_CONFIG, "plan_guard_mode", "strict")
+    monkeypatch.setattr(system_cmds, "_plan_guard_tui_available", lambda: True)
+
+    async def cancel_selection(_current):
+        return None
+
+    monkeypatch.setattr(system_cmds, "_select_plan_guard_mode", cancel_selection)
+    asyncio.run(
+        system_cmds.cmd_planguard(
+            CommandContext(verb="/planguard", arg="", arg2="", session=None)
+        )
+    )
+
+    assert DYNAMIC_CONFIG["plan_guard_mode"] == "strict"
+    assert "unchanged" in capsys.readouterr().out
+
+
+def test_planguard_without_tui_keeps_current_mode_and_shows_cli_syntax(monkeypatch, capsys):
+    import asyncio
+
+    from config import DYNAMIC_CONFIG
+    from core.commands import CommandContext, system as system_cmds
+
+    monkeypatch.setitem(DYNAMIC_CONFIG, "plan_guard_mode", "strict")
+    monkeypatch.setattr(system_cmds, "_plan_guard_tui_available", lambda: False)
+    asyncio.run(
+        system_cmds.cmd_planguard(
+            CommandContext(verb="/planguard", arg="", arg2="", session=None)
+        )
+    )
+
+    assert DYNAMIC_CONFIG["plan_guard_mode"] == "strict"
+    out = capsys.readouterr().out
+    assert "strict|advisory|status" in out
 
 
 def test_planguard_switches_modes_explicitly(monkeypatch, capsys):
@@ -409,3 +471,24 @@ def test_planguard_switches_modes_explicitly(monkeypatch, capsys):
     )
     out = capsys.readouterr().out
     assert "strict" in out
+
+
+def test_max_tier_uses_and_reports_advisory_plan_guard(fake_session, capsys):
+    from config import DYNAMIC_CONFIG
+    from core.commands import CommandContext, system as system_cmds
+
+    previous = dict(DYNAMIC_CONFIG)
+    try:
+        DYNAMIC_CONFIG["plan_guard_mode"] = "strict"
+        asyncio.run(
+            system_cmds.cmd_max(
+                CommandContext(verb="/max", arg="", arg2="", session=fake_session)
+            )
+        )
+        assert DYNAMIC_CONFIG["plan_guard_mode"] == "advisory"
+        output = capsys.readouterr().out
+        assert "plan_guard_mode" in output
+        assert "advisory" in output
+    finally:
+        DYNAMIC_CONFIG.clear()
+        DYNAMIC_CONFIG.update(previous)

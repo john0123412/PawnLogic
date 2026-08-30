@@ -96,6 +96,10 @@ The repository has one CLI runtime implementation.
   implementation as `pawnlogic.cli`.
 - Dynamic `/model <alias>` completions must be read live from `_visible_models`.
 - Do not cache fetched provider models into a static completer `meta_dict`.
+- Top-level command completion candidates must come from `core.commands.COMMANDS`;
+  do not maintain a second manual command list. Every newly registered command
+  must be reachable through Prompt Toolkit and readline fuzzy completion as
+  well as direct command dispatch.
 - Add or update tests for both `main.PawnCompleter` and
   `pawnlogic.cli.PawnCompleter` when changing completion behavior.
 - `python main.py --help`, `python -m pawnlogic --help`, `pawn --help`, and
@@ -614,9 +618,10 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   or capability filtering.
 - Tool watchdog abandons wedged tool threads instead of blocking the session;
   abandoned threads keep running until process exit and their results are lost.
-- Advisory plan-guard tiers (LOW/MID, `plan_guard_mode`) let weak models run
-  side-effect tools without plan blocks; Operation Policy remains the actual
-  safety gate, not the CoT Guard.
+- Tier presets use advisory plan-guard mode (`plan_guard_mode`) so weak models
+  can run side-effect tools without plan blocks; `/planguard strict` remains
+  explicit opt-in. Operation Policy remains the actual safety gate, not the
+  CoT Guard.
 - `/abort` clears queued input but cannot cancel a provider request already
   handed to a synchronous stream; Ctrl+C remains the in-flight interruption
   path.

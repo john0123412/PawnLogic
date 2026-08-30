@@ -124,6 +124,21 @@ class MessageQueue:
                 self._queue.appendleft(msg)
             return count
 
+    def replace_next(self, content: str) -> bool:
+        """Replace the next queued message without changing queue order.
+
+        This is used when a user edits the prompt that was requeued after an
+        interrupted turn. Later messages must remain queued behind the retry.
+
+        Returns:
+            ``True`` when a queued message was replaced, otherwise ``False``.
+        """
+        with self._lock:
+            if not self._queue:
+                return False
+            self._queue[0].content = content
+            return True
+
     def clear(self) -> int:
         """Clear all queued and pending messages.
 

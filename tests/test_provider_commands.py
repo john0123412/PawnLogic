@@ -184,6 +184,75 @@ def test_packaged_cli_completer_supports_fuzzy_command_completion():
     _assert_fuzzy_command_completion(pawn_cli.PawnCompleter)
 
 
+def _assert_registered_command_fuzzy_completion(pawn_module):
+    from core.commands import COMMANDS
+
+    words = pawn_module._builtin_command_completion_words()
+    assert set(COMMANDS).issubset(words)
+
+    completions = list(
+        pawn_module.PawnCompleter(words).get_completions(Document("/plg"), None)
+    )
+    assert "/planguard" in {completion.text for completion in completions}
+
+
+def test_main_registered_command_catalog_supports_planguard_fuzzy_completion():
+    _assert_registered_command_fuzzy_completion(pawn_main)
+
+
+def test_packaged_registered_command_catalog_supports_planguard_fuzzy_completion():
+    _assert_registered_command_fuzzy_completion(pawn_cli)
+
+
+def test_readline_command_candidates_support_fuzzy_matching():
+    assert pawn_cli._matching_command_words(
+        "/plg", ["/plan", "/planguard", "/provider"]
+    ) == ["/planguard"]
+
+
+def _assert_runtime_registered_command_completion(pawn_module):
+    from core.commands import register_owned_commands, unregister_owned_commands
+
+    async def handler(_ctx):
+        return None
+
+    owner = f"test-completion-catalog-{pawn_module.__name__}"
+    register_owned_commands(owner, {"/catalogcheck": handler})
+    try:
+        completer = pawn_module.PawnCompleter(
+            ["/help"],
+            dynamic_command_provider=pawn_module._builtin_command_completion_words,
+        )
+        completions = list(completer.get_completions(Document("/ctc"), None))
+        assert "/catalogcheck" in {completion.text for completion in completions}
+    finally:
+        unregister_owned_commands(owner)
+
+
+def test_main_registered_command_catalog_refreshes_runtime_commands():
+    _assert_runtime_registered_command_completion(pawn_main)
+
+
+def test_packaged_registered_command_catalog_refreshes_runtime_commands():
+    _assert_runtime_registered_command_completion(pawn_cli)
+
+
+def test_readline_command_candidates_include_runtime_registered_commands():
+    from core.commands import register_owned_commands, unregister_owned_commands
+
+    async def handler(_ctx):
+        return None
+
+    owner = "test-readline-completion-catalog"
+    register_owned_commands(owner, {"/catalogcheck": handler})
+    try:
+        candidates = pawn_cli._readline_command_candidates(["/provider list"])
+        assert "/catalogcheck" in candidates
+        assert "/provider list" in candidates
+    finally:
+        unregister_owned_commands(owner)
+
+
 def test_packaged_cli_completer_refreshes_extension_names_and_subcommands_live():
     visible = {"security": "Extension (disabled)"}
     completer = pawn_cli.PawnCompleter(

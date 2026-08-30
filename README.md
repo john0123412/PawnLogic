@@ -209,7 +209,7 @@ connection and response wait times.
 /think <prompt>                   # run one deeper reasoning turn
 /compact                          # summarize and compact context
 /undo [n]                         # roll back recent turns
-/queue [clear]                    # inspect or clear messages queued after an interruption
+/queue [clear|resume]             # inspect, clear, or resume messages queued after an interruption
 /abort                            # clear queued messages and mark the session aborted
 /deep                             # full-power mode
 /init_project [desc]              # initialize project state
@@ -223,7 +223,7 @@ connection and response wait times.
 /extension enable <name>          # explicitly enable an Extension
 /extension disable <name>         # disable an Extension
 /worker [alias|auto]              # inspect or set the preferred worker
-/planguard [strict|advisory|status]  # CoT plan-guard mode; no arg means advisory
+/planguard [strict|advisory|status]  # no argument opens the mode selector; tiers default to advisory, strict is opt-in
 /agent policy show                # inspect delegated-agent policy
 /agent run <role> <objective>     # print a safe delegate_task request template
 ```
@@ -376,6 +376,15 @@ Analyze ./challenge, use pwn_debug to inspect registers at main breakpoint.
 
 **Q: `/model` doesn't show new models after adding a provider?**
 A: Configure its key, run `/provider fetch <name>`, select models, then `/provider activate <name>`.
+
+**Q: Can I abbreviate a slash command?**
+A: Yes. Type a unique prefix or subsequence such as `/plg`; Tab completion lists `/planguard`, and pressing Enter normalizes the command. All registered built-in commands participate in both Prompt Toolkit and readline completion.
+
+**Q: How do I choose a plan-guard mode?**
+A: Run `/planguard` (or `/plg`) in an interactive terminal, then use Up/Down or 1/2 and press Enter. Use `/planguard advisory`, `/planguard strict`, or `/planguard status` for explicit or non-interactive use. Advisory is the default; in strict mode the first two tool-call batches without a plan block still run with a correction, and the third such attempt is stopped before its tools execute.
+
+**Q: What happens when I interrupt a running turn?**
+A: Pawn preserves the current prompt as queued work. The next input is prefilled: press Enter to retry it once, edit it then press Enter to replace it, use `/queue` to inspect it, `/queue resume` to run it later, or `/abort` to discard queued work.
 
 **Q: Test Connection fails but fetch succeeds?**
 A: Fetch reads `/v1/models`; Test Connection sends a chat request. Load a chat model first.

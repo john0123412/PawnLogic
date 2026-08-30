@@ -194,6 +194,36 @@ def test_run_turn_hard_stops_after_soft_plan_corrections(monkeypatch, capsys):
     assert "Missing <plan>" in capsys.readouterr().out
 
 
+def test_max_tier_advisory_guard_keeps_running_after_missing_plans(monkeypatch):
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    from config import DYNAMIC_CONFIG, TIER_MAX
+
+    monkeypatch.setitem(DYNAMIC_CONFIG, "plan_guard_mode", TIER_MAX["plan_guard_mode"])
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 4)
+    tool_runs = []
+    monkeypatch.setitem(
+        session_mod.TOOL_MAP,
+        "write_file",
+        lambda _args: tool_runs.append("write") or "OK: fake write",
+    )
+    monkeypatch.setattr(
+        session_mod,
+        "stream_request",
+        fake_stream_sequence(
+            _tool_call_response("write_file", {"path": "a.txt"}, call_id="call_1", include_plan=False),
+            _tool_call_response("write_file", {"path": "b.txt"}, call_id="call_2", include_plan=False),
+            _tool_call_response("write_file", {"path": "c.txt"}, call_id="call_3", include_plan=False),
+            _assistant_done_response("completed"),
+        ),
+    )
+
+    s.run_turn("write repeatedly without a plan")
+
+    assert tool_runs == ["write", "write", "write"]
+    assert s._session_status == "completed"
+    assert s.messages[-1] == {"role": "assistant", "content": "completed"}
+
+
 def test_run_turn_marks_iteration_limit_as_failed(monkeypatch):
     from config import DYNAMIC_CONFIG
 
@@ -886,6 +916,99 @@ def test_run_turn_clears_interruption_timestamp_after_queue_drains(monkeypatch):
     assert s._message_queue.is_empty
     assert s._session_status == "completed"
     assert s._interrupted_at is None
+
+
+def test_run_turn_drains_messages_enqueued_during_an_active_turn(monkeypatch):
+    s = _make_session()
+    processed = []
+    monkeypatch.setattr(s, "_sync_runtime_context", lambda: None)
+
+    def run_active(user_input):
+        processed.append(user_input)
+        if user_input == "first":
+            s.run_turn("second")
+        return None
+
+    monkeypatch.setattr(s, "_run_turn_active", run_active)
+
+    s.run_turn("first")
+
+    assert processed == ["first", "second"]
+    assert s._message_queue.is_empty
+    assert s._session_status == "completed"
+
+
+def test_run_turn_requeues_pending_message_after_interruption(monkeypatch):
+    s = _make_session()
+    s._autosave = MagicMock()
+    monkeypatch.setattr(s, "_sync_runtime_context", lambda: None)
+
+    def interrupted(_user_input):
+        raise TurnInterrupted()
+
+    monkeypatch.setattr(s, "_run_turn_active", interrupted)
+
+    with pytest.raises(TurnInterrupted):
+        s.run_turn("retry me")
+
+    assert s._message_queue.to_list() == ["retry me"]
+    assert s._message_queue.pending_count == 0
+    assert s._session_status == "interrupted"
+    s._autosave.assert_called_once_with(turn_status="interrupted")
+
+
+def test_retry_interrupted_turn_replaces_requeued_prompt_without_duplicate(monkeypatch):
+    s = _make_session()
+    s._autosave = MagicMock()
+    monkeypatch.setattr(s, "_sync_runtime_context", lambda: None)
+    processed = []
+    interrupted = True
+
+    def run_active(user_input):
+        nonlocal interrupted
+        if interrupted:
+            interrupted = False
+            raise TurnInterrupted()
+        processed.append(user_input)
+        return None
+
+    monkeypatch.setattr(s, "_run_turn_active", run_active)
+
+    with pytest.raises(TurnInterrupted):
+        s.run_turn("original prompt")
+
+    # A later queued message must remain behind the edited retry.
+    s._message_queue.enqueue("later prompt")
+    s.retry_interrupted_turn("edited prompt")
+
+    assert processed == ["edited prompt", "later prompt"]
+    assert s._message_queue.is_empty
+    assert s._session_status == "completed"
+
+
+def test_resume_queued_turns_runs_requeued_prompt_once(monkeypatch):
+    s = _make_session()
+    s._autosave = MagicMock()
+    monkeypatch.setattr(s, "_sync_runtime_context", lambda: None)
+    processed = []
+    interrupted = True
+
+    def run_active(user_input):
+        nonlocal interrupted
+        if interrupted:
+            interrupted = False
+            raise TurnInterrupted()
+        processed.append(user_input)
+        return None
+
+    monkeypatch.setattr(s, "_run_turn_active", run_active)
+
+    with pytest.raises(TurnInterrupted):
+        s.run_turn("resume me")
+
+    assert s.resume_queued_turns() is True
+    assert processed == ["resume me"]
+    assert s._message_queue.is_empty
 
 
 def test_abort_clears_queued_messages_and_marks_session_aborted():
