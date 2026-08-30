@@ -834,6 +834,12 @@ def _run_repl_turn(session: AgentSession, raw: str, *, retry_interrupted: bool) 
             session.run_turn(raw)
 
 
+def _is_interrupted_recovery_control(raw: str) -> bool:
+    """Return whether ``raw`` manages preserved work instead of replacing it."""
+    verb = raw.split(None, 1)[0].lower() if raw.strip() else ""
+    return verb in {"/queue", "/abort"}
+
+
 def _restore_interrupted_repl_input(session: AgentSession, fallback: str) -> str:
     """Roll back display state and explain how to resume a preserved prompt."""
     _removed, last_text = session.undo(1)
@@ -845,7 +851,8 @@ def _restore_interrupted_repl_input(session: AgentSession, fallback: str) -> str
             YELLOW,
             "  [interrupted] Saved "
             f"{queue_depth} queued message{suffix}. Press Enter to retry it, "
-            "edit then press Enter to replace it, or run /queue resume to run it later.",
+            "edit then press Enter to replace it, run /queue resume to run it "
+            "later, or /abort to discard it.",
         ))
     else:
         print(c(YELLOW, "  [interrupted] Edit and press Enter to retry."))
@@ -1424,17 +1431,27 @@ async def _main_impl():
                 _label = _re_edit_default if _re_edit_default else ""
                 raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ") + _label).strip()
 
-            _retry_interrupted = bool(_re_edit_default)
+            _interrupted_default = _re_edit_default
+            _retry_interrupted = bool(_interrupted_default)
             if not raw and _retry_interrupted:
                 # readline cannot place a default value in the editable buffer;
                 # Enter therefore means retry the preserved prompt.
-                raw = _re_edit_default
+                raw = _interrupted_default
 
             _re_edit_default = ""    # clear after consuming it
             _signal_state.submitted()
             if not raw:
                 continue
-            if raw.startswith("/"):
+            _run_as_recovery_command = (
+                _retry_interrupted
+                and (
+                    raw == _interrupted_default
+                    or _is_interrupted_recovery_control(raw)
+                )
+            )
+            if raw.startswith("/") and (
+                not _retry_interrupted or _run_as_recovery_command
+            ):
                 # Fuzzy command typo correction.
                 _cmd_parts = raw.split(None, 1)
                 _cmd_verb  = _cmd_parts[0]

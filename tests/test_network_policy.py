@@ -68,6 +68,26 @@ def test_special_ip_ranges_deny_for_ipv4_and_ipv6(host, rule):
     assert decision.rule == rule.value
 
 
+@pytest.mark.parametrize(
+    "host",
+    ["localhost", "service.localhost", "LOCALHOST.", "Service.LocalHost."],
+)
+def test_localhost_namespace_denies_before_dns(host):
+    calls: list[str] = []
+
+    def resolver(value: str):
+        calls.append(value)
+        raise AssertionError("localhost namespace must not reach DNS")
+
+    decision = NetworkPolicy(resolver=resolver).evaluate(
+        NetworkOperation(url=f"http://{host}:8080/")
+    )
+
+    assert decision.action == NetworkAction.DENY
+    assert decision.rule == NetworkRule.LOOPBACK.value
+    assert calls == []
+
+
 @pytest.mark.parametrize("host", ["metadata", "metadata.google.internal", "metadata.aliyun.com", "service.internal"])
 def test_cloud_metadata_and_internal_hosts_deny(host):
     decision = NetworkPolicy().evaluate(NetworkOperation(scheme="http", host=host))

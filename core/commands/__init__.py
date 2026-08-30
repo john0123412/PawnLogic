@@ -20,22 +20,35 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Awaitable, Callable
 
 
-def _pawn_fuzzy_match(query: str, candidate: str) -> bool:
-    """Case-insensitive subsequence fuzzy match.
-
-    Return True if ``query`` is a subsequence of ``candidate`` (case-insensitive).
-    Used for fuzzy verb matching in command dispatch, allowing partial type-ahead
-    such as ``/plang`` → ``/planguard``.
-    """
+def pawn_fuzzy_match(query: str, candidate: str) -> tuple[bool, list[int]]:
+    """Return whether ``query`` fuzzily matches ``candidate`` and its indices."""
     q, c = query.lower(), candidate.lower()
     ci = 0
+    indices: list[int] = []
     for qc in q:
         while ci < len(c) and c[ci] != qc:
             ci += 1
         if ci >= len(c):
-            return False
+            return False, []
+        indices.append(ci)
         ci += 1
-    return True
+    return True, indices
+
+
+def matching_command_words(query: str, candidates: Iterable[str]) -> list[str]:
+    """Return prefix matches before other subsequence matches."""
+    query_lower = query.lower()
+    prefix_matches: list[str] = []
+    fuzzy_matches: list[str] = []
+    for candidate in sorted(set(candidates)):
+        matched, _ = pawn_fuzzy_match(query, candidate)
+        if not matched:
+            continue
+        if candidate.lower().startswith(query_lower):
+            prefix_matches.append(candidate)
+        else:
+            fuzzy_matches.append(candidate)
+    return prefix_matches + fuzzy_matches
 
 
 @dataclass
@@ -181,38 +194,29 @@ async def dispatch(ctx: CommandContext) -> Any:
             finally:
                 set_active_sink(old_sink)
 
-        # Fuzzy-match unknown verbs against registered commands.
-        best_match: str | None = None
-        best_score: int = 0
-        for verb in COMMANDS:
-            # Score: number of matching subsequence characters (higher is better)
-            score = 0
-            if _pawn_fuzzy_match(ctx.verb, verb):
-                # Count how many of the query chars matched in order
-                q, v = ctx.verb.lower(), verb.lower()
-                ci = 0
-                for qc in q:
-                    while ci < len(v) and v[ci] != qc:
-                        ci += 1
-                    if ci < len(v):
-                        score += 1
-                        ci += 1
-                if score > best_score:
-                    best_score = score
-                    best_match = verb
-
-        if best_match is not None and best_score >= 2:
+        # Fuzzy dispatch is safe only when the input identifies one command.
+        matches = matching_command_words(ctx.verb, COMMANDS) if len(ctx.verb) >= 3 else []
+        if len(matches) == 1:
+            matched_verb = matches[0]
             from core.commands._common import set_active_sink, swap_active_sink
             old_sink = swap_active_sink(ctx.sink)
             try:
-                ctx.verb = best_match
-                handler = COMMANDS[best_match]
+                ctx.verb = matched_verb
+                handler = COMMANDS[matched_verb]
                 return await handler(ctx)
             finally:
                 set_active_sink(old_sink)
 
-        # Unknown verb - match legacy behavior of printing a hint.
         from utils.ansi import c, GRAY
+        if matches:
+            candidates = ", ".join(matches)
+            ctx.sink.print(c(
+                GRAY,
+                f"  Ambiguous command '{ctx.verb}'. Matches: {candidates}",
+            ))
+            return None
+
+        # Unknown verb - match legacy behavior of printing a hint.
         ctx.sink.print(c(GRAY, f"  Unknown command '{ctx.verb}'. Type /help."))
         return None
 
@@ -238,5 +242,7 @@ __all__ = [
     "unregister_owned_commands",
     "command_owner",
     "dispatch",
+    "matching_command_words",
+    "pawn_fuzzy_match",
     "COMMANDS",
 ]

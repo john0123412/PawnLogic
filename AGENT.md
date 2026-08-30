@@ -100,6 +100,8 @@ The repository has one CLI runtime implementation.
   do not maintain a second manual command list. Every newly registered command
   must be reachable through Prompt Toolkit and readline fuzzy completion as
   well as direct command dispatch.
+- Fuzzy direct dispatch must execute only a unique registered-command match.
+  Ambiguous input must list its candidates and execute no command.
 - Add or update tests for both `main.PawnCompleter` and
   `pawnlogic.cli.PawnCompleter` when changing completion behavior.
 - `python main.py --help`, `python -m pawnlogic --help`, `pawn --help`, and
@@ -576,9 +578,10 @@ are source-checkout or user-installed assets; pip/curl installations should use
   distribution build, PyPI fresh-install smoke, and GitHub Release creation;
   the one-time `.release-ready` marker was then removed.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Active plan: the `0.3.4` release is complete.
-  `docs/plans/0.3.2-bounded-concurrency-two.md` records the completed 0.3.2
-  implementation and release evidence. Independent
+- Active plan: `docs/plans/0.3.5-command-recovery-hardening.md` tracks the
+  command-recovery fixes and final network-policy release gate required before
+  the 0.3.5 release candidate. The published 0.3.4 release remains complete.
+  Independent
   `pawnlogic-security` 0.1.0 published from `john0123412/pawnlogic-security`
   on 2026-07-28.
 - `main` protected by branch rule requiring PR, up-to-date branches, and four
