@@ -5,7 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [0.3.6] - 2026-08-30
+
+### Planned
+
+- Live turn control: mid-turn steering, follow-up queue, and per-Turn
+  cancellation under the 0.3.6 Turn Scheduler plan. Entries accumulate here as
+  the cycle lands; the release date is corrected at finalization.
 
 ## [0.3.5] - 2026-08-30
 
