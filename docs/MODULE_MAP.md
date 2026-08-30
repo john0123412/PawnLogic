@@ -22,6 +22,7 @@
 | `core/delegation_runtime.py` | Delegated execution | `SubAgentSession`, `DelegationTaskExecutor` | `test_delegate_tool.py`, `test_delegation_baseline.py`, `test_concurrent_delegation.py` | Host safety instructions precede task instructions; each child receives a copied RuntimeContext, unique workspace, bounded output collector, and task-local cancellation. Two-worker mode permits only task-isolated file Tools. |
 | `core/knowledge.py` | Retrieval contracts and orchestration | `KnowledgeRecord`, `RetrievalHit`, `KnowledgeRetriever` | `test_knowledge.py` | SQLite content is authoritative; optional projections provide ranking only; stale or unavailable projections fall back without startup failure. |
 | `core/knowledge_sqlite.py` | Durable knowledge Adapter | `SQLiteKnowledgeAdapter` | `test_knowledge_memory_adapter.py` | Bounded FTS/keyword reads, revision-aware outbox events, and database-side rebuild enqueueing never materialize the full corpus. |
+| `core/gsa_tools.py` | GSA tool handlers | `tool_bump_skill`, `tool_audit_payload` | `test_session_utils.py`, `test_tool_routing.py` | Handlers and schemas live here; `core.session` registers them into the shared registry at import time. |
 | `core/agent_events.py` | Versioned Agent Event Interface | `AgentEvent`, `AgentEventPublisher` | `test_agent_events.py`, `test_agent_event_integration.py` | Events are immutable, recursively redacted, canonically serialized, and synchronously published outside persisted chat-message shapes. |
 | `core/session_events.py` | Main-session event Adapter | `SessionEventEmitter` | `test_agent_event_integration.py`, `test_session_utils.py` | Correlates Turn, retrieval, usage, Tool, and policy events; subscriber failures never stop Agent execution. |
 | `core/tool_registry.py` | Capability Interface | `ToolRegistry.register()` / `visible_specs()` | `test_tool_registry.py` | Handler, schema, phase, trust, capabilities registered atomically. No tool without handler. |
@@ -97,7 +98,7 @@
 |--------|------|-----------|-------|------------|
 | `pawnlogic/cli.py` | CLI facade | `run()`, `PawnCompleter` | `test_cli_startup.py`, `test_cli_transcripts.py` | Public entry point. Live model and Extension completions; Extension startup failures remain non-fatal. |
 | `pawnlogic/extension_host.py` | Extension startup Adapter | `ExtensionHost` | `test_extension_host.py` | One process-level manager; persisted activation and shutdown failures are isolated. |
-| `pawnlogic/completion_sources.py` | Live completion merge | `merge_completion_sources()` | `test_completion_sources.py`, `test_provider_commands.py` | Static completion inputs are immutable; model, delegated-policy alias, and Extension sources are read live. |
+| `pawnlogic/completion_sources.py` | Live completion merge and fuzzy command matching | `merge_completion_sources()`, `pawn_fuzzy_match()`, `matching_command_words()` | `test_completion_sources.py`, `test_provider_commands.py` | Static completion inputs are immutable; model, delegated-policy alias, and Extension sources are read live. |
 | `pawnlogic/startup.py` | Bootstrap | `setup_environment()` | `test_cli_startup.py` | First-run, env, debug mode. |
 | `pawnlogic/repl.py` | REPL loop | `run_repl()` | `test_cli_startup.py` | Signal handling, input restoration. |
 
