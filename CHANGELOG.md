@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.3.5] - 2026-08-30
 
+### Added
+- Added an interactive `/planguard` selector for choosing advisory or strict
+  plan-guard mode.
+- Added fuzzy slash-command auto-correction for unique registered-command
+  prefixes and subsequences, while ambiguous input only lists candidates.
+
+### Changed
+- Changed the DEEP and MAX tier plan-guard defaults from strict to advisory;
+  strict mode now requires explicit selection.
+
 ### Fixed
 - Prevented ambiguous fuzzy slash commands from executing an arbitrary first
   match; ambiguous input now lists candidates and runs nothing.
