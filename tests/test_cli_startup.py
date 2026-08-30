@@ -52,7 +52,10 @@ def test_interrupted_repl_recovery_explains_preserved_queue(capsys):
 
     assert restored == "retry prompt"
     autosave.assert_called_once_with()
-    assert "Saved 1 queued message" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Saved 1 queued message" in output
+    assert "/queue resume" in output
+    assert "/abort" in output
 
 
 def test_startup_resume_prompt_warns_and_continues_on_session_lookup_failure(

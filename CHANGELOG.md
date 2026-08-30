@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Prevented ambiguous fuzzy slash commands from executing an arbitrary first
+  match; ambiguous input now lists candidates and runs nothing.
+- Let slash-prefixed edits replace an interrupted queued Turn while preserving
+  `/queue` and `/abort` as recovery controls.
+- Denied `localhost` and every reserved `.localhost` subdomain before DNS
+  resolution so resolver failures cannot bypass loopback protection.
+
+### Tests
+- Added direct-dispatch and terminal E2E coverage for ambiguous commands,
+  slash-prefixed retry edits, aborting preserved work, and DNS-independent
+  localhost namespace blocking.
+
 ## [0.3.4] - 2026-08-29
 
 ### Added

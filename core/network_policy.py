@@ -385,6 +385,12 @@ class NetworkPolicy:
                 f"scheme '{target.scheme}' is not allowed",
                 target.url,
             )
+        if target.host == "localhost" or target.host.endswith(".localhost"):
+            return self._deny(
+                NetworkRule.LOOPBACK,
+                "localhost namespace is a loopback target",
+                target.url,
+            )
         if target.host in _METADATA_HOSTS or target.host.endswith(".internal"):
             return self._deny(NetworkRule.CLOUD_METADATA, "cloud metadata/internal host is denied", target.url)
 
