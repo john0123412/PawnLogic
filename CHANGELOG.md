@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-08-30
+
 ### Fixed
 - Prevented ambiguous fuzzy slash commands from executing an arbitrary first
   match; ambiguous input now lists candidates and runs nothing.

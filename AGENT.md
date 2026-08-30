@@ -578,9 +578,9 @@ are source-checkout or user-installed assets; pip/curl installations should use
   distribution build, PyPI fresh-install smoke, and GitHub Release creation;
   the one-time `.release-ready` marker was then removed.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Active plan: `docs/plans/0.3.5-command-recovery-hardening.md` tracks the
-  command-recovery fixes and final network-policy release gate required before
-  the 0.3.5 release candidate. The published 0.3.4 release remains complete.
+- Active plan: release candidate `0.3.5` is being validated on
+  `test/release-0.3.5`; it remains unpublished until the tag-triggered release
+  workflow completes. The published 0.3.4 release remains complete.
   Independent
   `pawnlogic-security` 0.1.0 published from `john0123412/pawnlogic-security`
   on 2026-07-28.
