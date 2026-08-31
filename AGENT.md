@@ -571,17 +571,15 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.3.4`. PyPI, GitHub Release, and latest tag
-  are `v0.3.4`.
-- Release finalization: `v0.3.4` was published on 2026-08-29 through Trusted
+- Current published release: `0.3.5`. PyPI, GitHub Release, and latest tag
+  are `v0.3.5`.
+- Release finalization: `v0.3.5` was published on 2026-08-30 through Trusted
   Publishing. The release workflow completed its full test gate, Dynamic E2E,
   distribution build, PyPI fresh-install smoke, and GitHub Release creation;
   the one-time `.release-ready` marker was then removed.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Active plan: the `0.3.5` release-finalization commit is being validated on
-  `test/release-0.3.5`; the version remains unpublished until the tag-triggered
-  release workflow completes. The published 0.3.4 release remains complete.
-  Independent
+- Active plan: none. The completed plans index records the published 0.3.5
+  command-recovery hardening plan. Independent
   `pawnlogic-security` 0.1.0 published from `john0123412/pawnlogic-security`
   on 2026-07-28.
 - `main` protected by branch rule requiring PR, up-to-date branches, and four
