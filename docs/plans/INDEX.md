@@ -18,7 +18,7 @@ and its release is published, it moves to Completed below.
 
 | Version | Plan | Release |
 |---------|------|---------| 
-| 0.3.5 | [0.3.5-command-recovery-hardening.md](0.3.5-command-recovery-hardening.md) | v0.3.5 |
+| 0.3.5 | [0.3.5-command-recovery-hardening.md](0.3.5-command-recovery-hardening.md) | [v0.3.5](https://github.com/john0123412/PawnLogic/releases/tag/v0.3.5) |
 | 0.3.2 | [0.3.2-bounded-concurrency-two.md](0.3.2-bounded-concurrency-two.md) | [v0.3.2](https://github.com/john0123412/PawnLogic/releases/tag/v0.3.2) |
 | 0.3.1 | [0.3.1-runtime-hardening-and-release-preparation.md](0.3.1-runtime-hardening-and-release-preparation.md) | v0.3.1 |
 | 0.3.0 | [0.3.0-extensible-agent-platform-and-security-distribution.md](0.3.0-extensible-agent-platform-and-security-distribution.md) | v0.3.0 |

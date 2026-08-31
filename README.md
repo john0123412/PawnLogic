@@ -213,6 +213,8 @@ connection and response wait times.
 /queue [clear|resume]             # inspect, clear, or resume messages queued after an interruption
 /abort                            # clear queued messages and mark the session aborted
 /deep                             # full-power mode
+/max                              # maximum mode with up to 100 tool-call iterations
+/ultra                            # MAX limits with up to 150 tool-call iterations
 /init_project [desc]              # initialize project state
 /pwnenv                           # check CTF toolchain integrity
 /ctf init <name>                  # start CTF workspace metadata

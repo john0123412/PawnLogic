@@ -14,7 +14,7 @@ from .providers import (
     custom_model_alias, is_chat_model_candidate,
     is_provider_active, set_provider_active,
 )
-from .tiers import TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX
+from .tiers import TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX, TIER_ULTRA
 from .security import (
     READ_BLACKLIST, WRITE_BLACKLIST, DANGEROUS_PATTERNS,
     smart_truncate, user_friendly_error, scrub_sensitive_env,
@@ -36,7 +36,7 @@ __all__ = [
     "is_fast_model", "find_fast_peer", "models_url_from_base_url",
     "custom_model_alias", "is_chat_model_candidate",
     "is_provider_active", "set_provider_active",
-    "TIER_LOW", "TIER_MID", "TIER_DEEP", "TIER_MAX",
+    "TIER_LOW", "TIER_MID", "TIER_DEEP", "TIER_MAX", "TIER_ULTRA",
     "READ_BLACKLIST", "WRITE_BLACKLIST", "DANGEROUS_PATTERNS",
     "smart_truncate", "user_friendly_error", "scrub_sensitive_env",
     "SANDBOX_LANGS", "DOCKER_IMAGES", "BROWSER_CONFIG", "USER_AGENTS",

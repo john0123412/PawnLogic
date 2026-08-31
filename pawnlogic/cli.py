@@ -325,6 +325,7 @@ HELP_TEXT = f"""
   {c(YELLOW, "/mid")}  Default mode
   {c(MAGENTA, "/deep")} Deep mode
   {c(RED, "/max")}     Maximum mode
+  {c(BOLD + CYAN, "/ultra")} Ultra mode (150 iterations)
   {c(YELLOW, "/limits")} Show current limits
   {c(YELLOW, "/planguard [mode]")} Select plan-guard mode; no arg opens a selector
   {c(YELLOW, "/webstatus /browserstatus /docker /pwnenv")} Tool status
@@ -1070,7 +1071,7 @@ async def _main_impl():
 {vision_line}
 {state_line}
 {proxy_line}
-  {c(YELLOW,'/help')} commands  {c(GREEN,'/low')} {c(YELLOW,'/mid')} {c(MAGENTA,'/deep')} {c(RED,'/max')}  {c(CYAN,'/save /load')}  {c(MAGENTA,'/memorize')}  {c(YELLOW,'/init_project')}
+  {c(YELLOW,'/help')} commands  {c(GREEN,'/low')} {c(YELLOW,'/mid')} {c(MAGENTA,'/deep')} {c(RED,'/max')} {c(BOLD+CYAN,'/ultra')}  {c(CYAN,'/save /load')}  {c(MAGENTA,'/memorize')}  {c(YELLOW,'/init_project')}
 """)
     else:
         key_sym = "✓" if key_ok else "✗"
@@ -1121,6 +1122,7 @@ async def _main_impl():
         "/mid":           "Development mode (tokens=8k, ctx=150k) <- default",
         "/deep":          "Full-power mode (tokens=32k, ctx=400k)",
         "/max":           "Maximum mode (tokens=32k, ctx=600k, iter=100, 60min)",
+        "/ultra":         "Ultra mode (tokens=32k, ctx=600k, iter=150, 60min)",
         "/normal":        "Reset to /mid",
         "/limits":        "Show all runtime limits",
         "/tokens":        "Set max_tokens",
@@ -1258,6 +1260,8 @@ async def _main_impl():
             _tier = "MID"
             if DYNAMIC_CONFIG["max_tokens"] <= 4096:
                 _tier = "LOW"
+            elif DYNAMIC_CONFIG["max_iter"] >= 150:
+                _tier = "ULTRA"
             elif DYNAMIC_CONFIG["max_iter"] >= 100:
                 _tier = "MAX"
             elif DYNAMIC_CONFIG["max_tokens"] >= 32768:

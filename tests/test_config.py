@@ -27,7 +27,7 @@ for _key in list(sys.modules):
             del sys.modules[_key]
 
 from config import VERSION, DB_PATH, GLOBAL_SKILLS_PATH, WORKSPACE_DIR, LOG_DIR  # noqa: E402
-from config.tiers import TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX  # noqa: E402
+from config.tiers import TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX, TIER_ULTRA  # noqa: E402
 
 
 # ── helpers ──────────────────────────────────────────────
@@ -122,7 +122,8 @@ assert config.SKILLS_DIR == config.PAWNLOGIC_HOME / 'skills'
 
 def test_tier_keys_present():
     for name, tier in [("LOW", TIER_LOW), ("MID", TIER_MID),
-                       ("DEEP", TIER_DEEP), ("MAX", TIER_MAX)]:
+                       ("DEEP", TIER_DEEP), ("MAX", TIER_MAX),
+                       ("ULTRA", TIER_ULTRA)]:
         missing = _tier_keys() - tier.keys()
         assert not missing, f"TIER_{name} missing keys: {missing}"
 
@@ -131,14 +132,24 @@ def test_tier_ordering():
     assert TIER_LOW["max_tokens"] <= TIER_MID["max_tokens"]
     assert TIER_MID["max_tokens"] <= TIER_DEEP["max_tokens"]
     assert TIER_LOW["max_iter"] < TIER_MID["max_iter"] < TIER_DEEP["max_iter"]
-    assert TIER_DEEP["max_iter"] < TIER_MAX["max_iter"]
+    assert TIER_DEEP["max_iter"] < TIER_MAX["max_iter"] < TIER_ULTRA["max_iter"]
+
+
+def test_ultra_only_raises_max_tool_call_iterations():
+    assert TIER_MAX["max_iter"] == 100
+    assert TIER_ULTRA["max_iter"] == 150
+    assert {
+        key: value for key, value in TIER_ULTRA.items() if key != "max_iter"
+    } == {
+        key: value for key, value in TIER_MAX.items() if key != "max_iter"
+    }
 
 
 def test_ctx_trim_less_than_max():
-    for tier in (TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX):
+    for tier in (TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX, TIER_ULTRA):
         assert tier["ctx_trim_to"] < tier["ctx_max_chars"]
 
 
 def test_tier_plan_guard_defaults_to_advisory():
-    for tier in (TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX):
+    for tier in (TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX, TIER_ULTRA):
         assert tier["plan_guard_mode"] == "advisory"

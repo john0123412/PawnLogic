@@ -170,6 +170,8 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 /queue [clear|resume]             # 查看、清除或继续处理中断后排队的消息
 /abort                            # 清除排队消息并将会话标记为已中止
 /deep                             # full-power 模式
+/max                              # maximum 模式，最多 100 次工具调用迭代
+/ultra                            # 保持 MAX 其余限制，最多 150 次工具调用迭代
 /init_project [desc]              # 初始化项目状态
 /pwnenv                           # 检查 CTF 工具链完整性
 /ctf init <name>                  # 创建 CTF workspace metadata
