@@ -52,3 +52,7 @@ TIER_MAX = {
     "ctx_summary_threshold": 15,
     "plan_guard_mode":  "advisory",
 }
+TIER_ULTRA = {
+    **TIER_MAX,
+    "max_iter":        150,
+}

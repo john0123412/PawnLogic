@@ -28,7 +28,7 @@ EXIT_SENTINEL: str = "__PAWN_EXIT__"
 def fmt_config() -> str:
     """Render the current dynamic runtime config block as a multi-line string.
 
-    Used by /low, /mid, /deep, /max, /normal, /limits to display the
+    Used by /low, /mid, /deep, /max, /ultra, /normal, /limits to display the
     effective runtime tunables after a tier change.
     """
     cfg = runtime_config()

@@ -2390,7 +2390,7 @@ class AgentSession:
                 self._autosave(turn_status="interrupted")
                 raise TurnInterrupted()
 
-        print(c(RED, f"\n[Reached max_iter={turn_state.max_iter}; use /mid, /deep, or /iter <n> to raise it]"))
+        print(c(RED, f"\n[Reached max_iter={turn_state.max_iter}; change it with /max, /ultra, or /iter <n>]"))
         logger.warning(
             "max_iter reached | model={} session={} max_iter={}",
             self.model_alias, self.session_id[:8], turn_state.max_iter,

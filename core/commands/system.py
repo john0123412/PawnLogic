@@ -18,7 +18,7 @@ Commands in this module:
   /time [N]               show or set per-turn time budget (seconds)
   /failures [list|clear|N]  inspect / clear the failure audit log
 
-  /low /mid /deep /max /normal    apply a tier preset
+  /low /mid /deep /max /ultra /normal    apply a tier preset
   /limits                          show current dynamic config
   /tokens [N]    set max_tokens
   /ctx [N]       set ctx_max_chars
@@ -36,7 +36,7 @@ from pathlib import Path
 
 from config import (
     NORMAL_CONFIG,
-    TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX,
+    TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX, TIER_ULTRA,
 )
 from core.api_client import stream_request
 from core.memory import list_failures, clear_failures
@@ -299,6 +299,14 @@ async def cmd_max(ctx: CommandContext) -> None:
     _print(fmt_config())
 
 
+@register("/ultra")
+async def cmd_ultra(ctx: CommandContext) -> None:
+    update_dynamic_config(TIER_ULTRA)
+    ctx.session._reset_system_prompt()
+    _print(c(BOLD + CYAN, _tier_confirmation("/ultra ultra mode", TIER_ULTRA)))
+    _print(fmt_config())
+
+
 @register("/normal")
 async def cmd_normal(ctx: CommandContext) -> None:
     update_dynamic_config(NORMAL_CONFIG)
@@ -311,7 +319,7 @@ async def cmd_normal(ctx: CommandContext) -> None:
 async def cmd_limits(ctx: CommandContext) -> None:
     _print(c(BOLD, "\n  Current runtime limits:"))
     _print(fmt_config())
-    _print(c(GRAY, "  /low /mid /deep /max  |  /tokens /ctx /iter /toolsize /fetchsize"))
+    _print(c(GRAY, "  /low /mid /deep /max /ultra  |  /tokens /ctx /iter /toolsize /fetchsize"))
 
 
 # ════════════════════════════════════════════════════════

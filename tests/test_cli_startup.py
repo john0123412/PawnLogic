@@ -21,10 +21,12 @@ from pawnlogic import cli as cli_mod
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_help_text_lists_plan_guard_selector():
+def test_help_text_lists_runtime_controls():
     assert "/planguard [mode]" in cli_mod.HELP_TEXT
     assert "no arg opens a selector" in cli_mod.HELP_TEXT
     assert "/queue [clear|resume]" in cli_mod.HELP_TEXT
+    assert "/ultra" in cli_mod.HELP_TEXT
+    assert "150 iterations" in cli_mod.HELP_TEXT
 
 
 def test_repl_retry_uses_interrupted_turn_api(monkeypatch):

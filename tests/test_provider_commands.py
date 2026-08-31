@@ -184,6 +184,28 @@ def test_packaged_cli_completer_supports_fuzzy_command_completion():
     _assert_fuzzy_command_completion(pawn_cli.PawnCompleter)
 
 
+def _assert_ultra_fuzzy_command_completion(completer_cls):
+    query = "/ult"
+    completer = completer_cls(
+        ["/max", "/ultra", "/limits"],
+        meta_dict={"/ultra": "Ultra mode"},
+    )
+
+    completions = list(completer.get_completions(Document(query), None))
+
+    assert [completion.text for completion in completions] == ["/ultra"]
+    assert completions[0].start_position == -len(query)
+    assert completions[0].display_meta_text == "Ultra mode"
+
+
+def test_main_pawn_completer_supports_ultra_fuzzy_completion():
+    _assert_ultra_fuzzy_command_completion(pawn_main.PawnCompleter)
+
+
+def test_packaged_cli_completer_supports_ultra_fuzzy_completion():
+    _assert_ultra_fuzzy_command_completion(pawn_cli.PawnCompleter)
+
+
 def _assert_registered_command_fuzzy_completion(pawn_module):
     from core.commands import COMMANDS
 

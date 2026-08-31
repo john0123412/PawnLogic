@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Added an `/ultra` runtime tier that keeps the MAX token, context, output,
+  and time limits while raising the tool-call iteration limit from 100 to 150.
+
 ## [0.3.5] - 2026-08-30
 
 ### Added

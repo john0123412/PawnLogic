@@ -211,6 +211,21 @@ def test_slash_fuzzy_planguard(spawn_pawnlogic):
         pytest.fail(f"/plg fuzzy dispatch failed: {e}")
 
 
+def test_slash_fuzzy_ultra_sets_150_iteration_limit(spawn_pawnlogic):
+    """The unique /ult shorthand selects the 150-iteration Ultra tier."""
+    child = spawn_pawnlogic
+    try:
+        _wait_for_prompt(child)
+        child.sendline("/ult")
+        child.expect("Auto-corrected: /ult -> /ultra", timeout=10)
+        child.expect("iter=150", timeout=10)
+        child.expect("max_iter", timeout=10)
+        child.expect("150", timeout=10)
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"/ult fuzzy dispatch failed: {e}")
+
+
 def test_slash_ambiguous_fuzzy_command_lists_candidates(spawn_pawnlogic):
     """Ambiguous fuzzy input stays in the REPL and executes no candidate."""
     child = spawn_pawnlogic
