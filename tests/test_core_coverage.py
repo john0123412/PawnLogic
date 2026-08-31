@@ -58,6 +58,7 @@ class FakeSession:
     workspace_dir: str = ""
     messages: list[dict] = field(default_factory=list)
     reset_called: bool = False
+    _turn_scheduler: object | None = None
 
     def _reset_system_prompt(self):
         self.reset_called = True
@@ -168,10 +169,76 @@ def test_persistence_save_load_restores_session(isolated_memory, monkeypatch, tm
     assert target.reset_called is True
 
 
+def test_persistence_rejects_malformed_queue_state_without_discarding_it(
+    isolated_memory,
+    monkeypatch,
+    tmp_path,
+):
+    _drop_project_modules("core.persistence", force=True)
+    from core import persistence
+
+    monkeypatch.setattr(persistence, "init_db", isolated_memory.init_db)
+    session_id = "session-corrupt"
+    isolated_memory.upsert_session(
+        session_id=session_id,
+        name="Corrupt",
+        model="ds-v4-flash",
+        cwd=str(tmp_path),
+        config_dict={},
+        queue_state="{not-json",
+    )
+
+    with pytest.raises(
+        persistence.PersistenceStateError,
+        match="no queued work was discarded",
+    ):
+        persistence.load_snapshot(session_id)
+
+    row = isolated_memory.get_session(session_id)
+    assert row is not None
+    assert row["queue_state"] == "{not-json"
+
+    target = FakeSession(session_id="empty")
+    result = persistence.session_load(target, "Corrupt")
+    assert result.startswith("ERROR: persisted state")
+    assert target.session_id == "empty"
+
+
+def test_persistence_rejects_malformed_scheduler_state_before_session_mutation(
+    isolated_memory,
+    monkeypatch,
+    tmp_path,
+):
+    _drop_project_modules("core.persistence", force=True)
+    from core import persistence
+
+    monkeypatch.setattr(persistence, "init_db", isolated_memory.init_db)
+    session_id = "session-invalid-scheduler"
+    isolated_memory.upsert_session(
+        session_id=session_id,
+        name="Invalid scheduler",
+        model="ds-v4-flash",
+        cwd=str(tmp_path),
+        config_dict={},
+        queue_state='{"schema": 99, "follow_up": []}',
+    )
+
+    with pytest.raises(
+        persistence.PersistenceStateError,
+        match="persisted scheduler state is invalid",
+    ):
+        persistence.load_snapshot(session_id)
+
+    row = isolated_memory.get_session(session_id)
+    assert row is not None
+    assert row["queue_state"] == '{"schema": 99, "follow_up": []}'
+
+
 def test_persistence_restores_interrupted_queue_state(isolated_memory, monkeypatch, tmp_path):
     _drop_project_modules("core.persistence", force=True)
     from core import persistence
-    from core.message_queue import MessageQueue
+    from core.session_snapshot import SessionSnapshot
+    from core.turn_scheduler import TurnScheduler
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     monkeypatch.setattr(persistence, "init_db", isolated_memory.init_db)
@@ -182,14 +249,25 @@ def test_persistence_restores_interrupted_queue_state(isolated_memory, monkeypat
         workspace_dir=str(tmp_path / "workspace"),
         messages=[{"role": "user", "content": "resume this work"}],
     )
-    source._message_queue = MessageQueue()
-    source._message_queue.enqueue("resume first")
-    source._message_queue.enqueue("then continue")
-    source._message_queue.dequeue()
-    source._session_status = "interrupted"
-    source._interrupted_at = 1_700_000_000.0
-
-    persistence.session_save(source, "Queued")
+    legacy_state = {
+        "queue": [{"content": "then continue"}],
+        "pending": [{"content": "resume first"}],
+    }
+    persistence.save_snapshot(
+        SessionSnapshot.capture(
+            session_id=source.session_id,
+            model_alias=source.model_alias,
+            messages=source.messages,
+            cwd=source.cwd,
+            workspace_dir=source.workspace_dir,
+            config={},
+            status="interrupted",
+            interrupted_at=persistence._serialize_interrupted_at(1_700_000_000.0),
+            queue_depth=2,
+            queue_state=legacy_state,
+        ),
+        name="Queued",
+    )
     snapshot = persistence.load_snapshot(source.session_id)
     assert snapshot is not None
     assert snapshot.queue_state["queue"][0]["content"] == "then continue"
@@ -197,17 +275,19 @@ def test_persistence_restores_interrupted_queue_state(isolated_memory, monkeypat
     assert snapshot.interrupted_at is not None
 
     target = FakeSession(session_id="empty")
-    target._message_queue = MessageQueue()
-    target._session_status = "idle"
-    target._interrupted_at = None
+    target._turn_scheduler = TurnScheduler(lambda _: None)
 
     result = persistence.session_load(target, "Queued")
 
     assert result.startswith("OK: loaded [session-queue]")
-    assert target._message_queue.to_list() == ["resume first", "then continue"]
-    assert target._message_queue.pending_count == 0
-    assert target._session_status == "interrupted"
-    assert target._interrupted_at == pytest.approx(source._interrupted_at)
+    restored = target._turn_scheduler.view()
+    assert restored.recovered is not None
+    assert restored.recovered.content == "resume first"
+    assert [item.content for item in restored.follow_up] == ["then continue"]
+    assert restored.session_status == "interrupted"
+    assert restored.interrupted_at == pytest.approx(1_700_000_000.0)
+    assert restored.id_prefix == "session--turn"
+    assert restored.recovered.submission_id.startswith("session--turn-")
 
 
 def test_persistence_load_normalizes_stale_running_status(
@@ -217,7 +297,8 @@ def test_persistence_load_normalizes_stale_running_status(
 ):
     _drop_project_modules("core.persistence", force=True)
     from core import persistence
-    from core.message_queue import MessageQueue
+    from core.session_snapshot import SessionSnapshot
+    from core.turn_scheduler import TurnScheduler
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     monkeypatch.setattr(persistence, "init_db", isolated_memory.init_db)
@@ -227,20 +308,141 @@ def test_persistence_load_normalizes_stale_running_status(
         cwd=str(tmp_path),
         workspace_dir=str(tmp_path / "workspace"),
     )
-    source._message_queue = MessageQueue()
-    source._session_status = "running"
-    source._interrupted_at = None
-    persistence.session_save(source, "Running")
+    persistence.save_snapshot(
+        SessionSnapshot.capture(
+            session_id=source.session_id,
+            model_alias=source.model_alias,
+            messages=source.messages,
+            cwd=source.cwd,
+            workspace_dir=source.workspace_dir,
+            config={},
+            status="running",
+        ),
+        name="Running",
+    )
 
     target = FakeSession(session_id="empty")
-    target._message_queue = MessageQueue()
-    target._session_status = "idle"
-    target._interrupted_at = None
+    target._turn_scheduler = TurnScheduler(lambda _: None)
 
     result = persistence.session_load(target, "Running")
 
     assert result.startswith("OK: loaded [session-running]")
-    assert target._session_status == "interrupted"
+    assert target._turn_scheduler.view().session_status == "interrupted"
+
+
+def test_running_snapshot_restores_editable_draft_without_replaying_tools(
+    isolated_memory,
+    monkeypatch,
+    tmp_path,
+):
+    _drop_project_modules("core.persistence", force=True)
+    from core import persistence
+    from core.session_snapshot import SessionSnapshot
+    from core.turn_scheduler import TurnScheduler
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setattr(persistence, "init_db", isolated_memory.init_db)
+    source = FakeSession(
+        session_id="session-crashed",
+        cwd=str(tmp_path),
+        workspace_dir=str(tmp_path / "workspace"),
+        messages=[{"role": "user", "content": "run the side effect"}],
+    )
+    persistence.save_snapshot(
+        SessionSnapshot.capture(
+            session_id=source.session_id,
+            model_alias=source.model_alias,
+            messages=source.messages,
+            cwd=source.cwd,
+            workspace_dir=source.workspace_dir,
+            config={},
+            status="running",
+        ),
+        name="Crashed",
+    )
+
+    calls: list[str] = []
+    target = FakeSession(session_id="empty")
+    target._turn_scheduler = TurnScheduler(lambda item: calls.append(item.content))
+
+    result = persistence.session_load(target, "Crashed")
+
+    assert result.startswith("OK: loaded [session-crashed]")
+    restored = target._turn_scheduler.view()
+    assert calls == []
+    assert restored.session_status == "interrupted"
+    assert restored.recovered is not None
+    assert restored.recovered.content == "run the side effect"
+
+
+def test_session_continue_selects_only_recoverable_sessions(monkeypatch):
+    _drop_project_modules("core.persistence", force=True)
+    from core import persistence
+
+    rows = [
+        {"id": "done", "status": "completed"},
+        {"id": "failed", "status": "failed"},
+    ]
+    monkeypatch.setattr(persistence, "list_sessions", lambda _limit: rows)
+    loaded: list[str] = []
+    monkeypatch.setattr(
+        persistence,
+        "session_load",
+        lambda _session, query: loaded.append(query) or "OK: loaded [failed]",
+    )
+
+    result = persistence.session_continue(object())
+
+    assert result == "OK: loaded [failed]"
+    assert loaded == ["failed"]
+
+
+def test_session_continue_reports_missing_recoverable_session(monkeypatch):
+    _drop_project_modules("core.persistence", force=True)
+    from core import persistence
+
+    monkeypatch.setattr(
+        persistence,
+        "list_sessions",
+        lambda _limit: [{"id": "done", "status": "completed"}],
+    )
+
+    result = persistence.session_continue(object())
+
+    assert result.startswith("ERROR: no recoverable sessions")
+
+
+def test_production_scheduler_checkpoint_persists_latest_view(
+    isolated_memory,
+    monkeypatch,
+    tmp_path,
+):
+    _drop_project_modules("core.persistence", force=True)
+    from core import persistence
+    from core.live_turn_control import build_session_scheduler
+    from core.turn_scheduler import Submission
+    import json
+
+    monkeypatch.setattr(persistence, "init_db", isolated_memory.init_db)
+    session = FakeSession(
+        session_id="session-checkpoint",
+        cwd=str(tmp_path),
+        workspace_dir=str(tmp_path / "workspace"),
+    )
+    session._run_scheduled_turn = lambda content: session.messages.append(
+        {"role": "user", "content": content}
+    )
+
+    scheduler = build_session_scheduler(session, live_turns=False)
+    scheduler.submit(Submission("persist me"))
+
+    row = isolated_memory.get_session(session.session_id)
+    assert row is not None
+    assert row["status"] == "completed"
+    assert row["queue_depth"] == 0
+    state = json.loads(row["queue_state"])
+    assert state["schema"] == 1
+    assert state["revision"] >= 2
 
 
 def test_persistence_load_drops_and_persists_dangling_tool_calls(isolated_memory, monkeypatch, tmp_path):

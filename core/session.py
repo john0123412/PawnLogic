@@ -28,7 +28,10 @@ auto-intuition features are preserved.
 
 import itertools
 import os, json, sys, threading, time
+from collections.abc import Callable, MutableMapping
+from contextlib import nullcontext
 from pathlib import Path
+from typing import Any
 from config import (
     DYNAMIC_CONFIG, MODELS, DEFAULT_MODEL,
     validate_api_key, VERSION, GLOBAL_SKILLS_PATH,
@@ -71,6 +74,20 @@ from core.tool_executor import (
 )
 from core.session_tool_loop import TurnToolLoop
 from core.session_events import SessionEventEmitter, render_turn_usage
+from core.live_turn_control import (
+    abort_session,
+    build_session_scheduler,
+    clear_session_queue,
+    convert_session_queue,
+    interrupt_session,
+    recall_session_queue,
+    remove_session_queue,
+    resume_session_turn,
+    retry_interrupted_session_turn,
+    run_session_turn,
+    shutdown_session,
+    submit_session_turn,
+)
 from core.tool_result import (
     ToolResultProcessor,
     compact_redundant_tool_error_messages,
@@ -84,6 +101,17 @@ from core.turn_guards import (
     decide_empty_response_retry,
     decide_urgent_mode,
     is_empty_response,
+)
+from core.turn_scheduler import (
+    ControlAction,
+    SubmissionKind,
+)
+from core.stream_cancellation import StreamCancellationError
+from core.turn_cancellation import (
+    TurnCancellationToken,
+    activate_turn_cancellation,
+    current_turn_cancellation,
+    execute_session_tool_batch,
 )
 from core.memory import (
     init_db, _gen_id, search_knowledge, search_knowledge_records, format_knowledge_for_prompt,
@@ -123,7 +151,7 @@ def _debug_mode() -> bool:
     return bool(_runtime_state.debug_mode)
 
 
-def _dynamic_config() -> dict:
+def _dynamic_config() -> MutableMapping[str, Any]:
     """Return the currently loaded mutable runtime config via the runtime interface."""
     context = current_runtime_context()
     if context is not None:
@@ -138,7 +166,7 @@ def _tool_schema_snapshot() -> list[dict]:
     return _TOOL_REGISTRY.snapshot_schemas()
 
 
-def _tool_map_snapshot() -> dict[str, callable]:
+def _tool_map_snapshot() -> dict[str, Callable[..., object]]:
     return _TOOL_REGISTRY.snapshot_map()
 
 
@@ -831,7 +859,7 @@ def _load_state_md(cwd: str) -> str:
 # ════════════════════════════════════════════════════════
 
 class AgentSession:
-    def __init__(self):
+    def __init__(self, *, live_turns: bool = False):
         self.session_id  = _gen_id()
         self.model_alias = DEFAULT_MODEL
         self.messages: list = []
@@ -850,6 +878,11 @@ class AgentSession:
         self._time_budget_sec        = 0   # 0 = unlimited
         self._urgent_mode            = False
         self._save_lock = threading.Lock()
+        # Scheduler checkpoints may arrive from the live worker while a
+        # regular autosave is finishing.  Keep this narrow lock separate so
+        # persistence can serialize immutable captures without re-entering the
+        # scheduler or blocking turn execution on its state lock.
+        self._scheduler_checkpoint_lock = threading.RLock()
         self._naming_lock = threading.Lock()
         self._naming_done = False
         self._naming_attempted_at = 0.0
@@ -872,12 +905,15 @@ class AgentSession:
         # Sliding window + history summary state.
         self._history_summary: str = ""          # current effective history summary
         self._summary_turn_count: int = 0        # turn count when summary was last generated
-        # ── Breakpoint resume: message queue and session status ──
-        from core.message_queue import MessageQueue
-        self._message_queue = MessageQueue()
-        self._session_status = "idle"
-        self._interrupted_at: float | None = None
-        self._executing = False
+        # ── Synchronous turn scheduler ──
+        # The adapter keeps RuntimeContext activation and legacy failure
+        # autosaves at the session seam while the scheduler owns all queue and
+        # lifecycle state.
+        self._live_turns_enabled = bool(live_turns)
+        self._turn_scheduler = build_session_scheduler(
+            self,
+            live_turns=self._live_turns_enabled,
+        )
         self.runtime_context.context_provider = self._select_delegation_context
         # Call last because it depends on all attributes above.
         self._reset_system_prompt()
@@ -1280,7 +1316,9 @@ class AgentSession:
                     "_pinned": True,
                 },
             )
-        return _drop_dangling_tool_call_messages(result)
+        bounded = _drop_dangling_tool_call_messages(result)
+        self._toolbar_context_chars = _ctx_chars(bounded)
+        return bounded
 
     def _structured_context_state(self) -> ContextState:
         return context_state_from_messages(self.messages) or context_state_from_history(
@@ -1493,11 +1531,16 @@ class AgentSession:
                 sys.stdout.flush()
 
         try:
+            cancellation = current_turn_cancellation()
+            stream_kwargs: dict[str, Any] = {}
+            if cancellation is not None:
+                stream_kwargs["cancellation"] = cancellation
             result = consume_model_stream(
                 stream_request(
                     api_msgs, self.model_alias,
                     tools_schema=current_tools,
                     max_tokens=current_max_tokens,
+                    **stream_kwargs,
                 ),
                 ensure_tool_call_id=ensure_tool_call_id,
                 iteration=iteration,
@@ -1584,7 +1627,7 @@ class AgentSession:
 
         return text_buf, tc_buf, reasoning_buf
 
-    def _prepare_turn(self, user_input: str) -> dict | None:
+    def _prepare_turn(self, user_input: str) -> MutableMapping[str, Any] | None:
         self._turn_prompt_tokens = 0
         self._turn_completion_tokens = 0
         self._turn_tool_calls = 0
@@ -2014,23 +2057,16 @@ class AgentSession:
         result_processor: ToolResultProcessor,
         current_tools: list | None,
     ) -> list | None:
-        batch = TurnToolLoop().execute_batch(
+        return execute_session_tool_batch(
+            self,
             tc_buf,
-            current_tools=current_tools,
-            execute_call=lambda i, tc, tools: self._execute_one_tool_call(
-                i,
-                dict(tc),
-                iteration=iteration,
-                max_iter=max_iter,
-                tool_executor=tool_executor,
-                result_processor=result_processor,
-                current_tools=tools,
-                plan_notice=plan_signal_injected,
-            ),
             plan_signal_injected=plan_signal_injected,
-            inject_plan_signal=self._inject_plan_missing_signal,
+            iteration=iteration,
+            max_iter=max_iter,
+            tool_executor=tool_executor,
+            result_processor=result_processor,
+            current_tools=current_tools,
         )
-        return batch.current_tools
 
     def _autosave_iteration_checkpoint(self, iteration: int) -> None:
         if iteration > 0 and iteration % 5 == 0:
@@ -2175,89 +2211,62 @@ class AgentSession:
         self._maybe_append_anti_loop_injection(result_processor, state.iteration)
         return False
 
-    # Main turn loop.
-    def run_turn(self, user_input: str):
-        """Queue a user input and process all queued messages.
+    def _run_scheduled_turn(
+        self,
+        user_input: str,
+        *,
+        cancellation: TurnCancellationToken | None = None,
+    ) -> object:
+        """Run one scheduler submission inside this session's context seam."""
+        # Background scheduler workers already activate a detached
+        # RuntimeContext snapshot with legacy mirroring disabled.  Calling
+        # _sync_runtime_context() here would overwrite process-wide mirrors
+        # from the worker and defeat that isolation.  Synchronous callers
+        # retain the existing session-context activation behavior.
+        active_context = current_runtime_context()
+        if active_context is None:
+            self._sync_runtime_context()
+            activation = self.runtime_context.activate()
+        else:
+            activation = nullcontext(active_context)
+        with activation, activate_turn_cancellation(cancellation):
+            try:
+                outcome = self._run_turn_active(user_input)
+            except (TurnInterrupted, StreamCancellationError):
+                self._autosave(turn_status="interrupted")
+                raise TurnInterrupted()
+            except Exception:
+                self._autosave(turn_status="failed")
+                raise
+        if outcome == "failed":
+            self._autosave(turn_status="failed")
+        return outcome
 
-        Supports breakpoint resume: while one turn runs, the caller can queue
-        additional user inputs. Each queued input is processed in FIFO order
-        after the current turn finishes. Ctrl+C pauses execution and saves
-        the queue state, allowing the caller to resume later.
-        """
-        if not user_input.strip():
-            return
-        # Enqueue the new input.
-        self._message_queue.enqueue(user_input)
-        self._drain_queued_turns()
+    # Main turn loop.
+    def submit_live_turn(
+        self,
+        user_input: str,
+        *,
+        kind: SubmissionKind | None = None,
+    ) -> None:
+        """Submit one live prompt without blocking the Prompt Toolkit loop."""
+        submit_session_turn(self, user_input, kind=kind)
+
+    def run_turn(self, user_input: str):
+        """Submit one prompt, preserving synchronous and live session modes."""
+        return run_session_turn(self, user_input)
 
     def retry_interrupted_turn(self, user_input: str) -> bool:
-        """Retry an interrupted turn without enqueueing its prompt twice.
-
-        The CLI preserves an interrupted prompt in the queue, then lets the
-        user edit it before retrying. Replacing that queued head preserves FIFO
-        order for messages that arrived later.
-
-        Returns:
-            ``True`` when an interrupted queued prompt was replaced.
-        """
-        if not user_input.strip():
-            return False
-        if self._session_status == "interrupted" and self._message_queue.replace_next(user_input):
-            self._drain_queued_turns()
-            return True
-        self.run_turn(user_input)
-        return False
+        """Replace and resume a recoverable prompt without duplicating it."""
+        return retry_interrupted_session_turn(self, user_input)
 
     def resume_queued_turns(self) -> bool:
-        """Process already-queued messages without adding a new prompt.
+        """Resume recovered or follow-up work without adding a new prompt."""
+        return resume_session_turn(self)
 
-        Returns:
-            ``True`` when there was queued work to process.
-        """
-        if self._message_queue.is_empty:
-            return False
-        self._drain_queued_turns()
-        return True
-
-    def _drain_queued_turns(self) -> None:
-        """Process queued messages unless another turn is already active."""
-        if self._executing:
-            # Another turn is already running; it will pick up our message.
-            return
-        self._sync_runtime_context()
-        with self.runtime_context.activate():
-            self._executing = True
-            try:
-                while not self._message_queue.is_empty:
-                    msg = self._message_queue.dequeue()
-                    if msg is None:
-                        break
-                    self._session_status = "running"
-                    try:
-                        turn_outcome = self._run_turn_active(msg.content)
-                    except TurnInterrupted:
-                        # Requeue the pending message so resume can pick it up.
-                        self._message_queue.requeue_pending()
-                        self._session_status = "interrupted"
-                        self._interrupted_at = time.time()
-                        self._autosave(turn_status="interrupted")
-                        raise
-                    except Exception:
-                        # Drop the failed message; do not block the rest of the queue.
-                        self._message_queue.complete_pending()
-                        self._session_status = "failed"
-                        self._autosave(turn_status="failed")
-                        raise
-                    self._message_queue.complete_pending()
-                    if turn_outcome == "failed":
-                        self._session_status = "failed"
-                        self._autosave(turn_status="failed")
-                        return
-                self._session_status = "completed" if self._message_queue.is_empty else "idle"
-                if self._session_status == "completed":
-                    self._interrupted_at = None
-            finally:
-                self._executing = False
+    def shutdown(self) -> bool:
+        """Close the session scheduler and join its optional worker."""
+        return shutdown_session(self)
 
     def _run_turn_active(self, user_input: str) -> str | None:
         dynamic_cfg = self._prepare_turn(user_input)
@@ -2297,6 +2306,9 @@ class AgentSession:
         iteration = 0
         while iteration < turn_state.max_iter:
             try:
+                cancellation = current_turn_cancellation()
+                if cancellation is not None and cancellation.cancelled:
+                    raise TurnInterrupted()
                 turn_state.set_iteration(iteration)
                 should_stop = self._run_iteration_bookkeeping(
                     state=turn_state,
@@ -2314,6 +2326,8 @@ class AgentSession:
                     renderer,
                     turn_state.iteration,
                 )
+                if cancellation is not None and cancellation.cancelled:
+                    raise TurnInterrupted()
                 if model_response is None:
                     return "failed"
                 text_buf, tc_buf, reasoning_buf = model_response
@@ -2338,7 +2352,7 @@ class AgentSession:
                     self._append_assistant_or_tool_call_message(
                         text_buf, tc_buf, reasoning_buf
                     )
-                    return
+                    return None
 
                 # ════════════════════════════════════════════════
                 # CoT Guard refactor: coaching mode.
@@ -2385,9 +2399,6 @@ class AgentSession:
                 iteration += 1
 
             except KeyboardInterrupt:
-                self._session_status = "interrupted"
-                self._interrupted_at = time.time()
-                self._autosave(turn_status="interrupted")
                 raise TurnInterrupted()
 
         print(c(RED, f"\n[Reached max_iter={turn_state.max_iter}; change it with /max, /ultra, or /iter <n>]"))
@@ -2399,40 +2410,73 @@ class AgentSession:
         return "failed"
 
     def abort(self) -> int:
-        """Clear queued work and mark the session as aborted.
+        """Interrupt the active Turn while preserving queued work."""
+        return abort_session(self)
 
-        A provider request already running in the synchronous stream cannot be
-        cancelled here; Ctrl+C remains the in-flight interruption path.
+    def interrupt_active(self) -> bool:
+        """Request cancellation of the active Turn without clearing queues."""
+        return interrupt_session(self)
 
-        Returns the number of queued messages that were cleared.
-        """
-        count = self._message_queue.clear()
-        self._session_status = "aborted"
-        return count
+    def abort_all(self) -> int:
+        """Interrupt the active Turn and clear queued/recovered work."""
+        return abort_session(self, clear_queued=True)
+
+    def clear_queued_turns(self) -> int:
+        """Clear queued and recovered work while keeping an active Turn."""
+        return clear_session_queue(self)
+
+    def remove_queued_turn(self, submission_id: str) -> bool:
+        """Remove one queued submission by stable ID."""
+        return bool(remove_session_queue(self, submission_id).accepted)
+
+    def convert_queued_turn(
+        self,
+        submission_id: str,
+        target_kind: SubmissionKind,
+    ) -> bool:
+        """Convert one queued submission while preserving its stable ID."""
+        return bool(convert_session_queue(self, submission_id, target_kind).accepted)
+
+    def queue_control(self, action: ControlAction) -> Any:
+        """Apply one typed queue action through the scheduler seam."""
+        return self._turn_scheduler.control(action)
+
+    def recall_queued_turn(self, submission_id: str | None = None) -> str | None:
+        """Stage the newest queued/recovered message as an editor draft."""
+        content = recall_session_queue(self, submission_id)
+        if content is not None:
+            self._pending_recall_draft = content
+        return content
 
     def queue_status(self) -> dict:
-        """Return a snapshot of the queue and session state.
-
-        Returns:
-            A dict with keys: status, queue_depth, pending_count, interrupted_at.
-        """
+        """Return a snapshot of the queue and session state."""
+        view = self._turn_scheduler.view()
         return {
-            "status": self._session_status,
-            "queue_depth": self._message_queue.size(),
-            "pending_count": self._message_queue.pending_count,
-            "interrupted_at": self._interrupted_at,
+            "status": view.session_status,
+            "queue_depth": view.total_unfinished_count,
+            "pending_count": view.pending_count,
+            "interrupted_at": view.interrupted_at,
+            "state": view.state.value,
+            "steer_count": len(view.steer),
+            "follow_up_count": len(view.follow_up),
+            "recovered_count": 1 if view.recovered is not None else 0,
         }
 
+    def queue_view(self) -> Any:
+        """Return the scheduler's immutable queue snapshot for UI adapters."""
+        return self._turn_scheduler.view()
+
     def peek_queue(self, n: int = 5) -> list[str]:
-        """Return the contents of the next n queued messages.
-
-        Args:
-            n: Maximum number of messages to peek at.
-
-        Returns:
-            A list of message content strings.
-        """
-        return [msg.content for msg in self._message_queue.peek(n)]
+        """Return the next n recoverable or queued message contents."""
+        if n <= 0:
+            return []
+        view = self._turn_scheduler.view()
+        entries = []
+        if view.recovered is not None:
+            entries.append(view.recovered.content)
+        entries.extend(item.content for item in view.steer)
+        entries.extend(item.content for item in view.follow_up)
+        return entries[:n]
 
     # ── Per-turn usage summary ───────────────────────────
     def _print_turn_summary(self):

@@ -151,8 +151,13 @@ def api_runtime_metrics_snapshot() -> RuntimeMetricsSnapshot:
 
 
 def _raise_if_stream_interrupted(cancellation: StreamCancellation | None = None) -> None:
-    """Preserve SIGINT behavior while checking an optional task-local token."""
-    raise_if_interrupted()
+    """Check the serial SIGINT or the owning Turn's token, never both lanes."""
+    # A live/background Turn is isolated by its per-Turn token.  Consulting
+    # the process-wide event here would let a readline SIGINT from another
+    # execution cancel this stream as well.  The no-token path deliberately
+    # retains the legacy signal behavior for the serial fallback.
+    if cancellation is None:
+        raise_if_interrupted()
     _raise_if_task_cancelled(cancellation)
 
 
@@ -424,6 +429,7 @@ def stream_request(
 
         conn: http.client.HTTPConnection | None = None
         cancel_callback = None
+        registered_global_cancel = False
         unregister_task_abort: Callable[[], None] | None = None
         partial_emitted = False
         try:
@@ -437,7 +443,12 @@ def stream_request(
                 conn,
                 response_ref["response"],
             )
-            set_cancel_callback(cancel_callback)
+            # Token-owned streams close only their own connection.  The
+            # process-wide callback remains for the serial readline fallback
+            # where no per-Turn token is available.
+            if cancellation is None:
+                set_cancel_callback(cancel_callback)
+                registered_global_cancel = True
             if cancellation is not None:
                 register_abort = getattr(cancellation, "register_abort", None)
                 if callable(register_abort):
@@ -558,7 +569,7 @@ def stream_request(
                     unregister_task_abort()
                 except Exception:
                     pass
-            if cancel_callback is not None:
+            if cancel_callback is not None and registered_global_cancel:
                 clear_cancel_callback(cancel_callback)
             if conn:
                 try: conn.close()

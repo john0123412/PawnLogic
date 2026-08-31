@@ -167,6 +167,44 @@ def test_queue_resume_processes_interrupted_messages(capsys):
     assert "Resumed queued messages" in capsys.readouterr().out
 
 
+def test_abort_interrupts_active_turn_without_clearing_queues(capsys):
+    from core.commands import CommandContext
+    from core.commands.session import cmd_abort
+
+    session = SimpleNamespace(
+        queue_status=MagicMock(return_value={"pending_count": 1}),
+        interrupt_active=MagicMock(return_value=True),
+        abort_all=MagicMock(),
+    )
+
+    asyncio.run(cmd_abort(CommandContext(
+        verb="/abort", arg="", arg2="", session=session,
+    )))
+
+    session.interrupt_active.assert_called_once_with()
+    session.abort_all.assert_not_called()
+    assert "queued messages preserved" in capsys.readouterr().out
+
+
+def test_abort_all_interrupts_active_turn_and_clears_queues(capsys):
+    from core.commands import CommandContext
+    from core.commands.session import cmd_abort
+
+    session = SimpleNamespace(
+        queue_status=MagicMock(return_value={"pending_count": 1}),
+        interrupt_active=MagicMock(),
+        abort_all=MagicMock(return_value=3),
+    )
+
+    asyncio.run(cmd_abort(CommandContext(
+        verb="/abort", arg="--all", arg2="", session=session,
+    )))
+
+    session.abort_all.assert_called_once_with()
+    session.interrupt_active.assert_not_called()
+    assert "cleared 2 queued message(s)" in capsys.readouterr().out
+
+
 # ════════════════════════════════════════════════════════
 # 2. Dispatch routing
 # ════════════════════════════════════════════════════════

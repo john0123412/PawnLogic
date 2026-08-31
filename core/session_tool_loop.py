@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.tool_executor import ToolExecutionOutcome
+from core.turn_cancellation import execute_cancellable_tool_batch
 from core.turn_guards import (
     ConcurrencyDecision,
     PlanGuardDecision,
@@ -26,6 +27,10 @@ ExecuteCall = Callable[
     [int, Mapping[str, Any], list[dict[str, Any]] | None],
     tuple[list[dict[str, Any]] | None, ToolExecutionOutcome],
 ]
+ClaimSafePoint = Callable[[], bool]
+SkipCall = Callable[[int, Mapping[str, Any]], ToolExecutionOutcome]
+CancellationCheck = Callable[[], bool]
+InterruptCall = Callable[[int, Mapping[str, Any]], ToolExecutionOutcome]
 
 
 class TurnToolLoop:
@@ -58,18 +63,21 @@ class TurnToolLoop:
         execute_call: ExecuteCall,
         plan_signal_injected: bool,
         inject_plan_signal: Callable[[], None],
+        claim_safe_point: ClaimSafePoint | None = None,
+        skip_call: SkipCall | None = None,
+        cancellation_check: CancellationCheck | None = None,
+        interrupt_call: InterruptCall | None = None,
     ) -> ToolBatchOutcome:
-        outcomes: list[ToolExecutionOutcome] = []
-        active_tools = current_tools
-        for index in sorted(calls):
-            active_tools, outcome = execute_call(index, calls[index], active_tools)
-            outcomes.append(outcome)
-        if plan_signal_injected:
-            inject_plan_signal()
-        return ToolBatchOutcome(
-            outcomes=tuple(outcomes),
-            current_tools=active_tools,
+        return execute_cancellable_tool_batch(
+            calls,
+            current_tools=current_tools,
+            execute_call=execute_call,
             plan_signal_injected=plan_signal_injected,
+            inject_plan_signal=inject_plan_signal,
+            claim_safe_point=claim_safe_point,
+            skip_call=skip_call,
+            cancellation_check=cancellation_check,
+            interrupt_call=interrupt_call,
         )
 
 

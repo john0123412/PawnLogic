@@ -20,6 +20,22 @@ def test_snapshot_capture_copies_messages_and_runtime():
     assert snapshot.messages[0]["content"] == "answer"
     assert snapshot.messages[0]["reasoning_content"] == "r"
     assert snapshot.runtime["config"] == {"max_tokens": 10}
+    assert snapshot.schema_version == 1
+
+
+def test_snapshot_rejects_unknown_schema_version():
+    import pytest
+
+    with pytest.raises(ValueError, match="unsupported session snapshot schema"):
+        SessionSnapshot.capture(
+            session_id="s1",
+            model_alias="model",
+            messages=[],
+            cwd="/work",
+            workspace_dir="/workspace",
+            config={},
+            schema_version=2,
+        )
 
 
 def test_message_repair_preserves_complete_tool_groups_and_drops_dangling():

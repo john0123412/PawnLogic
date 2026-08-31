@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import json
 import threading
 import time
+from contextvars import copy_context
 from typing import Any
 
 from core.tool_registry import ResolvedTool, ToolSpec
@@ -272,14 +273,20 @@ def _run_handler_with_watchdog(
     finished = threading.Event()
     result_holder: list[object] = []
     error_holder: list[BaseException] = []
+    execution_context = copy_context()
 
-    def _worker() -> None:
+    def _worker_body() -> None:
         try:
             result_holder.append(handler(fn_args))
         except BaseException as exc:  # Relay KeyboardInterrupt too.
             error_holder.append(exc)
         finally:
             finished.set()
+
+    def _worker() -> None:
+        # ContextVars (including the per-Turn cancellation token) do not
+        # propagate into a newly-created thread automatically.
+        execution_context.run(_worker_body)
 
     worker = threading.Thread(
         target=_worker,
