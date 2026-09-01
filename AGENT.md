@@ -601,6 +601,10 @@ are source-checkout or user-installed assets; pip/curl installations should use
   0.3.5 release finalization. Independent
   `pawnlogic-security` 0.1.0 published from `john0123412/pawnlogic-security`
   on 2026-07-28.
+- The 0.3.6 implementation and local static/E2E gates are complete, but the
+  Python 3.10/3.11/3.12 matrix, package build, isolated fresh-install smoke,
+  and remote Actions remain release-stage checks. Do not describe 0.3.6 as
+  published until those checks and the release approval gate finish.
 - `main` protected by branch rule requiring PR, up-to-date branches, and four
   checks: ruff, docs guard, mypy, fast tests. Tag ruleset protects `v*.*.*`.
 - Publishing uses Trusted Publishing / OIDC. GitHub Release waits on
@@ -619,7 +623,9 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `core/session_snapshot`, `core/delegation`, `core/agent_orchestrator`,
 `core/message_history`, `core/provider_streams`, `core/runtime_metrics`,
 `core/mcp_client_manager`, `core/path_policy`, `core/provider_transport`,
-`core/api_retry`, `core/provider_tui_state`, `tools/check_doc_structure`,
+`core/api_retry`, `core/provider_tui_state`, `core/turn_scheduler`,
+`core/live_turn_control`, `core/turn_cancellation`, `core/queue_tui`,
+`pawnlogic/live_repl`, `pawnlogic/restart_recovery`, `tools/check_doc_structure`,
 `tools/check_release_consistency`, `tools/merge_ctf_skills`, `tools/browser_ops`,
 `tools/lsp_lite`, `tools/text_patch`, `tools/shell_ops`, `tools/docker_plan`,
 `tools/pwn_binary`, `tools/pwn_debugger`.
@@ -638,6 +644,14 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   or capability filtering.
 - Tool watchdog abandons wedged tool threads instead of blocking the session;
   abandoned threads keep running until process exit and their results are lost.
+- Prompt Toolkit live composition, worker-thread execution, terminal repainting,
+  and TTY-owning interactive Tools can race; live-input tests must exercise the
+  Prompt Toolkit path while preserving the serial readline fallback.
+- The 0.3.6 Queue TUI is deliberately main-thread-only and must not claim
+  worker stdin; non-TTY and readline paths use text controls. Packaging and
+  fresh-install validation for the unreleased candidate remain outstanding.
+- Safe-point steering can alter Tool Call batch protocol; skipped results,
+  ordering, and plan-guard accounting must remain complete.
 - Tier presets use advisory plan-guard mode (`plan_guard_mode`) so weak models
   can run side-effect tools without plan blocks; `/planguard strict` remains
   explicit opt-in. Operation Policy remains the actual safety gate, not the

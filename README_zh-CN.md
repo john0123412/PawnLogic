@@ -80,6 +80,8 @@ pawn
 pawn --debug
 pawn --eval "summarize this repository"
 pawn --eval "summarize this repository" --json
+pawn --continue                    # 加载最近的可恢复草稿
+pawn resume <session>              # 加载指定会话但不自动执行
 python -m pawnlogic --help
 ```
 
@@ -167,8 +169,14 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 /think <prompt>                   # 执行一次更深推理
 /compact                          # 总结并压缩上下文
 /undo [n]                         # 回滚最近轮次
-/queue [clear|resume]             # 查看、清除或继续处理中断后排队的消息
-/abort                            # 清除排队消息并将会话标记为已中止
+/queue                            # 查看队列（空闲 Prompt Toolkit 会打开队列 TUI）
+/queue clear                      # 清除排队/恢复消息，但不中断当前 Turn
+/queue resume                     # 继续处理可恢复的排队工作
+/queue remove <id>                # 按稳定 ID 移除一条排队消息
+/queue steer <id>                 # 将 follow-up 转换为 steer
+/queue follow-up <id>             # 将 steer 转换为 follow-up
+/queue recall <id>                # 预填编辑器但不移除消息
+/abort                            # 中断当前 Turn；--all 同时清除队列
 /deep                             # full-power 模式
 /max                              # maximum 模式，最多 100 次工具调用迭代
 /ultra                            # 保持 MAX 其余限制，最多 150 次工具调用迭代
@@ -310,7 +318,7 @@ A: 可以。输入唯一前缀或子序列，例如 `/plg`；按 Tab 会列出 `
 A: 在交互式终端运行 `/planguard`（或 `/plg`），用 Up/Down 或 1/2 选择后按 Enter。脚本或非交互环境请使用 `/planguard advisory`、`/planguard strict` 或 `/planguard status`。默认是 advisory；在 strict 模式下，前两批缺少 plan block 的工具调用仍会执行并收到纠正提示，第三次此类尝试会在执行工具前被停止。
 
 **Q: 中断正在运行的 turn 后会怎样？**
-A: Pawn 会将当前 prompt 保留为队列工作，并把它预填到下一次输入中：按 Enter 只重试一次；编辑后按 Enter 会替换该重试（包括以 `/` 开头的编辑）。恢复期间，`/queue`、`/queue resume` 和 `/queue clear` 用于管理保留工作，`/abort` 用于丢弃它。
+A: Pawn 会将当前 prompt 保留为可编辑草稿，并预填到下一次输入中：按 Enter 只重试一次；编辑后按 Enter 会替换该重试（包括以 `/` 开头的编辑）。恢复期间，空闲的 Prompt Toolkit 中 `/queue` 会打开队列 TUI（readline/非 TTY 环境显示文本视图）；`/queue remove <id>`、`/queue clear`、`/queue steer <id>`、`/queue follow-up <id>` 和 `/queue recall <id>` 可管理条目，召回不会自动执行。`Alt+Up` 会将最近的排队或恢复条目召回到编辑器。`/abort` 只中断当前 Turn，`/abort --all` 还会清除队列。重启后，`pawn --continue` 会加载最近的 interrupted、running 或 failed 会话，`pawn resume <session>` 会加载指定会话。两个命令都会显示历史并预填草稿，但不会自动执行。
 
 **Q: Test Connection 失败但 fetch 成功？**
 A: Fetch 只读 `/v1/models`；Test Connection 发送聊天请求。先加载聊天模型。

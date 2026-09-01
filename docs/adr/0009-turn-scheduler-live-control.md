@@ -2,8 +2,9 @@
 
 ## Status
 
-Proposed. Becomes Accepted when the 0.3.6 contract review (plan phase P0
-gate) passes; implementation phases must not start before that.
+Accepted after the 0.3.6 contract review and the P0-P6 implementation gates.
+The release remains an unreleased 0.3.6 candidate until packaging, remote CI,
+and the release approval gate complete.
 
 ## Context
 
@@ -38,15 +39,18 @@ surface is three calls: `submit(submission) -> SubmissionReceipt`,
 `control(action) -> ControlReceipt`, and `view() -> SchedulerView`. Internals
 own the active Turn, the steering queue, the follow-up queue, the recovered
 draft, state transitions, and atomic persistence checkpoints. Submissions
-carry stable IDs and strict FIFO order; a full queue is an explicit error,
-never a silent drop. The unused `priority` ordering and the module-level
-singleton are removed. One worker serializes execution per session so message
-history is never mutated concurrently.
+carry stable IDs and FIFO within each lane; mixed lanes follow the safe-point
+policy, with steer taking precedence over follow-up. A full queue is an
+explicit error, never a silent drop. The unused `priority` ordering and the
+module-level singleton are removed. One worker serializes execution per session
+so message history is never mutated concurrently.
 
 The production executor Adapter wraps `AgentSession._run_turn_active()`;
-tests inject an in-memory Adapter. CLI, remote control, and tests depend on
-the scheduler Interface, never on session internals such as
-`_message_queue` or `_autosave()`.
+tests inject an in-memory Adapter. FIFO is guaranteed within each lane; mixed
+lanes are resolved by safe-point policy, with steer taking precedence over
+follow-up at P3. CLI, remote control, and tests depend on the scheduler
+Interface, never on session internals such as `_message_queue` or
+`_autosave()`.
 
 ### Steering and safe points
 
@@ -87,11 +91,48 @@ follow-up, pending to recovered draft). Restart restores queues and turns an
 unfinished Turn into an editable draft; side-effect Tools are never replayed
 automatically.
 
+### Queue presentation
+
+Queue presentation is an Adapter over the immutable `SchedulerView`. The
+Prompt Toolkit menu is available only while the UI thread is idle; an active
+worker is never asked to share stdin. Stable-ID remove, recall, and
+steer/follow-up conversion are routed back through typed scheduler controls,
+so every mutation retains checkpointing and active/recovered safety rules.
+
+### P0 verification contract
+
+The P0 terminal baseline exercises the Prompt Toolkit path and a real native
+blocking Tool Call. It submits a steering line while the Tool Call is blocked,
+asserts that no second model request starts before the Tool Call completes, and
+then verifies that the next request contains the steer. A text-only stream must
+finish intact before any submitted follow-up is requested. The readline
+fallback remains serial and buffers input until the active Turn finishes.
+
+The baseline may use imperative `pytest.xfail` only for the known
+pre-scheduler mismatch after all startup, input-mode, Tool Call, and trace
+preconditions have passed. Function-level or module-level xfail markers are
+not permitted because they can hide harness and setup failures.
+
 ### Version policy note
 
 This work ships as 0.3.6. Per the AGENT.md Version Numbering Policy the
 minor digit does not move without an explicit owner decision, and the 0.3.6
 version PR stays unmerged until the previous release completes.
+
+### Verification evidence
+
+- P0-P5 scheduler, live-composer, cancellation, runtime-context, and
+  persistence regression suites were previously green; the maintained
+  targeted set records 112 passing tests.
+- P6 queue controls, conversion, immutable rendering, recall, toolbar, and
+  active-stdin isolation add 171 passing targeted tests.
+- Dynamic terminal E2E is green: 23 tests passed. Fast non-E2E validation is
+  green: 1,432 tests passed with 7 deselected and 5 Python tarfile warnings.
+- Ruff, CI-equivalent typed-island mypy (including the six live-control
+  modules), documentation structure, release consistency, repository
+  language policy, architecture budget, code-index freshness, and diff checks
+  are green. Packaging/fresh-install validation is intentionally not claimed
+  by this ADR and remains a release-stage gate.
 
 ## Consequences
 

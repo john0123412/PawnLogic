@@ -16,6 +16,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - Added an `/ultra` runtime tier that keeps the MAX token, context, output,
   and time limits while raising the tool-call iteration limit from 100 to 150.
+- Added the queue TUI and command controls for stable-ID recall, removal, and
+  steer/follow-up type conversion, with a text fallback for non-interactive
+  sessions.
+- Added the live-composer Alt+Up recall shortcut and a queue-state toolbar.
+- Added live-composer Enter steering and Alt+Enter follow-up queueing while a
+  Turn runs; the readline fallback remains serial.
+
+### Changed
+
+- Changed `/abort` to interrupt only the active Turn; `/abort --all` also
+  clears queued and recovered work, while `/queue clear` clears queues without
+  interrupting active work.
+- Added restart recovery entry points `pawn --continue` and
+  `pawn resume <session>`; both load an editable draft without auto-running it.
 
 ## [0.3.5] - 2026-08-30
 
