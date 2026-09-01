@@ -252,7 +252,7 @@ def restore_interrupted_repl_input(session: Any, fallback: str) -> str:
             "  [interrupted] Saved "
             f"{queue_depth} queued message{suffix}. Press Enter to retry it, "
             "edit then press Enter to replace it, run /queue resume to run it "
-            "later, or /abort to discard it.",
+            "later, or /abort --all to discard queued work.",
         ))
     else:
         print(c(YELLOW, "  [interrupted] Edit and press Enter to retry."))

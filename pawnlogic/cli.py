@@ -300,7 +300,7 @@ HELP_TEXT = f"""
   {c(YELLOW, "/context")}         Show context size and token estimate
   {c(YELLOW, "/pin [n]")}         Pin the last n messages
   {c(YELLOW, "/undo [n]")}        Undo recent turns
-  {c(YELLOW, "/queue [clear|resume]")} Inspect, clear, or resume interrupted work
+  {c(YELLOW, "/queue [action]")} Manage: clear, resume, remove, steer, follow-up, recall
   {c(YELLOW, "/abort [--all]")}   Interrupt active work; --all also clears queues
   {c(YELLOW, "/compact")}         Summarize and compact context
   {c(YELLOW, "/think <prompt>")}  Run one deeper reasoning turn
@@ -1112,7 +1112,7 @@ async def _main_impl():
         "/pin":           "Pin recent messages (/pin msg 5 by index)",
         "/unpin":         "Clear all pinned messages",
         "/undo":          "Undo recent turns (default 1)",
-        "/queue":         "Inspect, clear, or resume interrupted queued messages",
+        "/queue":         "Manage queue: clear, resume, remove, steer, follow-up, recall",
         "/abort":         "Interrupt active Turn; --all also clears queues",
         "/compact":       "Compact context with a lightweight summary",
         "/think":         "Single-turn reasoning mode (/think <prompt>)",

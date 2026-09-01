@@ -24,7 +24,8 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_help_text_lists_runtime_controls():
     assert "/planguard [mode]" in cli_mod.HELP_TEXT
     assert "no arg opens a selector" in cli_mod.HELP_TEXT
-    assert "/queue [clear|resume]" in cli_mod.HELP_TEXT
+    assert "/queue [action]" in cli_mod.HELP_TEXT
+    assert "remove, steer, follow-up, recall" in cli_mod.HELP_TEXT
     assert "/ultra" in cli_mod.HELP_TEXT
     assert "150 iterations" in cli_mod.HELP_TEXT
 
@@ -99,7 +100,7 @@ def test_interrupted_repl_recovery_explains_preserved_queue(capsys):
     output = capsys.readouterr().out
     assert "Saved 1 queued message" in output
     assert "/queue resume" in output
-    assert "/abort" in output
+    assert "/abort --all" in output
 
 
 def test_startup_resume_prompt_warns_and_continues_on_session_lookup_failure(
