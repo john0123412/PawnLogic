@@ -5,7 +5,11 @@
 
 ## Active Plan
 
-No active plan. New scoped work must establish one before implementation begins.
+[0.3.6-live-turn-control.md](0.3.6-live-turn-control.md) is active. It
+introduces the Turn Scheduler with mid-turn steering, follow-up queueing, and
+per-Turn cancellation. The cycle is declared as unreleased 0.3.6; its version
+PR stays unmerged until the previous release has completed, per the AGENT.md
+Version Numbering Policy.
 
 There is exactly one active plan at a time. When the active plan is completed
 and its release is published, it moves to Completed below.

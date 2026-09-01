@@ -32,6 +32,12 @@ from core.logger import logger
 from core.runtime_context import RuntimeContext
 from core.message_history import repair_dangling_tool_calls
 from core.session_snapshot import SessionSnapshot
+from core.turn_scheduler import (
+    ControlAction,
+    ControlKind,
+    SchedulerError,
+    TurnScheduler,
+)
 from core.state import runtime_config, update_dynamic_config
 from tools.file_ops import sync_runtime_context
 from utils.ansi import c, CYAN, GRAY, YELLOW, DIM
@@ -65,6 +71,13 @@ except Exception:
 # ════════════════════════════════════════════════════════
 
 
+class PersistenceStateError(ValueError):
+    """Raised when persisted scheduler state cannot be decoded safely."""
+
+
+RECOVERABLE_SESSION_STATUSES = frozenset({"interrupted", "running", "failed"})
+
+
 def _serialize_interrupted_at(value: object) -> str | None:
     """Normalize runtime interruption state for the SQLite text column."""
     if isinstance(value, str):
@@ -86,6 +99,79 @@ def _restore_interrupted_at(value: str | None) -> float | None:
     except ValueError:
         return None
 
+
+def _scheduler_snapshot(session) -> tuple[str, float | None, int, dict]:
+    """Read queue persistence only through the scheduler Interface."""
+    scheduler = getattr(session, "_turn_scheduler", None)
+    if scheduler is None:
+        return (
+            getattr(session, "_session_status", "idle"),
+            getattr(session, "_interrupted_at", None),
+            0,
+            {},
+        )
+    view = scheduler.view()
+    return (
+        view.session_status,
+        view.interrupted_at,
+        view.total_unfinished_count,
+        view.to_state(),
+    )
+
+
+def checkpoint_scheduler_view(session, view) -> SessionSnapshot:
+    """Persist one immutable scheduler transition without turn side effects.
+
+    The scheduler invokes this callback outside its own state lock.  Capture
+    the session fields and scheduler view under a narrow session-local lock,
+    then write the snapshot through the ordinary persistence seam.  This path
+    intentionally does not update metrics, auto-name the session, or call back
+    into scheduler controls.
+    """
+    lock = getattr(session, "_scheduler_checkpoint_lock", None)
+    if lock is None:
+        lock = threading.RLock()
+        with suppress(Exception):
+            session._scheduler_checkpoint_lock = lock
+    with lock:
+        config = dynamic_config_snapshot()
+        snapshot = SessionSnapshot.capture(
+            session_id=session.session_id,
+            model_alias=session.model_alias,
+            messages=list(session.messages),
+            cwd=session.cwd,
+            workspace_dir=getattr(session, "workspace_dir", ""),
+            config=config,
+            status=view.session_status,
+            interrupted_at=_serialize_interrupted_at(view.interrupted_at),
+            queue_depth=view.total_unfinished_count,
+            queue_state=view.to_state(),
+        )
+        _save_scheduler_snapshot_atomic(snapshot)
+        return snapshot
+
+
+def list_recoverable_sessions(limit: int = 20) -> list:
+    """Return the newest sessions that can be resumed without auto-running."""
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError("limit must be a positive integer")
+    rows = list_sessions(max(limit * 3, 20))
+    return [
+        row for row in rows
+        if str(row["status"] or "idle") in RECOVERABLE_SESSION_STATUSES
+    ][:limit]
+
+
+def session_continue(session) -> str:
+    """Load the newest recoverable session for an editable draft."""
+    rows = list_recoverable_sessions(1)
+    if not rows:
+        return (
+            "ERROR: no recoverable sessions found "
+            "(expected interrupted, running, or failed status)."
+        )
+    return session_load(session, rows[0]["id"])
+
 def save_snapshot(snapshot: SessionSnapshot, *, name: str = "") -> None:
     """Persist one immutable session snapshot through the SQLite adapter."""
     init_db()
@@ -106,6 +192,99 @@ def save_snapshot(snapshot: SessionSnapshot, *, name: str = "") -> None:
     save_messages(snapshot.session_id, list(snapshot.messages))
 
 
+def _save_scheduler_snapshot_atomic(snapshot: SessionSnapshot) -> None:
+    """Atomically write one scheduler checkpoint and its message projection."""
+    # Scheduler transitions are frequent and must not update naming/metrics.
+    # Use one SQLite transaction for the session row plus the complete message
+    # projection; the ordinary manual/autosave path keeps its incremental
+    # message writer and naming behavior unchanged.
+    from core import memory as _memory
+
+    rows = _memory._build_rows(snapshot.session_id, list(snapshot.messages))
+    queue_state = json.dumps(
+        snapshot.queue_state,
+        ensure_ascii=False,
+        default=str,
+    )
+    config = json.dumps(snapshot.runtime.get("config", {}))
+    now = _memory._now()
+
+    def _write() -> None:
+        with _memory.get_conn() as conn:
+            existing = conn.execute(
+                "SELECT * FROM sessions WHERE id=?",
+                (snapshot.session_id,),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE sessions
+                    SET model=?, cwd=?, config=?, workspace_dir=?, updated_at=?,
+                        status=?, interrupted_at=?, queue_depth=?, queue_state=?
+                    WHERE id=?
+                    """,
+                    (
+                        snapshot.model_alias,
+                        str(snapshot.runtime.get("cwd", "")),
+                        config,
+                        str(snapshot.runtime.get("workspace_dir", "")),
+                        now,
+                        snapshot.status,
+                        snapshot.interrupted_at,
+                        snapshot.queue_depth,
+                        queue_state,
+                        snapshot.session_id,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO sessions
+                        (id, name, model, cwd, config, workspace_dir,
+                         name_source, created_at, updated_at, status,
+                         interrupted_at, queue_depth, queue_state)
+                    VALUES (?, '', ?, ?, ?, ?, 'auto', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        snapshot.session_id,
+                        snapshot.model_alias,
+                        str(snapshot.runtime.get("cwd", "")),
+                        config,
+                        str(snapshot.runtime.get("workspace_dir", "")),
+                        now,
+                        now,
+                        snapshot.status,
+                        snapshot.interrupted_at,
+                        snapshot.queue_depth,
+                        queue_state,
+                    ),
+                )
+            conn.execute(
+                "DELETE FROM messages WHERE session_id=?",
+                (snapshot.session_id,),
+            )
+            if rows:
+                conn.executemany(
+                    """
+                    INSERT INTO messages
+                        (session_id, seq, role, content, tool_calls, tool_call_id,
+                         is_pinned, reasoning_content, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+
+    _memory._write_with_retry(
+        snapshot.session_id,
+        "save_scheduler_checkpoint",
+        _write,
+    )
+    _memory._last_saved_seq[snapshot.session_id] = len(rows) - 1
+    _memory._pinned_snapshot[snapshot.session_id] = {
+        row[1]: row[6] for row in rows
+    }
+
+
 def load_snapshot(session_id: str) -> SessionSnapshot | None:
     """Load and repair one session snapshot from SQLite."""
     full = get_session(session_id)
@@ -122,10 +301,25 @@ def load_snapshot(session_id: str) -> SessionSnapshot | None:
     raw_queue_state = dict(full).get("queue_state", "")
     try:
         queue_state = json.loads(raw_queue_state) if raw_queue_state else {}
-    except (TypeError, json.JSONDecodeError):
-        queue_state = {}
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise PersistenceStateError(
+            "persisted queue_state is not valid JSON; no queued work was discarded"
+        ) from exc
     if not isinstance(queue_state, dict):
-        queue_state = {}
+        raise PersistenceStateError(
+            "persisted queue_state must be an object; no queued work was discarded"
+        )
+    try:
+        # Validate before a caller mutates its live session.  The probe has no
+        # executor side effects and exercises the exact legacy/new migration
+        # parser used by the production scheduler.
+        TurnScheduler(lambda _submission: None).control(
+            ControlAction(ControlKind.RESTORE, restore_state=queue_state)
+        )
+    except (SchedulerError, ValueError, TypeError) as exc:
+        raise PersistenceStateError(
+            "persisted scheduler state is invalid; no queued work was discarded"
+        ) from exc
 
     return SessionSnapshot.capture(
         session_id=session_id,
@@ -143,7 +337,7 @@ def load_snapshot(session_id: str) -> SessionSnapshot | None:
 
 def session_save(session, name: str = "") -> str:
     """Write the current session through the shared snapshot interface."""
-    message_queue = getattr(session, "_message_queue", None)
+    status, interrupted_at, queue_depth, queue_state = _scheduler_snapshot(session)
     snapshot = SessionSnapshot.capture(
         session_id=session.session_id,
         model_alias=session.model_alias,
@@ -151,12 +345,10 @@ def session_save(session, name: str = "") -> str:
         cwd=session.cwd,
         workspace_dir=getattr(session, "workspace_dir", ""),
         config=dynamic_config_snapshot(),
-        status=getattr(session, "_session_status", "idle"),
-        interrupted_at=_serialize_interrupted_at(
-            getattr(session, "_interrupted_at", None)
-        ),
-        queue_depth=message_queue.size() if message_queue is not None else 0,
-        queue_state=message_queue.save_state() if message_queue is not None else {},
+        status=status,
+        interrupted_at=_serialize_interrupted_at(interrupted_at),
+        queue_depth=queue_depth,
+        queue_state=queue_state,
     )
     save_snapshot(snapshot, name=name)
     return session.session_id
@@ -186,6 +378,7 @@ def autosave_agent_session(
             session._runtime_metrics_snapshot(),
         )
     session._runtime_metrics.record_autosave()
+    status, interrupted_at, queue_depth, queue_state = _scheduler_snapshot(session)
     snapshot = SessionSnapshot.capture(
         session_id=session.session_id,
         model_alias=session.model_alias,
@@ -193,10 +386,10 @@ def autosave_agent_session(
         cwd=session.cwd,
         workspace_dir=session.workspace_dir,
         config=config,
-        status=session._session_status,
-        interrupted_at=_serialize_interrupted_at(session._interrupted_at),
-        queue_depth=session._message_queue.size(),
-        queue_state=session._message_queue.save_state(),
+        status=status,
+        interrupted_at=_serialize_interrupted_at(interrupted_at),
+        queue_depth=queue_depth,
+        queue_state=queue_state,
     )
     messages_snapshot = list(snapshot.messages)
     session_id = snapshot.session_id
@@ -457,7 +650,17 @@ def session_load(session, query: str) -> str:
 
     sid  = matched["id"]
     full = get_session(sid)
-    snapshot = load_snapshot(sid)
+    try:
+        snapshot = load_snapshot(sid)
+    except PersistenceStateError:
+        logger.error(
+            "Session state is invalid; preserving persisted queue_state | session={}",
+            sid[:8],
+        )
+        return (
+            f"ERROR: persisted state for session {sid} is invalid; "
+            "no queued work was discarded"
+        )
     if not full or snapshot is None:
         return f"ERROR: metadata for session {sid} is missing"
 
@@ -518,22 +721,54 @@ def session_load(session, query: str) -> str:
     session._reset_system_prompt()
     session.messages.extend(msgs)
     session.session_id = sid
-    if hasattr(session, "_message_queue"):
-        from core.message_queue import MessageQueue
-
-        restored_queue = MessageQueue.from_state(snapshot.queue_state)
-        # A persisted pending item belongs to an interrupted execution. It must
-        # become runnable again after /load rather than remain invisible forever.
-        restored_queue.requeue_pending()
-        session._message_queue = restored_queue
-    if hasattr(session, "_session_status"):
-        session._session_status = (
-            "interrupted"
-            if session._message_queue.size() or snapshot.status == "running"
-            else snapshot.status
+    scheduler = getattr(session, "_turn_scheduler", None)
+    if scheduler is not None:
+        restore_state = dict(snapshot.queue_state)
+        # A scheduler may have been constructed for the temporary session
+        # object before /load replaced its identity.  Persisted IDs generated
+        # for this session must therefore use the loaded session prefix.
+        restore_state["id_prefix"] = f"{sid[:8]}-turn"
+        restore_state.setdefault("session_status", snapshot.status)
+        restored_at = _restore_interrupted_at(snapshot.interrupted_at)
+        if restored_at is not None:
+            restore_state.setdefault("interrupted_at", restored_at)
+        # A stale running row has no active execution after /load. Preserve the
+        # old recovery contract by making it visibly interrupted instead.
+        if snapshot.status in RECOVERABLE_SESSION_STATUSES and not restore_state.get("recovered"):
+            has_queued = bool(
+                restore_state.get("steer")
+                or restore_state.get("follow_up")
+                or restore_state.get("queue")
+                or restore_state.get("pending")
+            )
+            if snapshot.status == "running":
+                # There is no active worker after a process restart.  Keep
+                # the recovered session visibly interrupted even when older
+                # queue data also contains follow-up entries.
+                restore_state["session_status"] = "interrupted"
+            if not has_queued:
+                restore_state["session_status"] = "interrupted"
+                # Older snapshots could mark a Turn active without recording
+                # its scheduler entry.  Recover the last user prompt as an
+                # editable draft; never resume it automatically.
+                last_user = next(
+                    (
+                        message.get("content", "")
+                        for message in reversed(msgs)
+                        if message.get("role") == "user"
+                        and isinstance(message.get("content"), str)
+                        and message.get("content", "").strip()
+                    ),
+                    "",
+                )
+                if last_user:
+                    restore_state["recovered"] = {
+                        "content": last_user,
+                        "source": "restart-recovery",
+                    }
+        scheduler.control(
+            ControlAction(ControlKind.RESTORE, restore_state=restore_state)
         )
-    if hasattr(session, "_interrupted_at"):
-        session._interrupted_at = _restore_interrupted_at(snapshot.interrupted_at)
     if hasattr(session, "_naming_done"):
         session._naming_done = bool(full["auto_name"])
     if hasattr(session, "_naming_attempted_at"):

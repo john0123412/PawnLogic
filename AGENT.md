@@ -505,6 +505,20 @@ Git operations require separate explicit flags. See
 - `tests/test_deployment_friendly.py` protects startup, first-run, packaging,
   and deployment behavior.
 
+## Version Numbering Policy
+
+This policy is set by the repository owner and binds every agent and release.
+
+- Never increment the minor (second) version digit without an explicit user
+  instruction given for that specific bump. Only the patch (third) digit may
+  be incremented autonomously.
+- Releases publish strictly in sequence. Never tag, publish, merge, or declare
+  a version that skips or precedes an earlier declared-but-unpublished
+  version; a cycle's version PR must not merge until the previous version's
+  tag and publish have completed.
+- A minor-version bump requires the user's written decision recorded in the
+  active plan before any version file changes.
+
 ## Version Bump Fixed Locations
 
 All agents must treat version updates as a fixed-location operation. Do not add
@@ -572,16 +586,25 @@ are source-checkout or user-installed assets; pip/curl installations should use
 ## Current Release State
 
 - Current published release: `0.3.5`. PyPI, GitHub Release, and latest tag
-  are `v0.3.5`.
+  are `v0.3.5`, published 2026-08-30 through Trusted Publishing after the
+  full test gate, Dynamic E2E, distribution build, and PyPI fresh-install
+  smoke. The `0.3.4` release remains complete.
 - Release finalization: `v0.3.5` was published on 2026-08-30 through Trusted
   Publishing. The release workflow completed its full test gate, Dynamic E2E,
   distribution build, PyPI fresh-install smoke, and GitHub Release creation;
   the one-time `.release-ready` marker was then removed.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Active plan: none. The completed plans index records the published 0.3.5
-  command-recovery hardening plan. Independent
+- Active plan: `0.3.6-live-turn-control.md` on `feat/live-turn-control-0.3.6`.
+  The working version is declared as unreleased `0.3.6`; per the Version
+  Numbering Policy the cycle's version PR stays unmerged until the previous
+  release completes. The `.release-ready` marker was removed during the
+  0.3.5 release finalization. Independent
   `pawnlogic-security` 0.1.0 published from `john0123412/pawnlogic-security`
   on 2026-07-28.
+- The 0.3.6 implementation and local static/E2E gates are complete, but the
+  Python 3.10/3.11/3.12 matrix, package build, isolated fresh-install smoke,
+  and remote Actions remain release-stage checks. Do not describe 0.3.6 as
+  published until those checks and the release approval gate finish.
 - `main` protected by branch rule requiring PR, up-to-date branches, and four
   checks: ruff, docs guard, mypy, fast tests. Tag ruleset protects `v*.*.*`.
 - Publishing uses Trusted Publishing / OIDC. GitHub Release waits on
@@ -600,7 +623,9 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `core/session_snapshot`, `core/delegation`, `core/agent_orchestrator`,
 `core/message_history`, `core/provider_streams`, `core/runtime_metrics`,
 `core/mcp_client_manager`, `core/path_policy`, `core/provider_transport`,
-`core/api_retry`, `core/provider_tui_state`, `tools/check_doc_structure`,
+`core/api_retry`, `core/provider_tui_state`, `core/turn_scheduler`,
+`core/live_turn_control`, `core/turn_cancellation`, `core/queue_tui`,
+`pawnlogic/live_repl`, `pawnlogic/restart_recovery`, `tools/check_doc_structure`,
 `tools/check_release_consistency`, `tools/merge_ctf_skills`, `tools/browser_ops`,
 `tools/lsp_lite`, `tools/text_patch`, `tools/shell_ops`, `tools/docker_plan`,
 `tools/pwn_binary`, `tools/pwn_debugger`.
@@ -619,6 +644,14 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   or capability filtering.
 - Tool watchdog abandons wedged tool threads instead of blocking the session;
   abandoned threads keep running until process exit and their results are lost.
+- Prompt Toolkit live composition, worker-thread execution, terminal repainting,
+  and TTY-owning interactive Tools can race; live-input tests must exercise the
+  Prompt Toolkit path while preserving the serial readline fallback.
+- The 0.3.6 Queue TUI is deliberately main-thread-only and must not claim
+  worker stdin; non-TTY and readline paths use text controls. Packaging and
+  fresh-install validation for the unreleased candidate remain outstanding.
+- Safe-point steering can alter Tool Call batch protocol; skipped results,
+  ordering, and plan-guard accounting must remain complete.
 - Tier presets use advisory plan-guard mode (`plan_guard_mode`) so weak models
   can run side-effect tools without plan blocks; `/planguard strict` remains
   explicit opt-in. Operation Policy remains the actual safety gate, not the

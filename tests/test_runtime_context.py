@@ -57,6 +57,61 @@ def test_runtime_context_for_test_is_isolated(tmp_path):
     assert ctx.dynamic_config is cfg
 
 
+def test_snapshot_for_turn_detaches_dynamic_config_and_sets_turn_id(tmp_path):
+    context = RuntimeContext.for_test(
+        cwd=tmp_path / "cwd",
+        workspace_dir=tmp_path / "workspace",
+        sink=CaptureSink(),
+        dynamic_config={"nested": {"value": 1}},
+    )
+
+    snapshot = context.snapshot_for_turn(turn_id="turn-1")
+
+    assert snapshot is not context
+    assert snapshot.active_turn_id == "turn-1"
+    assert snapshot.dynamic_config == context.dynamic_config
+    assert snapshot.dynamic_config is not context.dynamic_config
+    snapshot.dynamic_config["nested"]["value"] = 2
+    assert context.dynamic_config["nested"]["value"] == 1
+
+
+def test_snapshot_for_turn_keeps_legacy_mirrors_disabled_when_activated(tmp_path):
+    context = RuntimeContext.for_test(
+        cwd=tmp_path / "cwd",
+        workspace_dir=tmp_path / "workspace",
+        sink=CaptureSink(),
+        dynamic_config={"preferred_worker": "turn"},
+    )
+    config = _current_config()
+    old_state = (
+        state.debug_mode,
+        state.user_mode,
+        state.dynamic_config,
+        state.current_worker,
+        state.time_budget_sec,
+    )
+    old_config = (config.USER_MODE, config.QUIET_MODE)
+    snapshot = context.snapshot_for_turn(turn_id="turn-2")
+
+    try:
+        with snapshot.activate(mirror_legacy=False):
+            assert current_runtime_context() is snapshot
+            assert runtime_config() is snapshot.dynamic_config
+            set_dynamic_config_value("preferred_worker", "isolated-turn")
+            assert state.dynamic_config is old_state[2]
+            assert state.current_worker == old_state[3]
+            assert old_config[0] == config.USER_MODE
+    finally:
+        (
+            state.debug_mode,
+            state.user_mode,
+            state.dynamic_config,
+            state.current_worker,
+            state.time_budget_sec,
+        ) = old_state
+        config.USER_MODE, config.QUIET_MODE = old_config
+
+
 def test_fork_for_task_creates_an_isolated_safe_workspace(tmp_path):
     from core.delegation import AgentTask
 

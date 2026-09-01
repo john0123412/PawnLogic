@@ -137,6 +137,12 @@ jobs:
             core/session_tool_loop.py \
             core/session_snapshot.py \
             core/message_history.py \
+            core/turn_scheduler.py \
+            core/live_turn_control.py \
+            core/turn_cancellation.py \
+            core/queue_tui.py \
+            pawnlogic/live_repl.py \
+            pawnlogic/restart_recovery.py \
             tools/check_doc_structure.py \
             tools/check_release_consistency.py \
             tools/merge_ctf_skills.py \

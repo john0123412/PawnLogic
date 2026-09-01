@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import MutableMapping
 from contextlib import AbstractContextManager
+from copy import copy, deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -119,6 +120,27 @@ class RuntimeContext:
         mirror, because process-wide pointers cannot identify a concurrent child.
         """
         return activate_runtime_context(self, mirror_legacy=mirror_legacy)
+
+    def snapshot_for_turn(self, *, turn_id: str | None = None) -> RuntimeContext:
+        """Return a detached context snapshot for one background Turn.
+
+        A turn may run after the owning session has accepted more input or
+        changed its dynamic configuration.  Copying the mapping here gives
+        that turn a stable view without copying the sink, extension manager,
+        or event publisher that belong to the session.  The scheduler still
+        activates the returned context with ``mirror_legacy=False`` so its
+        worker cannot overwrite process-wide compatibility globals.
+        """
+        snapshot = copy(self)
+        try:
+            snapshot.dynamic_config = deepcopy(dict(self.dynamic_config))
+        except Exception:
+            snapshot.dynamic_config = dict(self.dynamic_config)
+        if turn_id is not None:
+            if not isinstance(turn_id, str) or not turn_id.strip():
+                raise ValueError("turn_id must be a non-empty string or None")
+            snapshot.active_turn_id = turn_id.strip()
+        return snapshot
 
     def set_output_mode(self, *, debug_mode: bool, user_mode: bool | None = None) -> None:
         """Update this context's output mode and its compatibility mirrors."""

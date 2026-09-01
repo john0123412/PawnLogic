@@ -12,6 +12,7 @@
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
 CTF-oriented toolchain. The current public release is **0.3.5**.
+Version **0.3.6** is an unreleased release candidate.
 
 ## System Requirements
 
@@ -88,6 +89,8 @@ pawn
 pawn --debug
 pawn --eval "summarize this repository"
 pawn --eval "summarize this repository" --json
+pawn --continue                    # load the newest recoverable draft
+pawn resume <session>              # load a chosen session without running it
 python -m pawnlogic --help
 ```
 
@@ -209,8 +212,14 @@ connection and response wait times.
 /think <prompt>                   # run one deeper reasoning turn
 /compact                          # summarize and compact context
 /undo [n]                         # roll back recent turns
-/queue [clear|resume]             # inspect, clear, or resume messages queued after an interruption
-/abort                            # clear queued messages and mark the session aborted
+/queue                            # inspect the queue (idle Prompt Toolkit opens the queue TUI)
+/queue clear                      # clear queued/recovered messages without interrupting a Turn
+/queue resume                     # resume recoverable queued work
+/queue remove <id>                # remove one queued message by stable ID
+/queue steer <id>                 # convert a follow-up into a steer
+/queue follow-up <id>             # convert a steer into a follow-up
+/queue recall <id>                # prefill the editor without removing the message
+/abort                            # interrupt the active Turn; --all also clears queues
 /deep                             # full-power mode
 /max                              # maximum mode with up to 100 tool-call iterations
 /ultra                            # MAX limits with up to 150 tool-call iterations
@@ -385,8 +394,11 @@ A: Yes. Type a unique prefix or subsequence such as `/plg`; Tab completion lists
 **Q: How do I choose a plan-guard mode?**
 A: Run `/planguard` (or `/plg`) in an interactive terminal, then use Up/Down or 1/2 and press Enter. Use `/planguard advisory`, `/planguard strict`, or `/planguard status` for explicit or non-interactive use. Advisory is the default; in strict mode the first two tool-call batches without a plan block still run with a correction, and the third such attempt is stopped before its tools execute.
 
+**Q: How does the live composer handle input while a Turn runs?**
+A: In Prompt Toolkit mode, Enter submits a steer for the next Tool safe point, Alt+Enter queues one follow-up for natural completion, and Alt+Up recalls the newest queued or recovered entry. Esc and Ctrl+C interrupt the active Turn. Readline remains explicitly serial and buffers input until the Turn completes.
+
 **Q: What happens when I interrupt a running turn?**
-A: Pawn preserves the current prompt as queued work. The next input is prefilled: press Enter to retry it once, or edit it then press Enter to replace it (including an edit beginning with `/`). During recovery, `/queue`, `/queue resume`, and `/queue clear` manage the preserved work, while `/abort` discards it.
+A: Pawn preserves the current prompt as an editable draft. The next input is prefilled: press Enter to retry it once, or edit it then press Enter to replace it (including an edit beginning with `/`). During recovery, `/queue` opens the idle Prompt Toolkit queue TUI (or prints a text view in readline/non-TTY mode); `/queue remove <id>`, `/queue clear`, `/queue steer <id>`, `/queue follow-up <id>`, and `/queue recall <id>` manage entries without running recalled work. `Alt+Up` recalls the newest queued or recovered entry into the editor. `/abort` interrupts only an active Turn, while `/abort --all` also clears queues. After a restart, `pawn --continue` loads the newest interrupted, running, or failed session, and `pawn resume <session>` loads a chosen session. Both commands show the history and prefill the draft without running it automatically.
 
 **Q: Test Connection fails but fetch succeeds?**
 A: Fetch reads `/v1/models`; Test Connection sends a chat request. Load a chat model first.
