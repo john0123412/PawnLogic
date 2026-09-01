@@ -523,7 +523,7 @@ def test_provider_filter_supported_chat_models_removes_unsupported(monkeypatch):
 
     monkeypatch.setattr(provider_runtime, "probe_openai_chat_model", fake_probe)
 
-    supported, removed = asyncio.run(
+    supported, removed, _probe_stats = asyncio.run(
         provider_runtime.filter_supported_chat_models(
             "https://api.example.com/v1",
             "test-key",

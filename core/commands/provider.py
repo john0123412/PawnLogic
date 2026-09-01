@@ -601,12 +601,19 @@ async def _provider_fetch(alias: str) -> None:
         _print(c(YELLOW, f"  ⚠ No usable models were fetched. {summary}"))
         return
 
+    kept_unknown = int(stats.get("probe_kept_unknown", 0) or 0)
+    kept_part = (
+        f"{kept_unknown} kept despite probe issues (rate limit/unreachable); "
+        if kept_unknown
+        else ""
+    )
     _print(
         c(
             GRAY,
             f"  Sync summary: {int(stats.get('returned', 0))} returned; "
             f"{int(stats.get('hidden_by_name', 0))} hidden by type/name; "
             f"{int(stats.get('hidden_by_probe', 0))} hidden by chat probe; "
+            f"{kept_part}"
             f"{int(stats.get('selectable', len(candidates)))} selectable.",
         )
     )
