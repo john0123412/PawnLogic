@@ -596,15 +596,34 @@ are source-checkout or user-installed assets; pip/curl installations should use
   `tools/check_release_consistency.py`; the v0.3.6 tag was force-updated
   to point at that commit because the tag ruleset blocks deletion.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Active plan: `0.3.7-inline-terminal-stability.md` is the next active plan
-  on `test/release-0.3.7`. It restores native terminal scrollback / mouse
-  selection / copy by removing the alternate-screen application mode and
-  unifies interactive selectors under a single Prompt Toolkit Application
-  dialog state. The 0.3.6 plan is **complete** and moved to Completed Plans in
-  `docs/plans/INDEX.md`; the architecture is captured by
-  [ADR 0010](docs/adr/0010-inline-terminal-modal.md). Independent
-  `pawnlogic-security` 0.1.0 published from `john0123412/pawnlogic-security`
-  on 2026-07-28.
+- Active plan: `0.3.7-inline-terminal-stability.md` is the active plan
+  on `rebuild/inline-terminal-0.3.7`. It restores native terminal
+  scrollback / mouse selection / copy by removing the alternate-screen
+  application mode and unifies interactive selectors under a single
+  Prompt Toolkit Application dialog state. The 0.3.6 plan is
+  **complete** and moved to Completed Plans in `docs/plans/INDEX.md`;
+  the architecture is captured by
+  [ADR 0010](docs/adr/0010-inline-terminal-modal.md) in **Proposed**
+  state. The previous `test/release-0.3.7` branch and its 7 commits
+  are preserved at `backup/pre-audit-0.3.7` for diff and forensics;
+  the rebuild branch carries the corrected work. Independent
+  `pawnlogic-security` 0.1.0 published from
+  `john0123412/pawnlogic-security` on 2026-07-28.
+- 0.3.7 cycle is in two phases. Phase A (the persistent terminal
+  itself) is committed on `rebuild/inline-terminal-0.3.7`:
+  `TerminalTranscript` is wired into `PersistentTerminal`,
+  `full_screen` / `mouse_support` are dropped, and the modal
+  lifecycle is rewritten as a no-op flag flip plus a new
+  `controller.run_selector` entry point. Phase B (porting the four
+  interactive selectors — `/model`, `/planguard`, `/provider`,
+  `/skills` — to `controller.run_selector`) is outstanding and
+  gates the 0.3.7 release. One E2E test
+  (`test_slash_planguard_tui_applies_selected_mode`) stays red
+  until phase B lands. Local non-E2E: 1,481 pass. Local Dynamic E2E:
+  25/26 pass. Ruff and typed-island mypy for
+  `pawnlogic/terminal_transcript.py` and `pawnlogic/live_terminal.py`
+  are clean. CHANGELOG, SECURITY, and `config/paths.py:VERSION`
+  must not be touched until phase B is complete.
 - 0.3.6 release gates all closed: 1,470 non-E2E tests, 26 Dynamic E2E,
   Ruff, typed-island mypy (42 modules), documentation and language guards,
   release consistency, architecture budget, package build, twine metadata,
