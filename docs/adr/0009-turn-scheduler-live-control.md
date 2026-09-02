@@ -61,7 +61,10 @@ Plan-guard interaction is fixed here: a skipped batch still counts as one
 observed batch for the escalation counter, so steering cannot be used to
 reset or evade the two-strike escalation rule. The steer is appended as a new
 user message and the model is requested again. Streaming text-only responses
-are not torn apart; Esc stays the immediate-interrupt path.
+are not torn apart; an unclaimed steer rolls forward as the next independent
+Turn after natural completion. Esc stays the immediate-interrupt path; the
+persistent terminal uses a short escape-sequence resolution window so bare Esc
+does not inherit Prompt Toolkit's compounded default delay.
 
 Follow-ups are consumed only after the agent stops naturally, one per Turn,
 so distinct user intents never merge.
@@ -74,14 +77,33 @@ Each Turn owns a cancellation token following the delegation runtime pattern
 never used to stop the worker thread. An interrupt fully closes unfinished
 Tool Call protocol pairs before the Turn is marked interrupted.
 
+Potentially waiting cancellation runs off the Prompt Toolkit thread. Once the
+active Turn has actually settled, the terminal prefills one explicitly marked
+recovered draft. Editing and submitting that draft replaces the recovered
+submission exactly once; no automatic replay occurs.
+
+Queue inspection is not a cancellation control. In the persistent terminal,
+bare `/queue` renders an immutable queue view in the output viewport without
+pausing the application or the active Turn.
+
+The output viewport owns both coordinate-aware mouse-wheel events and the
+coordinate-free ScrollUp/ScrollDown fallback used by some terminals and
+multiplexers. Its manual scroll anchor is independent from composer history;
+reaching the output tail restores automatic following.
+
 ### Threading migration
 
 Execution moves to a worker thread in two independently accepted stages:
-P2a keeps the Prompt Toolkit composer permanently live on the main thread
-with output through the Output Sink, then P2b moves turn execution into the
-worker after an audit lands for every module-level global and RuntimeContext
-legacy mirror, classifying each as encapsulated or thread-confined. The
-readline fallback stays serial with an explicit capability notice.
+P2a keeps one full-screen Prompt Toolkit application permanently live on the
+main thread. Its fixed bottom composer is rendered separately from the output
+viewport; stdout, stderr, and Output Sink writes enter the application's
+buffer and never repaint the physical input line. Queued and recovered input
+is rendered as muted, read-only preview rows immediately above the composer.
+P2b then moves turn
+execution into the worker after an audit lands for every module-level global
+and RuntimeContext legacy mirror, classifying each as encapsulated or
+thread-confined. The readline fallback stays serial with an explicit
+capability notice.
 
 ### Persistence
 
@@ -126,13 +148,14 @@ version PR stays unmerged until the previous release completes.
   targeted set records 112 passing tests.
 - P6 queue controls, conversion, immutable rendering, recall, toolbar, and
   active-stdin isolation add 171 passing targeted tests.
-- Dynamic terminal E2E is green: 23 tests passed. Fast non-E2E validation is
-  green: 1,432 tests passed with 7 deselected and 5 Python tarfile warnings.
-- Ruff, CI-equivalent typed-island mypy (including the six live-control
-  modules), documentation structure, release consistency, repository
-  language policy, architecture budget, code-index freshness, and diff checks
-  are green. Packaging/fresh-install validation is intentionally not claimed
-  by this ADR and remains a release-stage gate.
+- Dynamic terminal E2E is green: 26 tests passed. Non-E2E validation is green:
+  1,469 tests passed with 5 Python tarfile warnings. The persistent-terminal
+  slice passes Ruff and mypy, and documentation structure, release consistency,
+  repository language policy, code-index freshness, and diff checks are green.
+- Branch-wide typed-island and architecture-budget checks are blocked by the
+  separate `core/provider_runtime.py` change at this branch head, not by the
+  live-terminal slice. Packaging/fresh-install validation is intentionally not
+  claimed by this ADR and remains a release-stage gate.
 
 ## Consequences
 

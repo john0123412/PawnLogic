@@ -139,7 +139,9 @@ mutates session queue state directly.
 
 A Steering Message is user input submitted while a Turn is running. It takes
 effect at the next safe point, enters context as a new user message, and
-never merges with other submissions.
+never merges with other submissions. If a text-only Turn reaches natural
+completion without exposing a safe point, an unclaimed Steering Message rolls
+forward as the next independent Turn instead of remaining stuck in the queue.
 
 ### Follow-up Message
 
@@ -155,8 +157,9 @@ started are recorded as protocol-complete skipped results.
 ### Recovered Draft
 
 A Recovered Draft is an unfinished Turn restored after an interruption or
-process restart. It is presented as editable input and never replays
-side-effect Tools automatically.
+process restart. After cooperative cancellation settles, the live terminal
+automatically presents it as editable input. Submitting replaces and runs it
+exactly once; it never replays side-effect Tools automatically.
 
 ## Runtime State Terms
 

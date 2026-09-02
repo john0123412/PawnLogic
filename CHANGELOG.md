@@ -22,6 +22,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added the live-composer Alt+Up recall shortcut and a queue-state toolbar.
 - Added live-composer Enter steering and Alt+Enter follow-up queueing while a
   Turn runs; the readline fallback remains serial.
+- Added a persistent Prompt Toolkit terminal layout that keeps streamed output
+  above a fixed bottom composer and toolbar, including safe temporary handoff
+  to interactive slash-command selectors.
 
 ### Changed
 
@@ -30,6 +33,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   interrupting active work.
 - Added restart recovery entry points `pawn --continue` and
   `pawn resume <session>`; both load an editable draft without auto-running it.
+- Routed live-mode stdout, stderr, and command sink output through the
+  persistent terminal buffer so rapid streams cannot overwrite drafts or
+  splice accepted steering text into the active response.
+- Fixed consecutive Enter submissions after text-only responses: queued input
+  is now shown as muted rows above the composer, unclaimed steer messages drain
+  as independent subsequent Turns, stale keypress lanes are reconciled at
+  dispatch, and scheduler admission errors no longer surface as generic
+  internal failures.
+- Changed bare `/queue` in the persistent terminal to render queue status in
+  the output viewport without pausing the interface or active Turn.
+- Fixed delayed bare-Esc interruption by shortening Prompt Toolkit's terminal
+  decoding and key-binding prefix windows while preserving Alt shortcuts.
+- Fixed live Esc/Ctrl+C recovery so cancellation waits off the UI thread and
+  automatically prefills one editable recovered draft; submitting an edit
+  replaces the interrupted prompt exactly once instead of silently stopping
+  or replaying the original prompt first.
+- Fixed mouse-wheel routing in the persistent terminal: coordinate-aware and
+  multiplexer fallback events now scroll output history without recalling
+  composer history, and reaching the tail restores automatic output following.
+- Fixed a streamed-output render race that could point Prompt Toolkit's cursor
+  past its cached fragment lines, open an internal "Press ENTER to continue"
+  screen, and consume the user's next submitted prompt.
 
 ## [0.3.5] - 2026-08-30
 
