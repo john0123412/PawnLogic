@@ -59,6 +59,29 @@ def _kind_for_view(view: Any) -> SubmissionKind:
     return SubmissionKind.FOLLOW_UP if has_work else SubmissionKind.START
 
 
+def _reconcile_submission_kind(
+    view: Any,
+    kind: SubmissionKind,
+) -> SubmissionKind:
+    """Resolve a keypress intent against the latest scheduler snapshot.
+
+    Prompt Toolkit classifies the keypress before the main loop dispatches it.
+    A fast Turn can finish in that gap, so the UI's START/STEER/FOLLOW_UP hint
+    must be reconciled rather than rejected as an internal scheduler error.
+    """
+    has_queued = bool(view.recovered or view.steer or view.follow_up)
+    if kind is SubmissionKind.START:
+        if view.active is not None:
+            return SubmissionKind.STEER
+        if has_queued:
+            return SubmissionKind.FOLLOW_UP
+    elif kind is SubmissionKind.STEER and view.active is None:
+        return SubmissionKind.FOLLOW_UP if has_queued else SubmissionKind.START
+    elif kind is SubmissionKind.FOLLOW_UP and view.active is None and not has_queued:
+        return SubmissionKind.START
+    return kind
+
+
 def submit_session_turn(
     session: Any,
     user_input: str,
@@ -78,6 +101,7 @@ def submit_session_turn(
         if replacement.accepted:
             scheduler.control(ControlAction(ControlKind.RESUME))
         return
+    selected_kind = _reconcile_submission_kind(view, selected_kind)
     submission = Submission(user_input, kind=selected_kind, source="session")
     scheduler.submit(submission)
     if selected_kind is SubmissionKind.FOLLOW_UP and view.active is None:

@@ -8,14 +8,15 @@ facade below its architecture budget.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 import signal
 import sys
 from typing import Any
 
-from core.queue_tui import toolbar_queue_status
+from core.queue_tui import queue_rows, toolbar_queue_status
 from core.turn_scheduler import SubmissionKind
 from utils.ansi import YELLOW, c
 
@@ -27,17 +28,98 @@ LIVE_SLASH_NOTICE = (
 )
 
 
+async def _wait_for_interrupt_settlement(
+    running_turn: Callable[[], bool],
+) -> None:
+    """Wait without blocking the UI until cooperative cancellation settles."""
+    while running_turn():
+        await asyncio.sleep(0.02)
+
+
+def requires_modal_terminal(raw: str) -> bool:
+    """Return whether an idle slash command temporarily owns the physical TTY."""
+    parts = raw.strip().split()
+    if not parts:
+        return False
+    verb = parts[0].lower()
+    arg = parts[1].lower() if len(parts) > 1 else ""
+    if verb in {"/planguard", "/plg", "/model", "/resume"}:
+        return not arg
+    if verb == "/skills":
+        return not arg
+    if verb == "/provider":
+        return not arg or arg in {"add", "fetch", "test"}
+    return verb in {"/setkey"}
+
+
+async def dispatch_live_slash(
+    raw: str,
+    session: Any,
+    *,
+    live_enabled: bool,
+    terminal_controller: Any,
+    command_words: Callable[[], list[str]],
+    matching_words: Callable[[str, list[str]], list[str]],
+    dispatcher: Callable[[str, Any], Awaitable[Any]],
+    terminal_notice: Callable[[str], Awaitable[None]],
+    sink: Any,
+    exit_sentinel: Any,
+) -> Any:
+    """Normalize and dispatch one slash command around optional modal TTY use."""
+    paused = False
+    if terminal_controller is not None:
+        paused = await terminal_controller.pause_for_modal(
+            not session.queue_status().get("pending_count", 0)
+            and requires_modal_terminal(raw)
+        )
+    result = None
+    try:
+        parts = raw.split(None, 1)
+        verb = parts[0]
+        rest = parts[1] if len(parts) > 1 else ""
+        registered = command_words()
+        if verb not in registered and len(verb) >= 3:
+            matches = matching_words(verb, registered)
+            if len(matches) == 1:
+                corrected = matches[0]
+                raw = f"{corrected} {rest}".strip() if rest else corrected
+                notice = c(YELLOW, f"  ✔ Auto-corrected: {verb} -> {corrected}")
+                if paused:
+                    print(notice)
+                sink.print(notice)
+        if should_defer_live_slash(session, raw, enabled=live_enabled):
+            await terminal_notice(LIVE_SLASH_NOTICE)
+            return None
+        result = await dispatcher(raw, session)
+        return result
+    finally:
+        if terminal_controller is not None and result is not exit_sentinel:
+            await terminal_controller.resume_after_modal(paused)
+
+
 @dataclass(slots=True)
 class LiveSubmissionState:
     """Hold the submission kind for exactly one Prompt Toolkit submit."""
 
     kind: SubmissionKind | None = None
+    recovery_draft: bool = False
 
     def consume(self) -> SubmissionKind | None:
         """Return and clear the kind marked by the latest key binding."""
         kind = self.kind
         self.kind = None
         return kind
+
+    def mark_recovery_draft(self) -> None:
+        """Make the next Enter replace the recovered prompt."""
+        self.recovery_draft = True
+        self.kind = SubmissionKind.START
+
+    def consume_recovery_draft(self) -> bool:
+        """Return and clear the recovered-draft marker after submission."""
+        marked = self.recovery_draft
+        self.recovery_draft = False
+        return marked
 
 
 def build_prompt_toolkit_bindings(
@@ -47,27 +129,64 @@ def build_prompt_toolkit_bindings(
     read_text_cache: Callable[[Path], str],
     restore_last_input_buffer: Callable[[Any, str, dict[str, str]], bool],
     last_input_path: Path,
+    on_interrupt_settled: Callable[[], None] | None = None,
 ) -> tuple[Any, LiveSubmissionState]:
     """Create live key bindings and return their per-session input state."""
     bindings = key_bindings_factory()
     submission_state = LiveSubmissionState()
     ctrl_z_restore_state: dict[str, str] = {}
+    interrupt_task: asyncio.Task[None] | None = None
 
     def running_turn() -> bool:
         return bool(session.queue_status().get("pending_count", 0))
+
+    def queued_work() -> bool:
+        return bool(session.queue_status().get("queue_depth", 0))
 
     def interrupt_active_turn() -> bool:
         """Use the same typed control for Escape and Ctrl+C while running."""
         interrupt = getattr(session, "interrupt_active", None)
         return bool(interrupt()) if callable(interrupt) else False
 
+    def recovery_draft_pending() -> bool:
+        return submission_state.recovery_draft
+
+    def schedule_interrupt(event: Any) -> None:
+        """Request cancellation off the Prompt Toolkit event-loop thread."""
+        nonlocal interrupt_task
+        if interrupt_task is not None and not interrupt_task.done():
+            return
+
+        async def settle() -> None:
+            nonlocal interrupt_task
+            try:
+                accepted = await asyncio.to_thread(interrupt_active_turn)
+                if accepted and on_interrupt_settled is not None:
+                    await _wait_for_interrupt_settlement(running_turn)
+                    on_interrupt_settled()
+            finally:
+                interrupt_task = None
+
+        create_task = getattr(event.app, "create_background_task", None)
+        if callable(create_task):
+            interrupt_task = create_task(settle())
+        else:
+            # Lightweight binding tests use a fake app without an event loop.
+            # Preserve that seam while the real application remains async.
+            interrupt_active_turn()
+
     @bindings.add("enter")
     def _(event: Any) -> None:
         """Submit idle input or mark a running input as a steering message."""
         session._live_input_buffer = event.current_buffer
-        submission_state.kind = (
-            SubmissionKind.STEER if running_turn() else SubmissionKind.START
-        )
+        if recovery_draft_pending():
+            submission_state.kind = SubmissionKind.START
+        elif running_turn():
+            submission_state.kind = SubmissionKind.STEER
+        elif queued_work():
+            submission_state.kind = SubmissionKind.FOLLOW_UP
+        else:
+            submission_state.kind = SubmissionKind.START
         event.current_buffer.validate_and_handle()
 
     @bindings.add("escape", "enter")
@@ -75,7 +194,9 @@ def build_prompt_toolkit_bindings(
         """Mark Alt+Enter as a natural-completion follow-up while running."""
         session._live_input_buffer = event.current_buffer
         submission_state.kind = (
-            SubmissionKind.FOLLOW_UP if running_turn() else SubmissionKind.START
+            SubmissionKind.FOLLOW_UP
+            if running_turn() or queued_work()
+            else SubmissionKind.START
         )
         event.current_buffer.validate_and_handle()
 
@@ -93,13 +214,14 @@ def build_prompt_toolkit_bindings(
     def _(event: Any) -> None:
         """Interrupt one active Turn without consuming the current draft."""
         if running_turn():
-            interrupt_active_turn()
+            schedule_interrupt(event)
 
     @bindings.add("c-c")
     @bindings.add("<sigint>")
     def _(event: Any) -> None:
         """Interrupt active work for key and terminal SIGINT paths."""
-        if running_turn() and interrupt_active_turn():
+        if running_turn():
+            schedule_interrupt(event)
             return
         event.app.exit(exception=KeyboardInterrupt())
 
@@ -126,34 +248,60 @@ def build_prompt_toolkit_bindings(
     return bindings, submission_state
 
 
-def install_live_interrupt_handler(session: Any) -> Callable[[], None]:
+def install_live_interrupt_handler(
+    session: Any,
+    *,
+    on_interrupt_settled: Callable[[], None] | None = None,
+) -> Callable[[], None]:
     """Route terminal SIGINT to the active Turn's typed cancellation control.
 
     A PTY delivers Ctrl+C as SIGINT before Prompt Toolkit can dispatch its
-    ``c-c`` binding.  The handler only requests scheduler cancellation on the
-    main thread; the worker still stops cooperatively at its Turn token.  An
-    idle SIGINT raises ``KeyboardInterrupt`` so the existing double-press exit
-    behavior remains unchanged.
+    ``c-c`` binding.  The handler only schedules the potentially-waiting
+    scheduler cancellation; the worker still stops cooperatively at its Turn
+    token.  An idle SIGINT raises ``KeyboardInterrupt`` so the existing
+    double-press exit behavior remains unchanged.
     """
     previous = signal.getsignal(signal.SIGINT)
     restored = False
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    interrupt_task: asyncio.Task[None] | None = None
+
+    async def settle_interrupt() -> None:
+        nonlocal interrupt_task
+        try:
+            accepted = await asyncio.to_thread(interrupt_active_turn)
+            if accepted and on_interrupt_settled is not None:
+                await _wait_for_interrupt_settlement(running_turn)
+                on_interrupt_settled()
+        finally:
+            interrupt_task = None
+
+    def schedule_interrupt() -> bool:
+        nonlocal interrupt_task
+        if loop is None or loop.is_closed():
+            return False
+        if interrupt_task is not None and not interrupt_task.done():
+            return True
+        interrupt_task = loop.create_task(settle_interrupt())
+        return True
 
     def _handler(_signum: int, _frame: Any) -> None:
         if running_turn():
-            result = interrupt_active_turn()
-            if result:
-                status = session.queue_status()
-                pending = bool(status.get("pending_count", 0))
-                message = (
-                    "\n  [interrupt pending] Waiting for the active Turn to stop...\n"
-                    if pending
-                    else "\n  [interrupt] Stopping current response; returning to edit mode...\n"
-                )
+            if schedule_interrupt():
                 try:
-                    sys.stdout.write(message)
+                    sys.stdout.write(
+                        "\n  [interrupt pending] Waiting for the active Turn to stop...\n"
+                    )
                     sys.stdout.flush()
                 except Exception:
                     pass
+                return
+            # Keep a synchronous compatibility fallback for callers that
+            # install the handler outside an async REPL loop.
+            if interrupt_active_turn():
                 return
         raise KeyboardInterrupt
 
@@ -226,6 +374,76 @@ def build_bottom_toolbar(
     return bottom_toolbar
 
 
+def build_queue_preview(
+    session: Any,
+    *,
+    max_items: int = 3,
+) -> Callable[[], list[tuple[str, str]]]:
+    """Build muted, read-only rows for queued input above the composer."""
+    def queue_preview() -> list[tuple[str, str]]:
+        queue_view = getattr(session, "queue_view", None)
+        if not callable(queue_view):
+            return []
+        rows = [row for row in queue_rows(queue_view()) if row.status != "running"]
+        if not rows:
+            return []
+        visible = rows[:max_items]
+        lines = [
+            f"  ↳ queued [{row.kind.value}] {row.summary}"
+            for row in visible
+        ]
+        remaining = len(rows) - len(visible)
+        if remaining:
+            lines.append(f"  … +{remaining} more queued")
+        return [("class:queue-preview", "\n".join(lines))]
+
+    return queue_preview
+
+
+def build_live_style(style_factory: Any) -> Any:
+    """Build the persistent composer style outside the CLI facade."""
+    return style_factory.from_dict({
+        "prompt": "ansigreen bold",
+        "you": "bold",
+        "completion-menu": "bg:default fg:#bbbbbb",
+        "completion-menu.completion": "bg:default fg:#bbbbbb",
+        "completion-menu.meta.completion": "bg:default fg:#666666",
+        "completion-menu.completion.current": "bg:#333333 fg:#ffffff",
+        "completion-menu.meta.completion.current": "bg:#333333 fg:#aaaaaa",
+        "completion-menu.completion.character-match": "fg:#00d787 bold",
+        "scrollbar.background": "bg:default",
+        "scrollbar.button": "bg:default",
+        "bottom-toolbar": "bg:#222222 fg:#cccccc",
+        "queue-preview": "fg:#777777 italic",
+    })
+
+
+def prefill_settled_recovery(
+    session: Any,
+    terminal: Any,
+    submission_state: LiveSubmissionState,
+) -> None:
+    """Present one settled recovered prompt as an editable replacement."""
+    if terminal is None or terminal.is_closed:
+        return
+    queue_view = getattr(session, "queue_view", None)
+    view = queue_view() if callable(queue_view) else None
+    recovered = getattr(view, "recovered", None)
+    if recovered is None:
+        terminal.append_line(
+            "  [interrupt] Active Turn stopped; no recoverable draft was produced."
+        )
+        terminal.refresh()
+        return
+    submission_state.mark_recovery_draft()
+    terminal.set_recovery_draft(recovered.content)
+    terminal.append_line(
+        "  [interrupted] Response stopped. Edit the recovered prompt and "
+        "press Enter to replace it; use /queue resume to retry unchanged."
+    )
+    terminal.refresh()
+
+
 def should_defer_live_slash(session: Any, raw: str, *, enabled: bool) -> bool:
     """Return whether a slash command is unsafe while a live Turn runs."""
     if not enabled or not session.queue_status().get("pending_count", 0):
@@ -281,10 +499,15 @@ __all__ = [
     "LIVE_SLASH_NOTICE",
     "LiveSubmissionState",
     "build_bottom_toolbar",
+    "build_live_style",
     "build_prompt_toolkit_bindings",
+    "build_queue_preview",
     "dispatch_live_input",
+    "dispatch_live_slash",
     "install_live_interrupt_handler",
     "is_interrupted_recovery_control",
+    "prefill_settled_recovery",
+    "requires_modal_terminal",
     "restore_interrupted_repl_input",
     "should_defer_live_slash",
 ]

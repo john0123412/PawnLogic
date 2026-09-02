@@ -2,11 +2,29 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from pawnlogic.live_repl import build_bottom_toolbar, build_prompt_toolkit_bindings
+from pawnlogic.live_repl import (
+    build_bottom_toolbar,
+    build_prompt_toolkit_bindings,
+    build_queue_preview,
+    requires_modal_terminal,
+)
+
+
+def test_only_interactive_slash_forms_pause_the_persistent_terminal():
+    assert requires_modal_terminal("/planguard")
+    assert requires_modal_terminal("/model")
+    assert not requires_modal_terminal("/queue")
+    assert requires_modal_terminal("/provider fetch custom")
+    assert not requires_modal_terminal("/help")
+    assert not requires_modal_terminal("/planguard status")
+    assert not requires_modal_terminal("/queue clear")
+    assert not requires_modal_terminal("/skills view 2")
 
 
 class FakeBindings:
@@ -21,7 +39,7 @@ class FakeBindings:
         return register
 
 
-def _build_bindings(session):
+def _build_bindings(session, *, on_interrupt_settled=None):
     bindings = FakeBindings()
     restore = MagicMock()
     built, state = build_prompt_toolkit_bindings(
@@ -30,6 +48,7 @@ def _build_bindings(session):
         read_text_cache=lambda _path: "",
         restore_last_input_buffer=restore,
         last_input_path=Path(".last_input"),
+        on_interrupt_settled=on_interrupt_settled,
     )
     assert built is bindings
     return bindings, state
@@ -49,6 +68,69 @@ def test_active_escape_and_ctrl_c_share_interrupt_control():
     bindings.handlers[("c-c",)](event)
 
     assert session.interrupt_active.call_count == 2
+
+
+def test_escape_interrupt_runs_off_ui_thread_and_notifies_after_settle():
+    async def scenario() -> None:
+        status = {"pending_count": 1}
+        settled = asyncio.Event()
+
+        def interrupt() -> bool:
+            time.sleep(0.05)
+            status["pending_count"] = 0
+            return True
+
+        session = SimpleNamespace(
+            queue_status=lambda: status,
+            interrupt_active=interrupt,
+        )
+        bindings, _state = _build_bindings(
+            session,
+            on_interrupt_settled=settled.set,
+        )
+        app = SimpleNamespace(
+            current_buffer=SimpleNamespace(),
+            create_background_task=asyncio.create_task,
+        )
+        bindings.handlers[("escape",)](SimpleNamespace(app=app))
+
+        assert not settled.is_set()
+        await asyncio.sleep(0.01)
+        assert status["pending_count"] == 1
+        await asyncio.sleep(0.1)
+        assert status["pending_count"] == 0
+        assert settled.is_set()
+
+    asyncio.run(scenario())
+
+
+def test_escape_waits_for_late_cooperative_settlement_before_recovery_callback():
+    async def scenario() -> None:
+        status = {"pending_count": 1}
+        settled = asyncio.Event()
+
+        session = SimpleNamespace(
+            queue_status=lambda: status,
+            # A scheduler can accept cancellation but return before a slow
+            # provider or Tool reaches its cooperative cancellation point.
+            interrupt_active=lambda: True,
+        )
+        bindings, _state = _build_bindings(
+            session,
+            on_interrupt_settled=settled.set,
+        )
+        app = SimpleNamespace(
+            current_buffer=SimpleNamespace(),
+            create_background_task=asyncio.create_task,
+        )
+        bindings.handlers[("escape",)](SimpleNamespace(app=app))
+
+        await asyncio.sleep(0.02)
+        assert not settled.is_set()
+        status["pending_count"] = 0
+        await asyncio.wait_for(settled.wait(), timeout=0.5)
+
+    asyncio.run(scenario())
 
 
 def test_idle_ctrl_c_exits_prompt_and_does_not_call_session_control():
@@ -76,6 +158,25 @@ def test_escape_enter_still_marks_follow_up_while_running():
     )
 
     bindings.handlers[("escape", "enter")](event)
+
+    from core.turn_scheduler import SubmissionKind
+
+    assert state.consume() is SubmissionKind.FOLLOW_UP
+    validated.assert_called_once_with()
+
+
+def test_enter_queues_follow_up_when_work_exists_but_no_turn_is_active():
+    validated = MagicMock()
+    session = SimpleNamespace(
+        queue_status=lambda: {"pending_count": 0, "queue_depth": 2},
+    )
+    bindings, state = _build_bindings(session)
+    event = SimpleNamespace(
+        app=SimpleNamespace(current_buffer=SimpleNamespace()),
+        current_buffer=SimpleNamespace(validate_and_handle=validated),
+    )
+
+    bindings.handlers[("enter",)](event)
 
     from core.turn_scheduler import SubmissionKind
 
@@ -133,5 +234,36 @@ def test_bottom_toolbar_reports_immutable_queue_snapshot():
     )()
 
     assert "Running · steer:0 · follow-up:0" in toolbar
+    release.set()
+    scheduler.control(ControlAction(ControlKind.SHUTDOWN))
+
+
+def test_queue_preview_returns_muted_rows_for_waiting_input():
+    from prompt_toolkit.formatted_text import fragment_list_to_text
+    from threading import Event
+
+    from core.turn_scheduler import ControlAction, ControlKind, Submission, TurnScheduler
+
+    started = Event()
+    release = Event()
+
+    def execute(_item):
+        started.set()
+        assert release.wait(timeout=5)
+
+    scheduler = TurnScheduler(execute, background=True, id_prefix="preview")
+    scheduler.submit(Submission("active"))
+    assert started.wait(timeout=5)
+    scheduler.submit(Submission("second question", kind="steer"))
+    scheduler.submit(Submission("third question", kind="follow_up"))
+    preview = build_queue_preview(
+        SimpleNamespace(queue_view=scheduler.view),
+    )()
+
+    assert all(style == "class:queue-preview" for style, _text in preview)
+    text = fragment_list_to_text(preview)
+    assert "second question" in text
+    assert "third question" in text
+
     release.set()
     scheduler.control(ControlAction(ControlKind.SHUTDOWN))

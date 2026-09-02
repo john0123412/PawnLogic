@@ -746,7 +746,7 @@ async def cmd_queue(ctx: CommandContext) -> None:
     """Show or manage queued, steering, follow-up, and recovered messages.
 
     Usage:
-        /queue            - Show the queue (opens the idle Prompt Toolkit TUI)
+        /queue            - Show the queue without interrupting the active Turn
         /queue clear      - Clear all queued messages
         /queue resume     - Process queued messages
         /queue remove <id> - Remove one queued message
@@ -790,6 +790,7 @@ async def cmd_queue(ctx: CommandContext) -> None:
         is_live_idle = (
             getattr(ctx.session, "_live_turns_enabled", False)
             and view.active is None
+            and not getattr(ctx.session, "_live_terminal_active", False)
         )
         try:
             is_tty = bool(sys.stdin.isatty())

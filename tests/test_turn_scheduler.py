@@ -127,7 +127,7 @@ def test_follow_up_is_fifo_and_runs_after_natural_completion() -> None:
     assert scheduler.view().session_status == "completed"
 
 
-def test_steering_is_admitted_but_waits_for_the_p3_safe_point() -> None:
+def test_unclaimed_steer_runs_as_next_turn_after_natural_completion() -> None:
     executor = BlockingExecutor()
     scheduler = TurnScheduler(executor)
     worker, errors = run_in_thread(scheduler, Submission("original"))
@@ -138,8 +138,9 @@ def test_steering_is_admitted_but_waits_for_the_p3_safe_point() -> None:
     assert scheduler.view().state is SchedulerState.STEER_QUEUED
 
     finish_blocked(executor, worker, errors)
-    assert executor.calls == ["original"]
-    assert scheduler.view().steer[0].status is SubmissionStatus.QUEUED
+    assert executor.calls == ["original", "steer"]
+    assert scheduler.view().steer == ()
+    assert scheduler.view().session_status == "completed"
 
 
 def test_claim_steer_consumes_only_the_oldest_steer_at_a_safe_point() -> None:
@@ -809,7 +810,7 @@ def test_concurrent_follow_up_admission_is_serialized_by_sequence() -> None:
     assert executor.calls[1:] in (["one", "two"], ["two", "one"])
 
 
-def test_mixed_lanes_are_fifo_within_lane_and_steer_stays_at_safe_point() -> None:
+def test_unclaimed_mixed_lanes_drain_steer_before_follow_up() -> None:
     executor = BlockingExecutor()
     scheduler = TurnScheduler(executor)
     worker, errors = run_in_thread(scheduler, Submission("active"))
@@ -821,11 +822,10 @@ def test_mixed_lanes_are_fifo_within_lane_and_steer_stays_at_safe_point() -> Non
 
     finish_blocked(executor, worker, errors)
     view = scheduler.view()
-    assert executor.calls == ["active"]
-    assert [item.content for item in view.steer] == ["steer-1", "steer-2"]
-    assert [item.content for item in view.follow_up] == ["follow-1"]
-    assert [item.sequence for item in view.steer] == [2, 4]
-    assert [item.sequence for item in view.follow_up] == [3]
+    assert executor.calls == ["active", "steer-1", "steer-2", "follow-1"]
+    assert view.steer == ()
+    assert view.follow_up == ()
+    assert view.session_status == "completed"
 
 
 def test_control_validates_required_arguments() -> None:

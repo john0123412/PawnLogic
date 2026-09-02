@@ -9,13 +9,15 @@ without changing the three-entry control surface.
 ``MessageQueue`` used a bounded deque that silently discarded work and mixed
 future input with interrupted work.  This module keeps those concerns in
 separate lanes and makes capacity, recovery, and duplicate IDs explicit.
-Steering is admitted here but is not consumed at a safe point yet; that hook
-belongs to P3 when the turn/tool loop can expose a Tool Call boundary.
+Steering is consumed by the turn/tool loop at a Tool Call safe point. If a
+text-only Turn completes before exposing a safe point, the oldest unclaimed
+steer becomes the next Turn instead of leaving the scheduler permanently
+stuck in ``STEER_QUEUED``.
 
-FIFO is guaranteed within each lane, not across mixed lanes.  The admission
-sequence records the global order for persistence and inspection.  Once P3
-adds a safe point, steer entries take precedence over follow-up entries;
-until then P1 leaves steer entries queued and never silently reorders them.
+FIFO is guaranteed within each lane, not across mixed lanes. The admission
+sequence records the global order for persistence and inspection. Steer
+entries take precedence over follow-up entries at safe points and when an
+unclaimed steer rolls forward after natural completion.
 """
 
 from __future__ import annotations
@@ -814,13 +816,9 @@ class TurnScheduler:
                 with self._lock:
                     active = self._active
                     if active is None:
-                        if self._steer:
-                            # P1 admits steering but deliberately leaves its
-                            # safe-point consumption to P3.
-                            self._driving = False
-                            return
-                        if self._follow_up and self._session_status not in {"failed", "aborted"}:
-                            self._active = self._follow_up.popleft()
+                        queued_lane = self._steer or self._follow_up
+                        if queued_lane and self._session_status not in {"failed", "aborted"}:
+                            self._active = queued_lane.popleft()
                             self._active_cancellation = TurnCancellationToken()
                             self._session_status = "running"
                             self._interrupted_at = None
@@ -987,7 +985,7 @@ class TurnScheduler:
             self._active = self._recovered
             self._recovered = None
         elif self._steer:
-            return False
+            self._active = self._steer.popleft()
         elif self._follow_up:
             self._active = self._follow_up.popleft()
         else:

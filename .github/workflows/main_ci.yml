@@ -142,6 +142,7 @@ jobs:
             core/turn_cancellation.py \
             core/queue_tui.py \
             pawnlogic/live_repl.py \
+            pawnlogic/live_terminal.py \
             pawnlogic/restart_recovery.py \
             tools/check_doc_structure.py \
             tools/check_release_consistency.py \

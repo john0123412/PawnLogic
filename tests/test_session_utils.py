@@ -1062,6 +1062,47 @@ def test_live_start_replaces_recovered_draft_after_active_interrupt(monkeypatch)
     assert s.queue_status()["queue_depth"] == 0
 
 
+def test_live_start_hint_queues_behind_work_instead_of_raising(monkeypatch):
+    s = _make_session()
+    from core.turn_scheduler import ControlAction, ControlKind, SubmissionKind
+
+    s._turn_scheduler.control(
+        ControlAction(
+            ControlKind.RESTORE,
+            restore_state={"steer": [{"content": "second question"}]},
+        )
+    )
+    processed: list[str] = []
+    monkeypatch.setattr(s, "_sync_runtime_context", lambda: None)
+    monkeypatch.setattr(
+        s,
+        "_run_turn_active",
+        lambda user_input: processed.append(user_input),
+    )
+
+    s.submit_live_turn("third question", kind=SubmissionKind.START)
+
+    assert processed == ["second question", "third question"]
+    assert s.queue_status()["queue_depth"] == 0
+
+
+def test_stale_steer_hint_becomes_start_after_turn_finishes(monkeypatch):
+    s = _make_session()
+    from core.turn_scheduler import SubmissionKind
+
+    processed: list[str] = []
+    monkeypatch.setattr(s, "_sync_runtime_context", lambda: None)
+    monkeypatch.setattr(
+        s,
+        "_run_turn_active",
+        lambda user_input: processed.append(user_input),
+    )
+
+    s.submit_live_turn("arrived after completion", kind=SubmissionKind.STEER)
+
+    assert processed == ["arrived after completion"]
+
+
 def test_abort_preserves_queued_messages_when_no_turn_is_active():
     s = _make_session()
     from core.turn_scheduler import ControlAction, ControlKind
