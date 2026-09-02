@@ -154,8 +154,9 @@ version PR stays unmerged until the previous release completes.
   repository language policy, code-index freshness, and diff checks are green.
 - Branch-wide typed-island and architecture-budget checks pass after provider
   model helpers moved out of `core/provider_runtime.py`. Package build, twine
-  metadata, wheel contents, and isolated fresh-install checks pass; the remote
-  Python matrix remains a release-stage gate.
+  metadata, wheel contents, and isolated fresh-install checks pass. PR #120
+  passes the Python 3.10/3.11/3.12 matrix and Dynamic E2E in remote Actions;
+  owner manual terminal acceptance remains before release finalization.
 
 ## Consequences
 

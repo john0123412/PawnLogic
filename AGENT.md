@@ -605,8 +605,9 @@ are source-checkout or user-installed assets; pip/curl installations should use
 - The 0.3.6 release candidate is locally green: 1,469 non-E2E and 26 Dynamic
   E2E tests, Ruff, typed-island mypy, documentation and language guards,
   release consistency, architecture budget, package build, twine metadata,
-  and an isolated wheel fresh-install smoke all pass. The Python
-  3.10/3.11/3.12 matrix and remote Actions remain release-stage checks.
+  and an isolated wheel fresh-install smoke all pass. PR #120 also passes the
+  Python 3.10/3.11/3.12 matrix and Dynamic E2E in remote Actions. Owner manual
+  terminal acceptance remains before release finalization, merge, and tag.
   Do not describe 0.3.6 as published until every gate and the release approval
   finish.
 - `main` protected by branch rule requiring PR, up-to-date branches, and four
@@ -666,8 +667,8 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   controls. Escape shares a prefix with Alt shortcuts, so real-input tests
   must keep its bounded sequence-resolution latency covered. Mouse-wheel and
   coordinate-free ScrollUp/ScrollDown events must remain owned by the output
-  viewport so composer history cannot consume them. The remote Python matrix
-  and post-upload hash-pinned install smoke remain outstanding.
+  viewport so composer history cannot consume them. Owner manual terminal
+  acceptance and the post-upload hash-pinned install smoke remain outstanding.
 - Safe-point steering can alter Tool Call batch protocol; skipped results,
   ordering, and plan-guard accounting must remain complete.
 - Tier presets use advisory plan-guard mode (`plan_guard_mode`) so weak models
