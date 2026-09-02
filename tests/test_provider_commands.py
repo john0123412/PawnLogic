@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import stat
+import subprocess
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -182,6 +183,44 @@ def test_main_pawn_completer_supports_fuzzy_command_completion():
 
 def test_packaged_cli_completer_supports_fuzzy_command_completion():
     _assert_fuzzy_command_completion(pawn_cli.PawnCompleter)
+
+
+def test_fallback_completer_returns_compatible_completion_objects(tmp_path):
+    script = """
+from types import SimpleNamespace
+
+from pawnlogic.cli import PawnCompleter
+
+query = "/plg"
+items = list(
+    PawnCompleter(
+        ["/plan", "/planguard"],
+        meta_dict={"/planguard": "Configure plan guard"},
+    ).get_completions(SimpleNamespace(text_before_cursor=query), None)
+)
+assert [item.text for item in items] == ["/planguard"]
+assert items[0].start_position == -len(query)
+assert items[0].display_meta_text == "Configure plan guard"
+"""
+    env = os.environ.copy()
+    env.update(
+        {
+            "PAWNLOGIC_HOME": str(tmp_path),
+            "PAWNLOGIC_TEST_MODE": "true",
+            "MCP_ENABLED": "false",
+            "PROMPT_TOOLKIT_ENABLED": "0",
+        }
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def _assert_ultra_fuzzy_command_completion(completer_cls):

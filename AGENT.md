@@ -602,7 +602,7 @@ are source-checkout or user-installed assets; pip/curl installations should use
   0.3.5 release finalization. Independent
   `pawnlogic-security` 0.1.0 published from `john0123412/pawnlogic-security`
   on 2026-07-28.
-- The 0.3.6 release candidate is locally green: 1,469 non-E2E and 26 Dynamic
+- The 0.3.6 release candidate is locally green: 1,470 non-E2E and 26 Dynamic
   E2E tests, Ruff, typed-island mypy, documentation and language guards,
   release consistency, architecture budget, package build, twine metadata,
   and an isolated wheel fresh-install smoke all pass. PR #120 also passes the

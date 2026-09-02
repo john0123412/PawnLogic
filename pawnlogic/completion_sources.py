@@ -6,6 +6,40 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 
+class FallbackCompletion:
+    """Small prompt_toolkit Completion-compatible fallback value."""
+
+    def __init__(
+        self,
+        text: str,
+        start_position: int = 0,
+        display: Any = None,
+        display_meta: Any = None,
+        style: str = "",
+        selected_style: str = "",
+    ) -> None:
+        self.text = text
+        self.start_position = start_position
+        self.display = text if display is None else display
+        self.display_meta = "" if display_meta is None else display_meta
+        self.style = style
+        self.selected_style = selected_style
+
+    @staticmethod
+    def _plain_text(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        return "".join(fragment[1] for fragment in value)
+
+    @property
+    def display_text(self) -> str:
+        return self._plain_text(self.display)
+
+    @property
+    def display_meta_text(self) -> str:
+        return self._plain_text(self.display_meta)
+
+
 def merge_completion_sources(
     base_words: list[str],
     base_meta: Mapping[str, str],
@@ -89,6 +123,7 @@ def readline_command_candidates(static_words: list[str]) -> list[str]:
 
 
 __all__ = [
+    "FallbackCompletion",
     "builtin_command_completion_words",
     "matching_command_words",
     "merge_completion_sources",

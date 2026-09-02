@@ -55,6 +55,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Kept valid provider models selectable when chat probes hit rate limits or
   transient transport failures; models are hidden only after a definitive
   model-identity rejection.
+- Kept slash-command completion objects usable when Prompt Toolkit is
+  explicitly disabled, so serial-fallback validation no longer fails on the
+  completer's return-value contract.
 
 ## [0.3.5] - 2026-08-30
 

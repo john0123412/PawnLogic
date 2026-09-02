@@ -16,6 +16,7 @@ from pawnlogic.repl import (
 )
 from pawnlogic.extension_host import ExtensionHost
 from pawnlogic.completion_sources import (
+    FallbackCompletion,
     builtin_command_completion_words as _builtin_command_completion_words,
     matching_command_words as _matching_command_words,
     merge_completion_sources,
@@ -118,8 +119,9 @@ except Exception as _e:
     # Define dummy classes to prevent NameError in class definitions below
     class Completer:
         pass
-    class Completion:
-        pass
+
+    Completion = FallbackCompletion
+
     class AutoSuggestFromHistory:
         pass
 

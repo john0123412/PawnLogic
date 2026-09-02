@@ -149,7 +149,7 @@ version PR stays unmerged until the previous release completes.
 - P6 queue controls, conversion, immutable rendering, recall, toolbar, and
   active-stdin isolation add 171 passing targeted tests.
 - Dynamic terminal E2E is green: 26 tests passed. Non-E2E validation is green:
-  1,469 tests passed with 5 Python tarfile warnings. The persistent-terminal
+  1,470 tests passed with 5 Python tarfile warnings. The persistent-terminal
   slice passes Ruff and mypy, and documentation structure, release consistency,
   repository language policy, code-index freshness, and diff checks are green.
 - Branch-wide typed-island and architecture-budget checks pass after provider
