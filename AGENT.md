@@ -605,9 +605,10 @@ are source-checkout or user-installed assets; pip/curl installations should use
 - The 0.3.6 release candidate is locally green: 1,470 non-E2E and 26 Dynamic
   E2E tests, Ruff, typed-island mypy, documentation and language guards,
   release consistency, architecture budget, package build, twine metadata,
-  and an isolated wheel fresh-install smoke all pass. PR #120 also passes the
-  Python 3.10/3.11/3.12 matrix and Dynamic E2E in remote Actions. Owner manual
-  terminal acceptance remains before release finalization, merge, and tag.
+  and an isolated wheel fresh-install smoke all pass. PR #120 passed the
+  Python 3.10/3.11/3.12 matrix and Dynamic E2E in remote Actions and is merged
+  into `main`. Owner manual terminal acceptance remains before release
+  finalization and tag.
   Do not describe 0.3.6 as published until every gate and the release approval
   finish.
 - `main` protected by branch rule requiring PR, up-to-date branches, and four
