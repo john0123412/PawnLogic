@@ -650,10 +650,11 @@ def test_idle_ctrl_c_does_not_rollback_session_turns():
 
 def test_ctrl_z_restores_last_input_cache_binding():
     source = (ROOT / "pawnlogic" / "cli.py").read_text(encoding="utf-8")
+    live_source = (ROOT / "pawnlogic" / "live_repl.py").read_text(encoding="utf-8")
 
     assert '".last_input"' in source
-    assert "@_kb.add('c-z')" in source
-    assert "_restore_last_input_buffer(" in source
+    assert '@bindings.add("c-z")' in live_source
+    assert "restore_last_input_buffer(" in live_source
     assert "_write_text_cache(_last_input_path, raw)" in source
 
 

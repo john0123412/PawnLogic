@@ -17,6 +17,11 @@ from core.tool_executor import (
 )
 from core.tool_registry import ToolRegistry, ToolSpec
 from core.trust import TrustBoundaryKind
+from core.turn_cancellation import (
+    TurnCancellationToken,
+    activate_turn_cancellation,
+    current_turn_cancellation,
+)
 
 
 def test_tool_execution_context_exposes_short_session_label():
@@ -703,6 +708,34 @@ def test_execute_tool_handler_watchdog_returns_fast_result_unchanged():
 
     assert result.audit_ok is True
     assert result.content == "file body"
+
+
+def test_watchdog_propagates_the_active_turn_cancellation_context():
+    token = TurnCancellationToken()
+    observed: list[TurnCancellationToken | None] = []
+    context = ToolExecutionContext(
+        session_id="1234567890abcdef",
+        model_alias="test-model",
+        iteration=0,
+        current_phase="GENERAL",
+    )
+
+    def _observe(_args):
+        observed.append(current_turn_cancellation())
+        return "file body"
+
+    with activate_turn_cancellation(token):
+        result = execute_tool_handler(
+            tool_call_id="call_context",
+            tool_name="read_file",
+            fn_args={},
+            handler=_observe,
+            context=context,
+            hard_timeout_seconds=5.0,
+        )
+
+    assert result.audit_ok is True
+    assert observed == [token]
 
 
 def test_execute_tool_handler_watchdog_relays_handler_exception():

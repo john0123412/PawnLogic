@@ -189,7 +189,7 @@ def test_run_turn_hard_stops_after_soft_plan_corrections(monkeypatch, capsys):
 
     assert tool_runs == ["write", "write"]
     assert sum(1 for m in s.messages if m.get("role") == "tool") == 2
-    assert s._session_status == "failed"
+    assert s.queue_status()["status"] == "failed"
     s._autosave.assert_called_once_with(turn_status="failed")
     assert "Missing <plan>" in capsys.readouterr().out
 
@@ -220,7 +220,7 @@ def test_max_tier_advisory_guard_keeps_running_after_missing_plans(monkeypatch):
     s.run_turn("write repeatedly without a plan")
 
     assert tool_runs == ["write", "write", "write"]
-    assert s._session_status == "completed"
+    assert s.queue_status()["status"] == "completed"
     assert s.messages[-1] == {"role": "assistant", "content": "completed"}
 
 
@@ -240,7 +240,7 @@ def test_run_turn_marks_iteration_limit_as_failed(monkeypatch):
 
     s.run_turn("write one file")
 
-    assert s._session_status == "failed"
+    assert s.queue_status()["status"] == "failed"
     s._autosave.assert_called_once_with(turn_status="failed")
 
 
@@ -413,12 +413,11 @@ def _make_session():
         s._naming_attempted_at = 0.0
         s._urgent_mode = False
         s._loaded_skill_packs = []
-        # Initialize new fields for breakpoint resume
-        s._session_status = "idle"
-        s._interrupted_at = None
-        s._executing = False
-        from core.message_queue import MessageQueue
-        s._message_queue = MessageQueue()
+        from core.turn_scheduler import TurnExecutorAdapter, TurnScheduler
+        s._turn_scheduler = TurnScheduler(
+            TurnExecutorAdapter(s._run_scheduled_turn),
+            id_prefix="test-turn",
+        )
         return s
 
 
@@ -890,7 +889,7 @@ def test_run_turn_stops_after_bounded_plan_only_recovery(monkeypatch, capsys):
     s.run_turn("write a file")
 
     assert tool_runs == ["write_file"]
-    assert s._session_status == "failed"
+    assert s.queue_status()["status"] == "failed"
     assert sum(
         message.get("role") == "user"
         and str(message.get("content", "")).startswith("[SYSTEM: PLAN_ONLY_RECOVERY]")
@@ -907,15 +906,26 @@ def test_run_turn_stops_after_bounded_plan_only_recovery(monkeypatch, capsys):
 
 def test_run_turn_clears_interruption_timestamp_after_queue_drains(monkeypatch):
     s = _make_session()
-    s._interrupted_at = 1_700_000_000.0
+    from core.turn_scheduler import ControlAction, ControlKind
+    s._turn_scheduler.control(
+        ControlAction(
+            ControlKind.RESTORE,
+            restore_state={
+                "schema": 1,
+                "session_status": "interrupted",
+                "interrupted_at": 1_700_000_000.0,
+                "recovered": {"content": "old queued work"},
+            },
+        )
+    )
     monkeypatch.setattr(s, "_sync_runtime_context", lambda: None)
     monkeypatch.setattr(s, "_run_turn_active", lambda _input: None)
 
     s.run_turn("resume the queued work")
 
-    assert s._message_queue.is_empty
-    assert s._session_status == "completed"
-    assert s._interrupted_at is None
+    assert s.queue_status()["queue_depth"] == 0
+    assert s.queue_status()["status"] == "completed"
+    assert s.queue_status()["interrupted_at"] is None
 
 
 def test_run_turn_drains_messages_enqueued_during_an_active_turn(monkeypatch):
@@ -934,8 +944,19 @@ def test_run_turn_drains_messages_enqueued_during_an_active_turn(monkeypatch):
     s.run_turn("first")
 
     assert processed == ["first", "second"]
-    assert s._message_queue.is_empty
-    assert s._session_status == "completed"
+    assert s.queue_status()["queue_depth"] == 0
+    assert s.queue_status()["status"] == "completed"
+
+
+def test_run_turn_scheduler_adapter_passes_plain_content_to_active_turn(monkeypatch):
+    s = _make_session()
+    monkeypatch.setattr(s, "_sync_runtime_context", lambda: None)
+    active = MagicMock(return_value=None)
+    monkeypatch.setattr(s, "_run_turn_active", active)
+
+    s.run_turn("adapter payload")
+
+    active.assert_called_once_with("adapter payload")
 
 
 def test_run_turn_requeues_pending_message_after_interruption(monkeypatch):
@@ -951,9 +972,9 @@ def test_run_turn_requeues_pending_message_after_interruption(monkeypatch):
     with pytest.raises(TurnInterrupted):
         s.run_turn("retry me")
 
-    assert s._message_queue.to_list() == ["retry me"]
-    assert s._message_queue.pending_count == 0
-    assert s._session_status == "interrupted"
+    assert s.peek_queue() == ["retry me"]
+    assert s.queue_status()["pending_count"] == 0
+    assert s.queue_status()["status"] == "interrupted"
     s._autosave.assert_called_once_with(turn_status="interrupted")
 
 
@@ -978,12 +999,15 @@ def test_retry_interrupted_turn_replaces_requeued_prompt_without_duplicate(monke
         s.run_turn("original prompt")
 
     # A later queued message must remain behind the edited retry.
-    s._message_queue.enqueue("later prompt")
+    from core.turn_scheduler import Submission, SubmissionKind
+    s._turn_scheduler.submit(
+        Submission("later prompt", kind=SubmissionKind.FOLLOW_UP)
+    )
     s.retry_interrupted_turn("edited prompt")
 
     assert processed == ["edited prompt", "later prompt"]
-    assert s._message_queue.is_empty
-    assert s._session_status == "completed"
+    assert s.queue_status()["queue_depth"] == 0
+    assert s.queue_status()["status"] == "completed"
 
 
 def test_resume_queued_turns_runs_requeued_prompt_once(monkeypatch):
@@ -1008,18 +1032,109 @@ def test_resume_queued_turns_runs_requeued_prompt_once(monkeypatch):
 
     assert s.resume_queued_turns() is True
     assert processed == ["resume me"]
-    assert s._message_queue.is_empty
+    assert s.queue_status()["queue_depth"] == 0
 
 
-def test_abort_clears_queued_messages_and_marks_session_aborted():
+def test_live_start_replaces_recovered_draft_after_active_interrupt(monkeypatch):
     s = _make_session()
-    s._message_queue.enqueue("queued work")
+    from core.turn_scheduler import ControlAction, ControlKind, SubmissionKind
+
+    s._turn_scheduler.control(
+        ControlAction(
+            ControlKind.RESTORE,
+            restore_state={
+                "session_status": "interrupted",
+                "recovered": {"content": "original draft"},
+            },
+        )
+    )
+    processed: list[str] = []
+    monkeypatch.setattr(s, "_sync_runtime_context", lambda: None)
+    monkeypatch.setattr(
+        s,
+        "_run_turn_active",
+        lambda user_input: processed.append(user_input),
+    )
+
+    s.submit_live_turn("edited draft", kind=SubmissionKind.START)
+
+    assert processed == ["edited draft"]
+    assert s.queue_status()["queue_depth"] == 0
+
+
+def test_live_start_hint_queues_behind_work_instead_of_raising(monkeypatch):
+    s = _make_session()
+    from core.turn_scheduler import ControlAction, ControlKind, SubmissionKind
+
+    s._turn_scheduler.control(
+        ControlAction(
+            ControlKind.RESTORE,
+            restore_state={"steer": [{"content": "second question"}]},
+        )
+    )
+    processed: list[str] = []
+    monkeypatch.setattr(s, "_sync_runtime_context", lambda: None)
+    monkeypatch.setattr(
+        s,
+        "_run_turn_active",
+        lambda user_input: processed.append(user_input),
+    )
+
+    s.submit_live_turn("third question", kind=SubmissionKind.START)
+
+    assert processed == ["second question", "third question"]
+    assert s.queue_status()["queue_depth"] == 0
+
+
+def test_stale_steer_hint_becomes_start_after_turn_finishes(monkeypatch):
+    s = _make_session()
+    from core.turn_scheduler import SubmissionKind
+
+    processed: list[str] = []
+    monkeypatch.setattr(s, "_sync_runtime_context", lambda: None)
+    monkeypatch.setattr(
+        s,
+        "_run_turn_active",
+        lambda user_input: processed.append(user_input),
+    )
+
+    s.submit_live_turn("arrived after completion", kind=SubmissionKind.STEER)
+
+    assert processed == ["arrived after completion"]
+
+
+def test_abort_preserves_queued_messages_when_no_turn_is_active():
+    s = _make_session()
+    from core.turn_scheduler import ControlAction, ControlKind
+    s._turn_scheduler.control(
+        ControlAction(
+            ControlKind.RESTORE,
+            restore_state={"follow_up": [{"content": "queued work"}]},
+        )
+    )
 
     cleared = s.abort()
 
+    assert cleared == 0
+    assert s.queue_status()["queue_depth"] == 1
+    assert s.queue_status()["status"] == "idle"
+
+
+def test_abort_all_clears_queued_messages_and_marks_session_aborted():
+    s = _make_session()
+    from core.turn_scheduler import ControlAction, ControlKind
+    s._turn_scheduler.control(
+        ControlAction(
+            ControlKind.RESTORE,
+            restore_state={"follow_up": [{"content": "queued work"}]},
+        )
+    )
+
+    cleared = s.abort_all()
+
     assert cleared == 1
-    assert s._message_queue.is_empty
-    assert s._session_status == "aborted"
+    assert s.queue_status()["queue_depth"] == 0
+    assert s.queue_status()["status"] == "aborted"
 
 
 def _tool_call_response(name, args=None, *, call_id="call_tool", include_plan=True):

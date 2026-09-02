@@ -16,6 +16,7 @@ from pawnlogic.repl import (
 )
 from pawnlogic.extension_host import ExtensionHost
 from pawnlogic.completion_sources import (
+    FallbackCompletion,
     builtin_command_completion_words as _builtin_command_completion_words,
     matching_command_words as _matching_command_words,
     merge_completion_sources,
@@ -28,6 +29,22 @@ from pawnlogic.startup import (
     has_any_api_key,
     install_proxy as _install_proxy,
     manual_load_env as _manual_load_env,
+)
+from pawnlogic.live_repl import (
+    build_bottom_toolbar,
+    build_live_style,
+    build_prompt_toolkit_bindings,
+    build_queue_preview,
+    dispatch_live_input,
+    dispatch_live_slash,
+    install_live_interrupt_handler,
+    is_interrupted_recovery_control as _is_interrupted_recovery_control,
+    prefill_settled_recovery,
+    restore_interrupted_repl_input as _restore_interrupted_repl_input,
+)
+from pawnlogic.restart_recovery import (
+    parse_cli_arguments,
+    prepare_cli_recovery,
 )
 
 if sys.version_info < (3, 10):
@@ -56,6 +73,7 @@ def _fatal_startup_import_error(exc: ImportError) -> None:
 # returns the same sentinel object so identity comparison still works.
 try:
     from core.commands._common import EXIT_SENTINEL as _EXIT_SENTINEL
+    from core.turn_scheduler import SchedulerError
 
     # Deferred render queue. /load and /resume set it; the main loop consumes
     # it before prompt_async. State lives in core/commands/_common.py.
@@ -85,27 +103,25 @@ _RICH_IMPORT_ERROR = None
 try:
     if _FORCE_DISABLE_PT:
         raise ImportError("Prompt toolkit disabled by PROMPT_TOOLKIT_ENABLED=0")
-    from prompt_toolkit import PromptSession
     from prompt_toolkit.completion import Completer, Completion
     from prompt_toolkit.formatted_text import StyleAndTextTuples
     from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
     from prompt_toolkit.history import FileHistory
     from prompt_toolkit.styles import Style as _PTStyle
     from prompt_toolkit.formatted_text import HTML
-    from prompt_toolkit.shortcuts import CompleteStyle
     from prompt_toolkit.application import run_in_terminal as _pt_run_in_terminal
-    from prompt_toolkit.patch_stdout import patch_stdout as _patch_stdout
+    from prompt_toolkit.output.defaults import create_output as _pt_create_output
     _HAS_PROMPT_TOOLKIT = True
 except Exception as _e:
     _PT_IMPORT_ERROR = str(_e)
-    PromptSession = None
-    _patch_stdout = None
     _pt_run_in_terminal = None
+    _pt_create_output = None
     # Define dummy classes to prevent NameError in class definitions below
     class Completer:
         pass
-    class Completion:
-        pass
+
+    Completion = FallbackCompletion
+
     class AutoSuggestFromHistory:
         pass
 
@@ -251,7 +267,11 @@ try:
     )
     from core.interrupts import turn_interrupt_handler
     from core.memory import init_db
-    from core.persistence import session_load, _display_session_history
+    from core.persistence import (
+        session_continue,
+        session_load,
+        _display_session_history,
+    )
     # loguru logging module
     from core.logger import logger, setup_logger
 except ImportError as _startup_import_error:
@@ -282,8 +302,8 @@ HELP_TEXT = f"""
   {c(YELLOW, "/context")}         Show context size and token estimate
   {c(YELLOW, "/pin [n]")}         Pin the last n messages
   {c(YELLOW, "/undo [n]")}        Undo recent turns
-  {c(YELLOW, "/queue [clear|resume]")} Inspect, clear, or resume interrupted work
-  {c(YELLOW, "/abort")}           Clear interrupted work and mark the session aborted
+  {c(YELLOW, "/queue [action]")} Manage: clear, resume, remove, steer, follow-up, recall
+  {c(YELLOW, "/abort [--all]")}   Interrupt active work; --all also clears queues
   {c(YELLOW, "/compact")}         Summarize and compact context
   {c(YELLOW, "/think <prompt>")}  Run one deeper reasoning turn
   {c(YELLOW, "/cd <path>")}       Change working directory
@@ -325,6 +345,7 @@ HELP_TEXT = f"""
   {c(YELLOW, "/mid")}  Default mode
   {c(MAGENTA, "/deep")} Deep mode
   {c(RED, "/max")}     Maximum mode
+  {c(BOLD + CYAN, "/ultra")} Ultra mode (150 iterations)
   {c(YELLOW, "/limits")} Show current limits
   {c(YELLOW, "/planguard [mode]")} Select plan-guard mode; no arg opens a selector
   {c(YELLOW, "/webstatus /browserstatus /docker /pwnenv")} Tool status
@@ -834,31 +855,6 @@ def _run_repl_turn(session: AgentSession, raw: str, *, retry_interrupted: bool) 
             session.run_turn(raw)
 
 
-def _is_interrupted_recovery_control(raw: str) -> bool:
-    """Return whether ``raw`` manages preserved work instead of replacing it."""
-    verb = raw.split(None, 1)[0].lower() if raw.strip() else ""
-    return verb in {"/queue", "/abort"}
-
-
-def _restore_interrupted_repl_input(session: AgentSession, fallback: str) -> str:
-    """Roll back display state and explain how to resume a preserved prompt."""
-    _removed, last_text = session.undo(1)
-    session._autosave()
-    queue_depth = session.queue_status()["queue_depth"]
-    if queue_depth:
-        suffix = "" if queue_depth == 1 else "s"
-        print(c(
-            YELLOW,
-            "  [interrupted] Saved "
-            f"{queue_depth} queued message{suffix}. Press Enter to retry it, "
-            "edit then press Enter to replace it, run /queue resume to run it "
-            "later, or /abort to discard it.",
-        ))
-    else:
-        print(c(YELLOW, "  [interrupted] Edit and press Enter to retry."))
-    return last_text or fallback
-
-
 async def _main_impl():
     prompt_toolkit_enabled = _HAS_PROMPT_TOOLKIT
     # CLI argument parsing.
@@ -894,7 +890,7 @@ async def _main_impl():
         metavar="ID",
         help="Resume a specific session by ID (use with --eval).",
     )
-    args = parser.parse_args()
+    args = parse_cli_arguments(parser)
     set_output_mode(debug_mode=bool(args.debug), quiet_mode=False)
 
     # Output sink stage-2 integration point. Select human or JSON output and
@@ -1008,7 +1004,10 @@ async def _main_impl():
                 "  You can use /setkey at any time or manually export KEY=sk-...\n"
             ))
 
-    session = AgentSession()
+    # Prompt Toolkit owns a live composer on the main thread.  The readline
+    # fallback and --eval deliberately keep the historical synchronous path.
+    live_turns_enabled = prompt_toolkit_enabled and not args.eval and not args.json
+    session = AgentSession(live_turns=live_turns_enabled)
     _EXTENSION_HOST.mount(session)
     if first_run_model_alias and first_run_model_alias in MODELS:
         session.model_alias = first_run_model_alias
@@ -1019,6 +1018,22 @@ async def _main_impl():
             session.model_alias = args.model
         else:
             print(c(YELLOW, f"  ⚠ Unknown --model '{args.model}'; using the default model."))
+
+    # Explicit restart recovery loads history and leaves the recovered prompt
+    # in the editor; it never calls run_turn automatically.  ``--eval`` keeps
+    # its existing --session behavior and is handled below.
+    _requested_recovery, recovery_result, _recovery_draft = prepare_cli_recovery(
+        session,
+        latest=bool(args.continue_session),
+        query=args.command_arg if args.command else None,
+        latest_loader=session_continue,
+        query_loader=session_load,
+        set_history=set_deferred_history,
+    )
+    if _requested_recovery and not recovery_result.startswith("OK"):
+        print(c(RED, f"  ✗ {recovery_result}"))
+        detach_external_mcp_tools()
+        sys.exit(2)
 
     # --eval / --session single-shot mode. Intercept before decorative output so
     # JSON mode remains clean.
@@ -1070,7 +1085,7 @@ async def _main_impl():
 {vision_line}
 {state_line}
 {proxy_line}
-  {c(YELLOW,'/help')} commands  {c(GREEN,'/low')} {c(YELLOW,'/mid')} {c(MAGENTA,'/deep')} {c(RED,'/max')}  {c(CYAN,'/save /load')}  {c(MAGENTA,'/memorize')}  {c(YELLOW,'/init_project')}
+  {c(YELLOW,'/help')} commands  {c(GREEN,'/low')} {c(YELLOW,'/mid')} {c(MAGENTA,'/deep')} {c(RED,'/max')} {c(BOLD+CYAN,'/ultra')}  {c(CYAN,'/save /load')}  {c(MAGENTA,'/memorize')}  {c(YELLOW,'/init_project')}
 """)
     else:
         key_sym = "✓" if key_ok else "✗"
@@ -1080,7 +1095,9 @@ async def _main_impl():
     # ════════════════════════════════════════════════════════
     # Startup session resume prompt.
     # ════════════════════════════════════════════════════════
-    _startup_resume_done = _prompt_startup_resume(session)
+    _startup_resume_done = (
+        True if _requested_recovery else _prompt_startup_resume(session)
+    )
 
     # ════════════════════════════════════════════════════════
     # P2: CLI UX — FuzzyCompleter + WordCompleter + Bottom Toolbar
@@ -1097,8 +1114,8 @@ async def _main_impl():
         "/pin":           "Pin recent messages (/pin msg 5 by index)",
         "/unpin":         "Clear all pinned messages",
         "/undo":          "Undo recent turns (default 1)",
-        "/queue":         "Inspect, clear, or resume interrupted queued messages",
-        "/abort":         "Clear queued messages and mark the session aborted",
+        "/queue":         "Manage queue: clear, resume, remove, steer, follow-up, recall",
+        "/abort":         "Interrupt active Turn; --all also clears queues",
         "/compact":       "Compact context with a lightweight summary",
         "/think":         "Single-turn reasoning mode (/think <prompt>)",
         "/ping":          "Keepalive request to refresh cache TTL",
@@ -1121,6 +1138,7 @@ async def _main_impl():
         "/mid":           "Development mode (tokens=8k, ctx=150k) <- default",
         "/deep":          "Full-power mode (tokens=32k, ctx=400k)",
         "/max":           "Maximum mode (tokens=32k, ctx=600k, iter=100, 60min)",
+        "/ultra":         "Ultra mode (tokens=32k, ctx=600k, iter=150, 60min)",
         "/normal":        "Reset to /mid",
         "/limits":        "Show all runtime limits",
         "/tokens":        "Set max_tokens",
@@ -1236,6 +1254,8 @@ async def _main_impl():
     _history_path = str(_PAWNLOGIC_DIR / ".input_history")
     _last_input_path = _PAWNLOGIC_DIR / ".last_input"
 
+    _live_terminal = None
+    _live_terminal_controller = None
     if prompt_toolkit_enabled:
         # Use PawnCompleter directly. It has built-in fuzzy matching.
         _pawn_completer = PawnCompleter(
@@ -1253,93 +1273,40 @@ async def _main_impl():
             _pt_history = InMemoryHistory()
 
         # Bottom toolbar: model / tier / directory / token count / context percent.
-        def _bottom_toolbar():
-            _m = session.model_alias
-            _tier = "MID"
-            if DYNAMIC_CONFIG["max_tokens"] <= 4096:
-                _tier = "LOW"
-            elif DYNAMIC_CONFIG["max_iter"] >= 100:
-                _tier = "MAX"
-            elif DYNAMIC_CONFIG["max_tokens"] >= 32768:
-                _tier = "DEEP"
-            _tb = DYNAMIC_CONFIG.get("time_budget_sec", 0)
-            _time_str = f"  ⏱ {_tb}s" if _tb > 0 else ""
-            # Token count and context percentage with color thresholds.
-            _tk = session.total_prompt_tokens + session.total_completion_tokens
-            _ctx_used = sum(len(str(m.get("content", ""))) for m in session.messages)
-            _ctx_max = DYNAMIC_CONFIG["ctx_max_chars"]
-            _ctx_pct = min(100, int(_ctx_used * 100 / _ctx_max)) if _ctx_max else 0
-            if _ctx_pct >= 90:
-                _ctx_color = "ansired"
-            elif _ctx_pct >= 70:
-                _ctx_color = "ansiyellow"
-            else:
-                _ctx_color = "ansigreen"
-            return HTML(
-                f" <b>Model:</b> {_m}"
-                f"  <b>Tier:</b> {_tier}"
-                f"  <b>Tk:</b> {_tk:,}"
-                f"  <b>Ctx:</b> <{_ctx_color}>{_ctx_pct}%</{_ctx_color}>"
-                f"  <b>Dir:</b> {session.cwd}"
-                f"  <b>Phase:</b> {session.current_phase}"
-                f"{_time_str}"
-            )
+        _bottom_toolbar = build_bottom_toolbar(session, DYNAMIC_CONFIG, HTML)
 
-        # Transparent styling with no gray block artifacts.
-        _pawn_style = _PTStyle.from_dict({
-            "prompt": "ansigreen bold",
-            "you": "bold",
-            "completion-menu": "bg:default fg:#bbbbbb",
-            "completion-menu.completion": "bg:default fg:#bbbbbb",
-            "completion-menu.meta.completion": "bg:default fg:#666666",
-            "completion-menu.completion.current": "bg:#333333 fg:#ffffff",
-            "completion-menu.meta.completion.current": "bg:#333333 fg:#aaaaaa",
-            "completion-menu.completion.character-match": "fg:#00d787 bold",
-            "scrollbar.background": "bg:default",
-            "scrollbar.button": "bg:default",
-            "bottom-toolbar": "bg:#222222 fg:#cccccc",
-        })
+        _pawn_style = build_live_style(_PTStyle)
 
-        # Intercept backspace to force completion refresh in slash-command mode.
+        # Intercept editing and submit keys at the live-composer seam.
         from prompt_toolkit.key_binding import KeyBindings
-        _kb = KeyBindings()
-        _ctrl_z_restore_state: dict[str, str] = {}
 
-        @_kb.add('backspace')
-        @_kb.add('c-h')  # compatible with some Linux terminal backspace values
-        def _(event):
-            b = event.app.current_buffer
-            # 1. Perform the native delete-before-cursor action.
-            if b.text:
-                b.delete_before_cursor(1)
+        def _on_live_interrupt_settled() -> None:
+            """Show the recovered prompt as an editable replacement draft."""
+            prefill_settled_recovery(session, _live_terminal, _submission_state)
 
-            # 2. If the buffer still starts with "/", force the completion menu
-            # to re-open after prompt_toolkit updates the buffer.
-            if b.text.startswith('/'):
-                b.start_completion(select_first=False)
-
-        @_kb.add('c-z')
-        def _(event):
-            last_input = _read_text_cache(_last_input_path)
-            _restore_last_input_buffer(
-                event.app.current_buffer,
-                last_input,
-                _ctrl_z_restore_state,
-            )
+        _kb, _submission_state = build_prompt_toolkit_bindings(
+            KeyBindings,
+            session=session,
+            read_text_cache=_read_text_cache,
+            restore_last_input_buffer=_restore_last_input_buffer,
+            last_input_path=_last_input_path,
+            on_interrupt_settled=_on_live_interrupt_settled,
+        )
 
         # ──────────────────────────────────────────────────────────
 
-        _pt_session = PromptSession(
-            completer=_pawn_completer,
-            key_bindings=_kb,
-            auto_suggest=AutoSuggestFromHistory(),
-            history=_pt_history,
-            complete_while_typing=True,
-            complete_in_thread=False,
-            complete_style=CompleteStyle.COLUMN,
-            mouse_support=False,
-            bottom_toolbar=_bottom_toolbar,
-            reserve_space_for_menu=4,
+        from pawnlogic.live_terminal import LiveTerminalApp, PersistentTerminalController
+
+        _live_terminal = LiveTerminalApp(
+            initial_text=_recovery_draft, completer=_pawn_completer,
+            key_bindings=_kb, submission_kind=_submission_state.consume,
+            auto_suggest=AutoSuggestFromHistory(), history=_pt_history,
+            toolbar=_bottom_toolbar, queue_preview=build_queue_preview(session),
+            style=_pawn_style,
+            output=_pt_create_output(stdout=sys.stdout),
+        )
+        _live_terminal_controller = PersistentTerminalController(
+            _live_terminal, session, set_active_sink, sink
         )
 
         if _runtime_state.debug_mode:
@@ -1350,6 +1317,10 @@ async def _main_impl():
                 print(c(YELLOW, f"  ⚠ rich failed to load: {_RICH_IMPORT_ERROR}"))
     else:
         # readline fallback mode.
+        print(c(
+            GRAY,
+            "  [info] Live turn input requires Prompt Toolkit; readline mode remains serial.",
+        ))
         _ALL_COMMANDS = sorted(_all_words)
 
         def _completer_rl(text: str, state: int):
@@ -1384,7 +1355,7 @@ async def _main_impl():
                 print(c(YELLOW, "     Or reinstall with: pip install -e ."))
 
     # Main loop.
-    _re_edit_default = ""     # after Ctrl+C, previous user text becomes prompt default
+    _re_edit_default = _recovery_draft  # recovered work starts as an editable draft
     _signal_state = ReplSignalState()
 
     def _restore_last_input_on_sigtstp(_signum, _frame):
@@ -1397,8 +1368,21 @@ async def _main_impl():
     except Exception:
         _previous_sigtstp = None
 
+    _restore_live_sigint = None
+    if live_turns_enabled:
+        _settled_callback = _on_live_interrupt_settled if _live_terminal is not None else None
+        _restore_live_sigint = install_live_interrupt_handler(session, on_interrupt_settled=_settled_callback)
+
+    if _live_terminal_controller is not None:
+        await _live_terminal_controller.start()
+        sink = _live_terminal.sink
+
     while True:
         try:
+            if (pending_recall := getattr(session, "_pending_recall_draft", "")):
+                _re_edit_default = pending_recall
+                session._pending_recall_draft = ""
+                session._recall_prefill = True
             if _signal_state.consume_last_input_restore():
                 _cached_input = _read_text_cache(_last_input_path)
                 if _cached_input:
@@ -1418,27 +1402,36 @@ async def _main_impl():
                 sys.stdout.flush()
                 print("\n")  # reserve one physical line
 
-            if prompt_toolkit_enabled:
-                # Native async: patch_stdout keeps agent output from corrupting
-                # the active input line.
-                with _patch_stdout(raw=True):
-                    raw = (await _pt_session.prompt_async(
-                        [("class:prompt", "▶ "), ("class:you", "You > ")],
-                        style=_pawn_style,
-                        default=_re_edit_default,
-                    )).strip()
+            if _live_terminal is not None:
+                if _re_edit_default:
+                    _live_terminal.set_default(_re_edit_default)
+                accepted = await _live_terminal.next_submission()
+                if accepted is None:
+                    break
+                raw = accepted.text.strip()
+                submitted_kind = accepted.kind
+                accepted_recovery = bool(getattr(accepted, "recovery", False))
+                if _submission_state is not None:
+                    _submission_state.consume_recovery_draft()
             else:
                 _label = _re_edit_default if _re_edit_default else ""
                 raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ") + _label).strip()
+                submitted_kind = None
+                accepted_recovery = False
 
             _interrupted_default = _re_edit_default
-            _retry_interrupted = bool(_interrupted_default)
+            _retry_interrupted = accepted_recovery or (
+                bool(_interrupted_default) and not bool(
+                getattr(session, "_recall_prefill", False)
+                )
+            )
             if not raw and _retry_interrupted:
                 # readline cannot place a default value in the editable buffer;
                 # Enter therefore means retry the preserved prompt.
                 raw = _interrupted_default
 
             _re_edit_default = ""    # clear after consuming it
+            session._recall_prefill = False
             _signal_state.submitted()
             if not raw:
                 continue
@@ -1449,48 +1442,55 @@ async def _main_impl():
             if raw.startswith("/") and (
                 not _retry_interrupted or _is_recovery_control
             ):
-                # Fuzzy command typo correction.
-                _cmd_parts = raw.split(None, 1)
-                _cmd_verb  = _cmd_parts[0]
-                _cmd_rest  = _cmd_parts[1] if len(_cmd_parts) > 1 else ""
-                _registered_command_words = _builtin_command_completion_words()
-                if _cmd_verb not in _registered_command_words and len(_cmd_verb) >= 3:
-                    _matches = _matching_command_words(
-                        _cmd_verb, _registered_command_words
-                    )
-                    if len(_matches) == 1:
-                        _corrected = _matches[0]
-                        raw = f"{_corrected} {_cmd_rest}".strip() if _cmd_rest else _corrected
-                        print(c(YELLOW, f"  ✔ Auto-corrected: {_cmd_verb} -> {_corrected}"))
                 try:
-                    result = await handle_slash(raw, session)
+                    result = await dispatch_live_slash(
+                        raw,
+                        session,
+                        live_enabled=live_turns_enabled,
+                        terminal_controller=_live_terminal_controller,
+                        command_words=_builtin_command_completion_words,
+                        matching_words=_matching_command_words,
+                        dispatcher=handle_slash,
+                        terminal_notice=_terminal_notice,
+                        sink=sink,
+                        exit_sentinel=_EXIT_SENTINEL,
+                    )
                 except TurnInterrupted:
                     _re_edit_default = _restore_interrupted_repl_input(session, raw)
                     _signal_state.submitted()
                     continue
                 if result is _EXIT_SENTINEL:
-                    print(c(CYAN, "\n  Goodbye! 👋"))
                     break
                 continue
             _write_text_cache(_last_input_path, raw)
             try:
-                _run_repl_turn(session, raw, retry_interrupted=_retry_interrupted)
+                dispatch_live_input(
+                    session,
+                    raw,
+                    live_enabled=live_turns_enabled,
+                    retry_interrupted=_retry_interrupted,
+                    kind=submitted_kind,
+                    serial_runner=_run_repl_turn,
+                )
             except TurnInterrupted:
                 _re_edit_default = _restore_interrupted_repl_input(session, raw)
                 _signal_state.submitted()
+            except SchedulerError as _submission_exc:
+                await _terminal_notice(f"\n  ⚠ Input was not queued: {_submission_exc}")
+            finally:
+                if _live_terminal is not None:
+                    _live_terminal.refresh()
 
         except KeyboardInterrupt:
             # Idle input state: Ctrl+C only arms the double-press exit flow.
             # Turn rollback is handled exclusively by the in-flight
             # TurnInterrupted branch around session.run_turn().
             if _signal_state.interrupt_requests_exit():
-                await _terminal_notice("\n  Goodbye! 👋")
                 break
             await _terminal_notice("\n  [confirm] Press Ctrl+C again within 5s to exit. Current input is unchanged.")
             continue
         except EOFError:
             # Ctrl+D exits immediately.
-            print(c(CYAN, "\n  Goodbye! 👋"))
             break
         except Exception as _loop_exc:
             logger.error("Main loop error: {!r}", _loop_exc)
@@ -1498,6 +1498,15 @@ async def _main_impl():
             continue
 
     # Graceful shutdown: cancel all remaining asyncio tasks.
+    try:
+        session.shutdown()
+    except Exception as _shutdown_exc:  # noqa: BLE001
+        logger.warning("Session scheduler shutdown failed: {!r}", _shutdown_exc)
+    if _restore_live_sigint is not None:
+        _restore_live_sigint()
+    if _live_terminal_controller is not None:
+        await _live_terminal_controller.close()
+        print(c(CYAN, "\n  Goodbye! 👋"))
     pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
     for t in pending:
         t.cancel()

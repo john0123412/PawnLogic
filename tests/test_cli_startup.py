@@ -21,10 +21,55 @@ from pawnlogic import cli as cli_mod
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_help_text_lists_plan_guard_selector():
+def test_help_text_lists_runtime_controls():
     assert "/planguard [mode]" in cli_mod.HELP_TEXT
     assert "no arg opens a selector" in cli_mod.HELP_TEXT
-    assert "/queue [clear|resume]" in cli_mod.HELP_TEXT
+    assert "/queue [action]" in cli_mod.HELP_TEXT
+    assert "remove, steer, follow-up, recall" in cli_mod.HELP_TEXT
+    assert "/ultra" in cli_mod.HELP_TEXT
+    assert "150 iterations" in cli_mod.HELP_TEXT
+
+
+def test_cli_recovery_loader_returns_editable_draft_without_running(monkeypatch):
+    from pawnlogic.restart_recovery import load_cli_recovery
+
+    session = SimpleNamespace(
+        messages=[{"role": "user", "content": "history"}],
+        peek_queue=lambda _n: ["recover this draft"],
+    )
+    deferred: list[list[dict]] = []
+    latest_loader = lambda _session: "OK: loaded [sid]"
+
+    result, draft = load_cli_recovery(
+        session,
+        latest=True,
+        query=None,
+        latest_loader=latest_loader,
+        query_loader=lambda _session, _query: "ERROR: unexpected",
+        set_history=deferred.append,
+    )
+
+    assert result == "OK: loaded [sid]"
+    assert draft == "recover this draft"
+    assert deferred == [session.messages]
+
+
+def test_cli_recovery_loader_preserves_error_and_does_not_prefill(monkeypatch):
+    from pawnlogic.restart_recovery import load_cli_recovery
+
+    session = SimpleNamespace(messages=[], peek_queue=lambda _n: ["must not use"])
+
+    result, draft = load_cli_recovery(
+        session,
+        latest=False,
+        query="missing",
+        latest_loader=lambda _session: "ERROR: unexpected",
+        query_loader=lambda _session, _query: "ERROR: missing",
+        set_history=lambda _messages: None,
+    )
+
+    assert result == "ERROR: missing"
+    assert draft == ""
 
 
 def test_repl_retry_uses_interrupted_turn_api(monkeypatch):
@@ -55,7 +100,7 @@ def test_interrupted_repl_recovery_explains_preserved_queue(capsys):
     output = capsys.readouterr().out
     assert "Saved 1 queued message" in output
     assert "/queue resume" in output
-    assert "/abort" in output
+    assert "/abort --all" in output
 
 
 def test_startup_resume_prompt_warns_and_continues_on_session_lookup_failure(
@@ -107,11 +152,43 @@ def test_default_help_output_omits_runtime_diagnostics(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     output = result.stdout + result.stderr
     assert "--debug" in result.stdout
+    assert "--continue" in result.stdout
+    assert "resume" in result.stdout
     assert "Traceback" not in output
     assert "WARNING" not in output
     assert "Tab completion enabled" not in output
     assert "prompt_toolkit failed to load" not in output
     assert "Markdown rendering and code highlighting enabled" not in output
+
+
+@pytest.mark.parametrize("argv", [["--continue"], ["resume", "missing"]])
+def test_cli_restart_entrypoints_fail_clearly_without_recoverable_session(
+    tmp_path,
+    argv,
+):
+    env = os.environ.copy()
+    env.update({
+        "PAWNLOGIC_HOME": str(tmp_path / "home" / ".pawnlogic"),
+        "PAWNLOGIC_TEST_MODE": "true",
+        "MCP_ENABLED": "false",
+        "PROMPT_TOOLKIT_ENABLED": "0",
+        "TERM": "dumb",
+        "NO_COLOR": "1",
+    })
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "main.py"), *argv],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    output = result.stdout + result.stderr
+    assert "no recoverable sessions" in output or "no saved sessions" in output
 
 
 def test_eval_user_mode_exception_hides_traceback(monkeypatch, capsys):

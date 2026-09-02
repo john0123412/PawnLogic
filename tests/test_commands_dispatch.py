@@ -66,14 +66,14 @@ def _ctx(cmd_pkg, verb: str, arg: str = "", arg2: str = "", session=None):
 # 1. Registry completeness
 # ════════════════════════════════════════════════════════
 
-# The full set of 57 verbs that must be registered after stage-1 migration.
+# The full set of 58 verbs that must be registered after stage-1 migration.
 # Grouped by source module for readability.
 EXPECTED_VERBS_BY_MODULE: dict[str, set[str]] = {
     "system": {
         "/help", "/exit", "/quit", "/q",
         "/clear", "/context", "/ctx", "/history",
         "/ping", "/state", "/stats", "/time", "/failures",
-        "/low", "/mid", "/deep", "/max", "/normal", "/limits",
+        "/low", "/mid", "/deep", "/max", "/ultra", "/normal", "/limits",
         "/tokens", "/iter", "/toolsize", "/fetchsize", "/planguard",
     },
     "session": {
@@ -100,9 +100,9 @@ EXPECTED_ALL: set[str] = {v for verbs in EXPECTED_VERBS_BY_MODULE.values() for v
 
 
 def test_registry_has_expected_verb_count(cmd_pkg):
-    assert len(EXPECTED_ALL) == 57, "Test harness expects 57 distinct verbs"
-    assert len(cmd_pkg.COMMANDS) >= 57, (
-        f"Expected at least 57 registered commands, got {len(cmd_pkg.COMMANDS)}"
+    assert len(EXPECTED_ALL) == 58, "Test harness expects 58 distinct verbs"
+    assert len(cmd_pkg.COMMANDS) >= 58, (
+        f"Expected at least 58 registered commands, got {len(cmd_pkg.COMMANDS)}"
     )
 
 
@@ -165,6 +165,44 @@ def test_queue_resume_processes_interrupted_messages(capsys):
 
     session.resume_queued_turns.assert_called_once_with()
     assert "Resumed queued messages" in capsys.readouterr().out
+
+
+def test_abort_interrupts_active_turn_without_clearing_queues(capsys):
+    from core.commands import CommandContext
+    from core.commands.session import cmd_abort
+
+    session = SimpleNamespace(
+        queue_status=MagicMock(return_value={"pending_count": 1}),
+        interrupt_active=MagicMock(return_value=True),
+        abort_all=MagicMock(),
+    )
+
+    asyncio.run(cmd_abort(CommandContext(
+        verb="/abort", arg="", arg2="", session=session,
+    )))
+
+    session.interrupt_active.assert_called_once_with()
+    session.abort_all.assert_not_called()
+    assert "queued messages preserved" in capsys.readouterr().out
+
+
+def test_abort_all_interrupts_active_turn_and_clears_queues(capsys):
+    from core.commands import CommandContext
+    from core.commands.session import cmd_abort
+
+    session = SimpleNamespace(
+        queue_status=MagicMock(return_value={"pending_count": 1}),
+        interrupt_active=MagicMock(),
+        abort_all=MagicMock(return_value=3),
+    )
+
+    asyncio.run(cmd_abort(CommandContext(
+        verb="/abort", arg="--all", arg2="", session=session,
+    )))
+
+    session.abort_all.assert_called_once_with()
+    session.interrupt_active.assert_not_called()
+    assert "cleared 2 queued message(s)" in capsys.readouterr().out
 
 
 # ════════════════════════════════════════════════════════
@@ -236,6 +274,7 @@ FUZZY_VERB_CASES: list[tuple[str, str]] = [
     ("/mdl", "/model"),
     ("/ctx", "/ctx"),
     ("/iter", "/iter"),
+    ("/ult", "/ultra"),
     ("/provider", "/provider"),
     ("/prov", "/provider"),
     ("/pwnenv", "/pwnenv"),
@@ -523,6 +562,31 @@ def test_max_tier_uses_and_reports_advisory_plan_guard(fake_session, capsys):
         assert DYNAMIC_CONFIG["plan_guard_mode"] == "advisory"
         output = capsys.readouterr().out
         assert "plan_guard_mode" in output
+        assert "advisory" in output
+    finally:
+        DYNAMIC_CONFIG.clear()
+        DYNAMIC_CONFIG.update(previous)
+
+
+def test_ultra_tier_sets_150_iterations_and_reports_advisory_guard(
+    fake_session,
+    capsys,
+):
+    from config import DYNAMIC_CONFIG
+    from core.commands import CommandContext, system as system_cmds
+
+    previous = dict(DYNAMIC_CONFIG)
+    try:
+        DYNAMIC_CONFIG["plan_guard_mode"] = "strict"
+        asyncio.run(
+            system_cmds.cmd_ultra(
+                CommandContext(verb="/ultra", arg="", arg2="", session=fake_session)
+            )
+        )
+        assert DYNAMIC_CONFIG["max_iter"] == 150
+        assert DYNAMIC_CONFIG["plan_guard_mode"] == "advisory"
+        output = capsys.readouterr().out
+        assert "/ultra ultra mode" in output
         assert "advisory" in output
     finally:
         DYNAMIC_CONFIG.clear()

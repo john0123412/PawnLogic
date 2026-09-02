@@ -1,4 +1,10 @@
-"""Process-local interrupt state for cooperative turn cancellation."""
+"""Readline-compatible process interrupt state.
+
+Live Prompt Toolkit Turns use a per-Turn cancellation token owned by
+``TurnScheduler``.  This module intentionally remains only for the serial
+readline fallback and legacy signal-handler callers; its process-wide event
+must not be used to cancel a background Turn in another session.
+"""
 
 from __future__ import annotations
 

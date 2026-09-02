@@ -24,8 +24,9 @@ Commands in this module:
     /compact              summarize → clear (preserve pins)
     /think <prompt>       single-turn reasoning-mode invocation
     /mode                 toggle USER ↔ DEV output mode
-    /queue [clear|resume] inspect, clear, or resume interrupted-turn messages
-    /abort                clear queued messages and mark the session aborted
+    /queue [clear|resume|remove|steer|follow-up|recall] inspect or manage queued messages
+    /abort                interrupt the active Turn without clearing queues
+    /abort --all          interrupt the active Turn and clear all queues
 
 Module-private helpers (only used by these commands; intentionally kept
 out of `_common.py`):
@@ -37,6 +38,7 @@ out of `_common.py`):
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 from config import DB_PATH, validate_api_key
 from core.api_client import stream_request
@@ -64,9 +66,11 @@ from core.persistence import (
     session_rename,
     session_save,
 )
+from core.queue_tui import open_queue_tui
 from core.interrupts import turn_interrupt_handler
 from core.session import _ctx_chars
 from core.state import state as _runtime_state, set_output_mode
+from core.turn_scheduler import ControlAction, ControlKind, SubmissionKind
 from utils.ansi import (
     c, cp, BOLD, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA,
 )
@@ -664,27 +668,144 @@ async def cmd_mode(ctx: CommandContext) -> None:
 
 
 # ── /queue ───────────────────────────────────────────────────
+def _queue_view(session):
+    """Read one immutable scheduler view through the session seam."""
+    view = getattr(session, "queue_view", None)
+    if callable(view):
+        return view()
+    scheduler = getattr(session, "_turn_scheduler", None)
+    return scheduler.view() if scheduler is not None else None
+
+
+def _queue_id(session, token: str) -> str | None:
+    """Resolve an exact or unique short queue ID without touching messages."""
+    view = _queue_view(session)
+    if view is None:
+        return None
+    entries = [item for item in (*view.steer, *view.follow_up)]
+    if view.recovered is not None:
+        entries.append(view.recovered)
+    matches = {
+        item.submission_id
+        for item in entries
+        if item.submission_id == token or item.submission_id.startswith(token)
+    }
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def _queue_action(ctx: CommandContext, operation: str, token: str) -> None:
+    """Apply one command-style queue action and report its receipt."""
+    submission_id = _queue_id(ctx.session, token.strip()) if token.strip() else None
+    if submission_id is None:
+        _print(c(RED, f"  ✗ Unknown or ambiguous queue ID: {token or '<id>'}"))
+        return
+    if operation == "recall":
+        recall = getattr(ctx.session, "recall_queued_turn", None)
+        content = recall(submission_id) if callable(recall) else None
+        if content is None:
+            _print(c(RED, "  ✗ Queue entry could not be recalled"))
+            return
+        _print(c(GREEN, f"  ✓ Recalled {submission_id[:12]} into the editor buffer"))
+        return
+
+    if operation == "remove":
+        action = ControlAction(ControlKind.REMOVE, submission_id=submission_id)
+    else:
+        target = (
+            SubmissionKind.STEER
+            if operation == "steer"
+            else SubmissionKind.FOLLOW_UP
+        )
+        action = ControlAction(
+            ControlKind.CONVERT,
+            submission_id=submission_id,
+            target_kind=target,
+        )
+    control = getattr(ctx.session, "queue_control", None)
+    receipt = control(action) if callable(control) else None
+    if receipt is None:
+        _print(c(RED, "  ✗ Queue controls are unavailable in this session"))
+    elif receipt.accepted:
+        verb = "Removed" if operation == "remove" else f"Converted to {action.target_kind.value}"
+        _print(c(GREEN, f"  ✓ {verb}: {submission_id[:12]}"))
+    else:
+        _print(c(RED, f"  ✗ {receipt.reason or 'Queue action was not accepted'}"))
+
+
+def _queue_tui_input() -> object:
+    """Return Prompt Toolkit's prompt only when the UI can safely own stdin."""
+    try:
+        from prompt_toolkit import prompt
+    except ImportError:
+        return None
+    return prompt
+
+
 @register("/queue")
 async def cmd_queue(ctx: CommandContext) -> None:
-    """Show or manage the message queue for breakpoint resume.
+    """Show or manage queued, steering, follow-up, and recovered messages.
 
     Usage:
-        /queue            - Show queued messages
+        /queue            - Show the queue without interrupting the active Turn
         /queue clear      - Clear all queued messages
         /queue resume     - Process queued messages
+        /queue remove <id> - Remove one queued message
+        /queue steer <id> - Convert one follow-up to a steer
+        /queue follow-up <id> - Convert one steer to a follow-up
+        /queue recall <id> - Prefill the editor without removing the message
     """
     sub = ctx.arg.lower().strip()
     if sub == "clear":
-        count = ctx.session._message_queue.clear()
+        count = ctx.session.clear_queued_turns()
         _print(c(GREEN, f"  ✓ Cleared {count} queued message(s)"))
         return
     if sub == "resume":
-        with turn_interrupt_handler():
+        if getattr(ctx.session, "_live_turns_enabled", False):
             resumed = ctx.session.resume_queued_turns()
+        else:
+            # Readline remains serial and keeps its process-local SIGINT
+            # compatibility layer while the live Prompt Toolkit path uses a
+            # per-Turn scheduler token instead.
+            with turn_interrupt_handler():
+                resumed = ctx.session.resume_queued_turns()
         if resumed:
             _print(c(GREEN, "  ✓ Resumed queued messages"))
         else:
             _print(c(GRAY, "  (queue empty)"))
+        return
+
+    if sub in {"remove", "steer", "follow-up", "followup", "recall"}:
+        _queue_action(ctx, "follow-up" if sub == "followup" else sub, ctx.arg2)
+        return
+
+    view = _queue_view(ctx.session)
+    if view is not None:
+        _print(c(BOLD, "  📋 Message Queue Status"))
+        _print(c(GRAY, f"    Status: {view.session_status}"))
+        _print(c(GRAY, f"    Queued: {view.total_unfinished_count} message(s)"))
+        _print(c(GRAY, f"    Pending: {view.pending_count} message(s)"))
+        if view.interrupted_at:
+            _print(c(GRAY, f"    Interrupted at: {view.interrupted_at}"))
+        prompt_fn = None
+        is_live_idle = (
+            getattr(ctx.session, "_live_turns_enabled", False)
+            and view.active is None
+            and not getattr(ctx.session, "_live_terminal_active", False)
+        )
+        try:
+            is_tty = bool(sys.stdin.isatty())
+        except Exception:
+            is_tty = False
+        if is_live_idle and is_tty:
+            prompt_fn = _queue_tui_input()
+        result = open_queue_tui(view, input_fn=prompt_fn)
+        _print(result.output)
+        if result.action is not None:
+            _queue_action(
+                ctx,
+                result.action.operation,
+                result.action.submission_id or "",
+            )
         return
 
     status = ctx.session.queue_status()
@@ -710,10 +831,30 @@ async def cmd_queue(ctx: CommandContext) -> None:
 # ── /abort ───────────────────────────────────────────────────
 @register("/abort")
 async def cmd_abort(ctx: CommandContext) -> None:
-    """Clear queued messages and mark the session aborted.
+    """Interrupt the active Turn, optionally clearing queued work."""
+    option = ctx.arg.strip().lower()
+    if option not in {"", "--all"}:
+        _print(c(RED, "  Usage: /abort [--all]"))
+        return
 
-    A synchronous provider request already in progress must be interrupted
-    with Ctrl+C.
-    """
-    count = ctx.session.abort()
-    _print(c(RED, f"  ✗ Cleared {count} queued message(s); session marked aborted"))
+    if option == "--all":
+        had_active = bool(ctx.session.queue_status().get("pending_count", 0))
+        abort_all = getattr(ctx.session, "abort_all", None)
+        count = abort_all() if callable(abort_all) else ctx.session.abort()
+        cleared = max(count - (1 if had_active else 0), 0)
+        _print(c(
+            RED,
+            f"  ✗ Interrupted active Turn and cleared {cleared} queued message(s)",
+        ))
+        return
+
+    interrupt_active = getattr(ctx.session, "interrupt_active", None)
+    interrupted = (
+        bool(interrupt_active())
+        if callable(interrupt_active)
+        else bool(ctx.session.abort())
+    )
+    if interrupted:
+        _print(c(RED, "  ✗ Interrupt requested for the active Turn; queued messages preserved"))
+    else:
+        _print(c(GRAY, "  (no active Turn; queued messages preserved)"))
