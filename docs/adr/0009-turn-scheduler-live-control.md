@@ -152,10 +152,10 @@ version PR stays unmerged until the previous release completes.
   1,469 tests passed with 5 Python tarfile warnings. The persistent-terminal
   slice passes Ruff and mypy, and documentation structure, release consistency,
   repository language policy, code-index freshness, and diff checks are green.
-- Branch-wide typed-island and architecture-budget checks are blocked by the
-  separate `core/provider_runtime.py` change at this branch head, not by the
-  live-terminal slice. Packaging/fresh-install validation is intentionally not
-  claimed by this ADR and remains a release-stage gate.
+- Branch-wide typed-island and architecture-budget checks pass after provider
+  model helpers moved out of `core/provider_runtime.py`. Package build, twine
+  metadata, wheel contents, and isolated fresh-install checks pass; the remote
+  Python matrix remains a release-stage gate.
 
 ## Consequences
 

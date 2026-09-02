@@ -594,19 +594,19 @@ are source-checkout or user-installed assets; pip/curl installations should use
   distribution build, PyPI fresh-install smoke, and GitHub Release creation;
   the one-time `.release-ready` marker was then removed.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Active plan: `0.3.6-live-turn-control.md`; its locally merged implementation
-  is being hardened on `fix/live-terminal-tui-0.3.6`.
+- Active plan: `0.3.6-live-turn-control.md`; its release candidate is being
+  validated on `test/release-0.3.6`.
   The working version is declared as unreleased `0.3.6`; per the Version
   Numbering Policy the cycle's version PR stays unmerged until the previous
   release completes. The `.release-ready` marker was removed during the
   0.3.5 release finalization. Independent
   `pawnlogic-security` 0.1.0 published from `john0123412/pawnlogic-security`
   on 2026-07-28.
-- The 0.3.6 live-turn and persistent-terminal tests are locally green (1,469
-  non-E2E and 26 Dynamic E2E). Branch-wide architecture and typed-island gates
-  remain blocked by the separate `core/provider_runtime.py` change at the
-  current branch head; Python 3.10/3.11/3.12, package build, isolated
-  fresh-install smoke, and remote Actions also remain release-stage checks.
+- The 0.3.6 release candidate is locally green: 1,469 non-E2E and 26 Dynamic
+  E2E tests, Ruff, typed-island mypy, documentation and language guards,
+  release consistency, architecture budget, package build, twine metadata,
+  and an isolated wheel fresh-install smoke all pass. The Python
+  3.10/3.11/3.12 matrix and remote Actions remain release-stage checks.
   Do not describe 0.3.6 as published until every gate and the release approval
   finish.
 - `main` protected by branch rule requiring PR, up-to-date branches, and four
@@ -622,6 +622,7 @@ mode.
 
 Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `core/tool_executor`, `core/runtime_context`, `core/provider_runtime`,
+`core/provider_models`,
 `core/api_errors`, `core/tool_calls`, `core/tool_registry`, `core/context_window`,
 `core/workspace_cleanup`, `core/turn_state`, `core/session_tool_loop`,
 `core/session_snapshot`, `core/delegation`, `core/agent_orchestrator`,
@@ -665,8 +666,8 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   controls. Escape shares a prefix with Alt shortcuts, so real-input tests
   must keep its bounded sequence-resolution latency covered. Mouse-wheel and
   coordinate-free ScrollUp/ScrollDown events must remain owned by the output
-  viewport so composer history cannot consume them. Packaging and
-  fresh-install validation for the unreleased candidate remain outstanding.
+  viewport so composer history cannot consume them. The remote Python matrix
+  and post-upload hash-pinned install smoke remain outstanding.
 - Safe-point steering can alter Tool Call batch protocol; skipped results,
   ordering, and plan-guard accounting must remain complete.
 - Tier presets use advisory plan-guard mode (`plan_guard_mode`) so weak models

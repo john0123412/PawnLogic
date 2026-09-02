@@ -5,13 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [0.3.6] - 2026-08-30
-
-### Planned
-
-- Live turn control: mid-turn steering, follow-up queue, and per-Turn
-  cancellation under the 0.3.6 Turn Scheduler plan. Entries accumulate here as
-  the cycle lands; the release date is corrected at finalization.
+## [0.3.6] - 2026-09-02
 
 ### Added
 - Added an `/ultra` runtime tier that keeps the MAX token, context, output,
@@ -25,17 +19,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added a persistent Prompt Toolkit terminal layout that keeps streamed output
   above a fixed bottom composer and toolbar, including safe temporary handoff
   to interactive slash-command selectors.
+- Added restart recovery entry points `pawn --continue` and
+  `pawn resume <session>`; both load an editable draft without auto-running it.
 
 ### Changed
 
 - Changed `/abort` to interrupt only the active Turn; `/abort --all` also
   clears queued and recovered work, while `/queue clear` clears queues without
   interrupting active work.
-- Added restart recovery entry points `pawn --continue` and
-  `pawn resume <session>`; both load an editable draft without auto-running it.
 - Routed live-mode stdout, stderr, and command sink output through the
   persistent terminal buffer so rapid streams cannot overwrite drafts or
   splice accepted steering text into the active response.
+
+### Fixed
+
 - Fixed consecutive Enter submissions after text-only responses: queued input
   is now shown as muted rows above the composer, unclaimed steer messages drain
   as independent subsequent Turns, stale keypress lanes are reconciled at
@@ -55,6 +52,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Fixed a streamed-output render race that could point Prompt Toolkit's cursor
   past its cached fragment lines, open an internal "Press ENTER to continue"
   screen, and consume the user's next submitted prompt.
+- Kept valid provider models selectable when chat probes hit rate limits or
+  transient transport failures; models are hidden only after a definitive
+  model-identity rejection.
 
 ## [0.3.5] - 2026-08-30
 
