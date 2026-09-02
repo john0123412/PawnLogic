@@ -2,7 +2,8 @@
 
 The interactive application in this module has one owner for the terminal:
 Prompt Toolkit's application loop.  Producers (model streams, tools, and the
-turn worker) only append to a locked output buffer or submit typed events;
+turn worker) only append to a :class:`TerminalTranscript` or submit typed
+events;
 they never write directly to ``stdout`` or move the cursor.
 """
 
@@ -11,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 import json
 import re
@@ -28,6 +29,8 @@ from prompt_toolkit.formatted_text import ANSI, fragment_list_to_text, to_format
 from prompt_toolkit.history import History
 from prompt_toolkit.input.base import Input
 from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
+
+from .terminal_transcript import TerminalTranscript
 from prompt_toolkit.key_binding.key_bindings import KeyBindingsBase
 from prompt_toolkit.layout import Dimension, Layout
 from prompt_toolkit.layout.containers import (
@@ -217,8 +220,10 @@ class PersistentTerminal:
         self._style = style
         self._lock = RLock()
         self._stdout_lock = RLock()
-        self._output_chunks: deque[str] = deque()
-        self._output_chars = 0
+        # The persistent transcript has a single owner: a TerminalTranscript
+        # instance. All writers (TerminalSink, the stdout/stderr proxy, the
+        # legacy append_output path) must route through it. See ADR 0010.
+        self._transcript = TerminalTranscript(max_chars=max_output_chars)
         # ``None`` follows the newest output.  An integer is a user-owned
         # viewport offset and must survive redraws and new stream chunks.
         self._output_scroll_offset: int | None = None
@@ -242,11 +247,30 @@ class PersistentTerminal:
         self._invalidation_scheduled = False
         self._running = False
         self._closed = False
+        self._modal_active = False
+        self._modal_stack: list[Any] = []
 
     @property
     def application(self) -> Application[Any] | None:
         """Return the underlying application after it has been constructed."""
         return self._application
+
+    @property
+    def transcript(self) -> TerminalTranscript:
+        """Return the single TerminalTranscript that owns the persistent output."""
+        return self._transcript
+
+    def set_queue_preview(self, queue_preview: Callable[[], Any] | None) -> None:
+        """Replace the queue preview callback after construction."""
+        with self._lock:
+            self._queue_preview = queue_preview
+        self._schedule_invalidation()
+
+    def set_toolbar(self, toolbar: str | Callable[[], Any] | None) -> None:
+        """Replace the toolbar source after construction."""
+        with self._lock:
+            self._toolbar = toolbar
+        self._schedule_invalidation()
 
     @property
     def sink(self) -> TerminalSink:
@@ -270,8 +294,7 @@ class PersistentTerminal:
 
     @property
     def output_text(self) -> str:
-        with self._lock:
-            return "".join(self._output_chunks)
+        return self._transcript.snapshot()
 
     @property
     def draft(self) -> str:
@@ -294,38 +317,38 @@ class PersistentTerminal:
         with self._lock:
             if self._closed:
                 return
-            if len(text) >= self._max_output_chars:
-                self._output_chunks.clear()
-                text = text[-self._max_output_chars :]
-                self._output_chars = 0
             self._append_terminal_text_locked(text)
-            while self._output_chars > self._max_output_chars and self._output_chunks:
-                removed = self._output_chunks.popleft()
-                self._output_chars -= len(removed)
             self._schedule_invalidation_locked()
 
     def _append_terminal_text_locked(self, text: str) -> None:
-        """Apply carriage-return/backspace semantics inside the output pane."""
+        """Apply carriage-return/backspace semantics inside the output pane.
+
+        The buffer that backs the persistent transcript is the transcript's
+        own bounded deque. We still need CR/BS semantics so live output
+        can overwrite the last line (spinners, progress bars). The
+        transcript takes care of cap enforcement after the rewrite.
+        """
         text = text.replace("\r\n", "\n")
+        transcript = self._transcript
         for token in re.split(r"([\r\b])", text):
             if not token:
                 continue
             if token == "\r":
-                current = "".join(self._output_chunks)
+                current = transcript.snapshot()
                 prefix, separator, _line = current.rpartition("\n")
                 kept = f"{prefix}{separator}" if separator else ""
-                self._output_chunks = deque([kept]) if kept else deque()
-                self._output_chars = len(kept)
+                self._replace_transcript_locked(kept)
                 continue
             if token == "\b":
-                current = "".join(self._output_chunks)
+                current = transcript.snapshot()
                 if current:
-                    current = current[:-1]
-                    self._output_chunks = deque([current]) if current else deque()
-                    self._output_chars = len(current)
+                    self._replace_transcript_locked(current[:-1])
                 continue
-            self._output_chunks.append(token)
-            self._output_chars += len(token)
+            transcript.append(token)
+
+    def _replace_transcript_locked(self, text: str) -> None:
+        """Replace the entire transcript content. Caller must hold the lock."""
+        self._transcript.replace(text)
 
     def append_line(self, text: str) -> None:
         """Append one line while accepting callers that already include newline."""
@@ -631,12 +654,12 @@ class PersistentTerminal:
         self._application = Application(
             layout=Layout(root, focused_element=self._composer),
             key_bindings=bindings,
-            full_screen=True,
+            full_screen=False,
             erase_when_done=False,
             input=self._input,
             output=self._output,
             style=self._style,
-            mouse_support=True,
+            mouse_support=False,
         )
         # A bare Escape shares its first byte with Alt+Enter, Alt+Up, and
         # terminal navigation sequences. Prompt Toolkit otherwise waits 0.5s
@@ -667,10 +690,9 @@ class PersistentTerminal:
         buffer.cursor_position = 0
 
     def _render_output(self) -> Any:
-        with self._lock:
-            text = "".join(self._output_chunks)
-            plain_text = _ANSI_ESCAPE.sub("", text)
-            self._rendered_output_line_count = len(plain_text.split("\n"))
+        text = self._transcript.snapshot()
+        plain_text = _ANSI_ESCAPE.sub("", text)
+        self._rendered_output_line_count = len(plain_text.split("\n"))
         return ANSI(text) if "\x1b[" in text else text
 
     def _render_toolbar(self) -> Any:
@@ -875,7 +897,15 @@ class PersistentTerminal:
 
 
 class PersistentTerminalController:
-    """Own the application task, stdout proxy, and modal pause lifecycle."""
+    """Own the application task, the stdout proxy, and the modal lifecycle.
+
+    The 0.3.7 cycle reworked the modal lifecycle so that opening a
+    selector does NOT tear down the main Prompt Toolkit ``Application``.
+    Instead, the modal runs as a dialog inside the same ``Application``,
+    and the controller flips the ``_live_terminal_active`` flag so other
+    consumers can tell when a modal is on screen. The Application
+    object identity is stable across a modal round trip.
+    """
 
     def __init__(
         self,
@@ -911,27 +941,85 @@ class PersistentTerminalController:
             raise
 
     async def pause_for_modal(self, should_pause: bool) -> bool:
+        """Mark the session as modal-occupied without tearing down the App.
+
+        Returns True when the session is now considered modal. The
+        controller does NOT call ``Application.exit()`` and does NOT
+        await the main task: the persistent ``Application`` keeps
+        running so the modal can run as a dialog inside it (see
+        :meth:`run_selector` and ADR 0010).
+        """
         if not should_pause:
             return False
         self._session._live_terminal_active = False
-        self.terminal.pause()
-        if self._task is not None:
-            await asyncio.gather(self._task, return_exceptions=True)
-        if self._proxy_active:
-            self.terminal.restore_output_proxy()
-            self._proxy_active = False
         return True
 
     async def resume_after_modal(self, paused: bool) -> None:
+        """Mark the session as live again after a modal closes.
+
+        The main ``Application`` and its proxy are still alive; this
+        is just a flag flip. See :meth:`pause_for_modal` for the
+        counterpart.
+        """
         if not paused or self.terminal.is_closed:
             return
         self._session._live_terminal_active = True
-        self.terminal.install_output_proxy()
-        self._proxy_active = True
-        self.terminal.prepare_run()
-        self._task = asyncio.create_task(self.terminal.run())
-        self._task.add_done_callback(self._observe_terminal_task)
-        await self.terminal.wait_until_ready()
+
+    async def run_selector(
+        self,
+        selector_coro_factory: Callable[[asyncio.AbstractEventLoop], Callable[[], Any]],
+    ) -> str | None:
+        """Run a selector dialog inside the live Application.
+
+        ``selector_coro_factory(loop)`` is expected to return a callable
+        that the caller will await. The selector is scheduled as a
+        background task on the live ``Application`` so the main
+        ``Application`` object identity stays stable across the
+        round trip. The selector may render to the same layout (an
+        in-Application Float) or to a nested PT ``Application``; in
+        both cases the main ``Application.run_async`` task is not
+        awaited to completion.
+
+        Returns the selected alias, or ``None`` if the user cancelled.
+        """
+        application = self.terminal.application
+        if application is None:
+            return None
+        loop = self.terminal._loop
+        if loop is None:
+            loop = asyncio.get_running_loop()
+
+        result_future: asyncio.Future[str | None] = loop.create_future()
+        task = application.create_background_task(
+            self._drive_selector(selector_coro_factory, result_future)
+        )
+
+        try:
+            return await result_future
+        finally:
+            if not task.done():
+                task.cancel()
+                with suppress(BaseException):
+                    await task
+
+    async def _drive_selector(
+        self,
+        selector_coro_factory: Callable[
+            [asyncio.AbstractEventLoop], Callable[[], Any]
+        ],
+        result_future: asyncio.Future[str | None],
+    ) -> None:
+        """Run the selector and surface the result through ``result_future``."""
+        loop = asyncio.get_running_loop()
+        try:
+            run_callable = selector_coro_factory(loop)
+            value = await run_callable()
+        except BaseException as exc:
+            if not result_future.done():
+                result_future.set_exception(exc)
+            return
+        if not result_future.done():
+            result_future.set_result(value)
 
     def _observe_terminal_task(self, task: asyncio.Task[None]) -> None:
         """Log an unexpected Prompt Toolkit exit instead of hiding its cause."""
@@ -947,8 +1035,17 @@ class PersistentTerminalController:
             logger.warning("Persistent terminal application exited unexpectedly")
 
     async def close(self) -> None:
-        self.terminal.close()
-        if self._task is not None:
+        # Only ask the terminal to close if its Application is still
+        # alive. The terminal's ``close()`` triggers
+        # ``Application.exit()``, which raises if the future has
+        # already been resolved (for example after a test pipe hit
+        # EOF). Swallow that specific case so the controller's own
+        # cleanup still runs to completion.
+        try:
+            self.terminal.close()
+        except Exception as exc:
+            logger.debug("Persistent terminal close swallowed: {!r}", exc)
+        if self._task is not None and not self._task.done():
             await asyncio.gather(self._task, return_exceptions=True)
         if self._proxy_active:
             self.terminal.restore_output_proxy()

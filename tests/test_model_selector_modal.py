@@ -21,10 +21,10 @@ import pytest
 
 pytest.importorskip("prompt_toolkit")
 
-from prompt_toolkit.input import DummyInput  # noqa: E402
-from prompt_toolkit.output import DummyOutput  # noqa: E402
+from prompt_toolkit.input import DummyInput
+from prompt_toolkit.output import DummyOutput
 
-from pawnlogic.live_terminal import (  # noqa: E402
+from pawnlogic.live_terminal import (
     PersistentTerminal,
     PersistentTerminalController,
 )
@@ -106,8 +106,8 @@ def test_pause_for_modal_does_not_exit_main_application() -> None:
             paused = await controller.pause_for_modal(True)
             assert paused is True, "modal host should report it was entered"
             assert exit_calls == [], (
-                "Application.exit() must not be called while opening a "
-                "selector; saw %r" % exit_calls
+                f"Application.exit() must not be called while opening a "
+                f"selector; saw {exit_calls!r}"
             )
             assert (
                 terminal.is_running is True
@@ -168,6 +168,60 @@ def test_resume_after_modal_preserves_application_identity() -> None:
             assert (
                 after is before
             ), "modal round trip must not rebuild the main Application"
+        finally:
+            await controller.close()
+
+    asyncio.run(_drive())
+
+
+def test_run_selector_keeps_main_application_task_alive() -> None:
+    """run_selector must not exit the main Application.
+
+    The selector runs inside the same Application's event loop via
+    Application.create_background_task; the main task stays alive
+    for the entire round trip and the Application identity is stable.
+    """
+    terminal = _make_terminal()
+    session = _StubSession()
+    controller = _make_controller(terminal, session)
+    terminal.prepare_run()
+
+    async def _drive() -> None:
+        await controller.start()
+        before_app = terminal.application
+        before_task = controller._task
+        assert before_app is not None
+        assert before_task is not None
+
+        def _factory(_loop: Any) -> Any:
+            async def _select() -> str | None:
+                return "picked-alias"
+
+            return _select
+
+        exit_calls: list[dict[str, Any]] = []
+
+        def _spy_exit(*args: Any, **kwargs: Any) -> None:
+            exit_calls.append({"args": args, "kwargs": kwargs})
+            return None
+
+        before_app.exit = _spy_exit  # type: ignore[method-assign]
+
+        try:
+            result = await controller.run_selector(_factory)
+            assert result == "picked-alias", (
+                f"run_selector must surface the selector's result; got {result!r}"
+            )
+            assert exit_calls == [], (
+                f"Application.exit() must not be called during a selector "
+                f"round trip; saw {exit_calls!r}"
+            )
+            assert terminal.is_running is True
+            assert terminal.application is before_app
+            assert controller._task is before_task, (
+                "controller task identity must not change across a selector "
+                "round trip"
+            )
         finally:
             await controller.close()
 

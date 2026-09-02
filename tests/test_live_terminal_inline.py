@@ -18,8 +18,8 @@ import pytest
 
 pytest.importorskip("prompt_toolkit")
 
-from pawnlogic import live_terminal  # noqa: E402
-from pawnlogic.live_terminal import PersistentTerminal  # noqa: E402
+from pawnlogic import live_terminal
+from pawnlogic.live_terminal import PersistentTerminal
 
 # ---------------------------------------------------------------------------
 # Transcript wiring
@@ -59,12 +59,12 @@ def test_terminal_sink_writes_route_through_transcript() -> None:
     transcript = terminal.transcript
     rendered = transcript.snapshot()
     assert "hello from sink.print" in rendered, (
-        "TerminalSink.print must reach the persistent transcript; "
-        "snapshot was %r" % rendered
+        f"TerminalSink.print must reach the persistent transcript; "
+        f"snapshot was {rendered!r}"
     )
     assert "hello from sink.write" in rendered, (
-        "TerminalSink.write must reach the persistent transcript; "
-        "snapshot was %r" % rendered
+        f"TerminalSink.write must reach the persistent transcript; "
+        f"snapshot was {rendered!r}"
     )
 
 
@@ -97,11 +97,9 @@ def test_transcript_caps_in_memory_buffer() -> None:
     # Push 4x the cap. The buffer must stay bounded.
     for _ in range((cap // len(chunk)) * 4 + 8):
         transcript.append(chunk)
-    assert (
-        transcript.char_count() <= cap
-    ), "transcript buffer must respect its cap; got %d > %d" % (
-        transcript.char_count(),
-        cap,
+    assert transcript.char_count() <= cap, (
+        f"transcript buffer must respect its cap; got "
+        f"{transcript.char_count()} > {cap}"
     )
 
 
@@ -119,8 +117,8 @@ def test_transcript_snapshot_does_not_drop_unflushed_tail() -> None:
         transcript.append(distinct)
     snapshot = transcript.snapshot()
     assert distinct[-64:] in snapshot, (
-        "the most recent tail of the transcript must remain visible; "
-        "snapshot was %r..." % snapshot[-200:]
+        f"the most recent tail of the transcript must remain visible; "
+        f"snapshot was {snapshot[-200:]!r}..."
     )
 
 
@@ -165,6 +163,6 @@ def test_persistent_terminal_application_disables_mouse_tracking() -> None:
     is_on = application.mouse_support()
     assert is_on is False, (
         "Prompt Toolkit Application must use mouse_support=False so the "
-        "host terminal keeps its own mouse selection and wheel scroll; "
-        "got mouse_support() = %r" % is_on
+        f"host terminal keeps its own mouse selection and wheel scroll; "
+        f"got mouse_support() = {is_on!r}"
     )

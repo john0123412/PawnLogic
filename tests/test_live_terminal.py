@@ -385,15 +385,20 @@ def test_controller_pause_resume_and_close_restore_terminal_ownership() -> None:
                 assert sys.stderr is not original_stderr
                 assert activated[-1] is terminal.sink
 
+                # 0.3.7 modal lifecycle: the main Application stays
+                # alive while a selector dialog is open. The proxy
+                # remains installed; only the session flag flips.
                 assert await controller.pause_for_modal(True)
                 assert not session._live_terminal_active
-                assert sys.stdout is original_stdout
-                assert sys.stderr is original_stderr
+                assert sys.stdout is not original_stdout
+                assert sys.stderr is not original_stderr
+                assert terminal.is_running
 
                 await controller.resume_after_modal(True)
                 assert session._live_terminal_active
                 assert sys.stdout is not original_stdout
                 assert sys.stderr is not original_stderr
+                assert terminal.is_running
 
                 await controller.close()
                 assert not session._live_terminal_active
