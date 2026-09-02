@@ -264,13 +264,13 @@ class PersistentTerminal:
         """Replace the queue preview callback after construction."""
         with self._lock:
             self._queue_preview = queue_preview
-        self._schedule_invalidation()
+            self._schedule_invalidation_locked()
 
     def set_toolbar(self, toolbar: str | Callable[[], Any] | None) -> None:
         """Replace the toolbar source after construction."""
         with self._lock:
             self._toolbar = toolbar
-        self._schedule_invalidation()
+            self._schedule_invalidation_locked()
 
     @property
     def sink(self) -> TerminalSink:
