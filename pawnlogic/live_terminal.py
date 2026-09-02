@@ -965,6 +965,36 @@ class PersistentTerminalController:
             return
         self._session._live_terminal_active = True
 
+    def bypass_print(self, text: str) -> None:
+        """Write a one-shot notice directly to the original host stdout.
+
+        When a modal selector is about to run, short notices (e.g. the
+        ``Auto-corrected: /plg -> /planguard`` line) need to reach the
+        host terminal **before** the selector renders. The persistent
+        ``Application`` keeps running and owns the proxy, so ordinary
+        ``print`` and ``sink.print`` both land in the in-Application
+        transcript instead of the host PTY stream. ``bypass_print``
+        reaches past the proxy, writes a single line, and flushes so
+        the host terminal sees it immediately. It deliberately does
+        **not** also append to the in-Application transcript: the
+        selector is about to take over the screen and the host PTY
+        line is the authoritative view of this one-shot notice.
+        """
+        with self.terminal._stdout_lock:
+            if self.terminal._stdout_frames:
+                original_stdout = self.terminal._stdout_frames[0][0]
+            else:
+                original_stdout = sys.stdout
+        if not text:
+            return
+        try:
+            original_stdout.write(text)
+            flush = getattr(original_stdout, "flush", None)
+            if callable(flush):
+                flush()
+        except Exception as exc:
+            logger.debug("Bypass print to host stdout swallowed: {!r}", exc)
+
     async def run_selector(
         self,
         selector_coro_factory: Callable[[asyncio.AbstractEventLoop], Callable[[], Any]],

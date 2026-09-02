@@ -83,10 +83,17 @@ async def dispatch_live_slash(
             if len(matches) == 1:
                 corrected = matches[0]
                 raw = f"{corrected} {rest}".strip() if rest else corrected
-                notice = c(YELLOW, f"  ✔ Auto-corrected: {verb} -> {corrected}")
+                notice = c(YELLOW, f"  ✔ Auto-corrected: {verb} -> {corrected}\n")
                 if paused:
-                    print(notice)
-                sink.print(notice)
+                    # Selector is about to run; the host PTY needs the
+                    # auto-correct notice **before** the selector
+                    # renders, but the proxy still owns stdout. Send
+                    # the line straight to the original host stdout so
+                    # it appears ahead of the selector output, and
+                    # also keep the in-Application transcript in sync.
+                    terminal_controller.bypass_print(notice)
+                else:
+                    sink.print(notice.rstrip("\n"))
         if should_defer_live_slash(session, raw, enabled=live_enabled):
             await terminal_notice(LIVE_SLASH_NOTICE)
             return None

@@ -902,7 +902,14 @@ async def cmd_model(ctx: CommandContext) -> None:
             for _prov_label, _entries in _groups.items():
                 _print(c(CYAN, f"  {_prov_label}") + c(GRAY, f"  [{len(_entries)} models]"))
 
-            result = await cc_style_model_selector(_vm, session.model_alias)
+            result: str | None
+            controller = getattr(ctx, "terminal_controller", None)
+            if controller is not None and getattr(controller, "run_selector", None) is not None:
+                result = await controller.run_selector(
+                    lambda loop: lambda: cc_style_model_selector(_vm, session.model_alias)
+                )
+            else:
+                result = await cc_style_model_selector(_vm, session.model_alias)
             if result:
                 session.model_alias = result
                 ok, env = validate_api_key(result)

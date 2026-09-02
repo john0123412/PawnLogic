@@ -226,3 +226,82 @@ def test_run_selector_keeps_main_application_task_alive() -> None:
             await controller.close()
 
     asyncio.run(_drive())
+
+
+def test_planguard_dispatch_uses_run_selector_when_controller_is_present() -> None:
+    """cmd_planguard must route the selector through controller.run_selector.
+
+    Per [ADR 0010](../adr/0010-inline-terminal-modal.md) the
+    ``/planguard`` selector must NOT spawn its own ``Application``; the
+    controller's ``run_selector`` schedules it as a background task on
+    the main Application so the main ``Application`` object identity is
+    preserved. This test stubs the selector entry point and asserts
+    the dispatch path uses ``controller.run_selector`` when one is
+    provided in the ``CommandContext``.
+    """
+    from core.commands import CommandContext
+    from core.commands import system as system_commands
+
+    class _StubController:
+        """Stand-in that records the call to ``run_selector``."""
+
+        def __init__(self) -> None:
+            self.calls: list[Any] = []
+
+            async def _await(callable_: Any) -> str:
+                self.calls.append(callable_)
+                return "strict"
+
+            self.run_selector = _await
+
+    class _StubSession:
+        def __init__(self) -> None:
+            self.model_alias = "stub-model"
+
+        def runtime_context(self) -> Any:  # pragma: no cover - not exercised
+            return None
+
+    async def _drive() -> None:
+        controller = _StubController()
+        # ``_select_plan_guard_mode`` is imported lazily inside
+        # ``cmd_planguard``; patch it on the module to keep this test
+        # independent from prompt_toolkit's runtime requirements.
+        captured: list[tuple[str, Any]] = []
+
+        async def _fake_select_plan_guard_mode(current: str) -> str:
+            captured.append(("direct", current))
+            return "strict"
+
+        # cmd_planguard imports ``_select_plan_guard_mode`` via the
+        # module's own globals, so monkey-patching the module attribute
+        # is the right hook.
+        original = getattr(system_commands, "_select_plan_guard_mode", None)
+        system_commands._select_plan_guard_mode = _fake_select_plan_guard_mode  # type: ignore[assignment]
+        original_available = getattr(
+            system_commands, "_plan_guard_tui_available", None
+        )
+        system_commands._plan_guard_tui_available = lambda: True  # type: ignore[assignment]
+        try:
+            ctx = CommandContext(
+                verb="/planguard",
+                arg="",
+                arg2="",
+                session=_StubSession(),
+                terminal_controller=controller,
+            )
+            await system_commands.cmd_planguard(ctx)
+        finally:
+            if original is not None:
+                system_commands._select_plan_guard_mode = original  # type: ignore[assignment]
+            if original_available is not None:
+                system_commands._plan_guard_tui_available = original_available  # type: ignore[assignment]
+        assert controller.calls, (
+            "cmd_planguard must invoke controller.run_selector when a "
+            "controller is attached to the CommandContext"
+        )
+        assert captured == [], (
+            f"cmd_planguard must not call _select_plan_guard_mode "
+            f"directly when a controller is present; saw {captured!r}"
+        )
+
+    asyncio.run(_drive())

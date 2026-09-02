@@ -410,3 +410,54 @@ def test_controller_pause_resume_and_close_restore_terminal_ownership() -> None:
                     terminal.restore_output_proxy()
 
     asyncio.run(scenario())
+
+
+def test_bypass_print_writes_to_original_stdout_while_proxy_is_active() -> None:
+    """bypass_print reaches past the proxy to the original host stdout.
+
+    When a modal selector is about to run, short notices (e.g. the
+    ``Auto-corrected: /plg -> /planguard`` line) must reach the host
+    PTY **before** the selector renders, even though the proxy still
+    owns ``sys.stdout``.
+    """
+    captured: list[str] = []
+
+    class _CapturingStdout:
+        def write(self, text: str) -> int:
+            captured.append(text)
+            return len(text)
+
+        def flush(self) -> None:
+            return None
+
+    original_stdout = sys.stdout
+    session = SimpleNamespace(_live_terminal_active=False)
+    capture = _CapturingStdout()
+    try:
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+            controller = PersistentTerminalController(
+                terminal,
+                session,
+                lambda _sink: None,
+                None,
+            )
+            try:
+                asyncio.run(controller.start())
+                assert sys.stdout is not original_stdout
+                # Replace the original stdout the proxy wraps so we can
+                # observe what ``bypass_print`` actually writes.
+                terminal._stdout_frames[0] = (
+                    capture,
+                    terminal._stdout_frames[0][1],
+                    sys.stderr,
+                    terminal._stdout_frames[0][3],
+                )
+                controller.bypass_print("hello-host\n")
+                assert captured == ["hello-host\n"], (
+                    f"bypass_print must reach past the proxy; saw {captured!r}"
+                )
+            finally:
+                asyncio.run(controller.close())
+    finally:
+        sys.stdout = original_stdout

@@ -6,6 +6,7 @@ Multi-provider runtime, vision support, SQLite persistence, CoT guidance,
 GSA skill archive, spec-driven execution, and GSD project state.
 """
 import os, sys, shutil, argparse, asyncio, traceback, signal
+from typing import Any
 from pawnlogic.repl import (
     ReplSignalState,
     read_text_cache as _read_text_cache,
@@ -411,16 +412,43 @@ HELP_TEXT = f"""
 async def handle_slash(cmd: str, session: AgentSession):
     """Thin entry shell. Parses the raw line into a CommandContext and
     forwards to the dispatcher in core.commands.
+
+    When the live terminal is running, ``handle_slash`` attaches the
+    current :class:`PersistentTerminalController` to the context so
+    selectors can run through ``controller.run_selector`` instead of
+    spawning their own ``Application`` (ADR 0010).
     """
     from core.commands import CommandContext, dispatch
     parts = cmd.strip().split(None, 2)
+    controller = _get_live_terminal_controller()
     ctx = CommandContext(
         verb = parts[0].lower(),
         arg  = parts[1].strip() if len(parts) > 1 else "",
         arg2 = parts[2].strip() if len(parts) > 2 else "",
         session = session,
+        terminal_controller=controller,
     )
     return await dispatch(ctx)
+
+
+# ── Live-terminal controller holder ────────────────────────────────────────
+# ``run()`` publishes the active PersistentTerminalController here so
+# ``handle_slash`` (defined at module scope) can attach it to the
+# CommandContext.  The holder is reset to ``None`` on every entry to
+# ``run()`` so that stale controllers from a previous invocation cannot
+# leak into the next session.
+
+_LIVE_TERMINAL_CONTROLLER_HOLDER: dict[str, Any] = {}
+
+
+def _publish_live_terminal_controller(controller: Any) -> None:
+    """Publish or clear the controller that ``handle_slash`` will attach."""
+    _LIVE_TERMINAL_CONTROLLER_HOLDER["controller"] = controller
+
+
+def _get_live_terminal_controller() -> Any:
+    """Return the controller ``run()`` published, or ``None``."""
+    return _LIVE_TERMINAL_CONTROLLER_HOLDER.get("controller")
 
 
 
@@ -856,6 +884,9 @@ def _run_repl_turn(session: AgentSession, raw: str, *, retry_interrupted: bool) 
 
 
 async def _main_impl():
+    # Reset the controller holder so a previous ``run()`` cannot leak a
+    # stale PersistentTerminalController into the next session.
+    _publish_live_terminal_controller(None)
     prompt_toolkit_enabled = _HAS_PROMPT_TOOLKIT
     # CLI argument parsing.
     parser = argparse.ArgumentParser(
@@ -1308,6 +1339,7 @@ async def _main_impl():
         _live_terminal_controller = PersistentTerminalController(
             _live_terminal, session, set_active_sink, sink
         )
+        _publish_live_terminal_controller(_live_terminal_controller)
 
         if _runtime_state.debug_mode:
             print(c(GRAY, "  🐚 Tab completion enabled (advanced mode)"))
@@ -1506,6 +1538,7 @@ async def _main_impl():
         _restore_live_sigint()
     if _live_terminal_controller is not None:
         await _live_terminal_controller.close()
+        _publish_live_terminal_controller(None)
         print(c(CYAN, "\n  Goodbye! 👋"))
     pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
     for t in pending:

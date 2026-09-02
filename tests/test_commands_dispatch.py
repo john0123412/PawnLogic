@@ -388,7 +388,9 @@ def test_command_context_is_dataclass_instance(cmd_pkg, fake_session):
     fields = {f.name for f in dataclasses.fields(ctx)}
     # `sink` was added in stage-2 step 4 with a None default so existing
     # callers don't have to specify it; dispatch() injects it lazily.
-    assert fields == {"verb", "arg", "arg2", "session", "sink"}
+    # `terminal_controller` was added in 0.3.7 so interactive selectors
+    # can use the live-terminal controller (ADR 0010).
+    assert fields == {"verb", "arg", "arg2", "session", "sink", "terminal_controller"}
 
 
 def test_command_context_supports_keyword_only_construction(cmd_pkg, fake_session):
