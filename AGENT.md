@@ -585,32 +585,29 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.3.5`. PyPI, GitHub Release, and latest tag
-  are `v0.3.5`, published 2026-08-30 through Trusted Publishing after the
+- Current published release: `0.3.6`. PyPI, GitHub Release, and latest tag
+  are `v0.3.6`, published 2026-09-02 through Trusted Publishing after the
   full test gate, Dynamic E2E, distribution build, and PyPI fresh-install
-  smoke. The `0.3.4` release remains complete.
-- Release finalization: `v0.3.5` was published on 2026-08-30 through Trusted
+  smoke. The `0.3.5` release remains complete.
+- Release finalization: `v0.3.6` was published on 2026-09-02 through Trusted
   Publishing. The release workflow completed its full test gate, Dynamic E2E,
-  distribution build, PyPI fresh-install smoke, and GitHub Release creation;
-  the one-time `.release-ready` marker was then removed.
+  distribution build, PyPI fresh-install smoke, and GitHub Release creation.
+  PR #122 carried the README version-pointer alignment required by
+  `tools/check_release_consistency.py`; the v0.3.6 tag was force-updated
+  to point at that commit because the tag ruleset blocks deletion.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Active plan: `0.3.6-live-turn-control.md`; its release candidate is being
-  validated on `test/release-0.3.6`.
-  The working version is declared as unreleased `0.3.6`; per the Version
-  Numbering Policy the cycle's version PR stays unmerged until the previous
-  release completes. The `.release-ready` marker was removed during the
-  0.3.5 release finalization. Independent
-  `pawnlogic-security` 0.1.0 published from `john0123412/pawnlogic-security`
-  on 2026-07-28.
-- The 0.3.6 release candidate is locally green: 1,470 non-E2E and 26 Dynamic
-  E2E tests, Ruff, typed-island mypy, documentation and language guards,
+- Active plan: `0.3.6-live-turn-control.md` is **complete** as of 2026-09-02.
+  The full P0–P6 live turn control contract (live input, mid-turn steer,
+  follow-up queue, per-Turn cancellation, recovery, queue TUI) shipped in
+  `v0.3.6`. The next cycle's plan file will be opened separately.
+  Independent `pawnlogic-security` 0.1.0 published from
+  `john0123412/pawnlogic-security` on 2026-07-28.
+- 0.3.6 release gates all closed: 1,470 non-E2E tests, 26 Dynamic E2E,
+  Ruff, typed-island mypy (42 modules), documentation and language guards,
   release consistency, architecture budget, package build, twine metadata,
-  and an isolated wheel fresh-install smoke all pass. PR #120 passed the
-  Python 3.10/3.11/3.12 matrix and Dynamic E2E in remote Actions and is merged
-  into `main`. Owner manual terminal acceptance remains before release
-  finalization and tag.
-  Do not describe 0.3.6 as published until every gate and the release approval
-  finish.
+  isolated fresh-install smoke, Python 3.10/3.11/3.12 matrix, and remote
+  Dynamic E2E all green. PR #120 (release prep), PR #121 (post-merge docs),
+  and PR #122 (README version-pointer alignment) all merged into `main`.
 - `main` protected by branch rule requiring PR, up-to-date branches, and four
   checks: ruff, docs guard, mypy, fast tests. Tag ruleset protects `v*.*.*`.
 - Publishing uses Trusted Publishing / OIDC. GitHub Release waits on
