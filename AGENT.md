@@ -596,12 +596,15 @@ are source-checkout or user-installed assets; pip/curl installations should use
   `tools/check_release_consistency.py`; the v0.3.6 tag was force-updated
   to point at that commit because the tag ruleset blocks deletion.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Active plan: `0.3.6-live-turn-control.md` is **complete** as of 2026-09-02.
-  The full P0–P6 live turn control contract (live input, mid-turn steer,
-  follow-up queue, per-Turn cancellation, recovery, queue TUI) shipped in
-  `v0.3.6`. The next cycle's plan file will be opened separately.
-  Independent `pawnlogic-security` 0.1.0 published from
-  `john0123412/pawnlogic-security` on 2026-07-28.
+- Active plan: `0.3.7-inline-terminal-stability.md` is the next active plan
+  on `test/release-0.3.7`. It restores native terminal scrollback / mouse
+  selection / copy by removing the alternate-screen application mode and
+  unifies interactive selectors under a single Prompt Toolkit Application
+  dialog state. The 0.3.6 plan is **complete** and moved to Completed Plans in
+  `docs/plans/INDEX.md`; the architecture is captured by
+  [ADR 0010](docs/adr/0010-inline-terminal-modal.md). Independent
+  `pawnlogic-security` 0.1.0 published from `john0123412/pawnlogic-security`
+  on 2026-07-28.
 - 0.3.6 release gates all closed: 1,470 non-E2E tests, 26 Dynamic E2E,
   Ruff, typed-island mypy (42 modules), documentation and language guards,
   release consistency, architecture budget, package build, twine metadata,
@@ -665,8 +668,7 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   controls. Escape shares a prefix with Alt shortcuts, so real-input tests
   must keep its bounded sequence-resolution latency covered. Mouse-wheel and
   coordinate-free ScrollUp/ScrollDown events must remain owned by the output
-  viewport so composer history cannot consume them. Owner manual terminal
-  acceptance and the post-upload hash-pinned install smoke remain outstanding.
+  viewport so composer history cannot consume them.
 - Safe-point steering can alter Tool Call batch protocol; skipped results,
   ordering, and plan-guard accounting must remain complete.
 - Tier presets use advisory plan-guard mode (`plan_guard_mode`) so weak models

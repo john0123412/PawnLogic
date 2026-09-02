@@ -2,9 +2,12 @@
 
 ## Status
 
-Accepted after the 0.3.6 contract review and the P0-P6 implementation gates.
-The release remains an unreleased 0.3.6 candidate until packaging, remote CI,
-and the release approval gate complete.
+Released. Shipped in
+[v0.3.6](https://github.com/john0123412/PawnLogic/releases/tag/v0.3.6) on
+2026-09-02 through Trusted Publishing after the P0–P6 implementation gates,
+the full test suite, dynamic E2E, package build, and PyPI fresh-install smoke
+all passed. Follow-up stability and recovery work continues under
+[ADR 0010](0010-inline-terminal-modal.md) and the active 0.3.7 plan.
 
 ## Context
 
