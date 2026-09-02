@@ -43,6 +43,7 @@
 |--------|------|-----------|-------|------------|
 | `core/provider_transport.py` | Format-specific headers | `provider_headers()` | `test_providers.py` | OpenAI and Anthropic header shapes are format-specific. Never share bearer tokens across formats. |
 | `core/provider_runtime.py` | Mutation Interface | `ProviderRuntime` class | `test_provider_runtime.py` | Persist config before mutating live registries. Rollback on write failure. |
+| `core/provider_models.py` | Model Policy | Provider model helpers | `test_provider_runtime.py` | Keep model classification, aliases, and response formatting independent from provider persistence. |
 | `core/provider_streams.py` | SSE readers | `read_openai_sse_lines()`, `read_anthropic_sse_lines()` | `test_api_stream_helpers.py` | Provider-specific SSE parsing. Contract-tested delta shapes. |
 | `core/api_retry.py` | Retry policy | `RetryPolicy` dataclass | `test_api_retry.py`, `test_api_errors.py` | Policy loaded at request time, not import time. Classification shared across paths. |
 | `core/api_client.py` | HTTP transport | `APIWrapper` class | `test_api_stream_helpers.py` | Stream and non-stream share classification. Timeout cap enforced. |
