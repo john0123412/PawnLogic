@@ -36,6 +36,7 @@ import json
 import os
 import inspect
 import sys
+from typing import Any
 
 from prompt_toolkit import prompt as ptk_prompt
 
@@ -656,7 +657,14 @@ async def _provider_fetch(alias: str) -> None:
 # /provider sub-command dispatcher
 # ════════════════════════════════════════════════════════
 
-async def _handle_provider_cmd(sub: str, sub_arg: str, session, sink=None) -> None:
+async def _handle_provider_cmd(
+    sub: str,
+    sub_arg: str,
+    session,
+    sink=None,
+    *,
+    terminal_controller: Any = None,
+) -> None:
     """Handle /provider sub-commands."""
 
     # /provider without arguments opens the interactive TUI panel.
@@ -664,7 +672,14 @@ async def _handle_provider_cmd(sub: str, sub_arg: str, session, sink=None) -> No
         if _HAS_PROMPT_TOOLKIT:
             try:
                 from core.provider_tui import run_provider_tui
-                await run_provider_tui()
+                if terminal_controller is not None and getattr(
+                    terminal_controller, "run_selector", None
+                ) is not None:
+                    await terminal_controller.run_selector(
+                        lambda loop: lambda: run_provider_tui()
+                    )
+                else:
+                    await run_provider_tui()
             except Exception as _tui_err:
                 logger.error(f"[provider-tui] crashed: {_tui_err}")
                 import traceback
@@ -878,7 +893,14 @@ async def cmd_keys(ctx: CommandContext) -> None:
 
 @register("/provider")
 async def cmd_provider(ctx: CommandContext) -> None:
-    await _handle_provider_cmd(ctx.arg, ctx.arg2, ctx.session, ctx.sink)
+    controller = getattr(ctx, "terminal_controller", None)
+    await _handle_provider_cmd(
+        ctx.arg,
+        ctx.arg2,
+        ctx.session,
+        ctx.sink,
+        terminal_controller=controller,
+    )
 
 
 @register("/model")

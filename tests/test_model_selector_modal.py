@@ -305,3 +305,207 @@ def test_planguard_dispatch_uses_run_selector_when_controller_is_present() -> No
         )
 
     asyncio.run(_drive())
+
+
+def test_model_dispatch_uses_run_selector_when_controller_is_present() -> None:
+    """cmd_model must route the selector through controller.run_selector.
+
+    Mirrors the /planguard contract test for the model selector, so the
+    ADR-0010 in-Application modal guarantee is pinned for both
+    selectors. cmd_model is also the long-running interaction the
+    user reaches for most often, so the regression surface is high.
+    """
+    from core.commands import CommandContext
+    from core.commands import provider as provider_commands
+
+    class _StubController:
+        def __init__(self) -> None:
+            self.calls: list[Any] = []
+
+            async def _await(callable_: Any) -> str | None:
+                self.calls.append(callable_)
+                return "picked-alias"
+
+            self.run_selector = _await
+
+    class _StubSession:
+        def __init__(self) -> None:
+            self.model_alias = "stub-model"
+
+    async def _drive() -> None:
+        controller = _StubController()
+        captured: list[Any] = []
+
+        async def _fake_cc_style_model_selector(_models: Any, _alias: str) -> str | None:
+            captured.append("direct")
+            return "picked-alias"
+
+        original = getattr(
+            provider_commands, "cc_style_model_selector", None
+        )
+        original_visible_models = getattr(
+            provider_commands, "_visible_models", None
+        )
+        original_models = getattr(provider_commands, "MODELS", None)
+        original_validate = getattr(provider_commands, "validate_api_key", None)
+        provider_commands.cc_style_model_selector = _fake_cc_style_model_selector  # type: ignore[assignment]
+        # `_visible_models` is read inside cmd_model; make it return
+        # at least one entry so the selector branch is taken.
+        provider_commands._visible_models = lambda: {"stub-model": {"provider": "stub", "desc": ""}}  # type: ignore[assignment]
+        # The print path looks up `MODELS[result]['color']` after the
+        # selector returns; give the stub a color entry so the print
+        # path does not crash on a KeyError.
+        provider_commands.MODELS = {  # type: ignore[attr-defined]
+            "picked-alias": {"color": "white"},
+        }
+        provider_commands.validate_api_key = lambda _alias: (True, "ENV")  # type: ignore[assignment]
+        try:
+            ctx = CommandContext(
+                verb="/model",
+                arg="",
+                arg2="",
+                session=_StubSession(),
+                terminal_controller=controller,
+            )
+            await provider_commands.cmd_model(ctx)
+        finally:
+            if original is not None:
+                provider_commands.cc_style_model_selector = original  # type: ignore[assignment]
+            if original_visible_models is not None:
+                provider_commands._visible_models = original_visible_models  # type: ignore[assignment]
+            if original_models is not None:
+                provider_commands.MODELS = original_models  # type: ignore[attr-defined]
+            if original_validate is not None:
+                provider_commands.validate_api_key = original_validate  # type: ignore[assignment]
+        assert controller.calls, (
+            "cmd_model must invoke controller.run_selector when a "
+            "controller is attached to the CommandContext"
+        )
+        assert captured == [], (
+            f"cmd_model must not call cc_style_model_selector "
+            f"directly when a controller is present; saw {captured!r}"
+        )
+
+    asyncio.run(_drive())
+
+
+def test_provider_dispatch_uses_run_selector_when_controller_is_present() -> None:
+    """cmd_provider must route the TUI through controller.run_selector.
+
+    When /provider is called with no arguments the interactive
+    provider TUI panel must be scheduled through
+    ``controller.run_selector`` so the main ``Application`` identity
+    is preserved (ADR 0010).
+    """
+    from core.commands import CommandContext
+    from core.commands import provider as provider_commands
+
+    class _StubController:
+        def __init__(self) -> None:
+            self.calls: list[Any] = []
+
+            async def _await(callable_: Any) -> None:
+                self.calls.append(callable_)
+                return None
+
+            self.run_selector = _await
+
+    class _StubSession:
+        pass
+
+    async def _drive() -> None:
+        controller = _StubController()
+        captured: list[str] = []
+
+        async def _fake_run_provider_tui() -> None:
+            captured.append("direct")
+
+        # The provider handler imports ``run_provider_tui`` lazily
+        # from ``core.provider_tui``; intercept the import by
+        # patching ``core.provider_tui.run_provider_tui`` for the
+        # duration of the test.
+        from core import provider_tui as provider_tui_module
+        original_provider_tui = provider_tui_module.run_provider_tui
+        provider_tui_module.run_provider_tui = _fake_run_provider_tui  # type: ignore[assignment]
+        try:
+            ctx = CommandContext(
+                verb="/provider",
+                arg="",
+                arg2="",
+                session=_StubSession(),
+                terminal_controller=controller,
+            )
+            await provider_commands.cmd_provider(ctx)
+        finally:
+            provider_tui_module.run_provider_tui = original_provider_tui  # type: ignore[assignment]
+        assert controller.calls, (
+            "cmd_provider must invoke controller.run_selector when a "
+            "controller is attached to the CommandContext"
+        )
+        assert captured == [], (
+            f"cmd_provider must not call run_provider_tui directly "
+            f"when a controller is present; saw {captured!r}"
+        )
+
+    asyncio.run(_drive())
+
+
+def test_skills_dispatch_uses_run_selector_when_controller_is_present() -> None:
+    """cmd_skills must route the TUI through controller.run_selector.
+
+    /skills launches the interactive skill pack selector. Per ADR
+    0010 it must go through ``controller.run_selector`` when a
+    controller is attached so the main ``Application`` identity is
+    preserved.
+    """
+    from core.commands import CommandContext
+    from core.commands import tools as tools_commands
+
+    class _StubController:
+        def __init__(self) -> None:
+            self.calls: list[Any] = []
+
+            async def _await(callable_: Any) -> bool:
+                self.calls.append(callable_)
+                return False
+
+            self.run_selector = _await
+
+    class _StubSession:
+        pass
+
+    async def _drive() -> None:
+        controller = _StubController()
+        captured: list[str] = []
+
+        async def _fake_run_skill_tui(_scanner: Any) -> bool:
+            captured.append("direct")
+            return False
+
+        # cmd_skills imports ``run_skill_tui`` lazily from
+        # ``core.skill_tui``; patch the symbol on its origin module so
+        # the lazy import sees the stub.
+        from core import skill_tui as skill_tui_module
+        original_skill_tui = skill_tui_module.run_skill_tui
+        skill_tui_module.run_skill_tui = _fake_run_skill_tui  # type: ignore[assignment]
+        try:
+            ctx = CommandContext(
+                verb="/skills",
+                arg="",
+                arg2="",
+                session=_StubSession(),
+                terminal_controller=controller,
+            )
+            await tools_commands.cmd_skills(ctx)
+        finally:
+            skill_tui_module.run_skill_tui = original_skill_tui  # type: ignore[assignment]
+        assert controller.calls, (
+            "cmd_skills must invoke controller.run_selector when a "
+            "controller is attached to the CommandContext"
+        )
+        assert captured == [], (
+            f"cmd_skills must not call run_skill_tui directly when a "
+            f"controller is present; saw {captured!r}"
+        )
+
+    asyncio.run(_drive())
