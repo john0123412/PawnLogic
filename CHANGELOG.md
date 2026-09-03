@@ -40,18 +40,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   queue status in the output viewport without pausing the interface or
   the active Turn.
 - The persistent composer's `TextArea` now wraps long input at the
-  terminal width instead of overwriting the right margin or freezing
-  at column 0.
+  terminal width and grows from one to up to five rows so long input
+  is not clipped to a single fixed row.
 
 ### Fixed
-- Fixed the persistent terminal not writing to the host scrollback by
-  dual-writing complete transcript lines (with ANSI escapes stripped)
-  to the original stdout, while partial streaming chunks still flow
-  only through the Prompt Toolkit output pane to avoid cursor
-  conflicts.
+- Fixed the persistent terminal not writing to the host scrollback
+  by routing the full transcript to the original stdout exactly once
+  at `close()` time, via the new
+  `PersistentTerminal._flush_scrollback_to_stdout` helper. The flush
+  strips ANSI escapes so the scrollback receives plain text. A first
+  attempt to dual-write every complete transcript line on the live
+  `append_output` path was reverted: writing to the host stdout
+  while the application is alive fights Prompt Toolkit's VT100
+  cursor positioning and corrupts the visible output. The flush now
+  runs only after PT releases the terminal.
 - Fixed the bare-Esc binding: pressing Escape while a Turn runs now
-  interrupts the active Turn and, when the queue is non-empty,
-  immediately submits the first queued item as a STEER so the model
+  interrupts the active Turn and, when the queue is non-empty, sends
+  `ControlAction(kind=CLAIM_STEER)` through `session.queue_control`
+  so the scheduler marks the first queued item as a steer. The model
   resumes along the new direction without the user having to type a
   follow-up. Ctrl+C keeps its existing interrupt + recovery behaviour.
 - Removed the parallel `_output_chunks` buffer in `PersistentTerminal`
