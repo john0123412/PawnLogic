@@ -223,13 +223,13 @@ def build_prompt_toolkit_bindings(
         if running_turn():
             schedule_interrupt(event)
             if queued_work():
-                recall = getattr(session, "recall_queued_turn", None)
-                content = recall() if callable(recall) else None
-                if content:
-                    submit = getattr(session, "submit_session_turn", None)
-                    if callable(submit):
-                        from core.queue import SubmissionKind
-                        submit(content, kind=SubmissionKind.STEER)
+                # Convert the first queued item to STEER so the scheduler
+                # picks it up as a directional steer when the turn resumes.
+                from core.queue import ControlAction, ControlKind
+                action = ControlAction(kind=ControlKind.CLAIM_STEER)
+                queue_control = getattr(session, "queue_control", None)
+                if callable(queue_control):
+                    queue_control(action)
 
     @bindings.add("c-c")
     @bindings.add("<sigint>")

@@ -383,22 +383,6 @@ class PersistentTerminal:
                 return
             self._append_terminal_text_locked(text)
             self._schedule_invalidation_locked()
-        # Flush complete lines to the original host stdout for terminal
-        # scrollback. Only lines ending with \n are written to avoid cursor
-        # conflicts with the PT output pane for partial streaming chunks.
-        if text.endswith("\n"):
-            with self._stdout_lock:
-                original_stdout = self._stdout_frames[0][0] if self._stdout_frames else None
-            if original_stdout is not None:
-                try:
-                    plain = _ANSI_ESCAPE.sub("", text)
-                    if plain:
-                        original_stdout.write(plain)
-                        flush = getattr(original_stdout, "flush", None)
-                        if callable(flush):
-                            flush()
-                except Exception:
-                    pass
 
     def _append_terminal_text_locked(self, text: str) -> None:
         """Apply carriage-return/backspace semantics inside the output pane.
@@ -557,6 +541,7 @@ class PersistentTerminal:
 
     def close(self) -> None:
         """Close the application and wake any consumer waiting for input."""
+        self._flush_scrollback_to_stdout()
         with self._lock:
             if self._closed:
                 return
@@ -570,6 +555,35 @@ class PersistentTerminal:
             return
         callback = application.exit
         self._schedule_on_loop(callback, loop=loop)
+
+    def _flush_scrollback_to_stdout(self) -> None:
+        """Flush full transcript to original stdout for terminal scrollback.
+
+        Writes the plain-text conversation to the host terminal's scrollback
+        buffer so the user can scroll up with the mouse wheel to review past
+        output after the application exits. This runs only when the
+        application is closing, so it never conflicts with PT's VT100
+        cursor positioning.
+        """
+        text = self._transcript.snapshot()
+        if not text:
+            return
+        plain = _ANSI_ESCAPE.sub("", text)
+        if not plain:
+            return
+        with self._stdout_lock:
+            original_stdout = self._stdout_frames[0][0] if self._stdout_frames else None
+        if original_stdout is None:
+            return
+        try:
+            original_stdout.write(plain)
+            if not plain.endswith("\n"):
+                original_stdout.write("\n")
+            flush = getattr(original_stdout, "flush", None)
+            if callable(flush):
+                flush()
+        except Exception:
+            pass
 
     def install_output_proxy(self) -> _StdoutProxy:
         """Route ordinary stdout/stderr writes into the output buffer."""
@@ -715,7 +729,7 @@ class PersistentTerminal:
             text=self._default_text,
             multiline=False,
             wrap_lines=True,
-            height=Dimension.exact(1),
+            height=Dimension(min=1, max=5),
             prompt=self.prompt,
             accept_handler=self._accept_handler,
             focusable=True,
