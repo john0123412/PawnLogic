@@ -508,7 +508,7 @@ async def cmd_skills(ctx: CommandContext) -> None:
     controller = getattr(ctx, "terminal_controller", None)
     if controller is not None and getattr(controller, "run_selector", None) is not None:
         saved = await controller.run_selector(
-            lambda loop: lambda: run_skill_tui(_skill_scanner)
+            lambda: run_skill_tui(_skill_scanner)
         )
     else:
         saved = await run_skill_tui(_skill_scanner)

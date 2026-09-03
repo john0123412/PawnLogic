@@ -675,9 +675,7 @@ async def _handle_provider_cmd(
                 if terminal_controller is not None and getattr(
                     terminal_controller, "run_selector", None
                 ) is not None:
-                    await terminal_controller.run_selector(
-                        lambda loop: lambda: run_provider_tui()
-                    )
+                    await terminal_controller.run_selector(run_provider_tui)
                 else:
                     await run_provider_tui()
             except Exception as _tui_err:
@@ -927,8 +925,10 @@ async def cmd_model(ctx: CommandContext) -> None:
             result: str | None
             controller = getattr(ctx, "terminal_controller", None)
             if controller is not None and getattr(controller, "run_selector", None) is not None:
+                from pawnlogic.selectors import ModelSelector
+
                 result = await controller.run_selector(
-                    lambda loop: lambda: cc_style_model_selector(_vm, session.model_alias)
+                    lambda: ModelSelector(_vm, session.model_alias)
                 )
             else:
                 result = await cc_style_model_selector(_vm, session.model_alias)

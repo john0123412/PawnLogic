@@ -610,20 +610,25 @@ are source-checkout or user-installed assets; pip/curl installations should use
   `pawnlogic-security` 0.1.0 published from
   `john0123412/pawnlogic-security` on 2026-07-28.
 - 0.3.7 cycle is in two phases. Phase A (the persistent terminal
-  itself) is committed on `rebuild/inline-terminal-0.3.7`:
-  `TerminalTranscript` is wired into `PersistentTerminal`,
-  `full_screen` / `mouse_support` are dropped, and the modal
-  lifecycle is rewritten as a no-op flag flip plus a new
-  `controller.run_selector` entry point. Phase B (porting the four
-  interactive selectors — `/model`, `/planguard`, `/provider`,
-  `/skills` — to `controller.run_selector`) is outstanding and
-  gates the 0.3.7 release. One E2E test
-  (`test_slash_planguard_tui_applies_selected_mode`) stays red
-  until phase B lands. Local non-E2E: 1,481 pass. Local Dynamic E2E:
-  25/26 pass. Ruff and typed-island mypy for
-  `pawnlogic/terminal_transcript.py` and `pawnlogic/live_terminal.py`
-  are clean. CHANGELOG, SECURITY, and `config/paths.py:VERSION`
-  must not be touched until phase B is complete.
+  itself) and Phase B (porting the four interactive selectors —
+  `/model`, `/planguard`, `/provider`, `/skills` — to
+  `controller.run_selector`) are both committed on
+  `rebuild/inline-terminal-0.3.7`. `/model` and `/planguard` use
+  the state-machine selector path that installs the selector in
+  the live `Application`'s `SelectorRegistry`; `/provider` and
+  `/skills` still drive their own nested `Application` (the full
+  in-Application Float rewrite is the documented follow-up) but
+  the main `Application` task identity is now preserved across the
+  round trip in both cases. `controller.run_selector` accepts
+  either a state-machine factory or an awaitable factory and
+  routes them through the correct path. Local non-E2E: 1,486
+  pass. Local Dynamic E2E: 29/29 pass (the two new TUI tests for
+  `/provider` and `/skills` are green). Ruff, typed-island mypy
+  for `pawnlogic/terminal_transcript.py`,
+  `pawnlogic/live_terminal.py`, and `pawnlogic/selectors.py`, and
+  `git diff --check` are all clean. CHANGELOG, SECURITY, and
+  `config/paths.py:VERSION` must not be touched until the release
+  PR is prepared.
 - 0.3.6 release gates all closed: 1,470 non-E2E tests, 26 Dynamic E2E,
   Ruff, typed-island mypy (42 modules), documentation and language guards,
   release consistency, architecture budget, package build, twine metadata,

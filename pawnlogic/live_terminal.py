@@ -14,6 +14,7 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+import inspect
 import json
 import re
 import sys
@@ -31,6 +32,7 @@ from prompt_toolkit.input.base import Input
 from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
 
 from .terminal_transcript import TerminalTranscript
+from .selectors import SelectorRegistry, SelectorState, style_dict as _selector_style_dict
 from prompt_toolkit.key_binding.key_bindings import KeyBindingsBase
 from prompt_toolkit.layout import Dimension, Layout
 from prompt_toolkit.layout.containers import (
@@ -45,7 +47,7 @@ from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.output import Output
 from prompt_toolkit.keys import Keys
-from prompt_toolkit.styles import BaseStyle
+from prompt_toolkit.styles import BaseStyle, Style, merge_styles
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.widgets import TextArea
 
@@ -249,11 +251,73 @@ class PersistentTerminal:
         self._closed = False
         self._modal_active = False
         self._modal_stack: list[Any] = []
+        # In-Application selector registry (ADR 0010). The live
+        # ``Application`` consults ``selector_registry`` to decide
+        # whether the selector Float is visible and which key
+        # bindings should dispatch to it. See ``pawnlogic/selectors.py``.
+        self._selector_registry = SelectorRegistry()
 
     @property
     def application(self) -> Application[Any] | None:
         """Return the underlying application after it has been constructed."""
         return self._application
+
+    @property
+    def selector_registry(self) -> SelectorRegistry:
+        """Return the in-Application selector registry.
+
+        The registry is a thin per-session object that owns the
+        currently-active selector state machine.  The live
+        ``Application``'s key bindings consult
+        ``selector_registry.has_active`` to decide whether to
+        dispatch to the selector; the Float that renders the
+        selector reads its formatted text from
+        ``selector_registry.formatted_text()``.
+        """
+        return self._selector_registry
+
+    def open_selector(self, selector: SelectorState) -> asyncio.Future[Any]:
+        """Install ``selector`` as the active modal and return its future.
+
+        The future is resolved when ``close_selector()`` is called
+        (typically by the controller when the selector state
+        machine has captured a result) or when the live terminal
+        shuts down.  The selector Float becomes visible immediately
+        and the main ``Application`` is invalidated so the new
+        state is rendered on the next redraw.
+        """
+        loop = self._loop
+        if loop is None:
+            loop = asyncio.get_running_loop()
+        future: asyncio.Future[Any] = loop.create_future()
+        self._selector_registry.install_active(selector, future)
+        self._modal_active = True
+        # Re-render and redraw so the selector Float appears and the
+        # current selection is highlighted.
+        self._schedule_invalidation_locked()
+        return future
+
+    def close_selector(self, result: Any = None) -> bool:
+        """Resolve the active selector's future with ``result``.
+
+        Returns True when a selector was active and resolved, False
+        otherwise.  The Float disappears and the main
+        ``Application`` is invalidated so the next redraw removes
+        the overlay.
+        """
+        resolved = self._selector_registry.resolve(result)
+        if resolved:
+            self._modal_active = self._selector_registry.has_active
+            self._schedule_invalidation_locked()
+        return resolved
+
+    def _selector_formatted_text(self) -> Any:
+        """Return the FormattedText for the active selector Float.
+
+        Reads through the registry so the live ``Application`` and
+        any tests can both observe the same content.
+        """
+        return self._selector_registry.formatted_text()
 
     @property
     def transcript(self) -> TerminalTranscript:
@@ -578,6 +642,43 @@ class PersistentTerminal:
                 self.set_submission_kind(SubmissionKind.FOLLOW_UP)
                 event.current_buffer.validate_and_handle()
 
+        # Selector key dispatch: when a selector is active the main
+        # ``Application`` forwards the key to the active state
+        # machine.  We register specific keys (``enter``, ``escape``,
+        # ``c-c``, ``up``, ``down``, ``1``-``9``) rather than
+        # ``Keys.Any`` because the composer's stock text-insert
+        # binding also uses ``Keys.Any`` with ``eager=True``; if two
+        # ``Keys.Any`` handlers are registered, the one registered
+        # first wins and there is no way to install our handler
+        # before the composer's.  Specific keys have unique
+        # priorities and run *before* the (read-only) composer
+        # absorbs the event.
+        for _k in ("enter", "c-j", "c-m"):
+            @bindings.add(_k, filter=Condition(lambda: self._selector_registry.has_active), eager=True)
+            def _sel_enter(event: Any, _key: str = _k) -> None:
+                self._selector_dispatch_key("enter")
+
+        @bindings.add("escape", filter=Condition(lambda: self._selector_registry.has_active), eager=True)
+        def _sel_escape(event: Any) -> None:
+            self._selector_dispatch_key("escape")
+
+        @bindings.add("c-c", filter=Condition(lambda: self._selector_registry.has_active), eager=True)
+        def _sel_c_c(event: Any) -> None:
+            self._selector_dispatch_key("c-c")
+
+        @bindings.add("up", filter=Condition(lambda: self._selector_registry.has_active), eager=True)
+        def _sel_up(event: Any) -> None:
+            self._selector_dispatch_key("up")
+
+        @bindings.add("down", filter=Condition(lambda: self._selector_registry.has_active), eager=True)
+        def _sel_down(event: Any) -> None:
+            self._selector_dispatch_key("down")
+
+        for _d in range(1, 10):
+            @bindings.add(str(_d), filter=Condition(lambda: self._selector_registry.has_active), eager=True)
+            def _sel_digit(event: Any, _digit: int = _d) -> None:
+                self._selector_dispatch_key(str(_digit))
+
         # Some terminals and multiplexers expose wheel events without screen
         # coordinates. Prompt Toolkit's stock binding translates those into
         # Up/Down, which would navigate the focused composer history. Handle
@@ -606,6 +707,7 @@ class PersistentTerminal:
             history=self._history,
             auto_suggest=self._auto_suggest,
             complete_while_typing=True,
+            read_only=Condition(lambda: self._selector_registry.has_active),
         )
         # Prompt Toolkit starts a TextArea cursor at position zero even when
         # initial text is supplied.  Recovery and explicit prefilled drafts
@@ -638,8 +740,29 @@ class PersistentTerminal:
             ),
             filter=Condition(self._has_queue_preview),
         )
+        # The selector content window replaces the live transcript
+        # when a selector is active.  Placing it in the body (not as
+        # a Float) gives it the full output height and avoids the
+        # FloatContainer's content-size clipping that swallowed the
+        # option lines on small terminals.
+        selector_control = FormattedTextControl(
+            self._selector_formatted_text,
+        )
+        selector_window = Window(
+            selector_control,
+            wrap_lines=True,
+            always_hide_cursor=True,
+        )
+        selector_output = ConditionalContainer(
+            content=selector_window,
+            filter=Condition(lambda: self._selector_registry.has_active),
+        )
+        normal_output = ConditionalContainer(
+            content=output_window,
+            filter=Condition(lambda: not self._selector_registry.has_active),
+        )
         body = HSplit(
-            [output_window, queue_preview, self._composer.window, toolbar_window]
+            [normal_output, selector_output, queue_preview, self._composer.window, toolbar_window]
         )
         root = FloatContainer(
             content=body,
@@ -648,7 +771,7 @@ class PersistentTerminal:
                     xcursor=True,
                     ycursor=True,
                     content=CompletionsMenu(max_height=6, scroll_offset=1),
-                )
+                ),
             ],
         )
         self._application = Application(
@@ -658,7 +781,14 @@ class PersistentTerminal:
             erase_when_done=False,
             input=self._input,
             output=self._output,
-            style=self._style,
+            style=merge_styles(
+                [
+                    Style.from_dict(_selector_style_dict()),
+                    self._style,
+                ]
+                if self._style is not None
+                else [Style.from_dict(_selector_style_dict())]
+            ),
             mouse_support=False,
         )
         # A bare Escape shares its first byte with Alt+Enter, Alt+Up, and
@@ -669,6 +799,25 @@ class PersistentTerminal:
         self._application.ttimeoutlen = _KEY_SEQUENCE_TIMEOUT_SECONDS
         self._application.timeoutlen = _KEY_SEQUENCE_TIMEOUT_SECONDS
         return self._application
+
+    def _selector_dispatch_key(self, key_name: str) -> None:
+        """Forward a key to the active selector state machine.
+
+        Bound to the selector FormattedTextControl so the focused
+        element's key handlers run before the (read-only) composer
+        absorbs the event.  Closes the selector when the state
+        machine reports itself closed, and moves focus back to the
+        composer.
+        """
+        selector = self._selector_registry.active_selector
+        if selector is None:
+            return
+        if selector.handle_key(key_name):
+            self._schedule_invalidation_locked()
+        if selector.is_closed:
+            self._selector_registry.resolve(selector.result)
+            self._modal_active = self._selector_registry.has_active
+            self._schedule_invalidation_locked()
 
     def _accept_handler(self, buffer: Buffer) -> None:
         text = buffer.text
@@ -997,59 +1146,106 @@ class PersistentTerminalController:
 
     async def run_selector(
         self,
-        selector_coro_factory: Callable[[asyncio.AbstractEventLoop], Callable[[], Any]],
-    ) -> str | None:
-        """Run a selector dialog inside the live Application.
+        selector_factory: Callable[[], Any],
+    ) -> Any:
+        """Open a selector dialog in the live Application.
 
-        ``selector_coro_factory(loop)`` is expected to return a callable
-        that the caller will await. The selector is scheduled as a
-        background task on the live ``Application`` so the main
-        ``Application`` object identity stays stable across the
-        round trip. The selector may render to the same layout (an
-        in-Application Float) or to a nested PT ``Application``; in
-        both cases the main ``Application.run_async`` task is not
-        awaited to completion.
+        Two factory patterns are supported:
 
-        Returns the selected alias, or ``None`` if the user cancelled.
+        1. **State-machine selector** (ADR 0010): ``selector_factory()``
+           returns a :class:`~pawnlogic.selectors.SelectorState` (or any
+           object that implements ``formatted_text``, ``handle_key``,
+           ``is_closed``, and ``close(result)``).  The controller
+           installs the selector in the
+           :class:`~pawnlogic.selectors.SelectorRegistry`, the live
+           ``Application``'s key bindings take over from the composer,
+           the selector Float becomes visible, and the awaiting
+           command blocks until the user confirms or cancels.
+
+        2. **Nested-Application TUI** (transitional): some interactive
+           TUIs (notably :func:`core.provider_tui.run_provider_tui` and
+           :func:`core.skill_tui.run_skill_pack_tui`) still drive their
+           own ``Application`` and only return ``None`` when the user
+           exits.  ``selector_factory()`` is detected as a callable
+           that returns an awaitable; the controller schedules it as
+           a background task on the live ``Application`` so the main
+           ``Application`` identity stays stable across the round
+           trip even though the inner TUI spins up its own
+           ``Application.run_async()`` and exits it.  The full
+           in-Application Float rewrite for these panels is the
+           documented follow-up; this branch keeps them functional in
+           0.3.7 while ADR 0010 is honoured for the main
+           ``Application``.
+
+        Returns the selector's result (typically a string alias for
+        ``/model`` and ``/planguard``) or ``None`` if the user
+        cancelled / closed the TUI.
+
+        The main ``Application`` object identity stays stable across
+        every round trip.  See ADR 0010 and
+        ``pawnlogic/selectors.py``.
         """
         application = self.terminal.application
         if application is None:
             return None
-        loop = self.terminal._loop
-        if loop is None:
-            loop = asyncio.get_running_loop()
+        produced = selector_factory()
+        if produced is None:
+            return None
+        # State-machine selector path: install in the registry, await
+        # the future, close the selector when the command returns.
+        if isinstance(produced, SelectorState):
+            future = self.terminal.open_selector(produced)
+            try:
+                return await future
+            finally:
+                self.terminal.close_selector()
+        # Nested-Application TUI path: the factory returned either
+        # a callable that produces an awaitable, or an awaitable
+        # itself (a coroutine).  Schedule it on the live Application
+        # as a background task so the main Application identity is
+        # kept.
+        if callable(produced) or inspect.isawaitable(produced):
+            run_callable: Any
+            if callable(produced):
 
-        result_future: asyncio.Future[str | None] = loop.create_future()
-        task = application.create_background_task(
-            self._drive_selector(selector_coro_factory, result_future)
-        )
+                async def _await_factory_result() -> Any:
+                    return await produced()
 
+                run_callable = _await_factory_result()
+            else:
+                run_callable = produced
+            loop = self.terminal._loop
+            if loop is None:
+                loop = asyncio.get_running_loop()
+            result_future: asyncio.Future[Any] = loop.create_future()
+
+            async def _drive() -> None:
+                try:
+                    value = await run_callable
+                except BaseException as exc:
+                    if not result_future.done():
+                        result_future.set_exception(exc)
+                    return
+                if not result_future.done():
+                    result_future.set_result(value)
+
+            task = application.create_background_task(_drive())
+            try:
+                return await result_future
+            finally:
+                if not task.done():
+                    task.cancel()
+                    with suppress(BaseException):
+                        await task
+        # Last resort: treat the produced object itself as a
+        # SelectorState-like object.  Fall back to the state-machine
+        # path so future selectors that don't subclass
+        # ``SelectorState`` still work.
+        future = self.terminal.open_selector(produced)
         try:
-            return await result_future
+            return await future
         finally:
-            if not task.done():
-                task.cancel()
-                with suppress(BaseException):
-                    await task
-
-    async def _drive_selector(
-        self,
-        selector_coro_factory: Callable[
-            [asyncio.AbstractEventLoop], Callable[[], Any]
-        ],
-        result_future: asyncio.Future[str | None],
-    ) -> None:
-        """Run the selector and surface the result through ``result_future``."""
-        loop = asyncio.get_running_loop()
-        try:
-            run_callable = selector_coro_factory(loop)
-            value = await run_callable()
-        except BaseException as exc:
-            if not result_future.done():
-                result_future.set_exception(exc)
-            return
-        if not result_future.done():
-            result_future.set_result(value)
+            self.terminal.close_selector()
 
     def _observe_terminal_task(self, task: asyncio.Task[None]) -> None:
         """Log an unexpected Prompt Toolkit exit instead of hiding its cause."""

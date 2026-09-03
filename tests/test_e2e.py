@@ -432,6 +432,51 @@ def test_slash_model_list(spawn_pawnlogic):
         pytest.fail(f"/model failed: {e}")
 
 
+def test_slash_model_tui_selects_current_model(spawn_pawnlogic_tui):
+    """The in-Application model selector applies the picked model alias."""
+    child = spawn_pawnlogic_tui
+    try:
+        _wait_for_prompt(child)
+        child.sendline("/model")
+        # The selector renders the "Select model" title above the list.
+        child.expect("Select model", timeout=10)
+        # Pick the first model (digit "1") and confirm with Enter.
+        child.send("1")
+        child.send("\r")
+        child.expect("Switched to", timeout=10)
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"/model TUI selector failed: {e}")
+
+
+def test_slash_provider_tui_opens_manager(spawn_pawnlogic_tui):
+    """The provider TUI panel opens under the live Application."""
+    child = spawn_pawnlogic_tui
+    try:
+        _wait_for_prompt(child)
+        child.sendline("/provider")
+        # The provider TUI title and one provider row must be visible.
+        child.expect("Provider Manager", timeout=10)
+        child.expect("deepseek", timeout=10)
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"/provider TUI failed: {e}")
+
+
+def test_slash_skills_tui_opens_picker(spawn_pawnlogic_tui):
+    """The skill-pack TUI panel opens under the live Application."""
+    child = spawn_pawnlogic_tui
+    try:
+        _wait_for_prompt(child)
+        child.sendline("/skills")
+        # The skill TUI renders the totals line and the action bar.
+        child.expect("of ", timeout=10)
+        child.expect("Save", timeout=10)
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"/skills TUI failed: {e}")
+
+
 def test_clean_exit(spawn_pawnlogic):
     """Send EOF (ctrl+d) and verify clean exit."""
     child = spawn_pawnlogic

@@ -402,8 +402,10 @@ async def cmd_planguard(ctx: CommandContext) -> None:
         try:
             controller = getattr(ctx, "terminal_controller", None)
             if controller is not None and getattr(controller, "run_selector", None) is not None:
+                from pawnlogic.selectors import PlanGuardSelector
+
                 selected = await controller.run_selector(
-                    lambda loop: lambda: _select_plan_guard_mode(current)
+                    lambda: PlanGuardSelector(current)
                 )
             else:
                 selected = await _select_plan_guard_mode(current)

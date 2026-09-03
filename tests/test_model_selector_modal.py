@@ -15,6 +15,7 @@ implementation is rewritten to honor the ADR.
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from typing import Any
 
 import pytest
@@ -177,53 +178,93 @@ def test_resume_after_modal_preserves_application_identity() -> None:
 def test_run_selector_keeps_main_application_task_alive() -> None:
     """run_selector must not exit the main Application.
 
-    The selector runs inside the same Application's event loop via
-    Application.create_background_task; the main task stays alive
-    for the entire round trip and the Application identity is stable.
+    The selector state machine is installed in the live ``Application``'s
+    :class:`SelectorRegistry`; the main task stays alive for the entire
+    round trip and the ``Application`` identity is stable.
     """
-    terminal = _make_terminal()
-    session = _StubSession()
-    controller = _make_controller(terminal, session)
-    terminal.prepare_run()
+    from prompt_toolkit.input.defaults import create_pipe_input
+    from pawnlogic.selectors import PlanGuardSelector
 
     async def _drive() -> None:
-        await controller.start()
-        before_app = terminal.application
-        before_task = controller._task
-        assert before_app is not None
-        assert before_task is not None
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+            session = _StubSession()
+            controller = _make_controller(terminal, session)
+            terminal.prepare_run()
+            await controller.start()
+            before_app = terminal.application
+            before_task = controller._task
+            assert before_app is not None
+            assert before_task is not None
 
-        def _factory(_loop: Any) -> Any:
-            async def _select() -> str | None:
-                return "picked-alias"
+            exit_calls: list[dict[str, Any]] = []
 
-            return _select
+            def _spy_exit(*args: Any, **kwargs: Any) -> None:
+                # Record the call and DO NOT delegate to the real exit.
+                # The contract forbids calling Application.exit() at
+                # all while a selector is open, so swallowing here
+                # keeps the Application alive for the rest of the
+                # assertions. The test process tears the event loop
+                # down at the end, so the spy never needs to release
+                # anything.
+                exit_calls.append({"args": args, "kwargs": kwargs})
+                return None
 
-        exit_calls: list[dict[str, Any]] = []
+            before_app.exit = _spy_exit  # type: ignore[method-assign]
 
-        def _spy_exit(*args: Any, **kwargs: Any) -> None:
-            exit_calls.append({"args": args, "kwargs": kwargs})
-            return None
+            async def _drive_close() -> None:
+                # Wait until the selector is installed and the
+                # controller is awaiting the future, then close the
+                # selector through the registry to resolve the future
+                # deterministically without depending on key input
+                # dispatch through the pipe.
+                for _ in range(50):
+                    await asyncio.sleep(0.01)
+                    selector = terminal.selector_registry.active_selector
+                    if selector is not None and not selector.is_closed:
+                        break
+                else:  # pragma: no cover - timeout safety
+                    return
+                # Resolve the future directly. The selector was
+                # created with current="advisory" and stays at index
+                # 0, so a synthetic Enter press would have returned
+                # "advisory" - mirror that here.
+                terminal._selector_registry.resolve("advisory")
 
-        before_app.exit = _spy_exit  # type: ignore[method-assign]
+            try:
+                drive_task = asyncio.create_task(_drive_close())
 
-        try:
-            result = await controller.run_selector(_factory)
-            assert result == "picked-alias", (
-                f"run_selector must surface the selector's result; got {result!r}"
-            )
-            assert exit_calls == [], (
-                f"Application.exit() must not be called during a selector "
-                f"round trip; saw {exit_calls!r}"
-            )
-            assert terminal.is_running is True
-            assert terminal.application is before_app
-            assert controller._task is before_task, (
-                "controller task identity must not change across a selector "
-                "round trip"
-            )
-        finally:
-            await controller.close()
+                def _factory() -> Any:
+                    return PlanGuardSelector(current="advisory")
+
+                result = await controller.run_selector(_factory)
+                await drive_task
+                assert result == "advisory", (
+                    f"run_selector must surface the selector's result; got {result!r}"
+                )
+                assert exit_calls == [], (
+                    f"Application.exit() must not be called during a selector "
+                    f"round trip; saw {exit_calls!r}"
+                )
+                assert terminal.is_running is True
+                assert terminal.application is before_app
+                assert controller._task is before_task, (
+                    "controller task identity must not change across a selector "
+                    "round trip"
+                )
+            finally:
+                # Skip the controller close: the exit spy above makes
+                # ``Application.exit()`` a no-op, so the controller
+                # close would block on the still-running main task.
+                # Cancel the main task directly instead.
+                if controller._task is not None and not controller._task.done():
+                    controller._task.cancel()
+                    with suppress(asyncio.CancelledError, BaseException):
+                        await controller._task
+                if terminal._proxy_active if hasattr(terminal, "_proxy_active") else False:
+                    terminal.restore_output_proxy()
+                terminal.restore_output_proxy()
+                session._live_terminal_active = False
 
     asyncio.run(_drive())
 
