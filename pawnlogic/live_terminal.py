@@ -383,6 +383,22 @@ class PersistentTerminal:
                 return
             self._append_terminal_text_locked(text)
             self._schedule_invalidation_locked()
+        # Flush complete lines to the original host stdout for terminal
+        # scrollback. Only lines ending with \n are written to avoid cursor
+        # conflicts with the PT output pane for partial streaming chunks.
+        if text.endswith("\n"):
+            with self._stdout_lock:
+                original_stdout = self._stdout_frames[0][0] if self._stdout_frames else None
+            if original_stdout is not None:
+                try:
+                    plain = _ANSI_ESCAPE.sub("", text)
+                    if plain:
+                        original_stdout.write(plain)
+                        flush = getattr(original_stdout, "flush", None)
+                        if callable(flush):
+                            flush()
+                except Exception:
+                    pass
 
     def _append_terminal_text_locked(self, text: str) -> None:
         """Apply carriage-return/backspace semantics inside the output pane.
@@ -698,7 +714,7 @@ class PersistentTerminal:
         self._composer = TextArea(
             text=self._default_text,
             multiline=False,
-            wrap_lines=False,
+            wrap_lines=True,
             height=Dimension.exact(1),
             prompt=self.prompt,
             accept_handler=self._accept_handler,

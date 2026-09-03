@@ -219,9 +219,17 @@ def build_prompt_toolkit_bindings(
 
     @bindings.add("escape")
     def _(event: Any) -> None:
-        """Interrupt one active Turn without consuming the current draft."""
+        """Interrupt active Turn, then steer with the first queued item."""
         if running_turn():
             schedule_interrupt(event)
+            if queued_work():
+                recall = getattr(session, "recall_queued_turn", None)
+                content = recall() if callable(recall) else None
+                if content:
+                    submit = getattr(session, "submit_session_turn", None)
+                    if callable(submit):
+                        from core.queue import SubmissionKind
+                        submit(content, kind=SubmissionKind.STEER)
 
     @bindings.add("c-c")
     @bindings.add("<sigint>")
