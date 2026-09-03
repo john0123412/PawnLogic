@@ -611,7 +611,7 @@ are source-checkout or user-installed assets; pip/curl installations should use
   `pawnlogic-security` 0.1.0 published from
   `john0123412/pawnlogic-security` on 2026-07-28.
 - 0.3.7 release prep is staged on `rebuild/inline-terminal-0.3.7`
-  (HEAD ahead of `origin/main` by 12 commits, working tree clean).
+  (HEAD ahead of `origin/main` by 14 commits, working tree clean).
   Phase A (the persistent terminal itself) and Phase B (porting the
   four interactive selectors — `/model`, `/planguard`, `/provider`,
   `/skills` — to `controller.run_selector`) are both committed.
@@ -623,7 +623,21 @@ are source-checkout or user-installed assets; pip/curl installations should use
   now preserved across the round trip in both cases.
   `controller.run_selector` accepts either a state-machine factory
   or an awaitable factory and routes them through the correct path.
-  Release-prep edits in this cycle:
+  After a first attempt to dual-write complete transcript lines to
+  the host stdout on every `append_output` call turned out to break
+  the live PT UI (the parallel writer fights PT's VT100 cursor
+  positioning), the scrollback flush was re-scoped: `append_output`
+  no longer touches the host stdout while the application is alive,
+  and the new `PersistentTerminal._flush_scrollback_to_stdout` writes
+  the ANSI-stripped full transcript to the original stdout exactly
+  once, from `close()`. The bare-Escape binding now routes the
+  queue-first-item conversion through
+  `ControlAction(kind=CLAIM_STEER)` plus `session.queue_control` so
+  the scheduler correctly marks the queued entry as a steer instead
+  of creating a fresh turn. The persistent composer's `TextArea`
+  height is now `Dimension(min=1, max=5)` so long wrapped input
+  grows up to five rows instead of being clipped to a single fixed
+  row. Release-prep edits in this cycle:
   `config/paths.py:VERSION` `0.3.6` → `0.3.7`, the `0.3.7` section
   added to `CHANGELOG.md`, `0.3.7` row added to `SECURITY.md`, and
   [ADR 0010](docs/adr/0010-inline-terminal-modal.md) header updated
@@ -636,7 +650,7 @@ are source-checkout or user-installed assets; pip/curl installations should use
   `pawnlogic/live_terminal.py`, `pawnlogic/selectors.py`, and
   `pawnlogic/restart_recovery.py`, `git diff --check`, leak scans,
   `check_doc_structure.py`, and `check_release_consistency.py` are
-  all clean. The release PR must be opened against `main` from
+  all clean. The release PR (#124) is open against `main` from
   `rebuild/inline-terminal-0.3.7`; `main` must not be force-pushed
   and `v0.3.7` must not be tagged or pushed to PyPI until the remote
   Actions on the release PR are green and the owner has run the
