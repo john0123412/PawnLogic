@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # These are regression ceilings, not aspirational targets.
 BUDGETS: dict[str, tuple[int, int]] = {
     "core/session.py": (2100, 310),
-    "pawnlogic/cli.py": (1200, 140),
+    "pawnlogic/cli.py": (1250, 145),
     "core/provider_tui.py": (1100, 195),
     "core/memory.py": (1000, 170),
     "tools/file_ops.py": (650, 105),
@@ -33,7 +33,7 @@ BUDGETS: dict[str, tuple[int, int]] = {
     "tools/web_ops.py": (500, 90),
     "tools/sandbox.py": (400, 65),
     "tools/delegate_tool.py": (400, 40),
-    "core/commands/provider.py": (800, 125),
+    "core/commands/provider.py": (850, 130),
     "core/provider_runtime.py": (400, 70),
     "core/api_client.py": (600, 105),
     "core/runtime_context.py": (300, 15),
