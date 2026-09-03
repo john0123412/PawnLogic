@@ -5,6 +5,70 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.3.7] - 2026-09-03
+
+### Added
+- Added `pawnlogic/terminal_transcript.py`, a single-owner transcript
+  buffer that the persistent terminal, the stdout/stderr proxy, and the
+  legacy output buffer all route through. The transcript owns a pluggable
+  host sink so the rendered text is forwarded to the host terminal and
+  captured by its native scrollback for mouse-wheel and copy/paste.
+- Added `controller.run_selector` on the live terminal controller, with
+  a dual-path dispatch: a state-machine factory installs a
+  `SelectorState` into the live `Application`'s `SelectorRegistry` and
+  runs entirely inside the existing `Application` loop, while an
+  awaitable factory runs a nested `Application.run_async()` and keeps
+  the main `Application` task identity alive across the round trip.
+- Added the `pawnlogic/selectors.py` typed module with `SelectorState`,
+  `SelectorRegistry`, the `PlanGuardSelector` state machine, and the
+  `ModelSelector` state machine that backs `/model`.
+
+### Changed
+- Restored native terminal scrollback, mouse selection, and copy/paste
+  by dropping the alternate-screen application mode. The persistent
+  composer is now built with `full_screen=False` and `mouse_support=
+  False`, and Prompt Toolkit's terminal-decoding and key-binding prefix
+  windows are tightened so bare Escape still feels immediate while Alt
+  shortcuts continue to work.
+- Routed every interactive selector (`/model`, `/planguard`,
+  `/provider`, `/skills`) through the single-`Application` modal
+  pattern from ADR 0010. `/model` and `/planguard` install a state
+  machine in the live `Application`; `/provider` and `/skills` round
+  trip through a nested `Application` while keeping the main
+  `Application` task alive. The previous exit-rebuild handoff is gone.
+- The bare `/queue` command in the persistent terminal now renders
+  queue status in the output viewport without pausing the interface or
+  the active Turn.
+- The persistent composer's `TextArea` now wraps long input at the
+  terminal width instead of overwriting the right margin or freezing
+  at column 0.
+
+### Fixed
+- Fixed the persistent terminal not writing to the host scrollback by
+  dual-writing complete transcript lines (with ANSI escapes stripped)
+  to the original stdout, while partial streaming chunks still flow
+  only through the Prompt Toolkit output pane to avoid cursor
+  conflicts.
+- Fixed the bare-Esc binding: pressing Escape while a Turn runs now
+  interrupts the active Turn and, when the queue is non-empty,
+  immediately submits the first queued item as a STEER so the model
+  resumes along the new direction without the user having to type a
+  follow-up. Ctrl+C keeps its existing interrupt + recovery behaviour.
+- Removed the parallel `_output_chunks` buffer in `PersistentTerminal`
+  so transcript ownership is unambiguous. Every output writer now
+  appends to the single `TerminalTranscript`; the host sink is the
+  only path that touches the original stdout.
+
+### Tests
+- Added `tests/test_live_terminal_inline.py` covering the inline
+  terminal contract: native keyboard events stay in the host terminal
+  while a modal is open, the persistent composer's `wrap_lines` is
+  True, and stdout restoration round trips cleanly.
+- Added `tests/test_model_selector_modal.py` covering the single-
+  `Application` modal path for `/model` and the controller's dual
+  dispatch. PTY smoke covers the host-terminal scrollback / mouse /
+  copy contract.
+
 ## [0.3.6] - 2026-09-02
 
 ### Added

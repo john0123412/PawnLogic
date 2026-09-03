@@ -604,31 +604,43 @@ are source-checkout or user-installed assets; pip/curl installations should use
   **complete** and moved to Completed Plans in `docs/plans/INDEX.md`;
   the architecture is captured by
   [ADR 0010](docs/adr/0010-inline-terminal-modal.md) in **Proposed**
-  state. The previous `test/release-0.3.7` branch and its 7 commits
+  state (implementation landed in 0.3.7; acceptance gates pending).
+  The previous `test/release-0.3.7` branch and its 7 commits
   are preserved at `backup/pre-audit-0.3.7` for diff and forensics;
   the rebuild branch carries the corrected work. Independent
   `pawnlogic-security` 0.1.0 published from
   `john0123412/pawnlogic-security` on 2026-07-28.
-- 0.3.7 cycle is in two phases. Phase A (the persistent terminal
-  itself) and Phase B (porting the four interactive selectors —
-  `/model`, `/planguard`, `/provider`, `/skills` — to
-  `controller.run_selector`) are both committed on
-  `rebuild/inline-terminal-0.3.7`. `/model` and `/planguard` use
-  the state-machine selector path that installs the selector in
-  the live `Application`'s `SelectorRegistry`; `/provider` and
-  `/skills` still drive their own nested `Application` (the full
-  in-Application Float rewrite is the documented follow-up) but
-  the main `Application` task identity is now preserved across the
-  round trip in both cases. `controller.run_selector` accepts
-  either a state-machine factory or an awaitable factory and
-  routes them through the correct path. Local non-E2E: 1,486
-  pass. Local Dynamic E2E: 29/29 pass (the two new TUI tests for
-  `/provider` and `/skills` are green). Ruff, typed-island mypy
+- 0.3.7 release prep is staged on `rebuild/inline-terminal-0.3.7`
+  (HEAD ahead of `origin/main` by 12 commits, working tree clean).
+  Phase A (the persistent terminal itself) and Phase B (porting the
+  four interactive selectors — `/model`, `/planguard`, `/provider`,
+  `/skills` — to `controller.run_selector`) are both committed.
+  `/model` and `/planguard` use the state-machine selector path that
+  installs the selector in the live `Application`'s
+  `SelectorRegistry`; `/provider` and `/skills` still drive their own
+  nested `Application` (the full in-Application Float rewrite is the
+  documented follow-up) but the main `Application` task identity is
+  now preserved across the round trip in both cases.
+  `controller.run_selector` accepts either a state-machine factory
+  or an awaitable factory and routes them through the correct path.
+  Release-prep edits in this cycle:
+  `config/paths.py:VERSION` `0.3.6` → `0.3.7`, the `0.3.7` section
+  added to `CHANGELOG.md`, `0.3.7` row added to `SECURITY.md`, and
+  [ADR 0010](docs/adr/0010-inline-terminal-modal.md) header updated
+  to record that the implementation has landed while keeping the
+  acceptance gates (`main` merge, PyPI publish, owner PTY smoke) as
+  the conditions for moving the ADR to **Accepted**. Local non-E2E:
+  1,486 pass. Local Dynamic E2E: 29/29 pass (the two new TUI tests
+  for `/provider` and `/skills` are green). Ruff, typed-island mypy
   for `pawnlogic/terminal_transcript.py`,
-  `pawnlogic/live_terminal.py`, and `pawnlogic/selectors.py`, and
-  `git diff --check` are all clean. CHANGELOG, SECURITY, and
-  `config/paths.py:VERSION` must not be touched until the release
-  PR is prepared.
+  `pawnlogic/live_terminal.py`, `pawnlogic/selectors.py`, and
+  `pawnlogic/restart_recovery.py`, `git diff --check`, leak scans,
+  `check_doc_structure.py`, and `check_release_consistency.py` are
+  all clean. The release PR must be opened against `main` from
+  `rebuild/inline-terminal-0.3.7`; `main` must not be force-pushed
+  and `v0.3.7` must not be tagged or pushed to PyPI until the remote
+  Actions on the release PR are green and the owner has run the
+  manual PTY smoke.
 - 0.3.6 release gates all closed: 1,470 non-E2E tests, 26 Dynamic E2E,
   Ruff, typed-island mypy (42 modules), documentation and language guards,
   release consistency, architecture budget, package build, twine metadata,

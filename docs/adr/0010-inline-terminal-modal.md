@@ -1,11 +1,14 @@
 # ADR 0010 — Inline Terminal and Single-Application Modal
 
-> **Status:** Proposed. This ADR is being introduced alongside the 0.3.7
-> inline-terminal-stability plan. It is normative for any future
-> live-terminal or interactive selector work, but the implementation that
-> satisfies it has not landed yet. Acceptance, GREEN evidence, and the
-> typed-island additions will be recorded when the implementation actually
-> ships.
+> **Status:** Proposed (implementation landed in 0.3.7; acceptance
+> gates pending). The 0.3.7 rebuild on
+> `rebuild/inline-terminal-0.3.7` implements every decision in this
+> ADR: `full_screen=False`, `mouse_support=False`, the
+> `TerminalTranscript` single owner, and the dual-path
+> `controller.run_selector` dispatch for every interactive selector.
+> Per the Acceptance section below, the ADR moves to **Accepted** only
+> after the 0.3.7 PR is merged, the 0.3.7 release is published to
+> PyPI, and the owner runs a real PTY smoke against the live composer.
 
 ## Context
 
