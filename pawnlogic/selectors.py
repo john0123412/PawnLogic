@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from prompt_toolkit.formatted_text import FormattedText
 
@@ -247,8 +247,8 @@ def style_dict() -> dict[str, str]:
 
 __all__ = [
     "DEFAULT_SELECTOR_STYLE",
-    "ModelSelector",
     "NO_RESULT",
+    "ModelSelector",
     "PlanGuardSelector",
     "SelectorHost",
     "SelectorRegistry",
