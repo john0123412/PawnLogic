@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from dataclasses import dataclass
 import inspect
 import json
@@ -57,6 +57,13 @@ from core.turn_scheduler import SubmissionKind
 
 _ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 _KEY_SEQUENCE_TIMEOUT_SECONDS = 0.1
+# Only the trailing lines of the transcript are rendered in the live
+# viewport. The full transcript still exists for scrollback flushing;
+# this cap keeps render cost constant for very large sessions.
+_RENDER_TAIL_LINES = 1000
+# Upper bound on invalidation scheduling rate (frames per second) so a
+# streaming producer cannot starve the key-processing loop.
+_MAX_RENDER_FPS = 30
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,6 +266,14 @@ class PersistentTerminal:
         self._next_kind = SubmissionKind.START
         self._sink = TerminalSink(self)
         self._invalidation_scheduled = False
+        # (transcript version, rendered fragments) cache for _render_output.
+        self._render_cache: tuple[int, Any] | None = None
+        # Monotonic timestamp of the last scheduled invalidation, for FPS
+        # throttling of streaming producers.
+        self._last_invalidation_ts = 0.0
+        # Pending trailing-edge throttle timer, so the final chunk of a
+        # burst is always repainted.
+        self._throttle_timer_handle: Any = None
         self._running = False
         self._closed = False
         self._modal_active = False
@@ -751,16 +766,17 @@ class PersistentTerminal:
             wrap_lines=True,
             # The composer grows on demand, bounded by ``max=5`` to keep
             # it from eating the entire output pane.  ``min=1`` keeps
-            # the empty composer at a single row.  ``weight=0`` is
-            # required: the ``_divide_heights`` algorithm grows every
-            # child with non-zero weight up to its ``max`` to fill the
-            # available space, which would otherwise make the empty
-            # composer always claim 5 rows.  ``weight=0`` removes the
-            # composer from the growth rotation; the layout engine
-            # still resizes the TextArea's window as the buffer height
-            # changes, so an empty buffer renders one row and a wrapped
-            # 5-line input renders five rows.
-            height=Dimension(min=1, max=5, weight=0),
+            # the empty composer at a single row.  Do NOT add
+            # ``weight=0``: with ``multiline=True``, a wrapped draft
+            # raises the TextArea's preferred height while zero weight
+            # excludes it from the growth rotation, and PT 3.0.52's
+            # ``take_using_weights`` then loops forever — measured as
+            # the "page freezes on long input, arrow keys dead" hang.
+            # ``dont_extend_height=True`` instead keeps the weighted
+            # composer from being inflated to ``max`` when empty: it
+            # renders exactly its preferred (content) height.
+            height=Dimension(min=1, max=5),
+            dont_extend_height=True,
             prompt=self.prompt,
             accept_handler=self._accept_handler,
             focusable=True,
@@ -836,15 +852,15 @@ class PersistentTerminal:
                 if self._style is not None
                 else [Style.from_dict(_selector_style_dict())]
             ),
-            # Enable mouse support so wheel events reach the
-            # ``scroll_bindings`` registered above.  ``full_screen=False``
-            # still leaves the host terminal's native scroll, selection,
-            # and copy working — mouse_support is independent of whether
-            # PT uses the alternate screen buffer.  All mouse modes that
-            # would let the user click into a row or move the cursor
-            # outside the composer are filtered out; only ScrollUp /
-            # ScrollDown is bound.
-            mouse_support=True,
+            # ADR 0010 §2: the live composer must not enable PT
+            # mouse-tracking modes. ``?1003h`` (any-motion tracking) makes
+            # WSL/Windows Terminal flood the input queue with motion
+            # events and swallows the host's native wheel scrollback,
+            # which the owner reported as a frozen page. The wheel scrolls
+            # the host terminal's own scrollback instead; in-viewport
+            # wheel packets that a multiplexer re-emits as ``Keys.ScrollUp``
+            # / ``Keys.ScrollDown`` still reach ``scroll_bindings``.
+            mouse_support=False,
         )
         # A bare Escape shares its first byte with Alt+Enter, Alt+Up, and
         # terminal navigation sequences. Prompt Toolkit otherwise waits 0.5s
@@ -894,10 +910,34 @@ class PersistentTerminal:
         buffer.cursor_position = 0
 
     def _render_output(self) -> Any:
-        text = self._transcript.snapshot()
+        """Render the transcript tail, cached per transcript version.
+
+        Measured on the owner's real session scale (6,000 lines /
+        250KB transcript), a full-transcript re-render costs ~50ms per
+        frame; streaming chunks invalidated at that rate froze the UI
+        and queued key presses behind renders (reported as "page
+        frozen, arrow keys dead"). Two mitigations:
+
+        - Only the trailing :data:`_RENDER_TAIL_LINES` lines are ever
+          rendered. The output viewport follows the tail anyway, and
+          the full transcript is still flushed to the host scrollback
+          on close, so nothing the user can see is lost.
+        - The rendered value (and its line count) are cached against
+          the transcript's monotonic ``version()``; redraws that do
+          not change the transcript (focus changes, toolbar ticks,
+          queue updates) reuse the cached fragments instead of
+          re-parsing 250KB of ANSI text.
+        """
+        version = self._transcript.version()
+        cached = self._render_cache
+        if cached is not None and cached[0] == version:
+            return cached[1]
+        text = self._transcript.tail(_RENDER_TAIL_LINES)
         plain_text = _ANSI_ESCAPE.sub("", text)
         self._rendered_output_line_count = len(plain_text.split("\n"))
-        return ANSI(text) if "\x1b[" in text else text
+        rendered: Any = ANSI(text) if "\x1b[" in text else text
+        self._render_cache = (version, rendered)
+        return rendered
 
     def _output_or_selector_text(self) -> Any:
         """Return transcript text or the active selector's text.
@@ -953,7 +993,10 @@ class PersistentTerminal:
         return toolbar or "Ready · steer:0 · follow-up:0"
 
     def _wrapped_output_lines(self, width: int) -> list[str]:
-        text = _ANSI_ESCAPE.sub("", self.output_text)
+        # Wrap the rendered tail, not the full transcript: the screen
+        # projection is height-bounded to the viewport anyway, and the
+        # full-text walk is O(transcript) on every call.
+        text = _ANSI_ESCAPE.sub("", self._transcript.tail(_RENDER_TAIL_LINES))
         if not text:
             return []
         lines: list[str] = []
@@ -975,7 +1018,7 @@ class PersistentTerminal:
 
     def _output_line_count(self) -> int:
         """Return the line count used by Prompt Toolkit's output control."""
-        text = _ANSI_ESCAPE.sub("", self.output_text)
+        text = _ANSI_ESCAPE.sub("", self._transcript.tail(_RENDER_TAIL_LINES))
         if not text:
             return 1
         return len(text.split("\n"))
@@ -1087,6 +1130,36 @@ class PersistentTerminal:
         loop = self._loop
         if loop is None or self._invalidation_scheduled:
             return
+        # Throttle cross-thread invalidation (streaming chunks, worker
+        # appends). At session scale a full render takes tens of
+        # milliseconds; without throttling, a fast stream schedules one
+        # render per chunk and starves the key processor, which the owner
+        # reported as a frozen page with dead arrow keys. Key/UI-thread
+        # events are never throttled: try_get_running_loop distinguishes
+        # them from producer threads.
+        in_ui_thread = False
+        try:
+            in_ui_thread = asyncio.get_running_loop() is loop
+        except RuntimeError:
+            in_ui_thread = False
+        if not in_ui_thread:
+            now = loop.time()
+            if now - self._last_invalidation_ts < 1.0 / _MAX_RENDER_FPS:
+                # Skip this render; the next unthrottled event or the next
+                # tick after the window elapses will repaint with the
+                # accumulated tail. The very last chunk is guaranteed a
+                # repaint by the trailing-edge timer below.
+                if self._throttle_timer_handle is None:
+                    def _trailing() -> None:
+                        self._throttle_timer_handle = None
+                        self._last_invalidation_ts = 0.0
+                        self._schedule_invalidation_locked()
+
+                    self._throttle_timer_handle = loop.call_later(
+                        1.0 / _MAX_RENDER_FPS, _trailing
+                    )
+                return
+            self._last_invalidation_ts = now
         self._invalidation_scheduled = True
         try:
             loop.call_soon_threadsafe(self._invalidate_on_ui)
@@ -1186,36 +1259,6 @@ class PersistentTerminalController:
             return
         self._session._live_terminal_active = True
 
-    def bypass_print(self, text: str) -> None:
-        """Write a one-shot notice directly to the original host stdout.
-
-        When a modal selector is about to run, short notices (e.g. the
-        ``Auto-corrected: /plg -> /planguard`` line) need to reach the
-        host terminal **before** the selector renders. The persistent
-        ``Application`` keeps running and owns the proxy, so ordinary
-        ``print`` and ``sink.print`` both land in the in-Application
-        transcript instead of the host PTY stream. ``bypass_print``
-        reaches past the proxy, writes a single line, and flushes so
-        the host terminal sees it immediately. It deliberately does
-        **not** also append to the in-Application transcript: the
-        selector is about to take over the screen and the host PTY
-        line is the authoritative view of this one-shot notice.
-        """
-        with self.terminal._stdout_lock:
-            if self.terminal._stdout_frames:
-                original_stdout = self.terminal._stdout_frames[0][0]
-            else:
-                original_stdout = sys.stdout
-        if not text:
-            return
-        try:
-            original_stdout.write(text)
-            flush = getattr(original_stdout, "flush", None)
-            if callable(flush):
-                flush()
-        except Exception as exc:
-            logger.debug("Bypass print to host stdout swallowed: {!r}", exc)
-
     async def run_selector(
         self,
         selector_factory: Callable[[], Any],
@@ -1286,29 +1329,40 @@ class PersistentTerminalController:
                 run_callable = _await_factory_result()
             else:
                 run_callable = produced
-            loop = self.terminal._loop
-            if loop is None:
-                loop = asyncio.get_running_loop()
-            result_future: asyncio.Future[Any] = loop.create_future()
-
-            async def _drive() -> None:
-                try:
-                    value = await run_callable
-                except BaseException as exc:
-                    if not result_future.done():
-                        result_future.set_exception(exc)
-                    return
-                if not result_future.done():
-                    result_future.set_result(value)
-
-            task = application.create_background_task(_drive())
+            # A nested ``Application.run_async()`` must be the only
+            # live Application on the PTY. Running it beside the main
+            # Application produced the interleaved/scrambled provider
+            # and skills panels the owner reported: two VT100 render
+            # loops fight over cursor positioning and both key
+            # processors read the same input stream. The 0.3.6
+            # pause/teardown/resume lifecycle is therefore restored for
+            # this transitional path: the main Application exits (its
+            # state lives on in the terminal object), the proxy is
+            # restored, the nested TUI runs alone, and the main
+            # Application is rebuilt afterwards. State-machine
+            # selectors (ADR 0010 path above) never pause anything.
+            if self._proxy_active:
+                self.terminal.restore_output_proxy()
+                self._proxy_active = False
+            self._session._live_terminal_active = False
+            if self._fallback_sink is not None:
+                self._activate_sink(self._fallback_sink)
+            if self._task is not None and not self._task.done():
+                self.terminal.pause()
+                await asyncio.gather(self._task, return_exceptions=True)
             try:
-                return await result_future
+                result = await run_callable
             finally:
-                if not task.done():
-                    task.cancel()
-                    with suppress(BaseException):
-                        await task
+                if not self.terminal.is_closed:
+                    self._session._live_terminal_active = True
+                    self._activate_sink(self.terminal.sink)
+                    self.terminal.install_output_proxy()
+                    self._proxy_active = True
+                    self.terminal.prepare_run()
+                    self._task = asyncio.create_task(self.terminal.run())
+                    self._task.add_done_callback(self._observe_terminal_task)
+                    await self.terminal.wait_until_ready()
+            return result
         # Last resort: treat the produced object itself as a
         # SelectorState-like object.  Fall back to the state-machine
         # path so future selectors that don't subclass

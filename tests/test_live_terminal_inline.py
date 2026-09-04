@@ -146,31 +146,29 @@ def test_persistent_terminal_application_uses_inline_screen() -> None:
     )
 
 
-def test_persistent_terminal_application_enables_mouse_support_for_wheel() -> None:
-    """The persistent Application must enable mouse_support so wheel events
-    reach the registered ``Keys.ScrollUp`` / ``Keys.ScrollDown`` bindings.
+def test_persistent_terminal_application_disables_mouse_tracking_per_adr() -> None:
+    """The persistent Application must keep ``mouse_support=False`` (ADR 0010 §2).
 
-    ``full_screen=False`` keeps the host terminal in its primary screen
-    buffer, so native scroll, selection, and copy still work.  The
-    ``mouse_support=True`` flag is independent of the alternate-screen
-    toggle; it only matters for whether wheel events route into the
-    Application.  Without it, the wheel never reaches our scroll
-    handler, which is what the owner reported as "wheel scroll not
-    working".
+    Enabling PT mouse support turns on ``?1003h`` any-motion tracking:
+    on WSL/Windows Terminal the flood of motion packets freezes the UI
+    and swallows the host's native wheel scrollback — reported by the
+    owner as a frozen page with dead keys. With tracking off, the wheel
+    scrolls the host terminal's own scrollback; multiplexers that
+    re-emit wheel packets as ``Keys.ScrollUp`` / ``Keys.ScrollDown``
+    still reach ``scroll_bindings`` because those keys are parsed
+    unconditionally.
     """
     from prompt_toolkit.input import DummyInput
     from prompt_toolkit.output import DummyOutput
 
     terminal = PersistentTerminal(input=DummyInput(), output=DummyOutput())
     application = terminal._build_application_locked()
-    # `mouse_support` is a PT Filter object; `bool(filter)` is
-    # ambiguous, so call it as a function to read the value.
     is_on = application.mouse_support()
-    assert is_on is True, (
-        "Prompt Toolkit Application must use mouse_support=True so wheel "
-        f"events reach the output viewport; got mouse_support() = {is_on!r}"
+    assert is_on is False, (
+        "Prompt Toolkit Application must use mouse_support=False (ADR 0010 §2); "
+        f"got mouse_support() = {is_on!r}"
     )
-    # The full_screen flag must still be False so the host terminal
+    # The full_screen flag must stay False so the host terminal
     # keeps its own primary screen buffer (native scroll, selection,
     # copy) and PT does not switch into the alternate screen.
     assert application.full_screen is False

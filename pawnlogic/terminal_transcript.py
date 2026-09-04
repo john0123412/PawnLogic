@@ -97,6 +97,7 @@ class TerminalTranscript:
         "_max_chars",
         "_recovery_draft",
         "_sink",
+        "_version",
     )
 
     def __init__(
@@ -113,6 +114,7 @@ class TerminalTranscript:
         self._char_count = 0
         self._lock = threading.Lock()
         self._recovery_draft = False
+        self._version = 0
 
     # ------------------------------------------------------------------
     # Buffer accessors
@@ -128,10 +130,55 @@ class TerminalTranscript:
         with self._lock:
             return self._char_count
 
+    def version(self) -> int:
+        """Monotonic write counter; readers use it to skip unchanged re-renders.
+
+        Every ``append`` and ``replace`` increments the counter, so a
+        renderer that caches its last projection can detect "content is
+        identical since last render" without re-reading the full buffer.
+        """
+        with self._lock:
+            return self._version
+
     def snapshot(self) -> str:
         """Return a stable copy of the buffered text without clearing it."""
         with self._lock:
             return "".join(self._chunks)
+
+    def tail(self, max_lines: int) -> str:
+        """Return the trailing ``max_lines`` lines (plus any unterminated tail).
+
+        Live rendering only shows the bottom of the transcript anyway;
+        reading just the tail keeps render cost independent of total
+        transcript length for large sessions. The returned text always
+        ends at the current buffer end; a leading partial line is kept
+        because the viewport clips by rows, not by line boundaries.
+        """
+        if max_lines < 1:
+            return ""
+        with self._lock:
+            if not self._chunks:
+                return ""
+            # Copy out only the last ~max_lines*400 chars, then trim to the
+            # requested line count. 400 chars per line is a generous upper
+            # bound for terminal rows; longer lines simply require reading a
+            # bit more than strictly necessary.
+            budget = max_lines * 400
+            if self._char_count > budget:
+                parts: list[str] = []
+                collected = 0
+                for chunk in reversed(self._chunks):
+                    parts.append(chunk)
+                    collected += len(chunk)
+                    if collected >= budget:
+                        break
+                text = "".join(reversed(parts))
+            else:
+                text = "".join(self._chunks)
+        lines = text.split("\n")
+        if len(lines) <= max_lines:
+            return text
+        return "\n".join(lines[-max_lines:])
 
     def drain(self) -> str:
         """Return and clear the buffered text."""
@@ -152,6 +199,7 @@ class TerminalTranscript:
         with self._lock:
             self._chunks.clear()
             self._char_count = 0
+            self._version += 1
             if not text:
                 return
             if len(text) > self._max_chars:
@@ -173,6 +221,7 @@ class TerminalTranscript:
         with self._lock:
             self._chunks.append(text)
             self._char_count += len(text)
+            self._version += 1
             while self._char_count > self._max_chars and self._chunks:
                 removed = self._chunks.popleft()
                 self._char_count -= len(removed)

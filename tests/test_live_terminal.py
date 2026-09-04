@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 import sys
+from typing import Any
 from threading import Thread
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -522,13 +523,16 @@ def test_controller_pause_resume_and_close_restore_terminal_ownership() -> None:
     asyncio.run(scenario())
 
 
-def test_bypass_print_writes_to_original_stdout_while_proxy_is_active() -> None:
-    """bypass_print reaches past the proxy to the original host stdout.
+def test_no_bypass_writes_reach_host_stdout_while_proxy_is_active() -> None:
+    """No code path may write raw bytes to host stdout while the App lives.
 
-    When a modal selector is about to run, short notices (e.g. the
-    ``Auto-corrected: /plg -> /planguard`` line) must reach the host
-    PTY **before** the selector renders, even though the proxy still
-    owns ``sys.stdout``.
+    The 0.3.7 audit removed ``bypass_print``: writing raw bytes to the
+    host PTY while the Application is alive corrupts PT's VT100 cursor
+    positioning (the interleaved ``Select modelel for this session``
+    scramble). Auto-correct notices and every other line output now
+    route through the terminal sink / transcript only. This regression
+    test asserts the controller exposes no bypass seam and that sink
+    output lands in the transcript, never in the original stdout.
     """
     captured: list[str] = []
 
@@ -555,17 +559,22 @@ def test_bypass_print_writes_to_original_stdout_while_proxy_is_active() -> None:
             try:
                 asyncio.run(controller.start())
                 assert sys.stdout is not original_stdout
-                # Replace the original stdout the proxy wraps so we can
-                # observe what ``bypass_print`` actually writes.
+                # Replace the original stdout the proxy wraps so any raw
+                # write that escapes the sink would be observable here.
                 terminal._stdout_frames[0] = (
                     capture,
                     terminal._stdout_frames[0][1],
                     sys.stderr,
                     terminal._stdout_frames[0][3],
                 )
-                controller.bypass_print("hello-host\n")
-                assert captured == ["hello-host\n"], (
-                    f"bypass_print must reach past the proxy; saw {captured!r}"
+                assert not hasattr(controller, "bypass_print"), (
+                    "bypass_print was removed; raw host-stdout writes "
+                    "corrupt the live Application"
+                )
+                terminal.sink.print("routed through the transcript")
+                assert "routed through the transcript" in terminal.output_text
+                assert captured == [], (
+                    f"sink output leaked to host stdout: {captured!r}"
                 )
             finally:
                 asyncio.run(controller.close())
@@ -694,3 +703,190 @@ def test_output_window_text_switches_to_active_selector() -> None:
             f"Got {rendered!r}"
         )
         terminal.close()
+
+
+def test_transcript_tail_render_keeps_cost_bounded_for_large_sessions() -> None:
+    """Regression: the render path must only project the transcript tail.
+
+    At the owner's real session scale (6,000 lines / 250KB), rendering
+    the full transcript on every redraw cost ~50ms per frame; streaming
+    invalidations then starved the key processor and the page froze
+    with dead arrow keys. The output control must therefore render the
+    bounded tail (``tail(_RENDER_TAIL_LINES)``), not the full snapshot,
+    and identical transcript versions must reuse the cached render.
+    """
+    async def scenario() -> None:
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+            for index in range(6000):
+                terminal.append_line(f"stream line {index}")
+            run_task = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+            try:
+                first = terminal._render_output()
+                # Cached: same version returns the same object.
+                again = terminal._render_output()
+                assert first is again, (
+                    "unchanged transcript must reuse the cached render"
+                )
+                # Tail-bounded: the render must not contain ancient lines.
+                from prompt_toolkit.formatted_text import to_plain_text
+                rendered_text = to_plain_text(first)
+                assert "stream line 0\n" not in rendered_text, (
+                    "render must project only the trailing tail, not the full transcript"
+                )
+                assert "stream line 5999" in rendered_text
+                # A new appends invalidates the cache.
+                terminal.append_line("a newer line appears")
+                third = terminal._render_output()
+                assert third is not first, (
+                    "a transcript change must produce a fresh render"
+                )
+                assert "a newer line appears" in to_plain_text(third)
+                # The full transcript is untouched for scrollback flush.
+                assert "stream line 0\n" in terminal.output_text
+            finally:
+                terminal.close()
+                await asyncio.gather(run_task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_composer_up_down_recall_history_even_on_wrapped_multiline_drafts() -> None:
+    """Regression: Up/Down must walk composer history on the multiline composer.
+
+    Prompt Toolkit's stock ``auto_up``/``auto_down`` only walk history
+    from the first/last row of the buffer. The 0.3.7 multiline composer
+    wraps long drafts onto several rows, so on any wrapped draft Up
+    moved the cursor inside the draft instead of recalling history —
+    reported by the owner as "up/down keys dead". The explicit history
+    bindings must walk history regardless of cursor row, while the
+    completion menu keeps PT's complete_previous/complete_next.
+    """
+    async def scenario() -> None:
+        session = SimpleNamespace(
+            queue_status=lambda: {"pending_count": 0},
+            _live_input_buffer=None,
+        )
+        bindings, _state = build_prompt_toolkit_bindings(
+            KeyBindings,
+            session=session,
+            read_text_cache=lambda _path: "",
+            restore_last_input_buffer=lambda *_args: False,
+            last_input_path=Path(".last_input"),
+        )
+        with create_pipe_input() as pipe:
+            from prompt_toolkit.history import InMemoryHistory
+            _hist = InMemoryHistory()
+            _hist.append_string("first submitted prompt")
+            terminal = PersistentTerminal(
+                input=pipe,
+                output=DummyOutput(),
+                key_bindings=bindings,
+                submission_kind=lambda: SubmissionKind.START,
+                history=_hist,
+            )
+            run_task = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+            try:
+                composer = terminal.composer
+                assert composer is not None
+                buffer = composer.buffer
+                # Long draft that wraps to multiple rows: auto_up would move
+                # the cursor, not recall history.
+                long_draft = "a wrapped multi row draft " * 12
+                buffer.text = long_draft
+                buffer.cursor_position = len(long_draft)
+                pipe.send_text("long draft that wraps across several rows " * 3)
+                await asyncio.sleep(0.05)
+                pipe.send_text("\x1b[A")  # Up arrow
+                await asyncio.sleep(0.1)
+                assert buffer.text == "first submitted prompt", (
+                    f"Up must recall history on wrapped drafts; got {buffer.text!r}"
+                )
+                pipe.send_text("\x1b[B")  # Down arrow
+                await asyncio.sleep(0.1)
+                # Down returns to the working (draft) line at the end of history.
+                assert buffer.text != "first submitted prompt", (
+                    "Down must move forward in history"
+                )
+            finally:
+                terminal.close()
+                await asyncio.gather(run_task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_auto_correction_notice_stays_in_transcript_not_host_stdout() -> None:
+    """Auto-correct notices route through the sink; no raw host-PTY writes.
+
+    Regression for the interleaved ``Select modelel for this session``
+    scramble: ``dispatch_live_slash`` used to call the removed
+    ``bypass_print`` while the selector was pending, writing raw bytes
+    to the host PTY mid-render. The notice must append to the
+    transcript instead.
+    """
+    from pawnlogic.live_repl import dispatch_live_slash
+
+    captured_host: list[str] = []
+
+    class _HostSink:
+        def write(self, text: str) -> int:
+            captured_host.append(text)
+            return len(text)
+
+        def flush(self) -> None:
+            return None
+
+    host_stdout = _HostSink()
+    original_stdout = sys.stdout
+    sink_calls: list[str] = []
+
+    class _Sink:
+        def print(self, text: str) -> None:
+            sink_calls.append(text)
+
+    async def scenario() -> None:
+        session = SimpleNamespace(queue_status=lambda: {"pending_count": 0})
+
+        async def dispatcher(raw: str, _session: Any) -> Any:
+            return None
+
+        async def notice(_text: str) -> None:
+            return None
+
+        async def _pause(should_pause: bool) -> bool:
+            return should_pause
+
+        async def _resume(_paused: bool) -> None:
+            return None
+
+        controller = SimpleNamespace(
+            pause_for_modal=_pause,
+            resume_after_modal=_resume,
+        )
+        result = await dispatch_live_slash(
+            "/modelel",
+            session,
+            live_enabled=True,
+            terminal_controller=controller,
+            command_words=lambda: {"/model"},
+            matching_words=lambda verb, words: ["/model"],
+            dispatcher=dispatcher,
+            terminal_notice=notice,
+            sink=_Sink(),
+            exit_sentinel=object(),
+        )
+        assert result is None
+        assert any("Auto-corrected" in call for call in sink_calls), (
+            f"notice must go through the sink; saw {sink_calls!r}"
+        )
+        assert captured_host == [], (
+            f"no byte may reach the host stdout directly: {captured_host!r}"
+        )
+
+    sys.stdout = host_stdout
+    try:
+        asyncio.run(scenario())
+    finally:
+        sys.stdout = original_stdout
