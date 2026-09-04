@@ -1650,13 +1650,21 @@ class AgentSession:
             return None
 
         cfg = self.model
-        print(c(cfg["color"] + BOLD, f"[{self.model_alias.upper()}]"), end=" ", flush=True)
+        # 0.3.7: the live terminal owns the persistent status line, so the
+        # readline-path ``[HY3]`` / ``⏱ Time budget`` prints must NOT
+        # surface while the inline terminal is active (they would either
+        # appear inside the output area or fight the status-line state
+        # machine).  The readline fallback keeps the old print contract.
+        if not getattr(self, "_live_terminal_active", False):
+            print(c(cfg["color"] + BOLD, f"[{self.model_alias.upper()}]"), end=" ", flush=True)
 
         dynamic_cfg = _dynamic_config()
         self._turn_start_time = time.monotonic()
         self._time_budget_sec = dynamic_cfg.get("time_budget_sec", 0)
         self._urgent_mode     = False
-        if self._time_budget_sec > 0:
+        if self._time_budget_sec > 0 and not getattr(
+            self, "_live_terminal_active", False
+        ):
             _mins = self._time_budget_sec // 60
             _secs = self._time_budget_sec % 60
             print(c(GRAY, f"  ⏱  Time budget: {_mins}m{_secs}s"))

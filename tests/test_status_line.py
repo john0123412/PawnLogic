@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import time
 from types import SimpleNamespace
-from unittest.mock import patch
 
 from prompt_toolkit.data_structures import Size
 

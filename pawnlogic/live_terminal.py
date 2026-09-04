@@ -12,13 +12,14 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+import contextlib
 from dataclasses import dataclass
 import inspect
 import json
 import re
 import sys
 from threading import RLock
+import time
 from typing import Any, TextIO
 
 from prompt_toolkit.application import Application
@@ -212,6 +213,7 @@ class PersistentTerminal:
         prompt: str = "▶ You > ",
         toolbar: str | Callable[[], Any] | None = None,
         queue_preview: Callable[[], Any] | None = None,
+        live_status: Callable[[], str] | None = None,
         initial_text: str = "",
         max_output_chars: int = 2_000_000,
         input: Input | None = None,
@@ -228,8 +230,18 @@ class PersistentTerminal:
         self.prompt = prompt
         self._toolbar = toolbar
         self._queue_preview = queue_preview
+        self._live_status = live_status
         self._default_text = initial_text
         self._draft_is_recovery = False
+        # Wall-clock time of the most recent recovery prefill.  Used by
+        # the status line to show a 1.5 s "edit the draft and press Enter"
+        # banner without making it permanent.
+        self._last_recovery_at: float | None = None
+        # The 250 ms status ticker re-asks the live_status callable so the
+        # user always sees a truthful "Running" / "Idle" / "⏸ interrupted by
+        # user" line while the worker thread is busy.  ``_status_ticker`` is
+        # scheduled in :meth:`prepare_run` and cancelled in :meth:`close`.
+        self._status_ticker: asyncio.TimerHandle | None = None
         self._max_output_chars = max_output_chars
         self._input = input
         self._output = output
@@ -239,6 +251,12 @@ class PersistentTerminal:
         self._history = history
         self._auto_suggest = auto_suggest
         self._style = style
+        # The session is supplied after construction by the owner (the CLI
+        # builds the terminal first, then attaches the session so the
+        # status line and the queue callback can read scheduler state).
+        # ``None`` means no session is bound yet (e.g. unit tests that only
+        # exercise rendering primitives).
+        self._session: Any | None = None
         self._lock = RLock()
         self._stdout_lock = RLock()
         # The persistent transcript has a single owner: a TerminalTranscript
@@ -451,11 +469,24 @@ class PersistentTerminal:
 
     def set_recovery_draft(self, text: str) -> None:
         """Prefill a recovered prompt for edit-and-replace submission."""
+        self._last_recovery_at = time.monotonic()
         self._schedule_ui(lambda: self._set_draft_on_ui(text, recovery=True))
 
     def recall(self, text: str) -> None:
         """Recall editable text without submitting or removing any queue entry."""
         self.set_default(text)
+
+    def set_session(self, session: Any) -> None:
+        """Bind a session so the status line can read scheduler state.
+
+        The CLI builds the terminal first and then attaches the session
+        after wiring the controller.  This split keeps the live terminal
+        decoupled from the session lifecycle: tests that only exercise
+        the rendering primitives never need a real session, and the live
+        owner never needs to know about scheduler internals.
+        """
+        with self._lock:
+            self._session = session
 
     def refresh(self) -> None:
         """Request a redraw after scheduler state changes without output."""
@@ -505,6 +536,45 @@ class PersistentTerminal:
         """Wait until Prompt Toolkit has entered its persistent application."""
         await self._ready_event.wait()
 
+    def _start_status_ticker(self) -> None:
+        """Schedule a 250 ms timer that re-asks ``live_status`` while live.
+
+        The ticker only redraws the persistent status line; the rest of the
+        layout updates naturally when transcripts change.  We schedule on
+        the asyncio loop PT already owns so the render lands on the UI
+        thread (the live_status callable itself is allowed to read
+        session state from any thread because the session surfaces are
+        either thread-local copies or guarded by locks).
+        """
+        with self._lock:
+            if self._status_ticker is not None or self._closed:
+                return
+            loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+
+        def _tick() -> None:
+            with self._lock:
+                self._status_ticker = None
+                if self._closed:
+                    return
+            try:
+                self._schedule_ui(self._invalidate_on_ui)
+            finally:
+                self._start_status_ticker()
+
+        with self._lock:
+            self._status_ticker = loop.call_later(0.25, _tick)
+
+    def _stop_status_ticker(self) -> None:
+        """Cancel the 250 ms status ticker (no-op if not started)."""
+        with self._lock:
+            handle = self._status_ticker
+            self._status_ticker = None
+        if handle is not None:
+            with contextlib.suppress(Exception):
+                handle.cancel()
+
     def prepare_run(self) -> None:
         """Reset the readiness handshake before scheduling a new app run."""
         self._ready_event.clear()
@@ -525,10 +595,12 @@ class PersistentTerminal:
             event = self._ready_event
             if event is not None:
                 event.set()
+            self._start_status_ticker()
 
         try:
             await application.run_async(pre_run=mark_ready, handle_sigint=False)
         finally:
+            self._stop_status_ticker()
             with self._lock:
                 self._running = False
                 if self._closed:
@@ -548,9 +620,11 @@ class PersistentTerminal:
                 with self._lock:
                     self._loop = application.loop
                 self._ready_event.set()
+                self._start_status_ticker()
 
             application.run(pre_run=mark_ready, handle_sigint=False)
         finally:
+            self._stop_status_ticker()
             with self._lock:
                 self._running = False
                 if self._closed:
@@ -569,6 +643,7 @@ class PersistentTerminal:
     def close(self) -> None:
         """Close the application and wake any consumer waiting for input."""
         self._flush_scrollback_to_stdout()
+        self._stop_status_ticker()
         with self._lock:
             if self._closed:
                 return
@@ -637,7 +712,7 @@ class PersistentTerminal:
             sys.stdout = previous_stdout
             sys.stderr = previous_stderr
 
-    @contextmanager
+    @contextlib.contextmanager
     def output_proxy(self) -> Iterator[_StdoutProxy]:
         """Temporarily capture stdout and restore it even on exceptions."""
         proxy = self.install_output_proxy()
@@ -808,6 +883,20 @@ class PersistentTerminal:
             FormattedTextControl(self._render_toolbar),
             height=Dimension.exact(1),
         )
+        # Persistent 1-line status indicator (Idle / Running / interrupted).
+        # The window only takes a row when a ``live_status`` callable was
+        # supplied (e.g. via the inline terminal owner), so the readline
+        # fallback (which supplies nothing) keeps the same compact layout
+        # as 0.3.6.
+        status_window = ConditionalContainer(
+            Window(
+                FormattedTextControl(self._render_status),
+                height=Dimension.exact(1),
+                wrap_lines=False,
+                always_hide_cursor=True,
+            ),
+            filter=Condition(lambda: self._live_status is not None),
+        )
         queue_preview = ConditionalContainer(
             Window(
                 FormattedTextControl(self._render_queue_preview),
@@ -825,7 +914,7 @@ class PersistentTerminal:
         # the "two output panes stacked" scramble on small terminals
         # and guarantees the selector sees the full body height.
         body = HSplit(
-            [output_window, queue_preview, self._composer.window, toolbar_window]
+            [status_window, output_window, queue_preview, self._composer.window, toolbar_window]
         )
         root = FloatContainer(
             content=body,
@@ -954,6 +1043,83 @@ class PersistentTerminal:
 
     def _render_toolbar(self) -> Any:
         return self._toolbar_text()
+
+    def _render_status(self) -> Any:
+        callback = self._live_status
+        if callback is None:
+            return []
+        try:
+            text = callback() or ""
+        except Exception:
+            return []
+        if not text:
+            return []
+        # The status window is always exactly one row.  Keep the line
+        # within the live terminal's visible width; on PT exception or
+        # before the layout knows its size, fall back to a 120-column
+        # budget so the test surface still sees a sane string.
+        try:
+            from prompt_toolkit.application.current import get_app
+
+            columns = get_app().output.get_size().columns
+        except Exception:
+            columns = 120
+        return self._clip_line(str(text), max(20, int(columns) - 1))
+
+    def _build_status(self) -> str:
+        """Return the persistent one-line status text (HTML, bold model).
+
+        The 0.3.7 inline terminal always tells the user what the worker
+        is doing so they never have to wonder whether a Turn is still
+        running.  States, in priority order:
+
+        * **Esc interrupt** — ``[model]  ⏸ interrupted by user`` for
+          1.5 s after the last interrupt, then back to ``Idle``.
+        * **Recovered draft** — ``[model]  Idle — edit the draft and
+          press Enter`` for 1.5 s after a recovery prefill.
+        * **Running** — ``[model]  ⏱ Ns · Esc to interrupt`` while
+          ``pending_count > 0``; the 250 ms ticker keeps the seconds
+          counter honest.
+        * **Idle** — ``[model]  Idle`` otherwise.
+
+        Failure is silent: a failed Turn parks the queue but does NOT
+        surface a ``Failed · +N parked`` label here.  The user can still
+        see the parked rows via ``/queue`` (internal alias) or abort
+        them with ``/abort``.
+        """
+        import html as _html
+
+        session = getattr(self, "_session", None)
+        if session is None:
+            return ""
+        now = time.monotonic()
+        model = str(getattr(session, "model_alias", "model") or "model")
+        model_bold = f"<b>{_html.escape(model)}</b>"
+
+        interrupt_at = getattr(session, "_last_interrupt_at", None)
+        if interrupt_at is not None and (now - float(interrupt_at)) < 1.5:
+            return f"{model_bold}  ⏸ interrupted by user"
+
+        recovery_at = getattr(self, "_last_recovery_at", None)
+        if (
+            recovery_at is not None
+            and (now - float(recovery_at)) < 1.5
+            and getattr(self, "_draft_is_recovery", False)
+        ):
+            return f"{model_bold}  Idle — edit the draft and press Enter"
+
+        try:
+            pending = int(
+                (session.queue_status() or {}).get("pending_count", 0) or 0
+            )
+        except Exception:
+            pending = 0
+        if pending > 0:
+            started = float(getattr(session, "_turn_start_time", 0.0) or 0.0)
+            elapsed = int(max(0, now - started)) if started > 0 else 0
+            return f"{model_bold}  ⏱ {elapsed}s · Esc to interrupt"
+
+        return f"{model_bold}  Idle"
 
     def _render_queue_preview(self) -> Any:
         callback = self._queue_preview

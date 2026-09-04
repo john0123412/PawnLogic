@@ -35,7 +35,6 @@ from pawnlogic.live_repl import (
     build_bottom_toolbar,
     build_live_style,
     build_prompt_toolkit_bindings,
-    build_queue_preview,
     dispatch_live_input,
     dispatch_live_slash,
     install_live_interrupt_handler,
@@ -303,8 +302,7 @@ HELP_TEXT = f"""
   {c(YELLOW, "/context")}         Show context size and token estimate
   {c(YELLOW, "/pin [n]")}         Pin the last n messages
   {c(YELLOW, "/undo [n]")}        Undo recent turns
-  {c(YELLOW, "/queue [action]")} Manage: clear, resume, remove, steer, follow-up, recall
-  {c(YELLOW, "/abort [--all]")}   Interrupt active work; --all also clears queues
+  {c(YELLOW, "/abort")}           Interrupt active Turn and clear all queued input
   {c(YELLOW, "/compact")}         Summarize and compact context
   {c(YELLOW, "/think <prompt>")}  Run one deeper reasoning turn
   {c(YELLOW, "/cd <path>")}       Change working directory
@@ -1167,8 +1165,7 @@ async def _main_impl():
         "/pin":           "Pin recent messages (/pin msg 5 by index)",
         "/unpin":         "Clear all pinned messages",
         "/undo":          "Undo recent turns (default 1)",
-        "/queue":         "Manage queue: clear, resume, remove, steer, follow-up, recall",
-        "/abort":         "Interrupt active Turn; --all also clears queues",
+        "/abort":         "Interrupt active Turn and clear all queued input",
         "/compact":       "Compact context with a lightweight summary",
         "/think":         "Single-turn reasoning mode (/think <prompt>)",
         "/ping":          "Keepalive request to refresh cache TTL",
@@ -1350,14 +1347,34 @@ async def _main_impl():
 
         from pawnlogic.live_terminal import LiveTerminalApp, PersistentTerminalController
 
+        def _build_live_status_text() -> str:
+            """Compute the persistent 1-line status indicator.
+
+            Delegates to the terminal's own ``_build_status`` so the same
+            state machine (Idle / Running / ⏸ interrupted by user /
+            recovered draft) is used by tests and the live layout.
+            """
+            terminal = _live_terminal
+            if terminal is None:
+                return ""
+            try:
+                return terminal._build_status()  # type: ignore[attr-defined]
+            except Exception:
+                return ""
+
         _live_terminal = LiveTerminalApp(
             initial_text=_recovery_draft, completer=_pawn_completer,
             key_bindings=_kb, submission_kind=_submission_state.consume,
             auto_suggest=AutoSuggestFromHistory(), history=_pt_history,
-            toolbar=_bottom_toolbar, queue_preview=build_queue_preview(session),
+            toolbar=_bottom_toolbar,
+            live_status=_build_live_status_text,
             style=_pawn_style,
             output=_pt_create_output(stdout=sys.stdout),
         )
+        # The status line reads scheduler state through ``self._session``;
+        # attaching the session after construction keeps the live terminal
+        # decoupled from the session lifecycle (tests can render without one).
+        _live_terminal.set_session(session)
         _live_terminal_controller = PersistentTerminalController(
             _live_terminal, session, set_active_sink, sink
         )

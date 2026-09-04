@@ -24,9 +24,7 @@ Commands in this module:
     /compact              summarize → clear (preserve pins)
     /think <prompt>       single-turn reasoning-mode invocation
     /mode                 toggle USER ↔ DEV output mode
-    /queue [clear|resume|remove|steer|follow-up|recall] inspect or manage queued messages
-    /abort                interrupt the active Turn without clearing queues
-    /abort --all          interrupt the active Turn and clear all queues
+    /abort                interrupt the active Turn and clear all queued input
 
 Module-private helpers (only used by these commands; intentionally kept
 out of `_common.py`):
@@ -38,6 +36,7 @@ out of `_common.py`):
 from __future__ import annotations
 
 from pathlib import Path
+import contextlib
 import sys
 
 from config import DB_PATH, validate_api_key
@@ -831,30 +830,24 @@ async def cmd_queue(ctx: CommandContext) -> None:
 # ── /abort ───────────────────────────────────────────────────
 @register("/abort")
 async def cmd_abort(ctx: CommandContext) -> None:
-    """Interrupt the active Turn, optionally clearing queued work."""
-    option = ctx.arg.strip().lower()
-    if option not in {"", "--all"}:
-        _print(c(RED, "  Usage: /abort [--all]"))
-        return
+    """Interrupt the active Turn and clear all queued input.
 
-    if option == "--all":
-        had_active = bool(ctx.session.queue_status().get("pending_count", 0))
-        abort_all = getattr(ctx.session, "abort_all", None)
-        count = abort_all() if callable(abort_all) else ctx.session.abort()
-        cleared = max(count - (1 if had_active else 0), 0)
-        _print(c(
-            RED,
-            f"  ✗ Interrupted active Turn and cleared {cleared} queued message(s)",
-        ))
-        return
-
+    0.3.7: the previous ``--all`` form was the only way to drop the
+    queue; plain ``/abort`` preserved the queue and required a follow-up
+    ``/queue clear``.  The two forms are now merged into one command
+    so the live UI exposes a single, unambiguous verb.  Failure is
+    silent on the user UI per the 0.3.7 contract; this command is the
+    only user-visible queue control.
+    """
+    had_active = bool(ctx.session.queue_status().get("pending_count", 0))
     interrupt_active = getattr(ctx.session, "interrupt_active", None)
-    interrupted = (
-        bool(interrupt_active())
-        if callable(interrupt_active)
-        else bool(ctx.session.abort())
-    )
-    if interrupted:
-        _print(c(RED, "  ✗ Interrupt requested for the active Turn; queued messages preserved"))
+    if had_active and callable(interrupt_active):
+        with contextlib.suppress(Exception):
+            interrupt_active()
+    abort_all = getattr(ctx.session, "abort_all", None)
+    cleared = abort_all() if callable(abort_all) else ctx.session.abort()
+    dropped = max(int(cleared or 0) - (1 if had_active else 0), 0)
+    if had_active:
+        _print(c(RED, f"  ✗ Aborted active Turn; cleared {dropped} queued message(s)"))
     else:
-        _print(c(GRAY, "  (no active Turn; queued messages preserved)"))
+        _print(c(GRAY, f"  (no active Turn; cleared {dropped} queued message(s))"))

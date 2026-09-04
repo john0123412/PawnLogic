@@ -276,11 +276,13 @@ def test_bottom_toolbar_reports_immutable_queue_snapshot():
         # essential fields (model, ctx, tier, tokens) are still
         # rendered, and the running-vs-idle state is now the
         # status-line's job (see tests/test_status_line.py).
-        assert "Model: model" in toolbar
-        assert "Tier: MAX" in toolbar
-        assert "steer:" not in toolbar
-        assert "follow-up:" not in toolbar
-        assert "Failed" not in toolbar
+        plain = toolbar.replace("<b>", "").replace("</b>", "")
+        assert "Model: model" in plain
+        assert "Tier: MAX" in plain
+        assert "steer:" not in plain
+        assert "follow-up:" not in plain
+        assert "Failed" not in plain
+        assert "Queue:" not in plain
     finally:
         # Always release the worker thread and shut the scheduler
         # down so the test does not leave non-daemon threads

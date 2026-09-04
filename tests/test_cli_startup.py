@@ -24,8 +24,13 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_help_text_lists_runtime_controls():
     assert "/planguard [mode]" in cli_mod.HELP_TEXT
     assert "no arg opens a selector" in cli_mod.HELP_TEXT
-    assert "/queue [action]" in cli_mod.HELP_TEXT
-    assert "remove, steer, follow-up, recall" in cli_mod.HELP_TEXT
+    # 0.3.7: ``/queue`` is no longer advertised in the help block. The
+    # live terminal exposes only ``/abort``; ``/queue`` survives as
+    # an internal alias for scripts and is reachable through
+    # ``/queue resume`` if the user types it.
+    assert "/queue [action]" not in cli_mod.HELP_TEXT
+    assert "/abort" in cli_mod.HELP_TEXT
+    assert "Interrupt active Turn and clear all queued input" in cli_mod.HELP_TEXT
     assert "/ultra" in cli_mod.HELP_TEXT
     assert "150 iterations" in cli_mod.HELP_TEXT
 

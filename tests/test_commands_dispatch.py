@@ -167,14 +167,19 @@ def test_queue_resume_processes_interrupted_messages(capsys):
     assert "Resumed queued messages" in capsys.readouterr().out
 
 
-def test_abort_interrupts_active_turn_without_clearing_queues(capsys):
+def test_abort_interrupts_active_turn_and_clears_queues_in_one_call(capsys):
+    """0.3.7: ``/abort`` merges the old "preserve queues" and
+    ``--all`` paths into one command.  A single ``/abort`` call must
+    both interrupt the active Turn (when one is running) AND clear
+    every queued message, so the user only has to learn one verb.
+    """
     from core.commands import CommandContext
     from core.commands.session import cmd_abort
 
     session = SimpleNamespace(
         queue_status=MagicMock(return_value={"pending_count": 1}),
         interrupt_active=MagicMock(return_value=True),
-        abort_all=MagicMock(),
+        abort_all=MagicMock(return_value=3),
     )
 
     asyncio.run(cmd_abort(CommandContext(
@@ -182,27 +187,33 @@ def test_abort_interrupts_active_turn_without_clearing_queues(capsys):
     )))
 
     session.interrupt_active.assert_called_once_with()
-    session.abort_all.assert_not_called()
-    assert "queued messages preserved" in capsys.readouterr().out
+    session.abort_all.assert_called_once_with()
+    assert "cleared 2 queued message(s)" in capsys.readouterr().out
 
 
-def test_abort_all_interrupts_active_turn_and_clears_queues(capsys):
+def test_abort_clears_queues_even_when_no_active_turn(capsys):
+    """When no Turn is in flight, ``/abort`` still clears the
+    queue; the printed message reflects the idle case.
+    """
     from core.commands import CommandContext
     from core.commands.session import cmd_abort
 
     session = SimpleNamespace(
-        queue_status=MagicMock(return_value={"pending_count": 1}),
+        queue_status=MagicMock(return_value={"pending_count": 0}),
         interrupt_active=MagicMock(),
-        abort_all=MagicMock(return_value=3),
+        abort_all=MagicMock(return_value=2),
     )
 
     asyncio.run(cmd_abort(CommandContext(
-        verb="/abort", arg="--all", arg2="", session=session,
+        verb="/abort", arg="", arg2="", session=session,
     )))
 
-    session.abort_all.assert_called_once_with()
+    # No active Turn -> no interrupt_active call.
     session.interrupt_active.assert_not_called()
-    assert "cleared 2 queued message(s)" in capsys.readouterr().out
+    session.abort_all.assert_called_once_with()
+    out = capsys.readouterr().out
+    assert "no active Turn" in out
+    assert "cleared 2 queued message(s)" in out
 
 
 # ════════════════════════════════════════════════════════
