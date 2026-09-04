@@ -727,9 +727,28 @@ class PersistentTerminal:
 
         self._composer = TextArea(
             text=self._default_text,
-            multiline=False,
+            # ``multiline=True`` is required so the TextArea grows beyond
+            # one row for wrapped, long input.  ``multiline=False`` forces
+            # the buffer to a single row and ``wrap_lines=True`` has no
+            # visible effect, so long input would be clipped, not wrapped.
+            # The eager ``enter`` binding registered by
+            # ``live_repl.build_prompt_toolkit_bindings`` still submits
+            # the buffer; ``c-j`` (Prompt Toolkit's built-in multiline
+            # newline key) inserts a literal newline.
+            multiline=True,
             wrap_lines=True,
-            height=Dimension(min=1, max=5),
+            # The composer grows on demand, bounded by ``max=5`` to keep
+            # it from eating the entire output pane.  ``min=1`` keeps
+            # the empty composer at a single row.  ``weight=0`` is
+            # required: the ``_divide_heights`` algorithm grows every
+            # child with non-zero weight up to its ``max`` to fill the
+            # available space, which would otherwise make the empty
+            # composer always claim 5 rows.  ``weight=0`` removes the
+            # composer from the growth rotation; the layout engine
+            # still resizes the TextArea's window as the buffer height
+            # changes, so an empty buffer renders one row and a wrapped
+            # 5-line input renders five rows.
+            height=Dimension(min=1, max=5, weight=0),
             prompt=self.prompt,
             accept_handler=self._accept_handler,
             focusable=True,

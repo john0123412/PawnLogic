@@ -153,6 +153,101 @@ def test_submissions_are_typed_and_application_stays_open_until_close() -> None:
     asyncio.run(scenario())
 
 
+def test_composer_grows_to_wrapped_multiline_and_still_submits_on_enter() -> None:
+    """Regression: long composer input must wrap and Enter must still submit.
+
+    The TextArea was created with ``multiline=False``, which TextArea
+    treats as ``height=Dimension.exact(1)`` regardless of the
+    ``Dimension(min=1, max=5)`` we passed. ``wrap_lines=True`` was
+    silently ignored, so long input was clipped, not wrapped.  The
+    eager ``enter`` binding from ``live_repl`` now wins over the
+    default ``_newline`` handler, so the buffer still submits on
+    Enter even though the composer is multiline.
+    """
+    async def scenario() -> None:
+        session = SimpleNamespace(
+            queue_status=lambda: {"pending_count": 0},
+            _live_input_buffer=None,
+        )
+        bindings, state = build_prompt_toolkit_bindings(
+            KeyBindings,
+            session=session,
+            read_text_cache=lambda _path: "",
+            restore_last_input_buffer=lambda *_args: False,
+            last_input_path=Path(".last_input"),
+        )
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(
+                input=pipe,
+                output=DummyOutput(),
+                key_bindings=bindings,
+                submission_kind=state.consume,
+            )
+            run_task = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+
+            # A 60-character message exceeds the typical narrow TUI width;
+            # with the bug it would have been clipped to a single line.
+            long_input = "analyze the screenshot, fix the layout bug, and re-run"
+            pipe.send_text(long_input + "\r")
+            submission = await terminal.next_submission()
+            assert submission is not None
+            assert submission.text == long_input
+
+            terminal.close()
+            await run_task
+
+    asyncio.run(scenario())
+
+
+def test_composer_cj_inserts_literal_newline_without_submitting() -> None:
+    """Multiline composer accepts ``\\n`` (Ctrl+J) without submitting.
+
+    Plain Enter (with ``eager=True``) is the submit path.  To insert
+    a hard newline inside a multi-line composer, the user types
+    ``Ctrl+J`` (which most terminals send as ``\\n``).  Prompt
+    Toolkit's default ``c-j`` handler unconditionally re-feeds the
+    press as a ControlM (Enter) for terminals that send ``\\n`` on
+    Enter; without the ``eager=True`` override we register here,
+    the user could never insert a literal newline.
+    """
+    async def scenario() -> None:
+        session = SimpleNamespace(
+            queue_status=lambda: {"pending_count": 0},
+            _live_input_buffer=None,
+        )
+        bindings, state = build_prompt_toolkit_bindings(
+            KeyBindings,
+            session=session,
+            read_text_cache=lambda _path: "",
+            restore_last_input_buffer=lambda *_args: False,
+            last_input_path=Path(".last_input"),
+        )
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(
+                input=pipe,
+                output=DummyOutput(),
+                key_bindings=bindings,
+                submission_kind=state.consume,
+            )
+            run_task = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+
+            # The TextArea is multiline so the user can author and
+            # submit multi-line drafts.
+            assert terminal.composer.buffer.multiline is True or terminal.composer.buffer.multiline() is True
+            # Type ``line one`` then ``\\n`` (Ctrl+J) then ``line two`` then Enter.
+            pipe.send_text("line one\x0aline two\r")
+            submission = await asyncio.wait_for(terminal.next_submission(), timeout=0.5)
+            assert submission is not None
+            assert submission.text == "line one\nline two"
+
+            terminal.close()
+            await run_task
+
+    asyncio.run(scenario())
+
+
 def test_submission_api_accepts_steer_and_follow_up_without_prompt_exit() -> None:
     async def scenario() -> None:
         terminal = PersistentTerminal(output=DummyOutput())

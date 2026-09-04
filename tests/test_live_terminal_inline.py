@@ -146,12 +146,17 @@ def test_persistent_terminal_application_uses_inline_screen() -> None:
     )
 
 
-def test_persistent_terminal_application_disables_mouse_tracking() -> None:
-    """The persistent Application must be constructed mouse_support=False.
+def test_persistent_terminal_application_enables_mouse_support_for_wheel() -> None:
+    """The persistent Application must enable mouse_support so wheel events
+    reach the registered ``Keys.ScrollUp`` / ``Keys.ScrollDown`` bindings.
 
-    mouse_support=True turns on the ?1000h / ?1002h / ?1003h / ?1006h
-    tracking modes which intercept host terminal wheel events. This
-    test fails until the implementation is rewritten to honor ADR 0010.
+    ``full_screen=False`` keeps the host terminal in its primary screen
+    buffer, so native scroll, selection, and copy still work.  The
+    ``mouse_support=True`` flag is independent of the alternate-screen
+    toggle; it only matters for whether wheel events route into the
+    Application.  Without it, the wheel never reaches our scroll
+    handler, which is what the owner reported as "wheel scroll not
+    working".
     """
     from prompt_toolkit.input import DummyInput
     from prompt_toolkit.output import DummyOutput
@@ -161,8 +166,11 @@ def test_persistent_terminal_application_disables_mouse_tracking() -> None:
     # `mouse_support` is a PT Filter object; `bool(filter)` is
     # ambiguous, so call it as a function to read the value.
     is_on = application.mouse_support()
-    assert is_on is False, (
-        "Prompt Toolkit Application must use mouse_support=False so the "
-        f"host terminal keeps its own mouse selection and wheel scroll; "
-        f"got mouse_support() = {is_on!r}"
+    assert is_on is True, (
+        "Prompt Toolkit Application must use mouse_support=True so wheel "
+        f"events reach the output viewport; got mouse_support() = {is_on!r}"
     )
+    # The full_screen flag must still be False so the host terminal
+    # keeps its own primary screen buffer (native scroll, selection,
+    # copy) and PT does not switch into the alternate screen.
+    assert application.full_screen is False

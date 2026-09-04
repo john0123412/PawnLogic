@@ -182,9 +182,22 @@ def build_prompt_toolkit_bindings(
             # Preserve that seam while the real application remains async.
             interrupt_active_turn()
 
-    @bindings.add("enter")
+    @bindings.add("enter", eager=True)
     def _(event: Any) -> None:
-        """Submit idle input or mark a running input as a steering message."""
+        """Submit idle input or mark a running input as a steering message.
+
+        ``eager=True`` lets the binding win over the TextArea's default
+        ``_newline`` handler (registered for ``enter`` when the composer is
+        multiline).  Without it, a multiline composer would insert ``\\n``
+        on Enter instead of submitting, and the user would have to find a
+        separate way to actually send the message.
+
+        To insert a literal newline without submitting, type ``Ctrl+J``
+        (Prompt Toolkit's built-in multiline-newline key).  The ``c-j``
+        binding below this one handles that case and is registered
+        ``eager=True`` so it wins over the default handler that would
+        convert ``c-j`` into a duplicate Enter press.
+        """
         session._live_input_buffer = event.current_buffer
         if recovery_draft_pending():
             submission_state.kind = SubmissionKind.START
@@ -195,6 +208,20 @@ def build_prompt_toolkit_bindings(
         else:
             submission_state.kind = SubmissionKind.START
         event.current_buffer.validate_and_handle()
+
+    @bindings.add("c-j", eager=True)
+    def _(event: Any) -> None:
+        """Insert a literal newline without submitting the composer.
+
+        ``eager=True`` keeps the binding from being silently converted
+        into a second Enter press by Prompt Toolkit's default ``c-j``
+        handler, which was originally written for terminals that send
+        ``\\n`` instead of ``\\r`` on Enter and unconditionally re-feeds
+        the press as a ControlM.  We need the multi-line composer to
+        treat ``c-j`` as a literal newline, so we register our own
+        eager handler that runs first.
+        """
+        event.current_buffer.insert_text("\n")
 
     @bindings.add("escape", "enter")
     def _(event: Any) -> None:

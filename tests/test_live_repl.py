@@ -31,7 +31,13 @@ class FakeBindings:
     def __init__(self) -> None:
         self.handlers: dict[tuple[str, ...], object] = {}
 
-    def add(self, *keys: str):
+    def add(self, *keys: str, **kwargs: object):
+        # ``eager`` and other keyword arguments are accepted so the
+        # fake mirrors the real ``KeyBindings.add`` signature; the
+        # lightweight binding tests only need to dispatch on the
+        # key sequence.
+        del kwargs
+
         def register(handler):
             self.handlers[keys] = handler
             return handler
