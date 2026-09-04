@@ -1346,8 +1346,13 @@ def test_failed_session_parks_implicit_resume_but_allows_explicit() -> None:
     assert calls == ["first prompt", "first prompt"], "no cascade"
 
 
-def test_failed_session_toolbar_and_preview_park_the_queue() -> None:
-    """The toolbar leads with Failed and the preview collapses parked items."""
+def test_failed_session_toolbar_is_a_label_only() -> None:
+    """0.3.7: a failed session no longer surfaces ``Failed · +N
+    parked`` to the user.  ``toolbar_queue_status`` returns the
+    label only.  The internal anti-cascade gate (the explicit
+    ``ControlAction`` flag) still parks the queue; the UI just
+    does not advertise the count.
+    """
     from core.queue_tui import toolbar_queue_status
 
     class _View:
@@ -1358,5 +1363,6 @@ def test_failed_session_toolbar_and_preview_park_the_queue() -> None:
         session_status = "failed"
 
     status = toolbar_queue_status(_View())
-    assert status.startswith("Failed"), status
-    assert "+3 parked" in status, status
+    assert status == "Failed", status
+    assert "+3" not in status
+    assert "parked" not in status

@@ -85,7 +85,7 @@ def test_repl_retry_uses_interrupted_turn_api(monkeypatch):
     session.run_turn.assert_not_called()
 
 
-def test_interrupted_repl_recovery_explains_preserved_queue(capsys):
+def test_interrupted_repl_recovery_explains_preserved_draft(capsys):
     autosave = MagicMock()
     session = SimpleNamespace(
         undo=lambda _count: (1, "retry prompt"),
@@ -98,9 +98,13 @@ def test_interrupted_repl_recovery_explains_preserved_queue(capsys):
     assert restored == "retry prompt"
     autosave.assert_called_once_with()
     output = capsys.readouterr().out
-    assert "Saved 1 queued message" in output
-    assert "/queue resume" in output
-    assert "/abort --all" in output
+    # 0.3.7: the recovery hint no longer mentions ``/queue resume``
+    # or ``/abort --all``; only ``/abort`` remains and the wording
+    # is a one-liner that points the user at the editor.
+    assert "/queue resume" not in output
+    assert "/abort --all" not in output
+    assert "/abort" in output
+    assert "Edit" in output and "press Enter" in output
 
 
 def test_startup_resume_prompt_warns_and_continues_on_session_lookup_failure(

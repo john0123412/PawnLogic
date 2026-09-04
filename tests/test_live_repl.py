@@ -11,7 +11,6 @@ from unittest.mock import MagicMock
 from pawnlogic.live_repl import (
     build_bottom_toolbar,
     build_prompt_toolkit_bindings,
-    build_queue_preview,
     requires_modal_terminal,
 )
 
@@ -265,17 +264,30 @@ def test_bottom_toolbar_reports_immutable_queue_snapshot():
         _toolbar_context_chars=0,
         cwd=".",
         current_phase="RECON",
-        queue_view=scheduler.view,
     )
-    toolbar = build_bottom_toolbar(
-        session,
-        {"max_tokens": 8192, "max_iter": 100, "ctx_max_chars": 1000},
-        lambda text: text,
-    )()
+    try:
+        toolbar = build_bottom_toolbar(
+            session,
+            {"max_tokens": 8192, "max_iter": 100, "ctx_max_chars": 1000},
+            lambda text: text,
+        )()
 
-    assert "Running · steer:0 · follow-up:0" in toolbar
-    release.set()
-    scheduler.control(ControlAction(ControlKind.SHUTDOWN))
+        # 0.3.7: the toolbar no longer surfaces queue counters; the
+        # essential fields (model, ctx, tier, tokens) are still
+        # rendered, and the running-vs-idle state is now the
+        # status-line's job (see tests/test_status_line.py).
+        assert "Model: model" in toolbar
+        assert "Tier: MAX" in toolbar
+        assert "steer:" not in toolbar
+        assert "follow-up:" not in toolbar
+        assert "Failed" not in toolbar
+    finally:
+        # Always release the worker thread and shut the scheduler
+        # down so the test does not leave non-daemon threads
+        # alive when an assertion fails (the test runner hangs in
+        # ``threading._shutdown`` otherwise).
+        release.set()
+        scheduler.control(ControlAction(ControlKind.SHUTDOWN))
 
 
 def _toolbar_session(*, cwd: str = ".") -> SimpleNamespace:
@@ -344,16 +356,21 @@ def test_bottom_toolbar_adapts_to_80_column_live_terminal(monkeypatch):
         f"toolbar must fit in 80 columns but was {len(plain)}: {plain!r}"
     )
     # The essential fields must still be visible
-    assert "Queue: Idle" in plain
     assert "Model: hy3" in plain
     # The long fields are dropped first
     assert "Dir:" not in plain
     assert "Phase:" not in plain
+    # 0.3.7: the toolbar no longer surfaces queue state. The
+    # status line carries running-vs-idle (see tests/test_status_line.py).
+    assert "Queue:" not in plain
+    assert "steer:" not in plain
+    assert "follow-up:" not in plain
 
 
 def test_bottom_toolbar_keeps_directory_on_160_column_live_terminal(monkeypatch):
-    """Wide terminals (160 columns) keep the full toolbar: queue, model,
-    ctx, tier, tokens, phase, dir, time."""
+    """Wide terminals (160 columns) keep the full toolbar: model, ctx,
+    tier, tokens, phase, dir, time. The Queue segment was removed in
+    0.3.7; the status line carries queue state."""
     from prompt_toolkit.data_structures import Size
 
     class _FakeApp:
@@ -368,10 +385,10 @@ def test_bottom_toolbar_keeps_directory_on_160_column_live_terminal(monkeypatch)
     toolbar = _toolbar_factory()()
     plain = toolbar.replace("<b>", "").replace("</b>", "")
     assert len(plain) <= 160
-    assert "Queue: Idle" in plain
     assert "Model: hy3" in plain
     assert "Phase: RECON" in plain
     assert "Dir: ." in plain
+    assert "Queue:" not in plain
 
 
 def test_bottom_toolbar_falls_back_to_static_cap_outside_pt_loop():
@@ -383,8 +400,8 @@ def test_bottom_toolbar_falls_back_to_static_cap_outside_pt_loop():
     plain = toolbar.replace("<b>", "").replace("</b>", "")
     # 100-column static cap, minus a 4-column margin
     assert len(plain) <= 100
-    assert "Queue: Idle" in plain
     assert "Model: hy3" in plain
+    assert "Queue:" not in plain
 
 
 def test_bottom_toolbar_strips_dir_on_120_column_live_terminal(monkeypatch):
@@ -419,89 +436,22 @@ def test_bottom_toolbar_strips_dir_on_120_column_live_terminal(monkeypatch):
     toolbar = build_bottom_toolbar(session, cfg, lambda text: text)()
     plain = toolbar.replace("<b>", "").replace("</b>", "")
     assert len(plain) <= 120, f"toolbar {len(plain)} cols: {plain!r}"
-    # Queue is the most important field; even when dir is dropped the
-    # queue counter stays readable.
-    assert "Queue:" in plain
+    # 0.3.7: no queue segment in the toolbar at all. The status
+    # line carries queue state, so the toolbar is purely
+    # model / ctx / tier / tokens / phase / dir / time.
     assert "Model: hy3" in plain
+    assert "Queue:" not in plain
 
 
-def test_queue_preview_returns_muted_rows_for_waiting_input():
-    from prompt_toolkit.formatted_text import fragment_list_to_text
-    from threading import Event
+def test_queue_preview_was_removed_in_0_3_7() -> None:
+    """The live composer no longer renders a queue preview above the
+    input.  ``build_queue_preview`` is gone from ``pawnlogic.live_repl``;
+    the live terminal renders only the status line, the output
+    transcript, and the composer itself.
+    """
+    import pawnlogic.live_repl as live_repl
 
-    from core.turn_scheduler import ControlAction, ControlKind, Submission, TurnScheduler
-
-    started = Event()
-    release = Event()
-
-    def execute(_item):
-        started.set()
-        assert release.wait(timeout=5)
-
-    scheduler = TurnScheduler(execute, background=True, id_prefix="preview")
-    scheduler.submit(Submission("active"))
-    assert started.wait(timeout=5)
-    scheduler.submit(Submission("second question", kind="steer"))
-    scheduler.submit(Submission("third question", kind="follow_up"))
-    preview = build_queue_preview(
-        SimpleNamespace(queue_view=scheduler.view),
-    )()
-
-    assert all(style == "class:queue-preview" for style, _text in preview)
-    text = fragment_list_to_text(preview)
-    assert "second question" in text
-    assert "third question" in text
-
-    release.set()
-    scheduler.control(ControlAction(ControlKind.SHUTDOWN))
-
-
-def test_build_queue_preview_parks_items_after_failure() -> None:
-    """A failed session collapses the queued rows to one parked summary."""
-    from types import SimpleNamespace as _NS
-
-    from core.queue_tui import queue_rows  # noqa: F401 - contract reference
-    from core.turn_scheduler import (
-        SubmissionKind,
-        SubmissionStatus,
-        SubmissionView,
+    assert not hasattr(live_repl, "build_queue_preview"), (
+        "build_queue_preview should be removed in 0.3.7; the live "
+        "terminal no longer surfaces queued rows above the composer"
     )
-    from pawnlogic.live_repl import build_queue_preview
-
-    def _view_item(content: str, kind: SubmissionKind) -> SubmissionView:
-        return SubmissionView(
-            submission_id=f"id-{content}",
-            sequence=1,
-            kind=kind,
-            content=content,
-            source="test",
-            status=SubmissionStatus.RECOVERED
-            if kind is SubmissionKind.RECOVERED
-            else SubmissionStatus.QUEUED,
-        )
-
-    class _View:
-        active = None
-        recovered = _view_item("draft", SubmissionKind.RECOVERED)
-        steer: tuple = ()
-        follow_up = (
-            _view_item("q1", SubmissionKind.FOLLOW_UP),
-            _view_item("q2", SubmissionKind.FOLLOW_UP),
-        )
-        session_status = "failed"
-
-    session = _NS(queue_view=lambda: _View())
-    preview = build_queue_preview(session)()
-    assert len(preview) == 1
-    text = preview[0][1]
-    assert "3 message(s) parked" in text
-    assert "/queue resume" in text
-    assert "q1" not in text, "parked queue must not scroll per-item rows"
-
-    # Healthy sessions keep the per-item preview.
-    class _HealthyView(_View):
-        session_status = "idle"
-
-    healthy = _NS(queue_view=lambda: _HealthyView())
-    preview2 = build_queue_preview(healthy)()
-    assert any("q1" in frag for _style, frag in preview2)
