@@ -278,6 +278,153 @@ def test_bottom_toolbar_reports_immutable_queue_snapshot():
     scheduler.control(ControlAction(ControlKind.SHUTDOWN))
 
 
+def _toolbar_session(*, cwd: str = ".") -> SimpleNamespace:
+    return SimpleNamespace(
+        model_alias="hy3",
+        total_prompt_tokens=0,
+        total_completion_tokens=0,
+        _toolbar_context_chars=0,
+        cwd=cwd,
+        current_phase="RECON",
+        queue_view=lambda: None,
+    )
+
+
+def _toolbar_factory():
+    from collections.abc import Mapping
+
+    from pawnlogic.live_repl import build_bottom_toolbar
+
+    cfg: Mapping[str, object] = {
+        "max_tokens": 8192,
+        "max_iter": 100,
+        "ctx_max_chars": 1000,
+        "time_budget_sec": 0,
+    }
+    return build_bottom_toolbar(_toolbar_session(), cfg, lambda text: text)
+
+
+def test_bottom_toolbar_adapts_to_80_column_live_terminal(monkeypatch):
+    """The 80-column PTY owner report: when the live Application reports
+    only 80 columns, the toolbar must drop the long directory and phase
+    fields so the remaining fields fit inside the visible width.
+
+    A previous cfc86b3 fix introduced a static 100-column hard cap; that
+    cap still overflows 80-column terminals because PT clips mid-field
+    (the original "follow-u" regression). The cap now follows the live
+    terminal's column count instead.
+    """
+    from prompt_toolkit.data_structures import Size
+
+    class _FakeApp:
+        class output:
+            @staticmethod
+            def get_size() -> Size:
+                return Size(rows=24, columns=80)
+
+    monkeypatch.setattr(
+        "prompt_toolkit.application.current.get_app", lambda: _FakeApp()
+    )
+    long_cwd = "/" + "/".join(["segment"] * 10)
+    session = _toolbar_session(cwd=long_cwd)
+    from collections.abc import Mapping
+    from pawnlogic.live_repl import build_bottom_toolbar
+
+    cfg: Mapping[str, object] = {
+        "max_tokens": 8192,
+        "max_iter": 100,
+        "ctx_max_chars": 1000,
+        "time_budget_sec": 0,
+    }
+    toolbar = build_bottom_toolbar(session, cfg, lambda text: text)()
+    # Strip the ANSI/HTML tags (the factory above passes through the
+    # inner text), then count the visible columns.
+    plain = toolbar.replace("<b>", "").replace("</b>", "")
+    assert len(plain) <= 80, (
+        f"toolbar must fit in 80 columns but was {len(plain)}: {plain!r}"
+    )
+    # The essential fields must still be visible
+    assert "Queue: Idle" in plain
+    assert "Model: hy3" in plain
+    # The long fields are dropped first
+    assert "Dir:" not in plain
+    assert "Phase:" not in plain
+
+
+def test_bottom_toolbar_keeps_directory_on_160_column_live_terminal(monkeypatch):
+    """Wide terminals (160 columns) keep the full toolbar: queue, model,
+    ctx, tier, tokens, phase, dir, time."""
+    from prompt_toolkit.data_structures import Size
+
+    class _FakeApp:
+        class output:
+            @staticmethod
+            def get_size() -> Size:
+                return Size(rows=24, columns=160)
+
+    monkeypatch.setattr(
+        "prompt_toolkit.application.current.get_app", lambda: _FakeApp()
+    )
+    toolbar = _toolbar_factory()()
+    plain = toolbar.replace("<b>", "").replace("</b>", "")
+    assert len(plain) <= 160
+    assert "Queue: Idle" in plain
+    assert "Model: hy3" in plain
+    assert "Phase: RECON" in plain
+    assert "Dir: ." in plain
+
+
+def test_bottom_toolbar_falls_back_to_static_cap_outside_pt_loop():
+    """Outside PT's main loop ``get_app()`` raises. The toolbar must
+    still produce a sane result that fits the static hard cap so
+    tests and pre-loop invocations do not crash.
+    """
+    toolbar = _toolbar_factory()()
+    plain = toolbar.replace("<b>", "").replace("</b>", "")
+    # 100-column static cap, minus a 4-column margin
+    assert len(plain) <= 100
+    assert "Queue: Idle" in plain
+    assert "Model: hy3" in plain
+
+
+def test_bottom_toolbar_strips_dir_on_120_column_live_terminal(monkeypatch):
+    """On a 120-column terminal a typical cwd of 60+ characters still
+    overflows; the dir field must be dropped before the queue field is.
+    The owner-reported regression was the queue counter being clipped,
+    so the test pins the invariant: the queue counter is the LAST thing
+    we drop, never the first.
+    """
+    from prompt_toolkit.data_structures import Size
+
+    class _FakeApp:
+        class output:
+            @staticmethod
+            def get_size() -> Size:
+                return Size(rows=24, columns=120)
+
+    monkeypatch.setattr(
+        "prompt_toolkit.application.current.get_app", lambda: _FakeApp()
+    )
+    long_cwd = "/" + "/".join(["segment"] * 10)
+    session = _toolbar_session(cwd=long_cwd)
+    from collections.abc import Mapping
+    from pawnlogic.live_repl import build_bottom_toolbar
+
+    cfg: Mapping[str, object] = {
+        "max_tokens": 8192,
+        "max_iter": 100,
+        "ctx_max_chars": 1000,
+        "time_budget_sec": 0,
+    }
+    toolbar = build_bottom_toolbar(session, cfg, lambda text: text)()
+    plain = toolbar.replace("<b>", "").replace("</b>", "")
+    assert len(plain) <= 120, f"toolbar {len(plain)} cols: {plain!r}"
+    # Queue is the most important field; even when dir is dropped the
+    # queue counter stays readable.
+    assert "Queue:" in plain
+    assert "Model: hy3" in plain
+
+
 def test_queue_preview_returns_muted_rows_for_waiting_input():
     from prompt_toolkit.formatted_text import fragment_list_to_text
     from threading import Event

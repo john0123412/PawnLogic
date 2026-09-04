@@ -29,10 +29,16 @@ LIVE_SLASH_NOTICE = (
 # Bottom-toolbar width budget (visible columns, not ANSI bytes).
 # _TOOLBAR_HARD_MAX: never exceed a 100-column toolbar — anything past
 # that is clipped mid-field by PT on 80-120 column terminals.
-# _TOOLBAR_WIDE_MIN: the long directory path and phase name only join
-# when the shorter fields leave at least this much room.
+# The cap adapts to the live terminal's column count (when we can
+# read it from PT) so the same logic fits 80-column, 120-column, and
+# 160-column hosts without overflowing.
+# _TOOLBAR_HARD_MAX: the static hard cap used outside PT's main loop
+# and as a floor when the live width is suspiciously small.
+# _TOOLBAR_COL_MARGIN: when adapting to the live terminal width we
+# leave this many columns of slack so PT's row renderer does not
+# still clip the last character off the right edge.
 _TOOLBAR_HARD_MAX = 100
-_TOOLBAR_WIDE_MIN = 60
+_TOOLBAR_COL_MARGIN = 4
 
 
 async def _wait_for_interrupt_settlement(
@@ -429,7 +435,37 @@ def build_bottom_toolbar(
         # ("... follow-u") because PT truncates the single toolbar row.
         # Render only the fields that fit, most important first:
         # queue state and model always, then context, tier, tokens,
-        # and only on wide terminals the long directory path.
+        # and only on wide terminals the long directory path. The
+        # hard cap adapts to the live terminal's column count when
+        # we can read it (PT exposes ``Application.output.get_size``
+        # inside its main loop); outside the loop we fall back to
+        # the 100-column static cap so the field budget is still
+        # safe on wide terminals and PT does not wrap the row.
+        try:
+            from prompt_toolkit.application.current import get_app
+
+            live_columns = get_app().output.get_size().columns
+        except Exception:
+            live_columns = None
+        if live_columns and live_columns > _TOOLBAR_HARD_MAX:
+            # Wide terminal: drop the 100-column ceiling so phase and
+            # the directory path can both join the row. The live
+            # visible width minus a 4-column safety margin is the
+            # budget; only the fields that actually fit are rendered.
+            hard_max = live_columns - _TOOLBAR_COL_MARGIN
+        elif live_columns and live_columns > _TOOLBAR_COL_MARGIN + 20:
+            # Narrow terminal that still has a usable get_size():
+            # the visible width minus a 4-column margin is the cap
+            # so PT does not clip the row mid-field on 80-90 column
+            # hosts. The 100-column static cap above is too wide
+            # for these widths and was the root of the
+            # ``follow-u`` regression.
+            hard_max = live_columns - _TOOLBAR_COL_MARGIN
+        else:
+            # No usable PT app (e.g. outside the main loop): fall
+            # back to the static 100-column cap so the row is still
+            # safe for tests and pre-loop invocations.
+            hard_max = _TOOLBAR_HARD_MAX
         segments = [
             ("queue", f"<b>Queue:</b> {queue_status}"),
             ("model", f"<b>Model:</b> {model}"),
@@ -445,10 +481,27 @@ def build_bottom_toolbar(
         for name, segment in segments:
             if name == "time" and not time_text:
                 continue
-            approx = len(segment) - (segment.count("</") * 3)
-            if name in {"dir", "phase"} and plain_len + approx > _TOOLBAR_WIDE_MIN:
+            # ``approx`` is the visible-column width of the segment
+            # excluding the <b>/</b> tags so it matches the
+            # terminal's column count. PT renders the tags with
+            # zero columns; the inline ANSI color (e.g. <ansigreen>)
+            # IS one character each because PT does not strip them.
+            approx = (
+                len(segment)
+                - segment.count("<b>") * 3
+                - segment.count("</b>") * 4
+            )
+            # Phase is short and fixed (≈12 chars); on a wide enough
+            # terminal (>=100 cols) it always joins. The dir path is
+            # variable and is dropped first when the budget runs out.
+            # The queue counter, model alias, ctx, tier, and tokens
+            # are the essential fields and are never dropped.
+            if name == "phase" and plain_len + approx + 2 > hard_max:
+                # tight column count: leave the short fields visible
                 continue
-            if plain_len + approx > _TOOLBAR_HARD_MAX and chosen:
+            if name == "dir" and plain_len + approx > hard_max:
+                continue
+            if plain_len + approx > hard_max and chosen:
                 continue
             chosen.append(segment)
             plain_len += approx + 2
