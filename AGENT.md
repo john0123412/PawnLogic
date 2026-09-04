@@ -637,15 +637,36 @@ are source-checkout or user-installed assets; pip/curl installations should use
   of creating a fresh turn. The persistent composer's `TextArea`
   height is now `Dimension(min=1, max=5)` so long wrapped input
   grows up to five rows instead of being clipped to a single fixed
-  row. Release-prep edits in this cycle:
+  row. A follow-up audit cycle (350abfa) reverted the
+  ``@bindings.add('enter', eager=True)`` flag and removed the
+  ``@bindings.add('c-j')`` binding from ``pawnlogic/live_repl.py``:
+  both were added by the b88cea3 multiline-composer commit but
+  empirically they break the live composer's normal text-insert
+  path.  The PTY e2e suite sends text + LF (``\n``) via
+  ``pexpect.sendline`` and ``\n`` maps to ``Keys.ControlJ`` in
+  Prompt Toolkit; the custom c-j binding ate that press as a
+  literal-newline insertion and the model never got called, while
+  the ``eager=True`` flag on the enter binding dropped the first
+  typed character on its own.  Leaving ``c-j`` to PT's default
+  ``_newline2`` handler (which re-feeds ``\n`` as ``ControlM``)
+  and relying on the ``_CombinedRegistry`` to resolve ``enter`` to
+  the LAST matching handler in the merged list restores the e2e
+  flow.  The multiline composer's ``Dimension(min=1, max=5)`` and
+  ``wrap_lines=True`` stay in place; only the literal-newline
+  insertion path is removed (no ``c-j`` binding) until a
+  /draft-style command is added to drive ``buffer.insert_text``
+  explicitly.  Release-prep edits in this cycle:
   `config/paths.py:VERSION` `0.3.6` → `0.3.7`, the `0.3.7` section
   added to `CHANGELOG.md`, `0.3.7` row added to `SECURITY.md`, and
   [ADR 0010](docs/adr/0010-inline-terminal-modal.md) header updated
   to record that the implementation has landed while keeping the
   acceptance gates (`main` merge, PyPI publish, owner PTY smoke) as
   the conditions for moving the ADR to **Accepted**. Local non-E2E:
-  1,486 pass. Local Dynamic E2E: 29/29 pass (the two new TUI tests
-  for `/provider` and `/skills` are green). Ruff, typed-island mypy
+  1,484 pass. Local Dynamic E2E: 29/29 pass (the two new TUI tests
+  for `/provider` and `/skills` are green, and the 12 E2E tests that
+  were failing on 3be257b's HEAD because of the c-j binding all pass
+  after 350abfa's revert of the eager / c-j additions). Ruff,
+  typed-island mypy
   for `pawnlogic/terminal_transcript.py`,
   `pawnlogic/live_terminal.py`, `pawnlogic/selectors.py`, and
   `pawnlogic/restart_recovery.py`, `git diff --check`, leak scans,
@@ -728,6 +749,14 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 - `/abort` clears queued input but cannot cancel a provider request already
   handed to a synchronous stream; Ctrl+C remains the in-flight interruption
   path.
+- The 0.3.7 multiline composer cannot accept a literal ``\n`` from the
+  composer key path: the ``c-j`` binding was removed because it intercepted
+  bare ``\n`` (which the PTY e2e suite relies on for submit) and the
+  ``eager=True`` flag on the ``enter`` binding made the first typed key
+  disappear.  Authoring a multi-line draft now requires a future
+  ``/draft``-style command that drives ``buffer.insert_text`` directly;
+  until then, the only way to send a multi-line message is to type it
+  pre-formatted in a single ``send`` (no in-composer literal newlines).
 - English and zh-CN docs drifting in structure or command examples.
 - Release prep editing version literals outside fixed locations.
 - Packaging accidentally including `skills/` content.
