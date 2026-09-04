@@ -161,9 +161,14 @@ def test_composer_grows_to_wrapped_multiline_and_still_submits_on_enter() -> Non
     treats as ``height=Dimension.exact(1)`` regardless of the
     ``Dimension(min=1, max=5)`` we passed. ``wrap_lines=True`` was
     silently ignored, so long input was clipped, not wrapped.  The
-    eager ``enter`` binding from ``live_repl`` now wins over the
-    default ``_newline`` handler, so the buffer still submits on
-    Enter even though the composer is multiline.
+    ``enter`` binding from ``live_repl`` is registered AFTER the
+    default ``_newline`` handler in the merged ``_CombinedRegistry``,
+    so the LAST matching handler wins on a ControlM press and the
+    buffer still submits on Enter even though the composer is
+    multiline.  ``eager=True`` is intentionally NOT used here; the
+    0.3.7 inline-terminal audit confirmed that ``eager=True`` on
+    the ``enter`` binding breaks the live composer's normal
+    text-insert path.
     """
     async def scenario() -> None:
         session = SimpleNamespace(
@@ -201,16 +206,21 @@ def test_composer_grows_to_wrapped_multiline_and_still_submits_on_enter() -> Non
     asyncio.run(scenario())
 
 
-def test_composer_cj_inserts_literal_newline_without_submitting() -> None:
-    """Multiline composer accepts ``\\n`` (Ctrl+J) without submitting.
+def test_composer_cj_submits_via_default_newline2_re_feed() -> None:
+    """Bare ``\\n`` (``Keys.ControlJ``) is re-fed by Prompt Toolkit as ControlM.
 
-    Plain Enter (with ``eager=True``) is the submit path.  To insert
-    a hard newline inside a multi-line composer, the user types
-    ``Ctrl+J`` (which most terminals send as ``\\n``).  Prompt
-    Toolkit's default ``c-j`` handler unconditionally re-feeds the
-    press as a ControlM (Enter) for terminals that send ``\\n`` on
-    Enter; without the ``eager=True`` override we register here,
-    the user could never insert a literal newline.
+    The 0.3.7 inline-terminal audit confirmed that registering a custom
+    ``c-j`` binding (even with ``eager=True``) breaks the live composer's
+    normal text-insert path for the first typed key.  The fix is to
+    leave ``c-j`` to Prompt Toolkit's default ``_newline2`` handler in
+    ``prompt_toolkit.key_binding.bindings.basic``, which unconditionally
+    re-feeds the press as a ``ControlM`` for terminals that send
+    ``\\n`` on Enter.  On a multiline composer, that re-feed then lands
+    on this binding's ``enter`` handler, which submits the buffer.
+
+    This regression test pins that contract: a bare ``\\n`` after a
+    single line of text submits with the original text intact, exactly
+    the way the PTY e2e suite's ``child.sendline`` path expects.
     """
     async def scenario() -> None:
         session = SimpleNamespace(
@@ -234,14 +244,18 @@ def test_composer_cj_inserts_literal_newline_without_submitting() -> None:
             run_task = asyncio.create_task(terminal.run())
             await terminal.wait_until_ready()
 
-            # The TextArea is multiline so the user can author and
-            # submit multi-line drafts.
+            # The TextArea stays multiline so wrap still works for long
+            # input; the multiline feature simply loses literal-newline
+            # insertion (no ``c-j`` binding).  Users wanting a hard
+            # newline inside a draft should use the Buffer API directly
+            # (for example via a future /draft command), not the
+            # composer key.
             assert terminal.composer.buffer.multiline is True or terminal.composer.buffer.multiline() is True
-            # Type ``line one`` then ``\\n`` (Ctrl+J) then ``line two`` then Enter.
-            pipe.send_text("line one\x0aline two\r")
+            # A bare ``\\n`` re-feeds as Enter and submits the buffer.
+            pipe.send_text("draft message\x0a")
             submission = await asyncio.wait_for(terminal.next_submission(), timeout=0.5)
             assert submission is not None
-            assert submission.text == "line one\nline two"
+            assert submission.text == "draft message"
 
             terminal.close()
             await run_task
