@@ -225,7 +225,7 @@ def build_prompt_toolkit_bindings(
             if queued_work():
                 # Convert the first queued item to STEER so the scheduler
                 # picks it up as a directional steer when the turn resumes.
-                from core.queue import ControlAction, ControlKind
+                from core.turn_scheduler import ControlAction, ControlKind
                 action = ControlAction(kind=ControlKind.CLAIM_STEER)
                 queue_control = getattr(session, "queue_control", None)
                 if callable(queue_control):

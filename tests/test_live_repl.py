@@ -70,6 +70,40 @@ def test_active_escape_and_ctrl_c_share_interrupt_control():
     assert session.interrupt_active.call_count == 2
 
 
+def test_escape_while_running_with_queued_work_claims_steer():
+    """Regression: live_repl.Esc binding must import ControlAction from
+    ``core.turn_scheduler``, not ``core.queue``. The latter module does
+    not exist; importing it inside the binding raised ModuleNotFoundError
+    on every Escape keypress, which PT then rendered as
+    "Press ENTER to continue..." — and the host stdout proxy routed
+    that string into the in-Application transcript, scrambling the UI.
+    """
+    queue_control = MagicMock()
+
+    def queue_status():
+        return {"pending_count": 1, "queue_depth": 1}
+
+    session = SimpleNamespace(
+        queue_status=queue_status,
+        interrupt_active=MagicMock(return_value=True),
+        queue_control=queue_control,
+    )
+    bindings, _state = _build_bindings(session)
+    event = SimpleNamespace(
+        app=SimpleNamespace(current_buffer=SimpleNamespace()),
+    )
+
+    # The binding runs ``schedule_interrupt`` in a background task when
+    # ``app.create_background_task`` is present. The local-import error
+    # is raised synchronously in the binding body, so the assertion here
+    # would fail loudly if the wrong module name regressed.
+    bindings.handlers[("escape",)](event)
+    queue_control.assert_called_once()
+    from core.turn_scheduler import ControlAction, ControlKind  # noqa: F401
+    action = queue_control.call_args[0][0]
+    assert action.kind is ControlKind.CLAIM_STEER
+
+
 def test_escape_interrupt_runs_off_ui_thread_and_notifies_after_settle():
     async def scenario() -> None:
         status = {"pending_count": 1}
