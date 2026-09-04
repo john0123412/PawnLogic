@@ -757,6 +757,17 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   ``/draft``-style command that drives ``buffer.insert_text`` directly;
   until then, the only way to send a multi-line message is to type it
   pre-formatted in a single ``send`` (no in-composer literal newlines).
+- The multiline composer must keep ``dont_extend_height=True`` with
+  ``Dimension(min=1, max=5)`` and must NOT use ``weight=0``:
+  multiline content raising the preferred height while zero weight
+  excludes the child from the growth rotation sends PT 3.0.52's
+  ``take_using_weights`` into an infinite layout loop (frozen page,
+  dead keys on wrapped input). The narrow live-terminal suite and the
+  e2e live-composer flows pin the working combination.
+- Nested-Application TUIs (``/provider``, ``/skills``) rely on the
+  controller's pause/teardown/resume lifecycle; a flag-flip-only
+  ``pause_for_modal`` lets two VT100 render loops fight the same PTY.
+  The full in-Application rewrite (ADR 0010 §3) remains the follow-up.
 - English and zh-CN docs drifting in structure or command examples.
 - Release prep editing version literals outside fixed locations.
 - Packaging accidentally including `skills/` content.

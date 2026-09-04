@@ -362,7 +362,10 @@ def test_slash_planguard_tui_applies_selected_mode(spawn_pawnlogic_tui):
     try:
         _wait_for_prompt(child)
         child.sendline("/plg")
-        child.expect("Auto-corrected: /plg -> /planguard", timeout=10)
+        # The auto-correct notice renders in the in-Application transcript
+        # (sink.print), not as raw host-PTY bytes, so the PTY sees the
+        # selector itself. The notice line is asserted by the in-process
+        # regression test for dispatch_live_slash.
         child.expect("Plan Guard Mode", timeout=10)
         child.send("2")
         child.send("\r")

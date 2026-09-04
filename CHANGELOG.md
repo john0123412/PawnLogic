@@ -64,6 +64,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   so transcript ownership is unambiguous. Every output writer now
   appends to the single `TerminalTranscript`; the host sink is the
   only path that touches the original stdout.
+- Fixed the owner-reported live-terminal freeze and dead keys. The
+  multiline composer (`multiline=True`) combined with
+  `height=Dimension(min=1, max=5, weight=0)` sent Prompt Toolkit
+  3.0.52's `take_using_weights` into an infinite layout loop the
+  moment a draft wrapped onto a second row, starving the key
+  processor. The composer now uses `Dimension(min=1, max=5)` with
+  `dont_extend_height=True`: the empty composer renders one row,
+  wrapped drafts grow up to five rows, and the layout loop terminates.
+- Restored Up/Down composer-history recall on wrapped drafts. The
+  stock `auto_up`/`auto_down` only walk history from the first/last
+  buffer row, so the multiline composer turned Up/Down into cursor
+  movement inside the draft. Explicit history bindings now walk
+  history regardless of cursor row; the completion menu keeps PT's
+  `complete_previous`/`complete_next`.
+- Reverted `mouse_support=True` (ADR 0010 §2). PT's mouse support
+  enables `?1003h` any-motion tracking, which floods WSL / Windows
+  Terminal with motion packets and swallows the host's native wheel
+  scrollback. Wheel scrolling now scrolls the host terminal's own
+  scrollback; multiplexer-emitted `Keys.ScrollUp`/`Keys.ScrollDown`
+  packets still reach the output viewport bindings.
+- Removed `bypass_print`: auto-correct notices now render through the
+  terminal sink (in-Application transcript) instead of raw host-PTY
+  writes that interleaved with PT's VT100 cursor positioning (the
+  `Select modelel for this session` scramble).
+- Restored the pause/teardown/resume lifecycle for nested-Application
+  TUIs (`/provider`, `/skills`). The 0.3.7 flag-flip-only
+  `pause_for_modal` let the nested `Application.run_async()` fight the
+  live Application for the PTY (the interleaved provider/skills
+  panels). The controller now tears the main Application down before
+  the nested TUI runs and rebuilds it afterwards; state-machine
+  selectors keep the single-Application modal path.
+- Bounded the live render cost for large sessions. The output window
+  renders the trailing `1000` transcript lines (not the full buffer),
+  caches the render against the transcript's monotonic version, and
+  throttles cross-thread invalidation to 30 fps with a trailing-edge
+  repaint. Measured at the owner's 6,000-line session: renders no
+  longer re-parse 250KB per frame and keys stay responsive while a
+  stream runs.
+- High-risk tool confirmations render as an in-Application yes/no
+  selector while the live terminal is up, marshalled onto the
+  terminal's event loop from the tool thread. The synchronous
+  `input()` fallback remains for non-live terminals; the previous
+  behavior raced the composer for stdin and leaked the
+  `Type 'yes' ...` prompt into the recovered draft.
+- Guarded the live SIGINT handler during shutdown so a stray Ctrl+C
+  at exit no longer raises from inside `threading._shutdown` (the
+  traceback printed on the owner's exit path).
 
 ### Tests
 - Added `tests/test_live_terminal_inline.py` covering the inline
@@ -74,6 +121,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `Application` modal path for `/model` and the controller's dual
   dispatch. PTY smoke covers the host-terminal scrollback / mouse /
   copy contract.
+- Added live-terminal regressions: tail-bounded rendering with
+  version caching, Up/Down history recall on wrapped drafts,
+  auto-correct notices staying in the transcript, and no bypass
+  seam for raw host-stdout writes. The PTY e2e planguard flow now
+  asserts on the selector rendering instead of host-PTY notice
+  bytes.
 
 ## [0.3.6] - 2026-09-02
 
