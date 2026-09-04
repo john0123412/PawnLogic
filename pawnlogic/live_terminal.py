@@ -87,7 +87,14 @@ Submission = TerminalSubmission
 
 
 class _OutputControl(FormattedTextControl):
-    """Formatted output control with wheel events bound to its viewport."""
+    """Formatted output control with wheel events bound to its viewport.
+
+    Renders the live transcript by default; switches to the active
+    selector's formatted text when a selector is registered.  Using
+    a single control guarantees only one output region is visible at
+    a time, which prevents the stacked-pane scramble that happens
+    when two ``ConditionalContainer``s share a body slot.
+    """
 
     def __init__(
         self,
@@ -104,6 +111,11 @@ class _OutputControl(FormattedTextControl):
         )
 
     def mouse_handler(self, mouse_event: MouseEvent) -> Any:
+        # When a selector is active, the wheel events must not steal
+        # scroll from the selector viewport; let the default handler
+        # deliver them to PT's own scroll machinery.
+        if self._terminal._selector_registry.has_active:
+            return super().mouse_handler(mouse_event)
         if mouse_event.event_type is MouseEventType.SCROLL_UP:
             self._terminal.scroll_output(-3)
             return None
@@ -764,7 +776,7 @@ class PersistentTerminal:
         self._composer.buffer.cursor_position = len(self._default_text)
         output_control = _OutputControl(
             self,
-            self._render_output,
+            self._output_or_selector_text,
             get_cursor_position=self._output_cursor_position,
         )
         output_window = Window(
@@ -789,29 +801,15 @@ class PersistentTerminal:
             ),
             filter=Condition(self._has_queue_preview),
         )
-        # The selector content window replaces the live transcript
-        # when a selector is active.  Placing it in the body (not as
-        # a Float) gives it the full output height and avoids the
-        # FloatContainer's content-size clipping that swallowed the
-        # option lines on small terminals.
-        selector_control = FormattedTextControl(
-            self._selector_formatted_text,
-        )
-        selector_window = Window(
-            selector_control,
-            wrap_lines=True,
-            always_hide_cursor=True,
-        )
-        selector_output = ConditionalContainer(
-            content=selector_window,
-            filter=Condition(lambda: self._selector_registry.has_active),
-        )
-        normal_output = ConditionalContainer(
-            content=output_window,
-            filter=Condition(lambda: not self._selector_registry.has_active),
-        )
+        # The active selector's formatted text replaces the live
+        # transcript inside the SAME output window via a switching
+        # ``text`` callable.  Using one window (instead of two
+        # ``ConditionalContainer``s sharing a body slot) means only
+        # one output region is ever visible at a time, which avoids
+        # the "two output panes stacked" scramble on small terminals
+        # and guarantees the selector sees the full body height.
         body = HSplit(
-            [normal_output, selector_output, queue_preview, self._composer.window, toolbar_window]
+            [output_window, queue_preview, self._composer.window, toolbar_window]
         )
         root = FloatContainer(
             content=body,
@@ -900,6 +898,19 @@ class PersistentTerminal:
         plain_text = _ANSI_ESCAPE.sub("", text)
         self._rendered_output_line_count = len(plain_text.split("\n"))
         return ANSI(text) if "\x1b[" in text else text
+
+    def _output_or_selector_text(self) -> Any:
+        """Return transcript text or the active selector's text.
+
+        Keeping both content sources in a single ``FormattedTextControl``
+        means the body HSplit only contains one output ``Window``;
+        switching at render time avoids stacking the transcript and
+        the selector in the same vertical slot, which previously
+        scrambled the page on small terminals.
+        """
+        if self._selector_registry.has_active:
+            return self._selector_registry.formatted_text()
+        return self._render_output()
 
     def _render_toolbar(self) -> Any:
         return self._toolbar_text()
@@ -991,6 +1002,10 @@ class PersistentTerminal:
 
     def _output_cursor_position(self) -> Point:
         """Anchor the output cursor inside the visible output slice."""
+        # The selector renders its own cursor (active option marker);
+        # the outer control's cursor must not also appear on top of it.
+        if self._selector_registry.has_active:
+            return Point(x=0, y=0)
         with self._lock:
             line_count = self._rendered_output_line_count
             offset = self._output_scroll_offset

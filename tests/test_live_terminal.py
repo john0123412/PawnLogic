@@ -9,6 +9,7 @@ from threading import Thread
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.input.defaults import create_pipe_input
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.output import DummyOutput
@@ -556,3 +557,126 @@ def test_bypass_print_writes_to_original_stdout_while_proxy_is_active() -> None:
                 asyncio.run(controller.close())
     finally:
         sys.stdout = original_stdout
+
+
+def test_body_layout_uses_a_single_output_window_not_two_conditional_containers() -> None:
+    """Regression: only one output region must exist in the body.
+
+    The previous layout stacked two ``ConditionalContainer``s
+    (one for the transcript, one for the selector) into the body
+    HSplit.  Both took layout space; the selector only filled the
+    first row, leaving the transcript fragment bleeding through and
+    scrambling the page.  This test walks the body HSplit and
+    confirms there is exactly one switching output ``Window``
+    (the one whose control is the same instance the terminal
+    stores on ``self._output_window``) — not two gated Windows.
+    """
+    from prompt_toolkit.layout import (
+        ConditionalContainer,
+        FloatContainer,
+        HSplit,
+    )
+
+    from pawnlogic.live_terminal import PersistentTerminal
+
+    with create_pipe_input() as pipe:
+        terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+        # Force the layout to build without spinning the Application.
+        application = terminal._build_application_locked()
+        root = application.layout.container
+        # FloatContainer -> body HSplit.
+        body = root
+        if isinstance(body, FloatContainer):
+            body = body.content
+        assert isinstance(body, HSplit), (
+            f"layout root body must be HSplit, got {type(body).__name__}"
+        )
+
+        # The terminal stores the single output Window on
+        # ``self._output_window``; the body must contain it
+        # exactly once and not duplicate it inside a
+        # ``ConditionalContainer`` next to the queue preview.
+        output_window = terminal._output_window
+        assert output_window is not None, "terminal must own an output Window"
+        output_matches = [
+            child for child in body.children
+            if child is output_window
+        ]
+        assert len(output_matches) == 1, (
+            f"body must contain the output Window exactly once; "
+            f"found {len(output_matches)}"
+        )
+        # No ConditionalContainer may wrap the output Window:
+        # the body must not stack the transcript and the selector.
+        for child in body.children:
+            if isinstance(child, ConditionalContainer) and child.content is output_window:
+                raise AssertionError(
+                    "output Window must not be wrapped in a "
+                    "ConditionalContainer — the transcript and "
+                    "the selector must share the same Window "
+                    "via a switching text callable"
+                )
+        terminal.close()
+
+
+def test_output_window_text_switches_to_active_selector() -> None:
+    """Regression: the single output Window's text source must
+    switch from transcript to selector when a selector is active.
+
+    Without this, the selector Float would be missing entirely or
+    the transcript would bleed through under it.  We install a
+    minimal ``SelectorState`` directly into the terminal's
+    registry and confirm ``_output_or_selector_text`` returns the
+    selector's formatted text (which contains the selector's
+    unique title) instead of the transcript snapshot.
+    """
+    from pawnlogic.selectors import PlanGuardSelector
+
+    with create_pipe_input() as pipe:
+        terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+        # Seed the transcript so we can detect when the switch
+        # correctly hides it.
+        terminal.append_output("transcript-line-marker-XYZ\n")
+        baseline = terminal._output_or_selector_text()
+        # The transcript path returns a plain string (or ANSI
+        # wrapper); the selector path returns a list of
+        # ``(style, text)`` tuples.  That structural difference
+        # is enough to confirm the routing without parsing.
+        assert isinstance(baseline, (str, ANSI)), (
+            f"baseline render must be the transcript text; got {type(baseline).__name__}"
+        )
+        assert "transcript-line-marker-XYZ" in str(baseline), (
+            "baseline render must show the transcript"
+        )
+
+        # Install a selector and re-render.  The output Window
+        # must now show the selector's text, not the transcript.
+        selector = PlanGuardSelector(current="advisory")
+        loop = asyncio.new_event_loop()
+        try:
+            future: asyncio.Future[str | None] = loop.create_future()
+            terminal._selector_registry.install_active(selector, future)
+        finally:
+            loop.close()
+        assert terminal._selector_registry.has_active, (
+            "selector must be active after install"
+        )
+        switched = terminal._output_or_selector_text()
+        # Selector formatted text is a list of (style, text) tuples.
+        assert isinstance(switched, list), (
+            f"switched render must be a selector fragment list; got {type(switched).__name__}"
+        )
+        rendered = "".join(
+            fragment[1] for fragment in switched
+            if isinstance(fragment, tuple) and len(fragment) >= 2
+        )
+        assert "Plan Guard Mode" in rendered, (
+            "output Window must show the active selector's text; "
+            f"got {rendered!r}"
+        )
+        assert "transcript-line-marker-XYZ" not in rendered, (
+            "output Window must NOT also show the transcript; the "
+            "two views must not coexist in the same Window. "
+            f"Got {rendered!r}"
+        )
+        terminal.close()
