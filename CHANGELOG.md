@@ -42,6 +42,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - The persistent composer's `TextArea` now wraps long input at the
   terminal width and grows from one to up to five rows so long input
   is not clipped to a single fixed row.
+- Added a persistent 1-line status indicator above the composer.
+  The 0.3.7 inline terminal now always tells the user what the worker
+  thread is doing without depending on a session-emitted `print()`:
+  `[model]  Idle`, `[model]  ⏱ Ns · Esc to interrupt` while a Turn
+  is in flight, `[model]  ⏸ interrupted by user` for 1.5 s after a
+  user-initiated Esc / Ctrl+C interrupt, and `[model]  Idle — edit
+  the draft and press Enter` for 1.5 s after a recovery prefill. A
+  250 ms `loop.call_later` ticker keeps the seconds counter honest
+  while the model is running. Failure is silent: a failed Turn
+  parks the queue internally but does not surface a `Failed · +N
+  parked` label to the user.
+- **Queue UI hidden.** The 0.3.7 live terminal no longer surfaces
+  queue counters, parked summaries, or the queue preview above the
+  composer. The bottom toolbar drops the `Queue: Idle · steer:N ·
+  follow-up:N` segment; `core/queue_tui.toolbar_queue_status`
+  returns a single label (`Idle` / `Running` / `Queued` /
+  `Recoverable` / `Failed`); the `build_queue_preview` helper is
+  removed from `pawnlogic.live_repl`. `/queue` is no longer in the
+  help block, the cmdhelp dictionary, the top-of-file
+  `core/commands/session.py` summary, or the live composer's
+  "controls allowed while running" notice. `/queue resume` and
+  `/queue clear` survive as internal aliases reachable through
+  `ControlAction(kind=RESUME, explicit=True)` and the existing
+  command registration, so any script that types them still works.
+- **`/abort` merged.** The previous `--all` form is removed; plain
+  `/abort` now interrupts the active Turn and clears the queue in
+  one call. Failure is silent on the user UI, so the only
+  user-visible queue control is now a single, unambiguous verb.
 
 ### Fixed
 - Fixed the persistent terminal not writing to the host scrollback
@@ -119,9 +147,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   onto the page. The control surface keeps an `explicit` flag:
   `/queue resume`, and Enter on the recovered draft, always proceed.
   Mirrors the queue-until-idle-and-healthy contract of claude-code's
-  QueryGuard. The toolbar leads with `Failed · +N parked` and the
-  queue preview collapses to one parked summary line with the
-  resume/discard hints instead of scrolling every queued row.
+  QueryGuard. 0.3.7 hides the parked state from the user UI (the
+  toolbar's `Queue:` segment and the per-row preview are gone); the
+  internal anti-cascade gate is preserved but failure is silent on
+  the user surface.
 - Made the bottom toolbar width-adaptive. The single toolbar row was
   clipped mid-field on 80-column terminals (`... follow-u`); fields
   now render most-important-first within a ~100-column budget and
@@ -137,6 +166,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `Application` modal path for `/model` and the controller's dual
   dispatch. PTY smoke covers the host-terminal scrollback / mouse /
   copy contract.
+- Added `tests/test_status_line.py` pinning the persistent status
+  line contract: the running indicator shows the elapsed seconds
+  while a Turn is in flight, the post-interrupt banner holds for
+  1.5 s and returns to `Idle`, and the line never surfaces queue
+  counters or `+N parked` labels.
+- Added `tests/test_enter_during_turn.py` pinning the auto-enqueue
+  contract: Enter during a running Turn sets `SubmissionKind.STEER`
+  and reaches `session.submit_live_turn` without blocking the event
+  loop, so the status ticker keeps redrawing and a follow-up
+  keypress echoes into the composer unchanged.
 - Added live-terminal regressions: tail-bounded rendering with
   version caching, Up/Down history recall on wrapped drafts,
   auto-correct notices staying in the transcript, and no bypass

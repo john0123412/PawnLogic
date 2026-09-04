@@ -655,7 +655,36 @@ are source-checkout or user-installed assets; pip/curl installations should use
   ``wrap_lines=True`` stay in place; only the literal-newline
   insertion path is removed (no ``c-j`` binding) until a
   /draft-style command is added to drive ``buffer.insert_text``
-  explicitly.  Release-prep edits in this cycle:
+  explicitly.  A follow-up cycle (6317195) added a persistent
+  1-line status indicator above the composer so the user always
+  sees what the worker thread is doing: `[model]  Idle`,
+  `[model]  ⏱ Ns · Esc to interrupt` while a Turn is in flight,
+  `[model]  ⏸ interrupted by user` for 1.5 s after a user-initiated
+  Esc / Ctrl+C interrupt, and `[model]  Idle — edit the draft and
+  press Enter` for 1.5 s after a recovery prefill. A 250 ms
+  `loop.call_later` ticker keeps the seconds counter honest while
+  the model runs, so the event loop stays free for key dispatch and
+  mid-turn typing echoes into the composer instead of being
+  swallowed. The same cycle hides the queue UI from the user
+  surface entirely: the toolbar's `Queue:` segment is dropped,
+  `build_queue_preview` is removed from `pawnlogic.live_repl`,
+  `core/queue_tui.toolbar_queue_status` returns a label-only
+  string, and `/queue` is gone from the help block, the cmdhelp
+  dictionary, the top-of-file command summary, and the live
+  composer's "controls allowed while running" notice. `/queue
+  resume` and `/queue clear` survive as internal aliases
+  reachable through `ControlAction(kind=RESUME, explicit=True)`
+  and the existing command registration, so scripts that type
+  them keep working. The `/abort` command is merged: the previous
+  `--all` form is removed and plain `/abort` interrupts the active
+  Turn and clears the queue in one call. Failure is silent on the
+  user UI — a failed Turn parks the queue internally but the
+  persistent status line simply returns to `Idle` with no `Failed
+  · +N parked` label — so the only outward sign of a failure is
+  a 1.5 s `interrupted by user` banner when the user pressed
+  Esc. The internal anti-cascade gate
+  (`ControlAction(explicit=True)`) is preserved exactly as it
+  was. Release-prep edits in this cycle:
   `config/paths.py:VERSION` `0.3.6` → `0.3.7`, the `0.3.7` section
   added to `CHANGELOG.md`, `0.3.7` row added to `SECURITY.md`, and
   [ADR 0010](docs/adr/0010-inline-terminal-modal.md) header updated
@@ -773,8 +802,11 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   Enter on the recovered draft, carried by ``ControlAction.explicit``).
   New user input still queues normally; only the automatic drain is
   gated. Tests pin the parked cascade, the explicit pass-through, the
-  ``Failed · +N parked`` toolbar label, and the one-line parked queue
-  preview.
+  label-only ``Failed`` toolbar status, and the
+  ``core/queue_tui.toolbar_queue_status`` label contract. The 0.3.7
+  live terminal hides the parked state from the user UI; the
+  internal anti-cascade gate is preserved but failure is silent on
+  the user surface.
 - The bottom toolbar renders fields within a width budget (see
   ``_TOOLBAR_HARD_MAX`` / ``_TOOLBAR_WIDE_MIN`` in
   ``pawnlogic/live_repl.py``); adding a toolbar field must keep the
