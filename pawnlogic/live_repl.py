@@ -84,16 +84,12 @@ async def dispatch_live_slash(
                 corrected = matches[0]
                 raw = f"{corrected} {rest}".strip() if rest else corrected
                 notice = c(YELLOW, f"  ✔ Auto-corrected: {verb} -> {corrected}\n")
-                if paused:
-                    # Selector is about to run; the host PTY needs the
-                    # auto-correct notice **before** the selector
-                    # renders, but the proxy still owns stdout. Send
-                    # the line straight to the original host stdout so
-                    # it appears ahead of the selector output, and
-                    # also keep the in-Application transcript in sync.
-                    terminal_controller.bypass_print(notice)
-                else:
-                    sink.print(notice.rstrip("\n"))
+                # Always route through the sink. Writing raw bytes to the
+                # host PTY while the Application is alive corrupts PT's
+                # VT100 cursor positioning (the interleaved
+                # "Select modelel for this session" scramble); the
+                # transcript renders the notice above the selector.
+                sink.print(notice.rstrip("\n"))
         if should_defer_live_slash(session, raw, enabled=live_enabled):
             await terminal_notice(LIVE_SLASH_NOTICE)
             return None
@@ -252,6 +248,34 @@ def build_prompt_toolkit_bindings(
             return
         event.app.exit(exception=KeyboardInterrupt())
 
+    # Arrow-key history recall. Prompt Toolkit's stock ``auto_up`` /
+    # ``auto_down`` only walk history when the cursor sits on the first
+    # (resp. last) row of the buffer. The 0.3.7 multiline composer wraps
+    # long drafts onto multiple rows, so ``auto_up`` started moving the
+    # cursor inside the draft instead of recalling history — reported as
+    # "up/down keys dead". These bindings restore the pre-0.3.7 contract:
+    # Up/Down always walk composer history while the completion menu is
+    # closed. The selector-active case never reaches here (its eager
+    # bindings in live_terminal.py run first).
+    def _has_completion_menu(event: Any) -> bool:
+        return bool(getattr(event.app.current_buffer, "complete_state", None))
+
+    @bindings.add("up")
+    def _(event: Any) -> None:
+        buffer = event.app.current_buffer
+        if _has_completion_menu(event):
+            buffer.complete_previous()
+            return
+        buffer.history_backward()
+
+    @bindings.add("down")
+    def _(event: Any) -> None:
+        buffer = event.app.current_buffer
+        if _has_completion_menu(event):
+            buffer.complete_next()
+            return
+        buffer.history_forward()
+
     @bindings.add("backspace")
     @bindings.add("c-h")
     def _(event: Any) -> None:
@@ -290,6 +314,7 @@ def install_live_interrupt_handler(
     """
     previous = signal.getsignal(signal.SIGINT)
     restored = False
+    closing = False
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -316,6 +341,11 @@ def install_live_interrupt_handler(
         return True
 
     def _handler(_signum: int, _frame: Any) -> None:
+        # During interpreter shutdown the original handler chain is gone;
+        # a stray ^C here must not raise from a dead helper into
+        # threading._shutdown (the traceback the owner saw on exit).
+        if closing:
+            return
         if running_turn():
             if schedule_interrupt():
                 try:
@@ -342,10 +372,11 @@ def install_live_interrupt_handler(
     signal.signal(signal.SIGINT, _handler)
 
     def restore() -> None:
-        nonlocal restored
+        nonlocal restored, closing
         if restored:
             return
         restored = True
+        closing = True
         signal.signal(signal.SIGINT, previous)
 
     return restore

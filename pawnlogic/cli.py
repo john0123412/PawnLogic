@@ -442,8 +442,30 @@ _LIVE_TERMINAL_CONTROLLER_HOLDER: dict[str, Any] = {}
 
 
 def _publish_live_terminal_controller(controller: Any) -> None:
-    """Publish or clear the controller that ``handle_slash`` will attach."""
+    """Publish or clear the controller that ``handle_slash`` will attach.
+
+    Also registers the confirmation seam in ``core.operation_policy``:
+    while the live terminal is up, a live event loop and controller are
+    published so high-risk tool confirmations render as the
+    in-Application yes/no modal instead of a raw ``input()`` that
+    races the composer for stdin. Clearing the controller also clears
+    the loop, restoring the synchronous confirmation path.
+    """
     _LIVE_TERMINAL_CONTROLLER_HOLDER["controller"] = controller
+    try:
+        from core.operation_policy import (
+            register_confirmation_controller,
+            register_confirmation_loop,
+        )
+
+        register_confirmation_controller(controller)
+        register_confirmation_loop(
+            controller.terminal._loop if controller is not None else None
+        )
+    except Exception:
+        # Best-effort seam: if registration fails, the tool path falls
+        # back to its non-interactive denial.
+        pass
 
 
 def _get_live_terminal_controller() -> Any:
@@ -1408,6 +1430,14 @@ async def _main_impl():
     if _live_terminal_controller is not None:
         await _live_terminal_controller.start()
         sink = _live_terminal.sink
+        # The terminal's event loop only exists after start(); publish it
+        # so tool threads can marshal confirmation modals onto it.
+        try:
+            from core.operation_policy import register_confirmation_loop
+
+            register_confirmation_loop(_live_terminal_controller.terminal._loop)
+        except Exception:
+            pass
 
     while True:
         try:
