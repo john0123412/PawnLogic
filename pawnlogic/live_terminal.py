@@ -819,7 +819,15 @@ class PersistentTerminal:
                 if self._style is not None
                 else [Style.from_dict(_selector_style_dict())]
             ),
-            mouse_support=False,
+            # Enable mouse support so wheel events reach the
+            # ``scroll_bindings`` registered above.  ``full_screen=False``
+            # still leaves the host terminal's native scroll, selection,
+            # and copy working — mouse_support is independent of whether
+            # PT uses the alternate screen buffer.  All mouse modes that
+            # would let the user click into a row or move the cursor
+            # outside the composer are filtered out; only ScrollUp /
+            # ScrollDown is bound.
+            mouse_support=True,
         )
         # A bare Escape shares its first byte with Alt+Enter, Alt+Up, and
         # terminal navigation sequences. Prompt Toolkit otherwise waits 0.5s
