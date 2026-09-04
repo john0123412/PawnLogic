@@ -99,7 +99,9 @@ def submit_session_turn(
             ControlAction(ControlKind.REPLACE_RECOVERED, content=user_input)
         )
         if replacement.accepted:
-            scheduler.control(ControlAction(ControlKind.RESUME))
+            # The user typed this Enter to replace the recovered draft:
+            # an explicit resume that may pass the failed-state gate.
+            scheduler.control(ControlAction(ControlKind.RESUME, explicit=True))
         return
     selected_kind = _reconcile_submission_kind(view, selected_kind)
     submission = Submission(user_input, kind=selected_kind, source="session")
@@ -143,7 +145,7 @@ def retry_interrupted_session_turn(session: Any, user_input: str) -> bool:
                 ControlAction(ControlKind.REPLACE_RECOVERED, content=user_input)
             )
             if replacement.accepted:
-                scheduler.control(ControlAction(ControlKind.RESUME))
+                scheduler.control(ControlAction(ControlKind.RESUME, explicit=True))
                 return True
     run_session_turn(session, user_input)
     return False
@@ -157,11 +159,12 @@ def resume_session_turn(session: Any) -> bool:
         return bool(view.follow_up)
     if view.recovered is None and not view.follow_up:
         return False
+    resume = ControlAction(ControlKind.RESUME, explicit=True)
     if getattr(session, "_live_turns_enabled", False):
-        return scheduler.control(ControlAction(ControlKind.RESUME)).accepted
+        return scheduler.control(resume).accepted
     session._sync_runtime_context()
     with session.runtime_context.activate():
-        return scheduler.control(ControlAction(ControlKind.RESUME)).accepted
+        return scheduler.control(resume).accepted
 
 
 def shutdown_session(session: Any) -> bool:

@@ -768,6 +768,17 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   controller's pause/teardown/resume lifecycle; a flag-flip-only
   ``pause_for_modal`` lets two VT100 render loops fight the same PTY.
   The full in-Application rewrite (ADR 0010 §3) remains the follow-up.
+- A failed or aborted Turn parks the queue: implicit RESUME drains are
+  rejected until the user explicitly resumes (``/queue resume`` or
+  Enter on the recovered draft, carried by ``ControlAction.explicit``).
+  New user input still queues normally; only the automatic drain is
+  gated. Tests pin the parked cascade, the explicit pass-through, the
+  ``Failed · +N parked`` toolbar label, and the one-line parked queue
+  preview.
+- The bottom toolbar renders fields within a width budget (see
+  ``_TOOLBAR_HARD_MAX`` / ``_TOOLBAR_WIDE_MIN`` in
+  ``pawnlogic/live_repl.py``); adding a toolbar field must keep the
+  80-column rendering free of mid-field clipping.
 - English and zh-CN docs drifting in structure or command examples.
 - Release prep editing version literals outside fixed locations.
 - Packaging accidentally including `skills/` content.

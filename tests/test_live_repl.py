@@ -307,3 +307,54 @@ def test_queue_preview_returns_muted_rows_for_waiting_input():
 
     release.set()
     scheduler.control(ControlAction(ControlKind.SHUTDOWN))
+
+
+def test_build_queue_preview_parks_items_after_failure() -> None:
+    """A failed session collapses the queued rows to one parked summary."""
+    from types import SimpleNamespace as _NS
+
+    from core.queue_tui import queue_rows  # noqa: F401 - contract reference
+    from core.turn_scheduler import (
+        SubmissionKind,
+        SubmissionStatus,
+        SubmissionView,
+    )
+    from pawnlogic.live_repl import build_queue_preview
+
+    def _view_item(content: str, kind: SubmissionKind) -> SubmissionView:
+        return SubmissionView(
+            submission_id=f"id-{content}",
+            sequence=1,
+            kind=kind,
+            content=content,
+            source="test",
+            status=SubmissionStatus.RECOVERED
+            if kind is SubmissionKind.RECOVERED
+            else SubmissionStatus.QUEUED,
+        )
+
+    class _View:
+        active = None
+        recovered = _view_item("draft", SubmissionKind.RECOVERED)
+        steer: tuple = ()
+        follow_up = (
+            _view_item("q1", SubmissionKind.FOLLOW_UP),
+            _view_item("q2", SubmissionKind.FOLLOW_UP),
+        )
+        session_status = "failed"
+
+    session = _NS(queue_view=lambda: _View())
+    preview = build_queue_preview(session)()
+    assert len(preview) == 1
+    text = preview[0][1]
+    assert "3 message(s) parked" in text
+    assert "/queue resume" in text
+    assert "q1" not in text, "parked queue must not scroll per-item rows"
+
+    # Healthy sessions keep the per-item preview.
+    class _HealthyView(_View):
+        session_status = "idle"
+
+    healthy = _NS(queue_view=lambda: _HealthyView())
+    preview2 = build_queue_preview(healthy)()
+    assert any("q1" in frag for _style, frag in preview2)

@@ -1303,3 +1303,60 @@ def test_background_interrupt_receipt_reports_pending_for_non_cooperative_execut
     finally:
         release.set()
         scheduler.control(ControlAction(ControlKind.SHUTDOWN))
+
+
+def test_failed_session_parks_implicit_resume_but_allows_explicit() -> None:
+    """Regression: a failed Turn must not auto-drain the queue.
+
+    The owner reported the cascade: with a dead provider (rate limit /
+    circuit open), every queued prompt re-ran into the same failure and
+    identical error lines piled onto the page. The implicit RESUME that
+    a new FOLLOW_UP submission triggers must be rejected while the
+    session is failed; an explicit RESUME (``/queue resume``) is the
+    user taking responsibility and proceeds.
+    """
+    calls: list[str] = []
+
+    def execute(submission: Submission) -> TurnExecutionResult:
+        calls.append(submission.content)
+        return TurnExecutionResult(TurnExecutionStatus.FAILED, "circuit open")
+
+    scheduler = TurnScheduler(execute)
+    scheduler.submit(Submission("first prompt"))
+    assert scheduler.view().session_status == "failed"
+
+    # Queue a follow-up; its automatic resume must be parked.
+    scheduler.submit(
+        Submission("second prompt", kind=SubmissionKind.FOLLOW_UP, source="test")
+    )
+    implicit = scheduler.control(ControlAction(ControlKind.RESUME))
+    assert not implicit.accepted
+    assert calls == ["first prompt"], "no queued prompt may re-run while failed"
+
+    # The explicit /queue resume passes the gate and re-runs the work.
+    # The executor keeps failing, so exactly ONE queued item is retried
+    # and the session parks again — a second implicit cascade must not
+    # drain the remaining queue on its own.
+    explicit = scheduler.control(ControlAction(ControlKind.RESUME, explicit=True))
+    assert explicit.accepted
+    assert calls == ["first prompt", "first prompt"], calls
+    assert scheduler.view().session_status == "failed"
+    still_parked = scheduler.control(ControlAction(ControlKind.RESUME))
+    assert not still_parked.accepted
+    assert calls == ["first prompt", "first prompt"], "no cascade"
+
+
+def test_failed_session_toolbar_and_preview_park_the_queue() -> None:
+    """The toolbar leads with Failed and the preview collapses parked items."""
+    from core.queue_tui import toolbar_queue_status
+
+    class _View:
+        active = None
+        recovered = object()
+        steer: tuple = ()
+        follow_up = (("q1",), ("q2",), ("q3",))
+        session_status = "failed"
+
+    status = toolbar_queue_status(_View())
+    assert status.startswith("Failed"), status
+    assert "+3 parked" in status, status

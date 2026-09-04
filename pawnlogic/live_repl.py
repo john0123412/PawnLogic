@@ -26,6 +26,13 @@ LIVE_SLASH_NOTICE = (
     "  ⚠ A Turn is running; only /queue, /abort [--all], or /exit controls are "
     "available until it completes."
 )
+# Bottom-toolbar width budget (visible columns, not ANSI bytes).
+# _TOOLBAR_HARD_MAX: never exceed a 100-column toolbar — anything past
+# that is clipped mid-field by PT on 80-120 column terminals.
+# _TOOLBAR_WIDE_MIN: the long directory path and phase name only join
+# when the shorter fields leave at least this much room.
+_TOOLBAR_HARD_MAX = 100
+_TOOLBAR_WIDE_MIN = 60
 
 
 async def _wait_for_interrupt_settlement(
@@ -418,16 +425,34 @@ def build_bottom_toolbar(
         queue_view = getattr(session, "queue_view", None)
         view = queue_view() if callable(queue_view) else None
         queue_status = toolbar_queue_status(view) if view is not None else "Idle · steer:0 · follow-up:0"
-        return html_factory(
-            f" <b>Model:</b> {model}"
-            f"  <b>Tier:</b> {tier}"
-            f"  <b>Tk:</b> {token_count:,}"
-            f"  <b>Ctx:</b> <{context_color}>{context_pct}%</{context_color}>"
-            f"  <b>Dir:</b> {session.cwd}"
-            f"  <b>Phase:</b> {session.current_phase}"
-            f"  <b>Queue:</b> {queue_status}"
-            f"{time_text}"
-        )
+        # Wide toolbars were clipped mid-field on 80-column terminals
+        # ("... follow-u") because PT truncates the single toolbar row.
+        # Render only the fields that fit, most important first:
+        # queue state and model always, then context, tier, tokens,
+        # and only on wide terminals the long directory path.
+        segments = [
+            ("queue", f"<b>Queue:</b> {queue_status}"),
+            ("model", f"<b>Model:</b> {model}"),
+            ("ctx", f"<b>Ctx:</b> <{context_color}>{context_pct}%</{context_color}>"),
+            ("tier", f"<b>Tier:</b> {tier}"),
+            ("tk", f"<b>Tk:</b> {token_count:,}"),
+            ("phase", f"<b>Phase:</b> {session.current_phase}"),
+            ("dir", f"<b>Dir:</b> {session.cwd}"),
+            ("time", time_text),
+        ]
+        plain_len = 1  # leading space
+        chosen: list[str] = []
+        for name, segment in segments:
+            if name == "time" and not time_text:
+                continue
+            approx = len(segment) - (segment.count("</") * 3)
+            if name in {"dir", "phase"} and plain_len + approx > _TOOLBAR_WIDE_MIN:
+                continue
+            if plain_len + approx > _TOOLBAR_HARD_MAX and chosen:
+                continue
+            chosen.append(segment)
+            plain_len += approx + 2
+        return html_factory(" " + "  ".join(chosen))
 
     return bottom_toolbar
 
@@ -437,14 +462,29 @@ def build_queue_preview(
     *,
     max_items: int = 3,
 ) -> Callable[[], list[tuple[str, str]]]:
-    """Build muted, read-only rows for queued input above the composer."""
+    """Build muted, read-only rows for queued input above the composer.
+
+    While the session is failed or aborted the queue is parked (the
+    scheduler refuses automatic drains), so scrolling every queued row
+    again on each redraw would just fill the composer area with the same
+    parked items — the "queue keeps piling onto the page" report. A
+    parked queue therefore renders one summary line plus the resume
+    hint instead of the per-item list.
+    """
     def queue_preview() -> list[tuple[str, str]]:
         queue_view = getattr(session, "queue_view", None)
         if not callable(queue_view):
             return []
-        rows = [row for row in queue_rows(queue_view()) if row.status != "running"]
+        view = queue_view()
+        rows = [row for row in queue_rows(view) if row.status != "running"]
         if not rows:
             return []
+        if view.session_status in {"failed", "aborted"}:
+            return [(
+                "class:queue-preview",
+                f"  ⏸ {len(rows)} message(s) parked after the failure — "
+                "/queue resume to run them, /abort --all to discard",
+            )]
         visible = rows[:max_items]
         lines = [
             f"  ↳ queued [{row.kind.value}] {row.summary}"

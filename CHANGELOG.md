@@ -111,6 +111,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Guarded the live SIGINT handler during shutdown so a stray Ctrl+C
   at exit no longer raises from inside `threading._shutdown` (the
   traceback printed on the owner's exit path).
+- Parked the queue after a failed Turn (cascade fix). An automatic
+  RESUME — the drain a new FOLLOW_UP submission triggers — is now
+  rejected while the session is failed or aborted: with a dead
+  provider (rate limit, circuit open, invalid key) every queued
+  prompt re-ran into the identical failure and piled error lines
+  onto the page. The control surface keeps an `explicit` flag:
+  `/queue resume`, and Enter on the recovered draft, always proceed.
+  Mirrors the queue-until-idle-and-healthy contract of claude-code's
+  QueryGuard. The toolbar leads with `Failed · +N parked` and the
+  queue preview collapses to one parked summary line with the
+  resume/discard hints instead of scrolling every queued row.
+- Made the bottom toolbar width-adaptive. The single toolbar row was
+  clipped mid-field on 80-column terminals (`... follow-u`); fields
+  now render most-important-first within a ~100-column budget and
+  the long directory path only appears when the shorter fields leave
+  room.
 
 ### Tests
 - Added `tests/test_live_terminal_inline.py` covering the inline

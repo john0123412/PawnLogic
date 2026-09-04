@@ -304,6 +304,7 @@ class ControlAction:
     content: str | None = None
     target_kind: SubmissionKind | None = None
     restore_state: Mapping[str, Any] | None = None
+    explicit: bool = False
 
     def __post_init__(self) -> None:
         kind = self.kind
@@ -328,6 +329,8 @@ class ControlAction:
             if not isinstance(self.restore_state, Mapping):
                 raise TypeError("restore_state must be a mapping or None")
             object.__setattr__(self, "restore_state", _copy_mapping(self.restore_state))
+        if not isinstance(self.explicit, bool):
+            object.__setattr__(self, "explicit", bool(self.explicit))
 
 
 @dataclass(frozen=True, slots=True)
@@ -633,7 +636,7 @@ class TurnScheduler:
             elif action.kind is ControlKind.REPLACE_RECOVERED:
                 receipt = self._replace_recovered_unlocked(action)
             elif action.kind is ControlKind.RESUME:
-                start_drive = self._resume_unlocked()
+                start_drive = self._resume_unlocked(explicit=action.explicit)
                 receipt = self._receipt_unlocked(
                     action,
                     start_drive,
@@ -978,7 +981,19 @@ class TurnScheduler:
     # ------------------------------------------------------------------
     # Controls and immutable views.
     # ------------------------------------------------------------------
-    def _resume_unlocked(self) -> bool:
+    def _resume_unlocked(self, *, explicit: bool = False) -> bool:
+        # An automatic RESUME (a new submission draining the follow-up
+        # lane) must not fire while the session is failed or aborted:
+        # every queued prompt would re-run into the same dead provider
+        # (rate limit, circuit open, invalid key) and pile identical
+        # failures onto the page — the cascade the owner reported. This
+        # mirrors the queue-until-idle-and-healthy contract of
+        # claude-code's QueryGuard: a failed query parks the queue.
+        # An EXPLICIT user resume (``/queue resume``, or Enter on the
+        # recovered draft) is the user taking responsibility and always
+        # proceeds.
+        if not explicit and self._session_status in {"failed", "aborted"}:
+            return False
         if self._active is not None or self._driving:
             return False
         if self._recovered is not None:

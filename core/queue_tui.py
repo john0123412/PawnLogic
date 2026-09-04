@@ -78,16 +78,25 @@ def queue_rows(view: SchedulerView) -> tuple[QueueRow, ...]:
 
 
 def toolbar_queue_status(view: SchedulerView) -> str:
-    """Return the compact queue status used by the live composer toolbar."""
+    """Return the compact queue status used by the live composer toolbar.
+
+    A failed session parks the queue (automatic drain is blocked until
+    the user resumes): the toolbar then leads with ``Failed`` so the
+    owner can tell a parked queue from a live one at a glance.
+    """
+    queued = len(view.steer) + len(view.follow_up)
+    counters = f"steer:{len(view.steer)} · follow-up:{len(view.follow_up)}"
     if view.active is not None:
-        label = "Running"
-    elif view.recovered is not None:
-        label = "Recoverable"
-    elif view.steer or view.follow_up:
-        label = "Queued"
-    else:
-        label = "Idle"
-    return f"{label} · steer:{len(view.steer)} · follow-up:{len(view.follow_up)}"
+        return f"Running · {counters}"
+    if view.session_status in {"failed", "aborted"}:
+        # Parked queue: nothing auto-runs until an explicit resume.
+        parked = f" +{queued} parked" if queued else ""
+        return f"Failed{parked} · {counters}"
+    if view.recovered is not None:
+        return f"Recoverable · {counters}"
+    if queued:
+        return f"Queued · {counters}"
+    return f"Idle · {counters}"
 
 
 def render_queue_tui(view: SchedulerView) -> str:
