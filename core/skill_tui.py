@@ -7,6 +7,9 @@ Launched via /skills. Arrow keys + Enter for all operations.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 from prompt_toolkit.application import Application
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout
@@ -17,6 +20,7 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 
 from core.skill_manager import SkillScanner, _canonical_skill_name
+from pawnlogic.selectors import ModalSpec
 
 _PAGE = 12
 _BTN_NAMES = ["Save", "All", "Clear", "Invert", "Sync", "Rescan", "Cancel"]
@@ -66,6 +70,11 @@ class SkillPackTUI:
         self._msg_style = ""
         self._flash_btn = -1  # button index to flash on activation
         self._app: Application | None = None
+        self._embedded = False
+        self._modal_close: Callable[[Any], None] | None = None
+        self._modal_refresh: Callable[[ModalSpec], None] | None = None
+        self._modal_key_bindings: Any = None
+        self._modal_closed = False
 
     # ── filtering ──────────────────────────────────────────────────────────
 
@@ -259,8 +268,7 @@ class SkillPackTUI:
             self._do_rescan()
         elif name == "Cancel":
             self._saved = False
-            if self._app:
-                self._app.exit()
+            self._finish(False)
         # Reset flash after a short delay (next invalidate cycle)
         self._flash_btn = -1
 
@@ -319,8 +327,7 @@ class SkillPackTUI:
         @kb.add("escape", filter=_buttons)
         def _btn_esc(e):
             self._saved = False
-            if self._app:
-                self._app.exit()
+            self._finish(False)
 
         # ── list focus mode ────────────────────────────────────────────────
         _listing = Condition(lambda: not self._search_focus and self._focus == "list")
@@ -391,8 +398,7 @@ class SkillPackTUI:
         @kb.add("escape", filter=_listing)
         def _list_esc(e):
             self._saved = False
-            if self._app:
-                self._app.exit()
+            self._finish(False)
 
         return kb
 
@@ -406,25 +412,89 @@ class SkillPackTUI:
         self._scanner._write_enabled(self._selected)
         self._scanner.invalidate_cache()
         self._saved = True
-        if self._app:
-            self._app.exit()
+        self._finish(True)
 
-    # ── run ────────────────────────────────────────────────────────────────
+    def bind_application(self, application: Application) -> None:
+        """Use the host application's loop when mounted as a live modal."""
+        self._app = application
 
-    async def run(self) -> bool:
-        """Run the TUI. Returns True if changes were saved."""
+    def _build_layout(self) -> Layout:
+        """Build the skill panel container for either run mode."""
         body = FormattedTextControl(self._render)
         status = FormattedTextControl(self._render_status)
-
         root = HSplit(
             [
                 Window(content=body, always_hide_cursor=True),
                 Window(content=status, height=1),
             ]
         )
+        return Layout(root)
 
+    def _refresh_layout(self) -> None:
+        """Refresh the panel without replacing the host application's layout."""
+        layout = self._build_layout()
+        if self._embedded and self._modal_refresh is not None:
+            self._modal_refresh(
+                ModalSpec(
+                    container=layout.container,
+                    key_bindings=self._modal_key_bindings,
+                    focus=layout.current_window,
+                )
+            )
+            return
+        if self._app:
+            self._app.layout = layout
+            self._app.invalidate()
+
+    def _finish(self, result: Any = None) -> None:
+        """Finish the embedded modal or the standalone TUI."""
+        if self._embedded:
+            self._modal_closed = True
+            callback = self._modal_close
+            if callback is not None:
+                callback(result if result is not None else self._saved)
+            return
+        if self._app:
+            self._app.exit()
+
+    @property
+    def is_closed(self) -> bool:
+        return self._modal_closed
+
+    def close(self, result: Any = None) -> None:
+        """Close the embedded selector when the host resolves its future."""
+        self._modal_closed = True
+        if result is not None:
+            self._saved = bool(result)
+
+    def build_modal(
+        self,
+        on_close: Callable[[Any], None],
+        on_refresh: Callable[[ModalSpec], None],
+    ) -> ModalSpec:
+        """Build the skill panel as a view owned by the live Application."""
+        if self._app is None:
+            raise RuntimeError("bind_application() is required before build_modal()")
+        self._embedded = True
+        self._modal_close = on_close
+        self._modal_refresh = on_refresh
+        self._modal_closed = False
+        layout = self._build_layout()
+        self._modal_key_bindings = self._build_kb()
+        return ModalSpec(
+            container=layout.container,
+            key_bindings=self._modal_key_bindings,
+            focus=layout.current_window,
+        )
+
+    # ── run ────────────────────────────────────────────────────────────────
+
+    async def run(self) -> bool:
+        """Run the TUI. Returns True if changes were saved."""
+        self._embedded = False
+        layout = self._build_layout()
         self._app = Application(
-            layout=Layout(root),
+            layout=layout,
             key_bindings=self._build_kb(),
             style=TUI_STYLE,
             full_screen=False,

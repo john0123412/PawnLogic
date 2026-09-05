@@ -36,6 +36,7 @@ import json
 import os
 import inspect
 import sys
+from typing import Any
 
 from prompt_toolkit import prompt as ptk_prompt
 
@@ -656,15 +657,33 @@ async def _provider_fetch(alias: str) -> None:
 # /provider sub-command dispatcher
 # ════════════════════════════════════════════════════════
 
-async def _handle_provider_cmd(sub: str, sub_arg: str, session, sink=None) -> None:
+async def _handle_provider_cmd(
+    sub: str,
+    sub_arg: str,
+    session,
+    sink=None,
+    *,
+    terminal_controller: Any = None,
+) -> None:
     """Handle /provider sub-commands."""
 
     # /provider without arguments opens the interactive TUI panel.
     if not sub:
         if _HAS_PROMPT_TOOLKIT:
             try:
-                from core.provider_tui import run_provider_tui
-                await run_provider_tui()
+                from core.provider_tui import ProviderTUI, run_provider_tui
+                if terminal_controller is not None and getattr(
+                    terminal_controller, "run_selector", None
+                ) is not None:
+                    # Build the panel as a view for the already-running live
+                    # Application.  Passing the legacy coroutine here would
+                    # make the controller launch a second Application.
+                    provider_tui = ProviderTUI()
+                    await terminal_controller.run_selector(
+                        lambda: provider_tui
+                    )
+                else:
+                    await run_provider_tui()
             except Exception as _tui_err:
                 logger.error(f"[provider-tui] crashed: {_tui_err}")
                 import traceback
@@ -878,7 +897,14 @@ async def cmd_keys(ctx: CommandContext) -> None:
 
 @register("/provider")
 async def cmd_provider(ctx: CommandContext) -> None:
-    await _handle_provider_cmd(ctx.arg, ctx.arg2, ctx.session, ctx.sink)
+    controller = getattr(ctx, "terminal_controller", None)
+    await _handle_provider_cmd(
+        ctx.arg,
+        ctx.arg2,
+        ctx.session,
+        ctx.sink,
+        terminal_controller=controller,
+    )
 
 
 @register("/model")
@@ -902,7 +928,16 @@ async def cmd_model(ctx: CommandContext) -> None:
             for _prov_label, _entries in _groups.items():
                 _print(c(CYAN, f"  {_prov_label}") + c(GRAY, f"  [{len(_entries)} models]"))
 
-            result = await cc_style_model_selector(_vm, session.model_alias)
+            result: str | None
+            controller = getattr(ctx, "terminal_controller", None)
+            if controller is not None and getattr(controller, "run_selector", None) is not None:
+                from pawnlogic.selectors import ModelSelector
+
+                result = await controller.run_selector(
+                    lambda: ModelSelector(_vm, session.model_alias)
+                )
+            else:
+                result = await cc_style_model_selector(_vm, session.model_alias)
             if result:
                 session.model_alias = result
                 ok, env = validate_api_key(result)

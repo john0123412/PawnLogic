@@ -400,7 +400,15 @@ async def cmd_planguard(ctx: CommandContext) -> None:
             ))
             return
         try:
-            selected = await _select_plan_guard_mode(current)
+            controller = getattr(ctx, "terminal_controller", None)
+            if controller is not None and getattr(controller, "run_selector", None) is not None:
+                from pawnlogic.selectors import PlanGuardSelector
+
+                selected = await controller.run_selector(
+                    lambda: PlanGuardSelector(current)
+                )
+            else:
+                selected = await _select_plan_guard_mode(current)
         except (EOFError, KeyboardInterrupt):
             selected = None
         except Exception:

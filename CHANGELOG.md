@@ -5,6 +5,223 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.3.7] - 2026-09-03
+
+### Added
+- Added `pawnlogic/terminal_transcript.py`, a single-owner transcript
+  buffer that the persistent terminal, the stdout/stderr proxy, and the
+  legacy output buffer all route through. The transcript owns a pluggable
+  host sink so the rendered text is forwarded to the host terminal and
+  captured by its native scrollback for mouse-wheel and copy/paste.
+- Added `controller.run_selector` on the live terminal controller. A
+  lightweight `SelectorState` or a rich `ModalSpec` is mounted inside
+  the existing live `Application`; live selectors no longer accept an
+  awaitable that can start a nested Prompt Toolkit application.
+- Added the `pawnlogic/selectors.py` typed module with `SelectorState`,
+  `SelectorRegistry`, the `PlanGuardSelector` state machine, and the
+  `ModelSelector` state machine that backs `/model`.
+
+### Changed
+- Restored native terminal scrollback, mouse selection, and copy/paste
+  by dropping the alternate-screen application mode. The persistent
+  composer is now built with `full_screen=False` and `mouse_support=
+  False`, and Prompt Toolkit's terminal-decoding and key-binding prefix
+  windows are tightened so bare Escape still feels immediate while Alt
+  shortcuts continue to work.
+- Routed every interactive selector (`/model`, `/planguard`,
+  `/provider`, `/skills`) through the single-`Application` modal
+  pattern from ADR 0010. `/model` and `/planguard` install a state
+  machine in the live `Application`; `/provider` and `/skills` mount
+  their complete containers, focus targets, and key bindings through a
+  dynamic modal root. No selector creates a second `Application` or
+  exits/rebuilds the persistent one.
+- The bare `/queue` command in the persistent terminal now renders
+  queue status in the output viewport without pausing the interface or
+  the active Turn.
+- The persistent composer's `TextArea` now wraps long input at the
+  terminal width and grows from one to up to five rows so long input
+  is not clipped to a single fixed row.
+- Added a persistent 1-line status indicator above the composer.
+  The 0.3.7 inline terminal now always tells the user what the worker
+  thread is doing without depending on a session-emitted `print()`:
+  `[model]  Idle`, `[model]  ⏱ Ns · Esc to interrupt` while a Turn
+  is in flight, `[model]  ⏸ interrupted by user` for 1.5 s after a
+  user-initiated Esc / Ctrl+C interrupt, and `[model]  Idle — edit
+  the draft and press Enter` for 1.5 s after a recovery prefill. A
+  250 ms `loop.call_later` ticker keeps the seconds counter honest
+  while the model is running. Failure is silent: a failed Turn
+  parks the queue internally but does not surface a `Failed · +N
+  parked` label to the user.
+- **Queue toolbar simplified.** The 0.3.7 live terminal no longer surfaces
+  queue counters or parked summaries in the bottom toolbar. The
+  toolbar drops the `Queue: Idle · steer:N · follow-up:N` segment;
+  `core/queue_tui.toolbar_queue_status` returns a single label
+  (`Idle` / `Running` / `Queued` / `Recoverable` / `Failed`).
+  primary live-composer help is intentionally gesture-first. The
+  registered `/queue` inspection and management commands remain
+  available as advanced controls and continue to render without
+  pausing the active Turn.
+- **Queue preview restored as a conditional surface** (owner
+  real-usage feedback after the initial hidden-queue re-scope):
+  the muted `↳ queued [kind] …` rows above the composer render
+  only while a steer or follow-up is actually queued; an empty
+  queue renders nothing, so the clean-composer goal holds. The
+  rows make Enter-while-running and the Esc→CLAIM_STEER handoff
+  visible instead of silently queuing input. A failed session
+  collapses the rows to the one-line parked summary with the
+  resume/discard hints.
+- **Esc now truly steers (owner regression fix).** Interrupting a
+  running Turn that has queued follow-up work hands the queue the
+  baton: the worker immediately re-drives the queued entry instead
+  of parking the session, and the interrupted prompt is no longer
+  minted as a `queued [recovered]` preview row (the "Esc flashes an
+  extra row instead of steering" report). The recovered-draft flow
+  is unchanged for an empty queue: interrupting with nothing queued
+  still parks the prompt as an editable recovered draft prefilled
+  into the composer.
+- **`/q` works while a Turn runs.** The `/exit` alias was missing
+  from the running-Turn command whitelist, so `/q` typed mid-Turn
+  was deferred and then queued as a prompt. `/q` now exits like
+  `/exit`/`/quit`.
+- **Shutdown no longer leaks `RuntimeError: Event loop is closed`.**
+  Streaming-producer threads racing the terminal close hit unguarded
+  `loop.call_later`/`call_soon_threadsafe` calls on the dying loop;
+  the invalidation scheduler now checks `loop.is_closed()` first and
+  the throttle timer is guarded.
+- **Queued messages are reworkable, claude-code style.** A new
+  `POP_ALL` scheduler control atomically empties the queued
+  steer/follow-up lanes and the recovered slot into one joined
+  draft (admission order, blank-line separated). The gestures:
+  with an idle session, empty composer, and queued messages, a
+  bare `Esc` — or `Up` on the empty composer, or `Alt+Up` — pops
+  the whole queue into the composer for editing and resubmitting.
+  While a Turn runs, `Esc` keeps its interrupt-and-steer meaning.
+  Gestures and dim preview rows are the primary queue surface; the
+  `/queue` commands remain available for explicit inspection and
+  recovery.
+- **`/abort` merged.** The previous `--all` form is removed; plain
+  `/abort` now interrupts the active Turn and clears the queue in
+  one call. Failure is silent on the user UI, so the only
+  user-visible queue control is now a single, unambiguous verb.
+
+### Fixed
+- Fixed live host scrollback without introducing a competing VT100
+  writer. Completed output lines are handed to the original stdout by
+  Prompt Toolkit's `run_in_terminal` while the persistent Application
+  stays alive; an unfinished partial line is emitted once during the
+  final close handoff. Flushes are serialized across worker bursts,
+  strip ANSI escapes, retry transient host-write failures with bounded
+  backoff, and open a circuit breaker after repeated failures instead of
+  spinning the event loop. The final partial-line handoff uses the same
+  finite retry contract, and output publication never calls
+  `Application.exit()`.
+- Fixed embedded-selector replacement and shutdown races. Selector close
+  and refresh callbacks are identity-guarded, so an older command's
+  `finally` block cannot dismiss a newer modal; closing the persistent
+  terminal also resolves the active selector future so command tasks do
+  not remain suspended during CLI shutdown.
+- Fixed the bare-Esc binding: pressing Escape while a Turn runs now
+  interrupts the active Turn and, when the queue is non-empty, sends
+  `ControlAction(kind=CLAIM_STEER)` through `session.queue_control`
+  so the scheduler marks the first queued item as a steer. The model
+  resumes along the new direction without the user having to type a
+  follow-up. Ctrl+C keeps its existing interrupt + recovery behaviour.
+- Removed the parallel `_output_chunks` buffer in `PersistentTerminal`
+  so transcript ownership is unambiguous. Every output writer now
+  appends to the single `TerminalTranscript`; the host sink is the
+  only path that touches the original stdout.
+- Fixed the owner-reported live-terminal freeze and dead keys. The
+  multiline composer (`multiline=True`) combined with
+  `height=Dimension(min=1, max=5, weight=0)` sent Prompt Toolkit
+  3.0.52's `take_using_weights` into an infinite layout loop the
+  moment a draft wrapped onto a second row, starving the key
+  processor. The composer now uses `Dimension(min=1, max=5)` with
+  `dont_extend_height=True`: the empty composer renders one row,
+  wrapped drafts grow up to five rows, and the layout loop terminates.
+- Restored Up/Down composer-history recall on wrapped drafts. The
+  stock `auto_up`/`auto_down` only walk history from the first/last
+  buffer row, so the multiline composer turned Up/Down into cursor
+  movement inside the draft. Explicit history bindings now walk
+  history regardless of cursor row; the completion menu keeps PT's
+  `complete_previous`/`complete_next`.
+- Reverted `mouse_support=True` (ADR 0010 §2). PT's mouse support
+  enables `?1003h` any-motion tracking, which floods WSL / Windows
+  Terminal with motion packets and swallows the host's native wheel
+  scrollback. Wheel scrolling now scrolls the host terminal's own
+  scrollback; multiplexer-emitted `Keys.ScrollUp`/`Keys.ScrollDown`
+  packets still reach the output viewport bindings.
+- Removed `bypass_print`: auto-correct notices now render through the
+  terminal sink (in-Application transcript) instead of raw host-PTY
+  writes that interleaved with PT's VT100 cursor positioning (the
+  `Select modelel for this session` scramble).
+- Replaced the pause/teardown/resume workaround for `/provider` and
+  `/skills` with embedded modal containers. Their standalone
+  Applications remain available only to the serial/readline path; the
+  live path keeps one Application, one key processor, and one PTY
+  renderer for the whole selector round trip.
+- Bounded the live render cost for large sessions. The output window
+  renders the trailing `1000` transcript lines (not the full buffer),
+  caches the render against the transcript's monotonic version, and
+  throttles cross-thread invalidation to 30 fps with a trailing-edge
+  repaint. Measured at the owner's 6,000-line session: renders no
+  longer re-parse 250KB per frame and keys stay responsive while a
+  stream runs.
+- High-risk tool confirmations render as an in-Application yes/no
+  selector while the live terminal is up, marshalled onto the
+  terminal's event loop from the tool thread. The synchronous
+  `input()` fallback remains for non-live terminals; the previous
+  behavior raced the composer for stdin and leaked the
+  `Type 'yes' ...` prompt into the recovered draft.
+- Guarded the live SIGINT handler during shutdown so a stray Ctrl+C
+  at exit no longer raises from inside `threading._shutdown` (the
+  traceback printed on the owner's exit path).
+- Parked the queue after a failed Turn (cascade fix). An automatic
+  RESUME — the drain a new FOLLOW_UP submission triggers — is now
+  rejected while the session is failed or aborted: with a dead
+  provider (rate limit, circuit open, invalid key) every queued
+  prompt re-ran into the identical failure and piled error lines
+  onto the page. The control surface keeps an `explicit` flag:
+  `/queue resume`, and Enter on the recovered draft, always proceed.
+  Mirrors the queue-until-idle-and-healthy contract of claude-code's
+  QueryGuard. 0.3.7 hides the parked state from the user UI (the
+  toolbar's `Queue:` segment and the per-row preview are gone); the
+  internal anti-cascade gate is preserved but failure is silent on
+  the user surface.
+- Made the bottom toolbar width-adaptive. The single toolbar row was
+  clipped mid-field on 80-column terminals (`... follow-u`); fields
+  now render most-important-first within a ~100-column budget and
+  the long directory path only appears when the shorter fields leave
+  room.
+
+### Tests
+- Added `tests/test_live_terminal_inline.py` covering the inline
+  terminal contract: native keyboard events stay in the host terminal
+  while a modal is open, the persistent composer's `wrap_lines` is
+  True, and stdout restoration round trips cleanly.
+- Added `tests/test_model_selector_modal.py` coverage that executes
+  the real `/model`, `/planguard`, `/provider`, and `/skills` command
+  paths and rejects a second Application or host-Application exit.
+  Added live host-flush coverage for complete lines, partial lines,
+  CR/BS rewrites, worker bursts, close de-duplication, and transient
+  write failures. Manual PTY mouse-selection/copy acceptance remains a
+  pre-release gate.
+- Added `tests/test_status_line.py` pinning the persistent status
+  line contract: the running indicator shows the elapsed seconds
+  while a Turn is in flight, the post-interrupt banner holds for
+  1.5 s and returns to `Idle`, and the line never surfaces queue
+  counters or `+N parked` labels.
+- Added `tests/test_enter_during_turn.py` pinning the auto-enqueue
+  contract: Enter during a running Turn sets `SubmissionKind.STEER`
+  and reaches `session.submit_live_turn` without blocking the event
+  loop, so the status ticker keeps redrawing and a follow-up
+  keypress echoes into the composer unchanged.
+- Added live-terminal regressions: tail-bounded rendering with
+  version caching, Up/Down history recall on wrapped drafts,
+  auto-correct notices staying in the transcript, and no bypass
+  seam for raw host-stdout writes. The PTY e2e planguard flow now
+  asserts on the selector rendering instead of host-PTY notice
+  bytes.
+
 ## [0.3.6] - 2026-09-02
 
 ### Added

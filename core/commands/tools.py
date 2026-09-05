@@ -504,8 +504,15 @@ async def cmd_skills(ctx: CommandContext) -> None:
 
     # Default: launch the TUI
     from core.session import _skill_scanner
-    from core.skill_tui import run_skill_tui
-    saved = await run_skill_tui(_skill_scanner)
+    from core.skill_tui import SkillPackTUI, run_skill_tui
+    controller = getattr(ctx, "terminal_controller", None)
+    if controller is not None and getattr(controller, "run_selector", None) is not None:
+        skill_tui = SkillPackTUI(_skill_scanner)
+        saved = await controller.run_selector(
+            lambda: skill_tui
+        )
+    else:
+        saved = await run_skill_tui(_skill_scanner)
     if saved:
         _print(c(GREEN, "  Skill pack selection saved"))
     else:

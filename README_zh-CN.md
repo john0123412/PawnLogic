@@ -10,6 +10,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
 PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.6**。
+版本 **0.3.7** 是尚未发布的候选版本。
 
 ## 系统要求
 
@@ -169,14 +170,14 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 /think <prompt>                   # 执行一次更深推理
 /compact                          # 总结并压缩上下文
 /undo [n]                         # 回滚最近轮次
-/queue                            # 查看队列，但不中断当前 Turn
+/queue                            # 高级队列检查，不中断当前 Turn
 /queue clear                      # 清除排队/恢复消息，但不中断当前 Turn
 /queue resume                     # 继续处理可恢复的排队工作
 /queue remove <id>                # 按稳定 ID 移除一条排队消息
 /queue steer <id>                 # 将 follow-up 转换为 steer
 /queue follow-up <id>             # 将 steer 转换为 follow-up
 /queue recall <id>                # 预填编辑器但不移除消息
-/abort                            # 中断当前 Turn；--all 同时清除队列
+/abort                            # 中断当前 Turn，并清除排队/恢复工作
 /deep                             # full-power 模式
 /max                              # maximum 模式，最多 100 次工具调用迭代
 /ultra                            # 保持 MAX 其余限制，最多 150 次工具调用迭代
@@ -318,10 +319,10 @@ A: 可以。输入唯一前缀或子序列，例如 `/plg`；按 Tab 会列出 `
 A: 在交互式终端运行 `/planguard`（或 `/plg`），用 Up/Down 或 1/2 选择后按 Enter。脚本或非交互环境请使用 `/planguard advisory`、`/planguard strict` 或 `/planguard status`。默认是 advisory；在 strict 模式下，前两批缺少 plan block 的工具调用仍会执行并收到纠正提示，第三次此类尝试会在执行工具前被停止。
 
 **Q: live composer 在 Turn 运行期间如何处理输入？**
-A: 在 Prompt Toolkit 模式下，一个持久终端界面会把模型和工具输出固定在上方，把输入编辑区和状态栏固定在最底部。连续提交的内容会以淡色队列行显示在输入区正上方。Enter 会提交 steer，并在下一个 Tool safe point 生效；如果纯文本响应先自然结束，尚未应用的 steer 会作为相互独立的后续 Turn 依次执行。Alt+Enter 会排队一条在自然完成后执行的 follow-up；Alt+Up 会召回最近的排队或恢复条目。Esc 和 Ctrl+C 会中断当前 Turn；较短的转义序列等待窗口可让单独 Esc 快速响应，同时保留 Alt 快捷键。鼠标滚轮只滚动输出区，绝不会修改输入历史；滚动到底部后会恢复自动跟随最新输出。`/queue` 会在输出区显示队列状态，绝不会暂停当前 Turn。readline 模式明确保持串行，并在 Turn 完成前缓存输入。
+A: 在 Prompt Toolkit 模式下，一个持久终端界面会把模型和工具输出放在底部输入编辑区和状态栏上方。完整输出行会通过 Prompt Toolkit 的安全终端交接写入宿主终端，因此 Application 运行期间仍可使用原生 scrollback、鼠标选择和复制。连续提交的内容会以淡色队列行显示在输入区正上方。Enter 会提交 steer，并在下一个 Tool safe point 生效；如果纯文本响应先自然结束，尚未应用的 steer 会作为相互独立的后续 Turn 依次执行。Alt+Enter 会排队一条在自然完成后执行的 follow-up。Esc 会中断当前 Turn；如果已有排队工作，会立即把控制权交给该工作，如果队列为空，则把被中断的 prompt 变成可编辑的 recovered draft。在 idle 且输入框为空时，Esc、Up 或 Alt+Up 会把排队/恢复工作合并进可编辑草稿。`/queue` 仍是高级诊断与管理命令，且不会暂停当前 Turn。readline 模式明确保持串行，并在 Turn 完成前缓存输入。
 
 **Q: 中断正在运行的 turn 后会怎样？**
-A: Pawn 会等待协作式取消完成，然后自动把被中断的 prompt 预填为可编辑的 recovered draft，但不会自动重跑。按 Enter 只重试一次；编辑后按 Enter 只执行替换后的内容一次（包括以 `/` 开头的编辑）。恢复期间，`/queue` 会在持久 TUI 的输出区显示当前队列；readline/非 TTY 模式使用相同的确定性文本视图。`/queue remove <id>`、`/queue clear`、`/queue steer <id>`、`/queue follow-up <id>` 和 `/queue recall <id>` 可管理条目，召回不会自动执行。`Alt+Up` 会将最近的排队或恢复条目召回到编辑器。`/abort` 只中断当前 Turn，`/abort --all` 还会清除队列。重启后，`pawn --continue` 会加载最近的 interrupted、running 或 failed 会话，`pawn resume <session>` 会加载指定会话。两个命令都会显示历史并预填草稿，但不会自动执行。
+A: Pawn 会等待协作式取消完成。如果已有排队工作，Esc 会把它作为新的 steer 继续执行，不会额外创建重复的 recovered 行。如果队列为空，被中断的 prompt 会预填为可编辑的 recovered draft，但不会自动重跑；按 Enter 只重试一次，编辑后按 Enter 只执行替换后的内容一次（包括以 `/` 开头的编辑）。`/queue remove <id>`、`/queue clear`、`/queue steer <id>`、`/queue follow-up <id>` 和 `/queue recall <id>` 仍可用于高级队列管理。`/abort` 会中断当前 Turn 并清除全部排队/恢复工作，不再有单独的 `--all` 形式。重启后，`pawn --continue` 会加载最近的 interrupted、running 或 failed 会话，`pawn resume <session>` 会加载指定会话。两个命令都会显示历史并预填草稿，但不会自动执行。
 
 **Q: Test Connection 失败但 fetch 成功？**
 A: Fetch 只读 `/v1/models`；Test Connection 发送聊天请求。先加载聊天模型。

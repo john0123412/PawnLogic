@@ -57,7 +57,12 @@ def test_queue_rows_and_toolbar_use_immutable_scheduler_view() -> None:
     rows = queue_rows(view)
     assert [row.sequence for row in rows] == [2, 4, 5]
     assert rows[0].short_id == "tui-recover"
-    assert toolbar_queue_status(view) == "Recoverable · steer:1 · follow-up:1"
+    # 0.3.7: ``toolbar_queue_status`` returns a label only — no
+    # ``steer:N`` / ``follow-up:N`` counters — because the live
+    # terminal no longer surfaces them. ``render_queue_tui`` is
+    # still used by ``/queue``'s text-mode TUI and keeps the
+    # full per-row table.
+    assert toolbar_queue_status(view) == "Recoverable"
     rendered = render_queue_tui(view)
     assert "Seq" in rendered
     assert "tui-recover" in rendered

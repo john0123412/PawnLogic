@@ -203,7 +203,7 @@ def build_session_prompt(
         "             web_select (adaptive CSS) · web_type · web_navigate\n"
         "  Sandbox  : run_code  (python / c / cpp / javascript / bash / rust / go / java)\n"
         "  Docker   : run_code_docker (one-shot container) · pwn_container (persistent container)\n"
-        "  Vision   : analyze_local_image  (jpg/png/gif/webp — glm-4v / gpt-4o)\n"
+        "  Vision   : analyze_local_image  (jpg/png/gif/webp — gpt-4o / claude-sonnet)\n"
         "  CTF/Pwn  : pwn_env · inspect_binary · pwn_rop · pwn_cyclic · pwn_disasm\n"
         "             pwn_libc · pwn_debug · pwn_one_gadget · pwn_timed_debug\n"
         "  Recon    : check_service (port -> PID/process/path/environment/shared libraries)\n"

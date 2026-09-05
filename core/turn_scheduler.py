@@ -105,6 +105,7 @@ class ControlKind(str, Enum):
     RESUME = "resume"
     REPLACE_RECOVERED = "replace_recovered"
     REMOVE = "remove"
+    POP_ALL = "pop_all"
     CONVERT = "convert"
     CLEAR = "clear"
     ABORT_ALL = "abort_all"
@@ -304,6 +305,7 @@ class ControlAction:
     content: str | None = None
     target_kind: SubmissionKind | None = None
     restore_state: Mapping[str, Any] | None = None
+    explicit: bool = False
 
     def __post_init__(self) -> None:
         kind = self.kind
@@ -328,6 +330,8 @@ class ControlAction:
             if not isinstance(self.restore_state, Mapping):
                 raise TypeError("restore_state must be a mapping or None")
             object.__setattr__(self, "restore_state", _copy_mapping(self.restore_state))
+        if not isinstance(self.explicit, bool):
+            object.__setattr__(self, "explicit", bool(self.explicit))
 
 
 @dataclass(frozen=True, slots=True)
@@ -628,12 +632,14 @@ class TurnScheduler:
                 receipt = self._receipt_unlocked(action, True, affected, "")
             elif action.kind is ControlKind.REMOVE:
                 receipt = self._remove_unlocked(action)
+            elif action.kind is ControlKind.POP_ALL:
+                receipt = self._pop_all_unlocked(action)
             elif action.kind is ControlKind.CONVERT:
                 receipt = self._convert_unlocked(action)
             elif action.kind is ControlKind.REPLACE_RECOVERED:
                 receipt = self._replace_recovered_unlocked(action)
             elif action.kind is ControlKind.RESUME:
-                start_drive = self._resume_unlocked()
+                start_drive = self._resume_unlocked(explicit=action.explicit)
                 receipt = self._receipt_unlocked(
                     action,
                     start_drive,
@@ -874,10 +880,20 @@ class TurnScheduler:
                             if self._abort_requested
                             else self._recover_active_unlocked()
                         )
-                        should_return = True
+                        # An interrupted Turn with queued work hands the
+                        # queue the baton (claude-code contract): the model
+                        # continues from the queued direction instead of
+                        # parking. _recover_active_unlocked already
+                        # refuses to mint a recovered draft while the
+                        # queue is non-empty, so keep driving the queue.
+                        # With an empty queue the interrupt parks.
+                        should_return = bool(
+                            self._abort_requested
+                            or not (self._steer or self._follow_up)
+                        )
                     elif outcome.status is TurnExecutionStatus.INTERRUPTED:
                         view = self._recover_active_unlocked()
-                        should_return = True
+                        should_return = not (self._steer or self._follow_up)
                     elif outcome.status is TurnExecutionStatus.FAILED:
                         # A failed executor result can still leave an
                         # externally visible side effect.  Preserve the
@@ -978,7 +994,19 @@ class TurnScheduler:
     # ------------------------------------------------------------------
     # Controls and immutable views.
     # ------------------------------------------------------------------
-    def _resume_unlocked(self) -> bool:
+    def _resume_unlocked(self, *, explicit: bool = False) -> bool:
+        # An automatic RESUME (a new submission draining the follow-up
+        # lane) must not fire while the session is failed or aborted:
+        # every queued prompt would re-run into the same dead provider
+        # (rate limit, circuit open, invalid key) and pile identical
+        # failures onto the page — the cascade the owner reported. This
+        # mirrors the queue-until-idle-and-healthy contract of
+        # claude-code's QueryGuard: a failed query parks the queue.
+        # An EXPLICIT user resume (``/queue resume``, or Enter on the
+        # recovered draft) is the user taking responsibility and always
+        # proceeds.
+        if not explicit and self._session_status in {"failed", "aborted"}:
+            return False
         if self._active is not None or self._driving:
             return False
         if self._recovered is not None:
@@ -1020,6 +1048,51 @@ class TurnScheduler:
                     self._touch_unlocked()
                     return self._receipt_unlocked(action, True, (submission_id,), "")
         return self._receipt_unlocked(action, False, (), "submission ID not found")
+
+    def _pop_all_unlocked(self, action: ControlAction) -> ControlReceipt:
+        """Atomically pop every queued/recovered item into one editable draft.
+
+        The claude-code gesture contract: an empty-input Esc (or Up on the
+        first row) moves the queued messages out of the queue and into the
+        editor so the user can rework them. The popped contents are joined
+        in admission-sequence order with blank lines and returned via the
+        receipt's ``claimed`` submission; the queue lanes and the
+        recovered slot are cleared, and an emptied session returns to
+        idle. The active Turn is never touched.
+        """
+        contents: list[str] = []
+        affected: list[str] = []
+        for entry in sorted(
+            (*self._steer, *self._follow_up),
+            key=lambda item: item.sequence,
+        ):
+            contents.append(entry.submission.content)
+            affected.append(entry.submission.submission_id or "")
+        self._steer.clear()
+        self._follow_up.clear()
+        if self._recovered is not None:
+            contents.insert(0, self._recovered.submission.content)
+            affected.insert(0, self._recovered.submission.submission_id or "")
+            self._recovered = None
+        if not contents:
+            return self._receipt_unlocked(action, False, (), "queue is empty")
+        if self._active is None:
+            self._session_status = "idle"
+            self._interrupted_at = None
+        self._touch_unlocked()
+        draft = "\n\n".join(contents)
+        claimed = Submission(
+            draft,
+            kind=SubmissionKind.RECOVERED,
+            source="pop_all",
+        )
+        return self._receipt_unlocked(
+            action,
+            True,
+            tuple(affected),
+            "",
+            claimed=claimed,
+        )
 
     def _convert_unlocked(self, action: ControlAction) -> ControlReceipt:
         """Move one queued entry between the steer and follow-up lanes.
@@ -1304,12 +1377,24 @@ class TurnScheduler:
         outcome: TurnExecutionStatus = TurnExecutionStatus.INTERRUPTED,
         session_status: str = "interrupted",
     ) -> SchedulerView:
+        """Park an interrupted active Turn.
+
+        claude-code contract: when the user interrupts a Turn that has
+        queued follow-up work, the queued work takes over — the model
+        continues in the new direction from the queue. The interrupted
+        prompt must NOT become an editable recovered draft in that case:
+        a recovered draft plus queued rows is what produced the owner's
+        "Esc flashes a recovered row instead of steering" report. The
+        interrupted prompt is therefore only preserved as ``recovered``
+        when the queue lanes are empty (nothing to steer into).
+        """
         if self._active is not None:
             active = self._active
-            self._recovered = _Entry(
-                replace(active.submission, kind=SubmissionKind.RECOVERED),
-                active.sequence,
-            )
+            if not (self._steer or self._follow_up):
+                self._recovered = _Entry(
+                    replace(active.submission, kind=SubmissionKind.RECOVERED),
+                    active.sequence,
+                )
         self._active = None
         self._active_cancellation = None
         self._interrupt_requested = False

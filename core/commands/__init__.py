@@ -63,12 +63,18 @@ class CommandContext:
         sink:    Output sink (HumanSink or JsonSink). If left as None,
                  `dispatch()` uses the session RuntimeContext sink first,
                  then the process-wide compatibility fallback.
+        terminal_controller: The live-terminal controller when a selector
+                 runs inside the persistent Application, otherwise None.
+                 Selectors that would otherwise spawn their own
+                 ``Application`` MUST use ``controller.run_selector`` to
+                 keep the main Application's identity stable (ADR 0010).
     """
     verb: str
     arg: str
     arg2: str
     session: Any  # AgentSession; kept loose to avoid circular import
     sink: Any = None  # HumanSink | JsonSink; populated by dispatch()
+    terminal_controller: Any = None  # PersistentTerminalController | None
 
 
 # ────────────────────────────────────────────────────────

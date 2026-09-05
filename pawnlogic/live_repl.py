@@ -14,18 +14,31 @@ from dataclasses import dataclass
 from pathlib import Path
 import signal
 import sys
+import time
 from typing import Any
 
-from core.queue_tui import queue_rows, toolbar_queue_status
+from core.queue_tui import queue_rows
 from core.turn_scheduler import SubmissionKind
 from utils.ansi import YELLOW, c
 
 
-LIVE_SLASH_COMMANDS = frozenset({"/queue", "/abort", "/exit", "/quit"})
+LIVE_SLASH_COMMANDS = frozenset({"/abort", "/exit", "/quit", "/q", "/queue"})
 LIVE_SLASH_NOTICE = (
-    "  ⚠ A Turn is running; only /queue, /abort [--all], or /exit controls are "
-    "available until it completes."
+    "  ⚠ A Turn is running; only /abort or /exit controls are available until it completes."
 )
+# Bottom-toolbar width budget (visible columns, not ANSI bytes).
+# _TOOLBAR_HARD_MAX: never exceed a 100-column toolbar — anything past
+# that is clipped mid-field by PT on 80-120 column terminals.
+# The cap adapts to the live terminal's column count (when we can
+# read it from PT) so the same logic fits 80-column, 120-column, and
+# 160-column hosts without overflowing.
+# _TOOLBAR_HARD_MAX: the static hard cap used outside PT's main loop
+# and as a floor when the live width is suspiciously small.
+# _TOOLBAR_COL_MARGIN: when adapting to the live terminal width we
+# leave this many columns of slack so PT's row renderer does not
+# still clip the last character off the right edge.
+_TOOLBAR_HARD_MAX = 100
+_TOOLBAR_COL_MARGIN = 4
 
 
 async def _wait_for_interrupt_settlement(
@@ -83,10 +96,13 @@ async def dispatch_live_slash(
             if len(matches) == 1:
                 corrected = matches[0]
                 raw = f"{corrected} {rest}".strip() if rest else corrected
-                notice = c(YELLOW, f"  ✔ Auto-corrected: {verb} -> {corrected}")
-                if paused:
-                    print(notice)
-                sink.print(notice)
+                notice = c(YELLOW, f"  ✔ Auto-corrected: {verb} -> {corrected}\n")
+                # Always route through the sink. Writing raw bytes to the
+                # host PTY while the Application is alive corrupts PT's
+                # VT100 cursor positioning (the interleaved
+                # "Select modelel for this session" scramble); the
+                # transcript renders the notice above the selector.
+                sink.print(notice.rstrip("\n"))
         if should_defer_live_slash(session, raw, enabled=live_enabled):
             await terminal_notice(LIVE_SLASH_NOTICE)
             return None
@@ -122,6 +138,24 @@ class LiveSubmissionState:
         return marked
 
 
+def _mark_user_interrupt(session: Any) -> None:
+    """Stamp the session so the status line shows ``⏸ interrupted by user``.
+
+    The 0.3.7 persistent status line reads ``session._last_interrupt_at``
+    and renders a 1.5 s confirmation banner when the user has just
+    pressed Esc / Ctrl+C.  The marker is set on every user-initiated
+    interrupt (Esc binding, Ctrl+C binding, and SIGINT in the live
+    terminal path) so the line is always truthful.
+    """
+    try:
+        session._last_interrupt_at = time.monotonic()
+        session._last_interrupt_kind = "user"
+    except Exception:
+        # The status line is a best-effort convenience; never let a
+        # missing attribute on a test session break the interrupt path.
+        pass
+
+
 def build_prompt_toolkit_bindings(
     key_bindings_factory: Callable[[], Any],
     *,
@@ -146,7 +180,10 @@ def build_prompt_toolkit_bindings(
     def interrupt_active_turn() -> bool:
         """Use the same typed control for Escape and Ctrl+C while running."""
         interrupt = getattr(session, "interrupt_active", None)
-        return bool(interrupt()) if callable(interrupt) else False
+        accepted = bool(interrupt()) if callable(interrupt) else False
+        if accepted:
+            _mark_user_interrupt(session)
+        return accepted
 
     def recovery_draft_pending() -> bool:
         return submission_state.recovery_draft
@@ -177,7 +214,19 @@ def build_prompt_toolkit_bindings(
 
     @bindings.add("enter")
     def _(event: Any) -> None:
-        """Submit idle input or mark a running input as a steering message."""
+        """Submit idle input or mark a running input as a steering message.
+
+        The composer is ``TextArea(multiline=True)`` so the buffer
+        can grow past one row and ``wrap_lines=True`` actually wraps
+        long input.  Prompt Toolkit's default ``_newline`` binding
+        is registered for ``enter`` on a multiline composer, but the
+        ``_CombinedRegistry`` resolves ``enter`` to the LAST matching
+        handler in the merged list, so this binding wins over
+        ``_newline`` even without ``eager=True``.  (An earlier 0.3.7
+        commit added ``eager=True`` here; the audit confirmed that
+        the flag breaks the live composer's normal text-insert path
+        for the first typed key, so it is intentionally absent.)
+        """
         session._live_input_buffer = event.current_buffer
         if recovery_draft_pending():
             submission_state.kind = SubmissionKind.START
@@ -202,19 +251,65 @@ def build_prompt_toolkit_bindings(
 
     @bindings.add("escape", "up")
     def _(event: Any) -> None:
-        """Recall the newest queued or recovered entry without consuming it."""
+        """Pop the queued messages into the composer without consuming history.
+
+        Alt+Up mirrors claude-code's "editable queued command" gesture:
+        the queued rows move out of the queue and into the editor in
+        one piece (the non-consuming single-item ``recall`` remains
+        available as ``/queue recall <id>`` for scripts).
+        """
         session._live_input_buffer = event.current_buffer
-        recall = getattr(session, "recall_queued_turn", None)
-        content = recall() if callable(recall) else None
-        if content:
-            event.current_buffer.text = content
-            event.current_buffer.cursor_position = len(content)
+        if not _pop_queued_to_composer(event.current_buffer):
+            # Nothing queued: fall back to the non-consuming recall so the
+            # pre-0.3.7 muscle memory keeps working.
+            recall = getattr(session, "recall_queued_turn", None)
+            content = recall() if callable(recall) else None
+            if content:
+                event.current_buffer.text = content
+                event.current_buffer.cursor_position = len(content)
+
+    def _pop_queued_to_composer(buffer: Any) -> bool:
+        """Pop every queued message into the composer for editing.
+
+        The claude-code gesture contract: when the input is empty, Esc
+        (and Up on the composer's first row) move the queued messages
+        out of the queue and into the editor so the user can rework
+        them before resubmitting. Returns True when something was
+        popped; the caller must not also run history recall then.
+        """
+        if buffer.text.strip():
+            return False
+        pop_all = getattr(session, "pop_all_queued_turns", None)
+        content = pop_all() if callable(pop_all) else None
+        if not content:
+            return False
+        buffer.text = content
+        buffer.cursor_position = len(content)
+        return True
 
     @bindings.add("escape")
     def _(event: Any) -> None:
-        """Interrupt one active Turn without consuming the current draft."""
+        """Interrupt + steer while running; pop the queue when idle.
+
+        While a Turn runs, Esc interrupts it and converts the first
+        queued item to a steer (the scheduler picks the new direction
+        up at the next safe point). While idle with queued messages
+        and an empty composer, Esc empties the queue into the editor
+        for editing — the claude-code gesture; without it, queued
+        input could only be discarded, never reworked.
+        """
         if running_turn():
             schedule_interrupt(event)
+            if queued_work():
+                # Convert the first queued item to STEER so the scheduler
+                # picks it up as a directional steer when the turn resumes.
+                from core.turn_scheduler import ControlAction, ControlKind
+                action = ControlAction(kind=ControlKind.CLAIM_STEER)
+                queue_control = getattr(session, "queue_control", None)
+                if callable(queue_control):
+                    queue_control(action)
+            return
+        _pop_queued_to_composer(event.current_buffer)
 
     @bindings.add("c-c")
     @bindings.add("<sigint>")
@@ -224,6 +319,38 @@ def build_prompt_toolkit_bindings(
             schedule_interrupt(event)
             return
         event.app.exit(exception=KeyboardInterrupt())
+
+    # Arrow-key history recall. Prompt Toolkit's stock ``auto_up`` /
+    # ``auto_down`` only walk history when the cursor sits on the first
+    # (resp. last) row of the buffer. The 0.3.7 multiline composer wraps
+    # long drafts onto multiple rows, so ``auto_up`` started moving the
+    # cursor inside the draft instead of recalling history — reported as
+    # "up/down keys dead". These bindings restore the pre-0.3.7 contract:
+    # Up/Down always walk composer history while the completion menu is
+    # closed. The selector-active case never reaches here (its eager
+    # bindings in live_terminal.py run first).
+    def _has_completion_menu(event: Any) -> bool:
+        return bool(getattr(event.app.current_buffer, "complete_state", None))
+
+    @bindings.add("up")
+    def _(event: Any) -> None:
+        buffer = event.app.current_buffer
+        if _has_completion_menu(event):
+            buffer.complete_previous()
+            return
+        # claude-code gesture: Up on an empty composer pops the queued
+        # messages into the editor instead of walking history.
+        if _pop_queued_to_composer(buffer):
+            return
+        buffer.history_backward()
+
+    @bindings.add("down")
+    def _(event: Any) -> None:
+        buffer = event.app.current_buffer
+        if _has_completion_menu(event):
+            buffer.complete_next()
+            return
+        buffer.history_forward()
 
     @bindings.add("backspace")
     @bindings.add("c-h")
@@ -263,6 +390,7 @@ def install_live_interrupt_handler(
     """
     previous = signal.getsignal(signal.SIGINT)
     restored = False
+    closing = False
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -289,6 +417,11 @@ def install_live_interrupt_handler(
         return True
 
     def _handler(_signum: int, _frame: Any) -> None:
+        # During interpreter shutdown the original handler chain is gone;
+        # a stray ^C here must not raise from a dead helper into
+        # threading._shutdown (the traceback the owner saw on exit).
+        if closing:
+            return
         if running_turn():
             if schedule_interrupt():
                 try:
@@ -310,15 +443,19 @@ def install_live_interrupt_handler(
 
     def interrupt_active_turn() -> bool:
         interrupt = getattr(session, "interrupt_active", None)
-        return bool(interrupt()) if callable(interrupt) else False
+        accepted = bool(interrupt()) if callable(interrupt) else False
+        if accepted:
+            _mark_user_interrupt(session)
+        return accepted
 
     signal.signal(signal.SIGINT, _handler)
 
     def restore() -> None:
-        nonlocal restored
+        nonlocal restored, closing
         if restored:
             return
         restored = True
+        closing = True
         signal.signal(signal.SIGINT, previous)
 
     return restore
@@ -357,19 +494,86 @@ def build_bottom_toolbar(
             context_color = "ansiyellow"
         else:
             context_color = "ansigreen"
-        queue_view = getattr(session, "queue_view", None)
-        view = queue_view() if callable(queue_view) else None
-        queue_status = toolbar_queue_status(view) if view is not None else "Idle · steer:0 · follow-up:0"
-        return html_factory(
-            f" <b>Model:</b> {model}"
-            f"  <b>Tier:</b> {tier}"
-            f"  <b>Tk:</b> {token_count:,}"
-            f"  <b>Ctx:</b> <{context_color}>{context_pct}%</{context_color}>"
-            f"  <b>Dir:</b> {session.cwd}"
-            f"  <b>Phase:</b> {session.current_phase}"
-            f"  <b>Queue:</b> {queue_status}"
-            f"{time_text}"
-        )
+        # 0.3.7: the live terminal no longer surfaces the queue. The
+        # toolbar therefore drops the ``Queue:`` segment and the
+        # ``queue_view`` / ``toolbar_queue_status`` lookup.  The
+        # persistent status line above the composer carries
+        # running-vs-idle state; the user can clear the queue with
+        # ``/abort`` (the only queue control the live UI advertises).
+        # Wide toolbars were clipped mid-field on 80-column terminals
+        # ("... follow-u") because PT truncates the single toolbar row.
+        # Render only the fields that fit, most important first:
+        # model, then context, tier, tokens, and only on wide
+        # terminals the long directory path. The hard cap adapts to
+        # the live terminal's column count when we can read it (PT
+        # exposes ``Application.output.get_size`` inside its main
+        # loop); outside the loop we fall back to the 100-column
+        # static cap so the field budget is still safe on wide
+        # terminals and PT does not wrap the row.
+        try:
+            from prompt_toolkit.application.current import get_app
+
+            live_columns = get_app().output.get_size().columns
+        except Exception:
+            live_columns = None
+        if live_columns and live_columns > _TOOLBAR_HARD_MAX:
+            # Wide terminal: drop the 100-column ceiling so phase and
+            # the directory path can both join the row. The live
+            # visible width minus a 4-column safety margin is the
+            # budget; only the fields that actually fit are rendered.
+            hard_max = live_columns - _TOOLBAR_COL_MARGIN
+        elif live_columns and live_columns > _TOOLBAR_COL_MARGIN + 20:
+            # Narrow terminal that still has a usable get_size():
+            # the visible width minus a 4-column margin is the cap
+            # so PT does not clip the row mid-field on 80-90 column
+            # hosts. The 100-column static cap above is too wide
+            # for these widths and was the root of the
+            # ``follow-u`` regression.
+            hard_max = live_columns - _TOOLBAR_COL_MARGIN
+        else:
+            # No usable PT app (e.g. outside the main loop): fall
+            # back to the static 100-column cap so the row is still
+            # safe for tests and pre-loop invocations.
+            hard_max = _TOOLBAR_HARD_MAX
+        segments = [
+            ("model", f"<b>Model:</b> {model}"),
+            ("ctx", f"<b>Ctx:</b> <{context_color}>{context_pct}%</{context_color}>"),
+            ("tier", f"<b>Tier:</b> {tier}"),
+            ("tk", f"<b>Tk:</b> {token_count:,}"),
+            ("phase", f"<b>Phase:</b> {session.current_phase}"),
+            ("dir", f"<b>Dir:</b> {session.cwd}"),
+            ("time", time_text),
+        ]
+        plain_len = 1  # leading space
+        chosen: list[str] = []
+        for name, segment in segments:
+            if name == "time" and not time_text:
+                continue
+            # ``approx`` is the visible-column width of the segment
+            # excluding the <b>/</b> tags so it matches the
+            # terminal's column count. PT renders the tags with
+            # zero columns; the inline ANSI color (e.g. <ansigreen>)
+            # IS one character each because PT does not strip them.
+            approx = (
+                len(segment)
+                - segment.count("<b>") * 3
+                - segment.count("</b>") * 4
+            )
+            # Phase is short and fixed (≈12 chars); on a wide enough
+            # terminal (>=100 cols) it always joins. The dir path is
+            # variable and is dropped first when the budget runs out.
+            # Model alias, ctx, tier, and tokens are the essential
+            # fields and are never dropped.
+            if name == "phase" and plain_len + approx + 2 > hard_max:
+                # tight column count: leave the short fields visible
+                continue
+            if name == "dir" and plain_len + approx > hard_max:
+                continue
+            if plain_len + approx > hard_max and chosen:
+                continue
+            chosen.append(segment)
+            plain_len += approx + 2
+        return html_factory(" " + "  ".join(chosen))
 
     return bottom_toolbar
 
@@ -379,14 +583,45 @@ def build_queue_preview(
     *,
     max_items: int = 3,
 ) -> Callable[[], list[tuple[str, str]]]:
-    """Build muted, read-only rows for queued input above the composer."""
+    """Build muted, read-only rows for queued input above the composer.
+
+    Conditionally rendered: an empty queue produces no output, so the
+    composer area stays clean while nothing is queued — the 0.3.7
+    "hidden queue UI" goal holds for the common case. The moment the
+    user queues a second message, the muted rows reappear so steering
+    and follow-up input stay visible (the owner's real-usage feedback
+    after 6317195: without them, Enter-while-running and the
+    Esc→CLAIM_STEER handoff happen invisibly and feel like lost input).
+
+    While the session is failed or aborted the queue is parked (the
+    scheduler refuses automatic drains), so scrolling every queued row
+    on each redraw would fill the composer area with the same parked
+    items. A parked queue renders one summary line plus the resume
+    hint instead of the per-item list.
+    """
     def queue_preview() -> list[tuple[str, str]]:
         queue_view = getattr(session, "queue_view", None)
         if not callable(queue_view):
             return []
-        rows = [row for row in queue_rows(queue_view()) if row.status != "running"]
+        view = queue_view()
+        # The recovered draft never renders as a preview row: it is already
+        # prefilled into the composer and carried by the status line
+        # ("Idle — edit the draft and press Enter"). Rendering it here too
+        # is what made Esc look like it "flashed an extra row" instead of
+        # interrupting cleanly.
+        rows = [
+            row
+            for row in queue_rows(view)
+            if row.status != "running" and row.kind is not SubmissionKind.RECOVERED
+        ]
         if not rows:
             return []
+        if view.session_status in {"failed", "aborted"}:
+            return [(
+                "class:queue-preview",
+                f"  ⏸ {len(rows)} message(s) parked after the failure — "
+                "/queue resume to run them, /abort to discard",
+            )]
         visible = rows[:max_items]
         lines = [
             f"  ↳ queued [{row.kind.value}] {row.summary}"
@@ -423,7 +658,14 @@ def prefill_settled_recovery(
     terminal: Any,
     submission_state: LiveSubmissionState,
 ) -> None:
-    """Present one settled recovered prompt as an editable replacement."""
+    """Present one settled recovered prompt as an editable replacement.
+
+    0.3.7: the persistent status line now carries a 1.5 s "edit the draft
+    and press Enter" hint instead of a long printed banner.  Recovery is
+    silent on the user UI; the banner only fires when the interrupt
+    produced no draft at all (e.g. a fast abort before the worker
+    checkpointed).
+    """
     if terminal is None or terminal.is_closed:
         return
     queue_view = getattr(session, "queue_view", None)
@@ -437,10 +679,7 @@ def prefill_settled_recovery(
         return
     submission_state.mark_recovery_draft()
     terminal.set_recovery_draft(recovered.content)
-    terminal.append_line(
-        "  [interrupted] Response stopped. Edit the recovered prompt and "
-        "press Enter to replace it; use /queue resume to retry unchanged."
-    )
+    terminal.refresh()
     terminal.refresh()
 
 
@@ -453,27 +692,33 @@ def should_defer_live_slash(session: Any, raw: str, *, enabled: bool) -> bool:
 
 
 def is_interrupted_recovery_control(raw: str) -> bool:
-    """Return whether ``raw`` manages preserved work instead of replacing it."""
+    """Return whether ``raw`` manages preserved work instead of replacing it.
+
+    0.3.7: ``/abort`` is the user-visible queue control; ``/queue`` is
+    an internal alias that still works when the user types it.  Both
+    are treated as recovery controls (allowed while
+    ``_retry_interrupted`` is set) so the slash dispatcher can run
+    them instead of forwarding them to the model as a prompt.
+    """
     verb = raw.split(None, 1)[0].lower() if raw.strip() else ""
-    return verb in {"/queue", "/abort"}
+    return verb in {"/abort", "/queue"}
 
 
 def restore_interrupted_repl_input(session: Any, fallback: str) -> str:
-    """Roll back display state and explain how to resume preserved work."""
+    """Roll back display state and explain how to resume preserved work.
+
+    0.3.7: the readline fallback keeps a one-liner that points the
+    user at the recovered draft. The queue is no longer advertised
+    here; ``/abort`` is the only user-visible queue control and the
+    only recovery verb the user needs to learn.
+    """
     _removed, last_text = session.undo(1)
     session._autosave()
-    queue_depth = session.queue_status()["queue_depth"]
-    if queue_depth:
-        suffix = "" if queue_depth == 1 else "s"
-        print(c(
-            YELLOW,
-            "  [interrupted] Saved "
-            f"{queue_depth} queued message{suffix}. Press Enter to retry it, "
-            "edit then press Enter to replace it, run /queue resume to run it "
-            "later, or /abort --all to discard queued work.",
-        ))
-    else:
-        print(c(YELLOW, "  [interrupted] Edit and press Enter to retry."))
+    print(c(
+        YELLOW,
+        "  Edit the recovered prompt and press Enter to retry, or "
+        "/abort to discard.",
+    ))
     return last_text or fallback
 
 

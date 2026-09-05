@@ -596,12 +596,111 @@ are source-checkout or user-installed assets; pip/curl installations should use
   `tools/check_release_consistency.py`; the v0.3.6 tag was force-updated
   to point at that commit because the tag ruleset blocks deletion.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Active plan: `0.3.6-live-turn-control.md` is **complete** as of 2026-09-02.
-  The full P0–P6 live turn control contract (live input, mid-turn steer,
-  follow-up queue, per-Turn cancellation, recovery, queue TUI) shipped in
-  `v0.3.6`. The next cycle's plan file will be opened separately.
-  Independent `pawnlogic-security` 0.1.0 published from
+- Active plan: `0.3.7-inline-terminal-stability.md` is the active plan
+  currently being repaired locally on `test/release-0.3.7`. It restores native terminal
+  scrollback / mouse selection / copy by removing the alternate-screen
+  application mode and unifies interactive selectors under a single
+  Prompt Toolkit Application dialog state. The 0.3.6 plan is
+  **complete** and moved to Completed Plans in `docs/plans/INDEX.md`;
+  the architecture is captured by
+  [ADR 0010](docs/adr/0010-inline-terminal-modal.md) in **Proposed**
+  state (local implementation repaired; acceptance gates pending).
+  The earlier rebuild history remains available for diff and
+  forensics. Independent
+  `pawnlogic-security` 0.1.0 published from
   `john0123412/pawnlogic-security` on 2026-07-28.
+- 0.3.7 release prep is paused for local repair on
+  `test/release-0.3.7`; no repair commit, push, merge, tag, or publish
+  may happen before the owner PTY gate. Phase A (the persistent
+  terminal itself) and Phase B (the four interactive selectors —
+  `/model`, `/planguard`, `/provider`, `/skills`) now have local
+  implementation and regression evidence.
+  `/model` and `/planguard` use the state-machine selector path that
+  installs the selector in the live `Application`'s
+  `SelectorRegistry`; `/provider` and `/skills` expose rich
+  `ModalSpec` containers and dynamic key bindings that are mounted in
+  that same Application. Their standalone Applications are used only
+  by the serial/readline fallback. `controller.run_selector` rejects
+  awaitable live factories so a nested `Application.run_async()`
+  cannot silently return. Completed transcript lines reach the host
+  stdout through Prompt Toolkit's `run_in_terminal` handoff while the
+  Application remains alive; partial lines flush once at close, worker
+  bursts are serialized, and transient host-write failures retry
+  without advancing the flush cursor. The bare-Escape binding now routes the
+  queue-first-item conversion through
+  `ControlAction(kind=CLAIM_STEER)` plus `session.queue_control` so
+  the scheduler correctly marks the queued entry as a steer instead
+  of creating a fresh turn. The persistent composer's `TextArea`
+  height is now `Dimension(min=1, max=5)` so long wrapped input
+  grows up to five rows instead of being clipped to a single fixed
+  row. A follow-up audit cycle (350abfa) reverted the
+  ``@bindings.add('enter', eager=True)`` flag and removed the
+  ``@bindings.add('c-j')`` binding from ``pawnlogic/live_repl.py``:
+  both were added by the b88cea3 multiline-composer commit but
+  empirically they break the live composer's normal text-insert
+  path.  The PTY e2e suite sends text + LF (``\n``) via
+  ``pexpect.sendline`` and ``\n`` maps to ``Keys.ControlJ`` in
+  Prompt Toolkit; the custom c-j binding ate that press as a
+  literal-newline insertion and the model never got called, while
+  the ``eager=True`` flag on the enter binding dropped the first
+  typed character on its own.  Leaving ``c-j`` to PT's default
+  ``_newline2`` handler (which re-feeds ``\n`` as ``ControlM``)
+  and relying on the ``_CombinedRegistry`` to resolve ``enter`` to
+  the LAST matching handler in the merged list restores the e2e
+  flow.  The multiline composer's ``Dimension(min=1, max=5)`` and
+  ``wrap_lines=True`` stay in place; only the literal-newline
+  insertion path is removed (no ``c-j`` binding) until a
+  /draft-style command is added to drive ``buffer.insert_text``
+  explicitly.  A follow-up cycle (6317195) added a persistent
+  1-line status indicator above the composer so the user always
+  sees what the worker thread is doing: `[model]  Idle`,
+  `[model]  ⏱ Ns · Esc to interrupt` while a Turn is in flight,
+  `[model]  ⏸ interrupted by user` for 1.5 s after a user-initiated
+  Esc / Ctrl+C interrupt, and `[model]  Idle — edit the draft and
+  press Enter` for 1.5 s after a recovery prefill. A 250 ms
+  `loop.call_later` ticker keeps the seconds counter honest while
+  the model runs, so the event loop stays free for key dispatch and
+  mid-turn typing echoes into the composer instead of being
+  swallowed. The same cycle hides the queue counters from the
+  user surface: the toolbar's `Queue:` segment is dropped,
+  `core/queue_tui.toolbar_queue_status` returns a label-only
+  string, and `/queue` is gone from the help block, the cmdhelp
+  dictionary, the top-of-file command summary, and the live
+  composer's "controls allowed while running" notice. `/queue
+  resume` and `/queue clear` survive as internal aliases
+  reachable through `ControlAction(kind=RESUME, explicit=True)`
+  and the existing command registration, so scripts that type
+  them keep working. The `/abort` command is merged: the previous
+  `--all` form is removed and plain `/abort` interrupts the active
+  Turn and clears the queue in one call. Failure is silent on the
+  user UI — a failed Turn parks the queue internally but the
+  persistent status line simply returns to `Idle` with no `Failed
+  · +N parked` label — so the only outward sign of a failure is
+  a 1.5 s `interrupted by user` banner when the user pressed
+  Esc. The internal anti-cascade gate
+  (`ControlAction(explicit=True)`) is preserved exactly as it
+  was. Release-prep edits in this cycle:
+  `config/paths.py:VERSION` `0.3.6` → `0.3.7`, the `0.3.7` section
+  added to `CHANGELOG.md`, `0.3.7` row added to `SECURITY.md`, and
+  [ADR 0010](docs/adr/0010-inline-terminal-modal.md) header updated
+  to record that the implementation has landed while keeping the
+  acceptance gates (`main` merge, PyPI publish, owner PTY smoke) as
+  the conditions for moving the ADR to **Accepted**. The two real-path
+  TUI tests for `/provider` and `/skills` are green, and the 12 E2E
+  tests that were failing on 3be257b's HEAD because of the c-j binding
+  all pass after 350abfa's revert of the eager / c-j additions. Ruff,
+  typed-island mypy
+  for `pawnlogic/terminal_transcript.py`,
+  `pawnlogic/live_terminal.py`, `pawnlogic/selectors.py`, and
+  `pawnlogic/restart_recovery.py`, `git diff --check`, leak scans,
+  `check_doc_structure.py`, and `check_release_consistency.py` are
+  all clean. The current local repair has combined evidence of 1,521
+  non-E2E tests and 29/29 Dynamic E2E tests; remote CI and owner PTY
+  acceptance have not run against it. The release PR (#124) is open against `main` from
+  `rebuild/inline-terminal-0.3.7`; `main` must not be force-pushed
+  and `v0.3.7` must not be tagged or pushed to PyPI until the remote
+  Actions on the release PR are green and the owner has run the
+  manual PTY smoke.
 - 0.3.6 release gates all closed: 1,470 non-E2E tests, 26 Dynamic E2E,
   Ruff, typed-island mypy (42 modules), documentation and language guards,
   release consistency, architecture budget, package build, twine metadata,
@@ -629,7 +728,7 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `core/mcp_client_manager`, `core/path_policy`, `core/provider_transport`,
 `core/api_retry`, `core/provider_tui_state`, `core/turn_scheduler`,
 `core/live_turn_control`, `core/turn_cancellation`, `core/queue_tui`,
-`pawnlogic/live_repl`, `pawnlogic/live_terminal`, `pawnlogic/restart_recovery`,
+`pawnlogic/live_repl`, `pawnlogic/live_terminal`, `pawnlogic/terminal_transcript`, `pawnlogic/restart_recovery`,
 `tools/check_doc_structure`,
 `tools/check_release_consistency`, `tools/merge_ctf_skills`, `tools/browser_ops`,
 `tools/lsp_lite`, `tools/text_patch`, `tools/shell_ops`, `tools/docker_plan`,
@@ -665,8 +764,7 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   controls. Escape shares a prefix with Alt shortcuts, so real-input tests
   must keep its bounded sequence-resolution latency covered. Mouse-wheel and
   coordinate-free ScrollUp/ScrollDown events must remain owned by the output
-  viewport so composer history cannot consume them. Owner manual terminal
-  acceptance and the post-upload hash-pinned install smoke remain outstanding.
+  viewport so composer history cannot consume them.
 - Safe-point steering can alter Tool Call batch protocol; skipped results,
   ordering, and plan-guard accounting must remain complete.
 - Tier presets use advisory plan-guard mode (`plan_guard_mode`) so weak models
@@ -676,6 +774,69 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 - `/abort` clears queued input but cannot cancel a provider request already
   handed to a synchronous stream; Ctrl+C remains the in-flight interruption
   path.
+- The 0.3.7 multiline composer cannot accept a literal ``\n`` from the
+  composer key path: the ``c-j`` binding was removed because it intercepted
+  bare ``\n`` (which the PTY e2e suite relies on for submit) and the
+  ``eager=True`` flag on the ``enter`` binding made the first typed key
+  disappear.  Authoring a multi-line draft now requires a future
+  ``/draft``-style command that drives ``buffer.insert_text`` directly;
+  until then, the only way to send a multi-line message is to type it
+  pre-formatted in a single ``send`` (no in-composer literal newlines).
+- The multiline composer must keep ``dont_extend_height=True`` with
+  ``Dimension(min=1, max=5)`` and must NOT use ``weight=0``:
+  multiline content raising the preferred height while zero weight
+  excludes the child from the growth rotation sends PT 3.0.52's
+  ``take_using_weights`` into an infinite layout loop (frozen page,
+  dead keys on wrapped input). The narrow live-terminal suite and the
+  e2e live-composer flows pin the working combination.
+- Rich in-Application TUIs (`/provider`, `/skills`) contribute dynamic
+  containers, key bindings, and focus targets to the persistent
+  Application. Their live command factories must never return an
+  awaitable or start a nested `Application`; tests must execute the real
+  command path and preserve the host Application/task identity.
+- Live host scrollback must use Prompt Toolkit's `run_in_terminal`
+  handoff. Worker threads must never write directly to the TTY; complete
+  lines stream live, partial lines flush once at close, and a failed host
+  write must not advance the transcript flush cursor.
+- A failed or aborted Turn parks the queue: implicit RESUME drains are
+  rejected until the user explicitly resumes (``/queue resume`` or
+  Enter on the recovered draft, carried by ``ControlAction.explicit``).
+  New user input still queues normally; only the automatic drain is
+  gated. Tests pin the parked cascade and the explicit pass-through.
+  The 0.3.7 live terminal keeps failure silent in the toolbar
+  (label-only ``Failed``); the internal anti-cascade gate is
+  preserved.
+- The queue preview above the composer is a CONDITIONAL surface: it
+  renders nothing while the queue is empty (the 0.3.7 clean-composer
+  goal) and shows the muted ``↳ queued [kind]`` rows the moment a
+  steer or follow-up is queued. Removing it again would make
+  Enter-while-running and the Esc→CLAIM_STEER handoff invisible
+  (the owner's real-usage regression report after the initial
+  hidden-queue re-scope); tests pin the empty/queued/failed
+  render states.
+- An interrupt with queued work is a STEER, not a recovery: the
+  scheduler must not mint a recovered draft while the queue is
+  non-empty, and the worker must re-drive the queue after the
+  interrupt settles (the ``_recover_active_unlocked`` queue guard
+  and the INTERRUPTED ``should_return`` computation in ``_drive``).
+  The recovered-draft edit flow applies ONLY to empty-queue
+  interrupts. Tests pin both halves; the preview never renders
+  recovered rows (status line + prefilled composer carry them).
+- ``/q`` is a registered alias of ``/exit`` and must stay in
+  ``LIVE_SLASH_COMMANDS`` so the running-Turn whitelist keeps
+  accepting it.
+- Queued messages are reworkable through gestures, not commands:
+  ``ControlKind.POP_ALL`` atomically drains the queued lanes and
+  the recovered slot into one editable draft, driven by bare Esc /
+  Up / Alt+Up on an empty, idle composer (the claude-code
+  gesture). Esc while a Turn runs keeps the interrupt + CLAIM_STEER
+  meaning. ``pop_all_session_queue`` is the session seam;
+  ``/queue`` stays hidden from the command surface with its
+  resume/clear aliases intact.
+- The bottom toolbar renders fields within a width budget (see
+  ``_TOOLBAR_HARD_MAX`` / ``_TOOLBAR_WIDE_MIN`` in
+  ``pawnlogic/live_repl.py``); adding a toolbar field must keep the
+  80-column rendering free of mid-field clipping.
 - English and zh-CN docs drifting in structure or command examples.
 - Release prep editing version literals outside fixed locations.
 - Packaging accidentally including `skills/` content.

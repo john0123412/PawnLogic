@@ -256,7 +256,14 @@ def test_slash_queue_resume_reports_empty_queue(spawn_pawnlogic):
 
 
 def test_ctrl_c_retry_and_queue_resume_keep_one_recoverable_message(tmp_path):
-    """Ctrl+C preserves one retry, whether the user presses Enter or resumes it."""
+    """Ctrl+C preserves one retry, whether the user presses Enter or resumes it.
+
+    0.3.7: the readline fallback's recovery hint is a one-liner that
+    no longer mentions the queue count.  The recovered prompt still
+    appears at the ``You >`` prompt and the user can still resume via
+    ``/queue resume`` (the internal alias for the explicit
+    ``ControlAction(kind=RESUME, explicit=True)`` gate).
+    """
     child, trace_path = _spawn_interruptible_pawnlogic_process(tmp_path)
     try:
         _wait_for_prompt(child)
@@ -264,7 +271,7 @@ def test_ctrl_c_retry_and_queue_resume_keep_one_recoverable_message(tmp_path):
         _wait_for_stream_count(trace_path, 1)
 
         child.sendcontrol("c")
-        child.expect("Saved 1 queued message", timeout=10)
+        child.expect("Edit the recovered prompt", timeout=10)
         child.expect(r"You > .*retry once", timeout=10)
 
         # Pressing Enter consumes the preserved prompt once, rather than adding
@@ -275,7 +282,7 @@ def test_ctrl_c_retry_and_queue_resume_keep_one_recoverable_message(tmp_path):
         assert len(trace_path.read_text(encoding="utf-8").splitlines()) == 2
 
         child.sendcontrol("c")
-        child.expect("Saved 1 queued message", timeout=10)
+        child.expect("Edit the recovered prompt", timeout=10)
         child.sendline("/queue")
         child.expect(r"Queued: 1 message\(s\)", timeout=10)
 
@@ -286,7 +293,7 @@ def test_ctrl_c_retry_and_queue_resume_keep_one_recoverable_message(tmp_path):
         time.sleep(0.2)
         assert len(trace_path.read_text(encoding="utf-8").splitlines()) == 3
         child.sendcontrol("c")
-        child.expect("Saved 1 queued message", timeout=10)
+        child.expect("Edit the recovered prompt", timeout=10)
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
         pytest.fail(f"Ctrl+C recovery flow failed: {e}")
@@ -306,14 +313,14 @@ def test_ctrl_c_edit_replaces_the_preserved_prompt(tmp_path, replacement):
         assert json.loads(starts[-1]) == "original prompt"
 
         child.sendcontrol("c")
-        child.expect("Saved 1 queued message", timeout=10)
+        child.expect("Edit the recovered prompt", timeout=10)
         child.expect(r"You > .*original prompt", timeout=10)
 
         child.sendline(replacement)
         starts = _wait_for_stream_count(trace_path, 2)
         assert json.loads(starts[-1]) == replacement
         child.sendcontrol("c")
-        child.expect("Saved 1 queued message", timeout=10)
+        child.expect("Edit the recovered prompt", timeout=10)
         child.expect(rf"You > .*{re.escape(replacement)}", timeout=10)
 
         # Enter must retry the edited prompt even when it starts with '/'.
@@ -321,7 +328,7 @@ def test_ctrl_c_edit_replaces_the_preserved_prompt(tmp_path, replacement):
         starts = _wait_for_stream_count(trace_path, 3)
         assert json.loads(starts[-1]) == replacement
         child.sendcontrol("c")
-        child.expect("Saved 1 queued message", timeout=10)
+        child.expect("Edit the recovered prompt", timeout=10)
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
         pytest.fail(f"Ctrl+C edit recovery failed: {e}")
@@ -332,7 +339,13 @@ def test_ctrl_c_edit_replaces_the_preserved_prompt(tmp_path, replacement):
 
 @pytest.mark.parametrize("control", ["/queue clear"])
 def test_ctrl_c_clear_control_discards_the_preserved_prompt(tmp_path, control):
-    """Documented clear controls remain available during retry editing."""
+    """Documented clear controls remain available during retry editing.
+
+    0.3.7: the live UI hides ``/queue`` but the readline fallback's
+    ``/queue clear`` and ``/abort`` commands are still reachable; the
+    preserved prompt's "Saved N queued message" line is replaced by
+    the one-liner "Edit the recovered prompt and press Enter...".
+    """
     child, trace_path = _spawn_interruptible_pawnlogic_process(tmp_path)
     try:
         _wait_for_prompt(child)
@@ -340,7 +353,7 @@ def test_ctrl_c_clear_control_discards_the_preserved_prompt(tmp_path, control):
         _wait_for_stream_count(trace_path, 1)
 
         child.sendcontrol("c")
-        child.expect("Saved 1 queued message", timeout=10)
+        child.expect("Edit the recovered prompt", timeout=10)
         child.expect(r"You > .*discard me", timeout=10)
 
         child.sendline(control)
@@ -362,7 +375,10 @@ def test_slash_planguard_tui_applies_selected_mode(spawn_pawnlogic_tui):
     try:
         _wait_for_prompt(child)
         child.sendline("/plg")
-        child.expect("Auto-corrected: /plg -> /planguard", timeout=10)
+        # The auto-correct notice renders in the in-Application transcript
+        # (sink.print), not as raw host-PTY bytes, so the PTY sees the
+        # selector itself. The notice line is asserted by the in-process
+        # regression test for dispatch_live_slash.
         child.expect("Plan Guard Mode", timeout=10)
         child.send("2")
         child.send("\r")
@@ -430,6 +446,51 @@ def test_slash_model_list(spawn_pawnlogic):
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
         pytest.fail(f"/model failed: {e}")
+
+
+def test_slash_model_tui_selects_current_model(spawn_pawnlogic_tui):
+    """The in-Application model selector applies the picked model alias."""
+    child = spawn_pawnlogic_tui
+    try:
+        _wait_for_prompt(child)
+        child.sendline("/model")
+        # The selector renders the "Select model" title above the list.
+        child.expect("Select model", timeout=10)
+        # Pick the first model (digit "1") and confirm with Enter.
+        child.send("1")
+        child.send("\r")
+        child.expect("Switched to", timeout=10)
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"/model TUI selector failed: {e}")
+
+
+def test_slash_provider_tui_opens_manager(spawn_pawnlogic_tui):
+    """The provider TUI panel opens under the live Application."""
+    child = spawn_pawnlogic_tui
+    try:
+        _wait_for_prompt(child)
+        child.sendline("/provider")
+        # The provider TUI title and one provider row must be visible.
+        child.expect("Provider Manager", timeout=10)
+        child.expect("deepseek", timeout=10)
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"/provider TUI failed: {e}")
+
+
+def test_slash_skills_tui_opens_picker(spawn_pawnlogic_tui):
+    """The skill-pack TUI panel opens under the live Application."""
+    child = spawn_pawnlogic_tui
+    try:
+        _wait_for_prompt(child)
+        child.sendline("/skills")
+        # The skill TUI renders the totals line and the action bar.
+        child.expect("of ", timeout=10)
+        child.expect("Save", timeout=10)
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"/skills TUI failed: {e}")
 
 
 def test_clean_exit(spawn_pawnlogic):
@@ -785,9 +846,12 @@ def test_live_composer_defers_unsafe_slash_commands_but_allows_controls(tmp_path
         _wait_for_control_marker(process["tool_started"])
 
         child.sendline("/model")
-        child.expect("only /queue, /abort", timeout=5)
+        child.expect("only /abort or /exit", timeout=5)
         _assert_no_control_trace(process["trace"], 2)
 
+        # 0.3.7: ``/queue`` is hidden from the live UI.  Typing it
+        # manually is still allowed (internal alias) so the test
+        # exercises the explicit-resume path.
         child.sendline("/queue")
         child.expect("Message Queue Status", timeout=5)
         _assert_no_control_trace(process["trace"], 2)
@@ -797,7 +861,14 @@ def test_live_composer_defers_unsafe_slash_commands_but_allows_controls(tmp_path
 
 
 def test_live_ctrl_c_interrupts_one_turn_and_preserves_recovered_draft(tmp_path):
-    """Prompt Toolkit Ctrl+C cancels the active Turn through its own token."""
+    """Prompt Toolkit Ctrl+C cancels the active Turn through its own token.
+
+    0.3.7: the live terminal no longer prints ``Response stopped``;
+    recovery is silent and the persistent status line briefly shows
+    ``⏸ interrupted by user``.  The ``cancellation_observed`` control
+    marker is the test-rig acknowledgement of the in-flight cancel,
+    so we wait on it instead of scraping the now-removed banner.
+    """
     _require_prompt_toolkit()
     process = _spawn_controlled_turn_process(
         tmp_path, prompt_toolkit_enabled=True, stream_mode="cancel"
@@ -810,16 +881,20 @@ def test_live_ctrl_c_interrupts_one_turn_and_preserves_recovered_draft(tmp_path)
         _wait_for_control_marker(process["tool_started"])
 
         child.sendcontrol("c")
-        child.expect("Response stopped", timeout=10)
+        _wait_for_control_marker(process["cancellation_observed"], timeout=10)
         child.sendcontrol("u")  # clear the recovered draft before a slash command
         child.sendline("/queue")
         child.expect("Status: interrupted", timeout=10)
         child.expect(r"Queued: 1 message\(s\)", timeout=10)
 
+        # 0.3.7: ``/abort`` clears the active Turn and the queue in one
+        # call; the ``--all`` form is gone.  After the first ``/abort``
+        # the queue is already empty, so the second call prints the
+        # idle-style "no active Turn" message.
         child.sendline("/abort")
-        child.expect("no active Turn; queued messages preserved", timeout=10)
-        child.sendline("/abort --all")
-        child.expect("cleared 1 queued message", timeout=10)
+        child.expect("cleared", timeout=10)
+        child.sendline("/abort")
+        child.expect("no active Turn", timeout=10)
         child.sendline("/queue")
         child.expect(r"Queued: 0 message\(s\)", timeout=10)
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
@@ -831,7 +906,14 @@ def test_live_ctrl_c_interrupts_one_turn_and_preserves_recovered_draft(tmp_path)
 
 
 def test_live_bare_escape_interrupts_one_turn_without_another_keypress(tmp_path):
-    """A lone Escape reaches the active Turn within the bounded key window."""
+    """A lone Escape reaches the active Turn within the bounded key window.
+
+    0.3.7: the persistent status line shows ``⏸ interrupted by user``
+    for 1.5 s after the user's Esc, then returns to ``Idle``.  The
+    test rig's ``cancellation_observed`` marker is the in-flight
+    acknowledgement; we wait on it instead of scraping the now-silent
+    recovery banner.
+    """
     _require_prompt_toolkit()
     process = _spawn_controlled_turn_process(
         tmp_path, prompt_toolkit_enabled=True, stream_mode="cancel"
@@ -861,7 +943,15 @@ def test_live_bare_escape_interrupts_one_turn_without_another_keypress(tmp_path)
 
 
 def test_live_escape_prefills_recovered_draft_for_edit_and_replace(tmp_path):
-    """Escape stops once and makes the recovered prompt directly editable."""
+    """Escape stops once and makes the recovered prompt directly editable.
+
+    0.3.7: recovery is silent on the user UI.  The persistent status
+    line briefly carries the "edit the draft" hint; the recovered
+    text shows up in the composer's prompt region instead of a
+    banner.  The next ``child.expect("original escape prompt", ...)``
+    confirms the recovery prefill by waiting for the original text
+    to appear in the prompt.
+    """
     _require_prompt_toolkit()
     process = _spawn_controlled_turn_process(
         tmp_path, prompt_toolkit_enabled=True, stream_mode="cancel"
@@ -875,12 +965,10 @@ def test_live_escape_prefills_recovered_draft_for_edit_and_replace(tmp_path):
 
         child.send("\x1b")
         _wait_for_control_marker(process["cancellation_observed"], timeout=1.0)
-        child.expect("Response stopped", timeout=10)
         # The alternate-screen renderer may emit only differential cursor
         # updates, so the recovered text can appear without a fresh prompt
-        # prefix in the PTY stream.  Its visible queue-preview row is the
-        # transcript-side confirmation; the next assertion verifies the edit
-        # path itself.
+        # prefix in the PTY stream.  The next assertion waits for the
+        # recovered text directly (no "Response stopped" banner anymore).
         child.expect("original escape prompt", timeout=10)
 
         # The prefilled line is a replacement draft.  This Enter must run the
@@ -892,7 +980,7 @@ def test_live_escape_prefills_recovered_draft_for_edit_and_replace(tmp_path):
         assert len(records) == 2
 
         child.sendcontrol("c")
-        child.expect("Response stopped", timeout=10)
+        _wait_for_control_marker(process["cancellation_observed"], timeout=10)
     except (pexpect.TIMEOUT, pexpect.EOF) as e:
         print(f"\n=== OUTPUT ===\n{child.before}")
         pytest.fail(f"live Escape recovery edit failed: {e}")
@@ -932,7 +1020,16 @@ def test_prompt_toolkit_text_stream_is_not_torn_apart(tmp_path):
 
 
 def test_plain_enter_inputs_are_previewed_and_drained_after_text_stream(tmp_path):
-    """Rapid Enter submissions stay visible and execute without START errors."""
+    """Rapid Enter submissions execute without START errors.
+
+    0.3.7: the live terminal no longer surfaces a per-row ``queued
+    [steer] ...`` preview above the composer; the user's typed text
+    is auto-enqueued silently and the scheduler admits it after the
+    active Turn completes.  The trace below proves the queue was
+    admitted and drained in submission order; the visual
+    preview-row assertion was removed because the preview is now
+    hidden by design.
+    """
     _require_prompt_toolkit()
     process = _spawn_controlled_turn_process(
         tmp_path, prompt_toolkit_enabled=True, stream_mode="text"
@@ -944,12 +1041,12 @@ def test_plain_enter_inputs_are_previewed_and_drained_after_text_stream(tmp_path
         _wait_for_control_trace(process["trace"], 1)
         _wait_for_control_marker(process["stream_open"])
 
+        # 0.3.7: plain Enter auto-enqueues without printing a per-row
+        # preview.  The user only sees the typed text in the composer
+        # (the ``child.sendline`` echoes it) and the persistent status
+        # line continues to show "Running" / "Esc to interrupt".
         child.sendline("second queued question")
-        child.expect(r"queued \[steer\] second queued question", timeout=5)
         child.sendline("third queued question")
-        # Prompt Toolkit emits differential cursor updates, so the real-screen
-        # unit test owns the multi-row visual assertion. The trace below proves
-        # this third Enter was admitted and drained independently.
         _assert_no_control_trace(process["trace"], 2)
 
         process["release"].write_text("release", encoding="utf-8")

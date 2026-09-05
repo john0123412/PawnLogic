@@ -78,16 +78,27 @@ def queue_rows(view: SchedulerView) -> tuple[QueueRow, ...]:
 
 
 def toolbar_queue_status(view: SchedulerView) -> str:
-    """Return the compact queue status used by the live composer toolbar."""
+    """Return a label-only queue summary used by the live composer.
+
+    0.3.7: the live terminal hides queue counters from the user. The
+    status line above the composer carries running-vs-idle state; the
+    toolbar only needs a single label so ``/queue`` and any internal
+    diagnostics stay distinguishable without leaking ``steer:N``,
+    ``follow-up:N``, or ``+N parked`` to the user.
+    """
+    queued = len(view.steer) + len(view.follow_up)
     if view.active is not None:
-        label = "Running"
-    elif view.recovered is not None:
-        label = "Recoverable"
-    elif view.steer or view.follow_up:
-        label = "Queued"
-    else:
-        label = "Idle"
-    return f"{label} · steer:{len(view.steer)} · follow-up:{len(view.follow_up)}"
+        return "Running"
+    if view.session_status in {"failed", "aborted"}:
+        # 0.3.7: failure is silent on the user UI. The internal gate
+        # still parks the queue, but the label collapses to a
+        # neutral ``Failed`` so the owner does not see ``+N parked``.
+        return "Failed"
+    if view.recovered is not None:
+        return "Recoverable"
+    if queued:
+        return "Queued"
+    return "Idle"
 
 
 def render_queue_tui(view: SchedulerView) -> str:

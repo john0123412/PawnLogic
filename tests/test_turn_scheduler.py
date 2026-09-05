@@ -1192,11 +1192,17 @@ def test_interrupt_active_preserves_follow_up_but_abort_all_clears_it() -> None:
         interrupted = scheduler.control(ControlAction(ControlKind.INTERRUPT_ACTIVE))
         assert interrupted.accepted
         assert interrupted.settled is True
-        assert interrupted.state is SchedulerState.RECOVERABLE
         assert release.wait(timeout=5)
+        # claude-code contract (0.3.7): an interrupted Turn with queued
+        # follow-up hands the queue the baton — the interrupted prompt is
+        # NOT minted as a recovered draft and the queue drains next.
         view = scheduler.view()
-        assert view.recovered is not None
-        assert [entry.content for entry in view.follow_up] == ["later"]
+        assert view.recovered is None, (
+            "interrupted-with-queue must not mint a recovered draft"
+        )
+        # The queue either still holds the follow-up or has already
+        # drained it (worker takeover) — both satisfy the contract.
+        assert view.session_status in {"interrupted", "running", "completed"}
 
         aborted = scheduler.control(ControlAction(ControlKind.ABORT_ALL))
         assert aborted.accepted
@@ -1302,4 +1308,199 @@ def test_background_interrupt_receipt_reports_pending_for_non_cooperative_execut
         assert scheduler.view().active is not None
     finally:
         release.set()
+        scheduler.control(ControlAction(ControlKind.SHUTDOWN))
+
+
+def test_failed_session_parks_implicit_resume_but_allows_explicit() -> None:
+    """Regression: a failed Turn must not auto-drain the queue.
+
+    The owner reported the cascade: with a dead provider (rate limit /
+    circuit open), every queued prompt re-ran into the same failure and
+    identical error lines piled onto the page. The implicit RESUME that
+    a new FOLLOW_UP submission triggers must be rejected while the
+    session is failed; an explicit RESUME (``/queue resume``) is the
+    user taking responsibility and proceeds.
+    """
+    calls: list[str] = []
+
+    def execute(submission: Submission) -> TurnExecutionResult:
+        calls.append(submission.content)
+        return TurnExecutionResult(TurnExecutionStatus.FAILED, "circuit open")
+
+    scheduler = TurnScheduler(execute)
+    scheduler.submit(Submission("first prompt"))
+    assert scheduler.view().session_status == "failed"
+
+    # Queue a follow-up; its automatic resume must be parked.
+    scheduler.submit(
+        Submission("second prompt", kind=SubmissionKind.FOLLOW_UP, source="test")
+    )
+    implicit = scheduler.control(ControlAction(ControlKind.RESUME))
+    assert not implicit.accepted
+    assert calls == ["first prompt"], "no queued prompt may re-run while failed"
+
+    # The explicit /queue resume passes the gate and re-runs the work.
+    # The executor keeps failing, so exactly ONE queued item is retried
+    # and the session parks again — a second implicit cascade must not
+    # drain the remaining queue on its own.
+    explicit = scheduler.control(ControlAction(ControlKind.RESUME, explicit=True))
+    assert explicit.accepted
+    assert calls == ["first prompt", "first prompt"], calls
+    assert scheduler.view().session_status == "failed"
+    still_parked = scheduler.control(ControlAction(ControlKind.RESUME))
+    assert not still_parked.accepted
+    assert calls == ["first prompt", "first prompt"], "no cascade"
+
+
+def test_failed_session_toolbar_is_a_label_only() -> None:
+    """0.3.7: a failed session no longer surfaces ``Failed · +N
+    parked`` to the user.  ``toolbar_queue_status`` returns the
+    label only.  The internal anti-cascade gate (the explicit
+    ``ControlAction`` flag) still parks the queue; the UI just
+    does not advertise the count.
+    """
+    from core.queue_tui import toolbar_queue_status
+
+    class _View:
+        active = None
+        recovered = object()
+        steer: tuple = ()
+        follow_up = (("q1",), ("q2",), ("q3",))
+        session_status = "failed"
+
+    status = toolbar_queue_status(_View())
+    assert status == "Failed", status
+    assert "+3" not in status
+    assert "parked" not in status
+
+
+def test_pop_all_empties_queue_into_joined_draft() -> None:
+    """POP_ALL drains queued + recovered work into one editable draft.
+
+    The claude-code gesture contract behind empty-input Esc: the queue
+    is emptied atomically and the contents return in admission order
+    (recovered first, then queue sequence) joined by blank lines. The
+    active Turn is untouched; an empty queue is rejected.
+    """
+
+    def execute(_submission: Submission) -> TurnExecutionResult:
+        return TurnExecutionResult(TurnExecutionStatus.INTERRUPTED)
+
+    scheduler = TurnScheduler(execute)
+    scheduler.submit(Submission("active", source="t"))  # -> recovered
+    scheduler.submit(Submission("q1", kind=SubmissionKind.FOLLOW_UP, source="t"))
+    scheduler.submit(Submission("q2", kind=SubmissionKind.FOLLOW_UP, source="t"))
+
+    receipt = scheduler.control(ControlAction(ControlKind.POP_ALL))
+    assert receipt.accepted
+    assert receipt.claimed is not None
+    assert receipt.claimed.content == "active\n\nq1\n\nq2"
+    view = scheduler.view()
+    assert view.recovered is None and not view.follow_up and not view.steer
+    assert view.session_status == "idle"
+
+    again = scheduler.control(ControlAction(ControlKind.POP_ALL))
+    assert not again.accepted and again.claimed is None
+
+
+def test_pop_all_keeps_active_turn_running() -> None:
+    """POP_ALL never touches the active Turn, only queued work."""
+    state = {"calls": 0}
+
+    def execute(_submission: Submission) -> TurnExecutionResult:
+        state["calls"] += 1
+        return TurnExecutionResult(TurnExecutionStatus.INTERRUPTED)
+
+    scheduler = TurnScheduler(execute)
+    scheduler.submit(Submission("active", source="t"))
+    assert scheduler.view().active is None  # interrupted -> recovered
+    # Re-run the recovered entry and interrupt again to keep a recovered slot
+    scheduler.control(ControlAction(ControlKind.RESUME, explicit=True))
+    receipt = scheduler.control(ControlAction(ControlKind.POP_ALL))
+    assert receipt.accepted
+    # The popped draft contains only the recovered entry; no active submission
+    # was removed and no extra executor run happened.
+    assert state["calls"] == 2
+
+
+def test_interrupt_with_queue_hands_baton_no_recovered_draft() -> None:
+    """Regression (claude-code contract): interrupting a Turn that has
+    queued work steers ahead from the queue; the interrupted prompt
+    must not surface as a recovered draft row.
+
+    The owner's report: Esc during a running Turn with queued input
+    flashed a ``queued [recovered]`` row instead of steering — the
+    interrupted prompt was minted as recovered and the queue parked
+    forever (the worker never re-drove the interrupted session).
+    """
+    started = Event()
+    release = Event()
+    runs: list[str] = []
+
+    class Executor:
+        def execute_with_cancellation(
+            self, item: Submission, token: TurnCancellationToken
+        ) -> object:
+            runs.append(item.content)
+            started.set()
+            if item.content == "active":
+                token.wait(timeout=5)
+                release.set()
+                return TurnExecutionResult(TurnExecutionStatus.INTERRUPTED)
+            return TurnExecutionResult(TurnExecutionStatus.COMPLETED)
+
+    scheduler = TurnScheduler(Executor(), background=True)
+    try:
+        scheduler.submit(Submission("active"))
+        assert started.wait(timeout=5)
+        started.clear()
+        scheduler.submit(Submission("next", kind=SubmissionKind.FOLLOW_UP))
+        assert scheduler.control(
+            ControlAction(ControlKind.INTERRUPT_ACTIVE)
+        ).accepted
+        assert release.wait(timeout=5)
+        # The queue drains: 'next' runs after the interrupted 'active'.
+        import time as _time
+
+        deadline = _time.monotonic() + 5
+        while _time.monotonic() < deadline:
+            if runs == ["active", "next"]:
+                break
+            _time.sleep(0.02)
+        assert runs == ["active", "next"], runs
+        view = scheduler.view()
+        assert view.recovered is None
+        assert view.follow_up == ()
+    finally:
+        scheduler.control(ControlAction(ControlKind.SHUTDOWN))
+
+
+def test_interrupt_with_empty_queue_parks_as_recovered_draft() -> None:
+    """The other half of the contract: an empty-queue interrupt keeps
+    the edit-and-retry recovered draft (prefilled composer path)."""
+    started = Event()
+    release = Event()
+
+    class Executor:
+        def execute_with_cancellation(
+            self, _item: Submission, token: TurnCancellationToken
+        ) -> object:
+            started.set()
+            token.wait(timeout=5)
+            release.set()
+            return TurnExecutionResult(TurnExecutionStatus.INTERRUPTED)
+
+    scheduler = TurnScheduler(Executor(), background=True)
+    try:
+        scheduler.submit(Submission("only"))
+        assert started.wait(timeout=5)
+        assert scheduler.control(
+            ControlAction(ControlKind.INTERRUPT_ACTIVE)
+        ).accepted
+        assert release.wait(timeout=5)
+        view = scheduler.view()
+        assert view.recovered is not None
+        assert view.recovered.content == "only"
+        assert view.session_status == "interrupted"
+    finally:
         scheduler.control(ControlAction(ControlKind.SHUTDOWN))

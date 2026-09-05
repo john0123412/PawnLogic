@@ -16,6 +16,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from config.security import DANGEROUS_PATTERNS
 
@@ -494,13 +495,122 @@ def is_confirmation_available(*, eval_mode: bool | None = None) -> bool:
     active_eval_mode = eval_mode if eval_mode is not None else is_eval_mode()
     if active_eval_mode:
         return False
-    stdin_tty = bool(getattr(sys.stdin, "isatty", lambda: False)())
-    stdout_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
-    return stdin_tty and stdout_tty
+    stdin_tty = bool(getattr(sys.stdin, "isatty", lambda: False) ())
+    # A live persistent terminal owns stdin: a raw ``input()`` here would
+    # race the Application's own input reader for the same PTY and corrupt
+    # the composer (the "Type 'yes' ..." bytes leaking into the draft).
+    # Confirmation is still available in that mode — it routes through
+    # the in-Application yes/no modal in ``prompt_for_confirmation`` —
+    # but only when the live-terminal loop is healthy.
+    stdin_tty = stdin_tty or _live_confirmation_loop() is not None
+    stdout_tty = bool(getattr(sys.stdout, "isatty", lambda: False) ())
+    return stdin_tty and (stdout_tty or _live_confirmation_loop() is not None)
+
+
+def _live_confirmation_loop() -> Any:
+    """Return the live terminal's event loop, if one is registered.
+
+    The CLI registers its persistent-terminal event loop here at startup
+    so tool threads can hand the high-risk confirmation to the
+    in-Application modal instead of stealing stdin. The registration is
+    a plain module attribute; no import of ``pawnlogic.*`` happens here
+    (``core`` must stay UI-agnostic).
+    """
+    loop = getattr(is_confirmation_available, "_live_loop", None)
+    if loop is not None and loop.is_closed():
+        return None
+    return loop
+
+
+def register_confirmation_loop(loop: Any) -> None:
+    """Register (or clear, with ``None``) the live-terminal event loop."""
+    is_confirmation_available._live_loop = loop  # type: ignore[attr-defined]
+
+
+async def run_confirmation_modal(decision: OperationDecision) -> bool:
+    """Run the high-risk confirmation as an in-Application yes/no selector."""
+    from pawnlogic.selectors import SelectorState
+
+    class _ConfirmSelector(SelectorState):
+        """Two-entry selector: approve or deny one high-risk operation."""
+
+        def __init__(self) -> None:
+            super().__init__(title="Confirm high-risk operation")
+            self.selected_idx = 0
+
+        @property
+        def formatted_text(self) -> Any:
+            from prompt_toolkit.formatted_text import FormattedText
+
+            fragments: list[tuple[str, str]] = []
+            fragments.append((self.style.title, "\n  High-risk host shell operation\n"))
+            fragments.append((self.style.desc, f"\n  Risk: {decision.risk.value}\n"))
+            fragments.append((self.style.desc, f"  Reason: {decision.reason}\n"))
+            fragments.append((self.style.desc, f"  Rule: {decision.matched_rule}\n"))
+            fragments.append(
+                (self.style.desc, f"  Command: {decision.redacted_command}\n")
+            )
+            fragments.append((self.style.help, "\n  Up/Down or 1/2 select  Enter confirm  Esc cancel\n\n"))
+            for index, (label, _keyword) in enumerate(
+                (("Approve and run", "yes"), ("Deny", "no"))
+            ):
+                cursor = ">" if index == self.selected_idx else " "
+                style = self.style.selected if index == self.selected_idx else ""
+                fragments.append(
+                    (style, f"  {cursor} {index + 1}. {label}\n")
+                )
+            return FormattedText(fragments)
+
+        def handle_key(self, key: str) -> bool:
+            if key == "up":
+                self.selected_idx = (self.selected_idx - 1) % 2
+                return True
+            if key == "down":
+                self.selected_idx = (self.selected_idx + 1) % 2
+                return True
+            if key in {"1", "2"}:
+                self.selected_idx = int(key) - 1
+                return True
+            if key == "enter":
+                self.close(result=self.selected_idx == 0)
+                return True
+            if key in {"escape", "c-c"}:
+                self.close(result=False)
+                return True
+            return False
+
+    controller = getattr(is_confirmation_available, "_live_controller", None)
+    if controller is None:
+        return False
+    return bool(await controller.run_selector(lambda: _ConfirmSelector()))
+
+
+def register_confirmation_controller(controller: Any) -> None:
+    """Register the live-terminal controller used for confirmation modals."""
+    is_confirmation_available._live_controller = controller  # type: ignore[attr-defined]
 
 
 def prompt_for_confirmation(decision: OperationDecision) -> bool:
-    """Prompt the user to approve a high-risk operation."""
+    """Prompt the user to approve a high-risk operation.
+
+    With a live persistent terminal, the confirmation is an
+    in-Application yes/no modal scheduled onto the terminal's event
+    loop (this callback runs on a tool thread, so the coroutine is
+    marshalled with ``run_coroutine_threadsafe``). Without one, the
+    synchronous readline prompt below is unchanged.
+    """
+    loop = _live_confirmation_loop()
+    controller = getattr(is_confirmation_available, "_live_controller", None)
+    if loop is not None and controller is not None:
+        import asyncio
+
+        future = asyncio.run_coroutine_threadsafe(
+            run_confirmation_modal(decision), loop
+        )
+        try:
+            return bool(future.result(timeout=600))
+        except Exception:
+            return False
     print("High-risk host shell operation requires confirmation.")
     print(f"Risk: {decision.risk.value}")
     print(f"Reason: {decision.reason}")
