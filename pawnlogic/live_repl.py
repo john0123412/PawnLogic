@@ -22,10 +22,9 @@ from core.turn_scheduler import SubmissionKind
 from utils.ansi import YELLOW, c
 
 
-LIVE_SLASH_COMMANDS = frozenset({"/abort", "/exit", "/quit", "/queue"})
+LIVE_SLASH_COMMANDS = frozenset({"/abort", "/exit", "/quit", "/q", "/queue"})
 LIVE_SLASH_NOTICE = (
-    "  ⚠ A Turn is running; only /abort or /exit controls are "
-    "available until it completes."
+    "  ⚠ A Turn is running; only /abort or /exit controls are available until it completes."
 )
 # Bottom-toolbar width budget (visible columns, not ANSI bytes).
 # _TOOLBAR_HARD_MAX: never exceed a 100-column toolbar — anything past
@@ -605,7 +604,16 @@ def build_queue_preview(
         if not callable(queue_view):
             return []
         view = queue_view()
-        rows = [row for row in queue_rows(view) if row.status != "running"]
+        # The recovered draft never renders as a preview row: it is already
+        # prefilled into the composer and carried by the status line
+        # ("Idle — edit the draft and press Enter"). Rendering it here too
+        # is what made Esc look like it "flashed an extra row" instead of
+        # interrupting cleanly.
+        rows = [
+            row
+            for row in queue_rows(view)
+            if row.status != "running" and row.kind is not SubmissionKind.RECOVERED
+        ]
         if not rows:
             return []
         if view.session_status in {"failed", "aborted"}:

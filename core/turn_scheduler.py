@@ -880,10 +880,20 @@ class TurnScheduler:
                             if self._abort_requested
                             else self._recover_active_unlocked()
                         )
-                        should_return = True
+                        # An interrupted Turn with queued work hands the
+                        # queue the baton (claude-code contract): the model
+                        # continues from the queued direction instead of
+                        # parking. _recover_active_unlocked already
+                        # refuses to mint a recovered draft while the
+                        # queue is non-empty, so keep driving the queue.
+                        # With an empty queue the interrupt parks.
+                        should_return = bool(
+                            self._abort_requested
+                            or not (self._steer or self._follow_up)
+                        )
                     elif outcome.status is TurnExecutionStatus.INTERRUPTED:
                         view = self._recover_active_unlocked()
-                        should_return = True
+                        should_return = not (self._steer or self._follow_up)
                     elif outcome.status is TurnExecutionStatus.FAILED:
                         # A failed executor result can still leave an
                         # externally visible side effect.  Preserve the
@@ -1367,12 +1377,24 @@ class TurnScheduler:
         outcome: TurnExecutionStatus = TurnExecutionStatus.INTERRUPTED,
         session_status: str = "interrupted",
     ) -> SchedulerView:
+        """Park an interrupted active Turn.
+
+        claude-code contract: when the user interrupts a Turn that has
+        queued follow-up work, the queued work takes over — the model
+        continues in the new direction from the queue. The interrupted
+        prompt must NOT become an editable recovered draft in that case:
+        a recovered draft plus queued rows is what produced the owner's
+        "Esc flashes a recovered row instead of steering" report. The
+        interrupted prompt is therefore only preserved as ``recovered``
+        when the queue lanes are empty (nothing to steer into).
+        """
         if self._active is not None:
             active = self._active
-            self._recovered = _Entry(
-                replace(active.submission, kind=SubmissionKind.RECOVERED),
-                active.sequence,
-            )
+            if not (self._steer or self._follow_up):
+                self._recovered = _Entry(
+                    replace(active.submission, kind=SubmissionKind.RECOVERED),
+                    active.sequence,
+                )
         self._active = None
         self._active_cancellation = None
         self._interrupt_requested = False

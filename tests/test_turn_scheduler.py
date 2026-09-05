@@ -1192,11 +1192,17 @@ def test_interrupt_active_preserves_follow_up_but_abort_all_clears_it() -> None:
         interrupted = scheduler.control(ControlAction(ControlKind.INTERRUPT_ACTIVE))
         assert interrupted.accepted
         assert interrupted.settled is True
-        assert interrupted.state is SchedulerState.RECOVERABLE
         assert release.wait(timeout=5)
+        # claude-code contract (0.3.7): an interrupted Turn with queued
+        # follow-up hands the queue the baton — the interrupted prompt is
+        # NOT minted as a recovered draft and the queue drains next.
         view = scheduler.view()
-        assert view.recovered is not None
-        assert [entry.content for entry in view.follow_up] == ["later"]
+        assert view.recovered is None, (
+            "interrupted-with-queue must not mint a recovered draft"
+        )
+        # The queue either still holds the follow-up or has already
+        # drained it (worker takeover) — both satisfy the contract.
+        assert view.session_status in {"interrupted", "running", "completed"}
 
         aborted = scheduler.control(ControlAction(ControlKind.ABORT_ALL))
         assert aborted.accepted
@@ -1415,3 +1421,86 @@ def test_pop_all_keeps_active_turn_running() -> None:
     # The popped draft contains only the recovered entry; no active submission
     # was removed and no extra executor run happened.
     assert state["calls"] == 2
+
+
+def test_interrupt_with_queue_hands_baton_no_recovered_draft() -> None:
+    """Regression (claude-code contract): interrupting a Turn that has
+    queued work steers ahead from the queue; the interrupted prompt
+    must not surface as a recovered draft row.
+
+    The owner's report: Esc during a running Turn with queued input
+    flashed a ``queued [recovered]`` row instead of steering — the
+    interrupted prompt was minted as recovered and the queue parked
+    forever (the worker never re-drove the interrupted session).
+    """
+    started = Event()
+    release = Event()
+    runs: list[str] = []
+
+    class Executor:
+        def execute_with_cancellation(
+            self, item: Submission, token: TurnCancellationToken
+        ) -> object:
+            runs.append(item.content)
+            started.set()
+            if item.content == "active":
+                token.wait(timeout=5)
+                release.set()
+                return TurnExecutionResult(TurnExecutionStatus.INTERRUPTED)
+            return TurnExecutionResult(TurnExecutionStatus.COMPLETED)
+
+    scheduler = TurnScheduler(Executor(), background=True)
+    try:
+        scheduler.submit(Submission("active"))
+        assert started.wait(timeout=5)
+        started.clear()
+        scheduler.submit(Submission("next", kind=SubmissionKind.FOLLOW_UP))
+        assert scheduler.control(
+            ControlAction(ControlKind.INTERRUPT_ACTIVE)
+        ).accepted
+        assert release.wait(timeout=5)
+        # The queue drains: 'next' runs after the interrupted 'active'.
+        import time as _time
+
+        deadline = _time.monotonic() + 5
+        while _time.monotonic() < deadline:
+            if runs == ["active", "next"]:
+                break
+            _time.sleep(0.02)
+        assert runs == ["active", "next"], runs
+        view = scheduler.view()
+        assert view.recovered is None
+        assert view.follow_up == ()
+    finally:
+        scheduler.control(ControlAction(ControlKind.SHUTDOWN))
+
+
+def test_interrupt_with_empty_queue_parks_as_recovered_draft() -> None:
+    """The other half of the contract: an empty-queue interrupt keeps
+    the edit-and-retry recovered draft (prefilled composer path)."""
+    started = Event()
+    release = Event()
+
+    class Executor:
+        def execute_with_cancellation(
+            self, _item: Submission, token: TurnCancellationToken
+        ) -> object:
+            started.set()
+            token.wait(timeout=5)
+            release.set()
+            return TurnExecutionResult(TurnExecutionStatus.INTERRUPTED)
+
+    scheduler = TurnScheduler(Executor(), background=True)
+    try:
+        scheduler.submit(Submission("only"))
+        assert started.wait(timeout=5)
+        assert scheduler.control(
+            ControlAction(ControlKind.INTERRUPT_ACTIVE)
+        ).accepted
+        assert release.wait(timeout=5)
+        view = scheduler.view()
+        assert view.recovered is not None
+        assert view.recovered.content == "only"
+        assert view.session_status == "interrupted"
+    finally:
+        scheduler.control(ControlAction(ControlKind.SHUTDOWN))

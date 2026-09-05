@@ -74,6 +74,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   visible instead of silently queuing input. A failed session
   collapses the rows to the one-line parked summary with the
   resume/discard hints.
+- **Esc now truly steers (owner regression fix).** Interrupting a
+  running Turn that has queued follow-up work hands the queue the
+  baton: the worker immediately re-drives the queued entry instead
+  of parking the session, and the interrupted prompt is no longer
+  minted as a `queued [recovered]` preview row (the "Esc flashes an
+  extra row instead of steering" report). The recovered-draft flow
+  is unchanged for an empty queue: interrupting with nothing queued
+  still parks the prompt as an editable recovered draft prefilled
+  into the composer.
+- **`/q` works while a Turn runs.** The `/exit` alias was missing
+  from the running-Turn command whitelist, so `/q` typed mid-Turn
+  was deferred and then queued as a prompt. `/q` now exits like
+  `/exit`/`/quit`.
+- **Shutdown no longer leaks `RuntimeError: Event loop is closed`.**
+  Streaming-producer threads racing the terminal close hit unguarded
+  `loop.call_later`/`call_soon_threadsafe` calls on the dying loop;
+  the invalidation scheduler now checks `loop.is_closed()` first and
+  the throttle timer is guarded.
 - **Queued messages are reworkable, claude-code style.** A new
   `POP_ALL` scheduler control atomically empties the queued
   steer/follow-up lanes and the recovered slot into one joined

@@ -1296,6 +1296,10 @@ class PersistentTerminal:
         loop = self._loop
         if loop is None or self._invalidation_scheduled:
             return
+        # Shutdown race: a producer thread may still be appending while
+        # the terminal is closing and the loop is already gone.
+        if loop.is_closed():
+            return
         # Throttle cross-thread invalidation (streaming chunks, worker
         # appends). At session scale a full render takes tens of
         # milliseconds; without throttling, a fast stream schedules one
@@ -1308,6 +1312,11 @@ class PersistentTerminal:
             in_ui_thread = asyncio.get_running_loop() is loop
         except RuntimeError:
             in_ui_thread = False
+        # A closed loop (terminal shutdown racing one last producer write)
+        # must not raise: the GC-time "RuntimeError('Event loop is closed')
+        # lost sys.stderr" report on exit came from these bare loop calls.
+        if loop.is_closed():
+            return
         if not in_ui_thread:
             now = loop.time()
             if now - self._last_invalidation_ts < 1.0 / _MAX_RENDER_FPS:
@@ -1321,9 +1330,10 @@ class PersistentTerminal:
                         self._last_invalidation_ts = 0.0
                         self._schedule_invalidation_locked()
 
-                    self._throttle_timer_handle = loop.call_later(
-                        1.0 / _MAX_RENDER_FPS, _trailing
-                    )
+                    with contextlib.suppress(RuntimeError):
+                        self._throttle_timer_handle = loop.call_later(
+                            1.0 / _MAX_RENDER_FPS, _trailing
+                        )
                 return
             self._last_invalidation_ts = now
         self._invalidation_scheduled = True

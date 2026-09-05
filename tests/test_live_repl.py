@@ -505,6 +505,19 @@ def test_queue_preview_is_conditionally_rendered() -> None:
     text = preview[0][1]
     assert "q1" in text and "q2" in text
 
+    class _RecoveredView:
+        active = None
+        recovered = _view_item("draft", SubmissionKind.RECOVERED)
+        steer: tuple = ()
+        follow_up: tuple = ()
+        session_status = "interrupted"
+
+    # The recovered draft never renders as a preview row: it is carried
+    # by the status line and the prefilled composer (the owner's "Esc
+    # flashes an extra row" regression).
+    session_recovered = _NS(queue_view=lambda: _RecoveredView())
+    assert live_repl.build_queue_preview(session_recovered)() == []
+
     class _FailedView(_QueuedView):
         session_status = "failed"
 

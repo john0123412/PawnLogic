@@ -812,6 +812,17 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   (the owner's real-usage regression report after the initial
   hidden-queue re-scope); tests pin the empty/queued/failed
   render states.
+- An interrupt with queued work is a STEER, not a recovery: the
+  scheduler must not mint a recovered draft while the queue is
+  non-empty, and the worker must re-drive the queue after the
+  interrupt settles (the ``_recover_active_unlocked`` queue guard
+  and the INTERRUPTED ``should_return`` computation in ``_drive``).
+  The recovered-draft edit flow applies ONLY to empty-queue
+  interrupts. Tests pin both halves; the preview never renders
+  recovered rows (status line + prefilled composer carry them).
+- ``/q`` is a registered alias of ``/exit`` and must stay in
+  ``LIVE_SLASH_COMMANDS`` so the running-Turn whitelist keeps
+  accepting it.
 - Queued messages are reworkable through gestures, not commands:
   ``ControlKind.POP_ALL`` atomically drains the queued lanes and
   the recovered slot into one editable draft, driven by bare Esc /
