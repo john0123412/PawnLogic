@@ -222,6 +222,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   asserts on the selector rendering instead of host-PTY notice
   bytes.
 
+### Release
+- Published 2026-09-05 via Trusted Publishing from
+  `Publish to PyPI` workflow run
+  [`33974631898`](https://github.com/john0123412/PawnLogic/actions/runs/33974631898).
+  Full test gate + Dynamic E2E + distribution build + PyPI
+  fresh-install smoke + GitHub Release creation all green.
+  PyPI: <https://pypi.org/project/pawnlogic/0.3.7/>;
+  GitHub Release:
+  <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.7>.
+  The first two attempts at the tag-driven publish workflow hit a
+  transient Dynamic E2E flake on
+  `test_live_bare_escape_interrupts_one_turn_without_another_keypress`
+  (CI-runner `pexpect` timed out waiting for the post-Esc
+  "Status: interrupted" banner); the rerun cleared it and the
+  underlying PTY esc behavior is intact. See `AGENT.md` "Known
+  Risks" for the retained environment-sensitive note. PR #124
+  (inline terminal repair, `7a40374`),
+  PR #125 (post-merge owner-acceptance record, `58ae1e8`),
+  PR #126 (release-prep README + `.release-ready`, `530d8df`)
+  all merged into `main` before the tag was force-updated to
+  `530d8df` (the tag ruleset blocks deletion).
+
 ## [0.3.6] - 2026-09-02
 
 ### Added
