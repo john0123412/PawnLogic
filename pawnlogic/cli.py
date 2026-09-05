@@ -1348,17 +1348,9 @@ async def _main_impl():
         from pawnlogic.live_terminal import LiveTerminalApp, PersistentTerminalController
 
         def _build_live_status_text() -> str:
-            """Compute the persistent 1-line status indicator.
-
-            Delegates to the terminal's own ``_build_status`` so the same
-            state machine (Idle / Running / ⏸ interrupted by user /
-            recovered draft) is used by tests and the live layout.
-            """
-            terminal = _live_terminal
-            if terminal is None:
-                return ""
+            """Delegate to the terminal's status state machine; "" when absent."""
             try:
-                return terminal._build_status()  # type: ignore[attr-defined]
+                return _live_terminal._build_status()  # type: ignore[union-attr]
             except Exception:
                 return ""
 
