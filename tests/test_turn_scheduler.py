@@ -1366,3 +1366,52 @@ def test_failed_session_toolbar_is_a_label_only() -> None:
     assert status == "Failed", status
     assert "+3" not in status
     assert "parked" not in status
+
+
+def test_pop_all_empties_queue_into_joined_draft() -> None:
+    """POP_ALL drains queued + recovered work into one editable draft.
+
+    The claude-code gesture contract behind empty-input Esc: the queue
+    is emptied atomically and the contents return in admission order
+    (recovered first, then queue sequence) joined by blank lines. The
+    active Turn is untouched; an empty queue is rejected.
+    """
+
+    def execute(_submission: Submission) -> TurnExecutionResult:
+        return TurnExecutionResult(TurnExecutionStatus.INTERRUPTED)
+
+    scheduler = TurnScheduler(execute)
+    scheduler.submit(Submission("active", source="t"))  # -> recovered
+    scheduler.submit(Submission("q1", kind=SubmissionKind.FOLLOW_UP, source="t"))
+    scheduler.submit(Submission("q2", kind=SubmissionKind.FOLLOW_UP, source="t"))
+
+    receipt = scheduler.control(ControlAction(ControlKind.POP_ALL))
+    assert receipt.accepted
+    assert receipt.claimed is not None
+    assert receipt.claimed.content == "active\n\nq1\n\nq2"
+    view = scheduler.view()
+    assert view.recovered is None and not view.follow_up and not view.steer
+    assert view.session_status == "idle"
+
+    again = scheduler.control(ControlAction(ControlKind.POP_ALL))
+    assert not again.accepted and again.claimed is None
+
+
+def test_pop_all_keeps_active_turn_running() -> None:
+    """POP_ALL never touches the active Turn, only queued work."""
+    state = {"calls": 0}
+
+    def execute(_submission: Submission) -> TurnExecutionResult:
+        state["calls"] += 1
+        return TurnExecutionResult(TurnExecutionStatus.INTERRUPTED)
+
+    scheduler = TurnScheduler(execute)
+    scheduler.submit(Submission("active", source="t"))
+    assert scheduler.view().active is None  # interrupted -> recovered
+    # Re-run the recovered entry and interrupt again to keep a recovered slot
+    scheduler.control(ControlAction(ControlKind.RESUME, explicit=True))
+    receipt = scheduler.control(ControlAction(ControlKind.POP_ALL))
+    assert receipt.accepted
+    # The popped draft contains only the recovered entry; no active submission
+    # was removed and no extra executor run happened.
+    assert state["calls"] == 2

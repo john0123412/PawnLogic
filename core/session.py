@@ -80,6 +80,7 @@ from core.live_turn_control import (
     clear_session_queue,
     convert_session_queue,
     interrupt_session,
+    pop_all_session_queue,
     recall_session_queue,
     remove_session_queue,
     resume_session_turn,
@@ -2436,6 +2437,14 @@ class AgentSession:
     def remove_queued_turn(self, submission_id: str) -> bool:
         """Remove one queued submission by stable ID."""
         return bool(remove_session_queue(self, submission_id).accepted)
+
+    def pop_all_queued_turns(self) -> str | None:
+        """Pop every queued/recovered message into one editable draft.
+
+        The claude-code gesture contract for empty-input Esc: the queue
+        is emptied and the joined content is returned for the composer.
+        """
+        return pop_all_session_queue(self)
 
     def convert_queued_turn(
         self,

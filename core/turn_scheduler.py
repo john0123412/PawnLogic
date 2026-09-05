@@ -105,6 +105,7 @@ class ControlKind(str, Enum):
     RESUME = "resume"
     REPLACE_RECOVERED = "replace_recovered"
     REMOVE = "remove"
+    POP_ALL = "pop_all"
     CONVERT = "convert"
     CLEAR = "clear"
     ABORT_ALL = "abort_all"
@@ -631,6 +632,8 @@ class TurnScheduler:
                 receipt = self._receipt_unlocked(action, True, affected, "")
             elif action.kind is ControlKind.REMOVE:
                 receipt = self._remove_unlocked(action)
+            elif action.kind is ControlKind.POP_ALL:
+                receipt = self._pop_all_unlocked(action)
             elif action.kind is ControlKind.CONVERT:
                 receipt = self._convert_unlocked(action)
             elif action.kind is ControlKind.REPLACE_RECOVERED:
@@ -1035,6 +1038,51 @@ class TurnScheduler:
                     self._touch_unlocked()
                     return self._receipt_unlocked(action, True, (submission_id,), "")
         return self._receipt_unlocked(action, False, (), "submission ID not found")
+
+    def _pop_all_unlocked(self, action: ControlAction) -> ControlReceipt:
+        """Atomically pop every queued/recovered item into one editable draft.
+
+        The claude-code gesture contract: an empty-input Esc (or Up on the
+        first row) moves the queued messages out of the queue and into the
+        editor so the user can rework them. The popped contents are joined
+        in admission-sequence order with blank lines and returned via the
+        receipt's ``claimed`` submission; the queue lanes and the
+        recovered slot are cleared, and an emptied session returns to
+        idle. The active Turn is never touched.
+        """
+        contents: list[str] = []
+        affected: list[str] = []
+        for entry in sorted(
+            (*self._steer, *self._follow_up),
+            key=lambda item: item.sequence,
+        ):
+            contents.append(entry.submission.content)
+            affected.append(entry.submission.submission_id or "")
+        self._steer.clear()
+        self._follow_up.clear()
+        if self._recovered is not None:
+            contents.insert(0, self._recovered.submission.content)
+            affected.insert(0, self._recovered.submission.submission_id or "")
+            self._recovered = None
+        if not contents:
+            return self._receipt_unlocked(action, False, (), "queue is empty")
+        if self._active is None:
+            self._session_status = "idle"
+            self._interrupted_at = None
+        self._touch_unlocked()
+        draft = "\n\n".join(contents)
+        claimed = Submission(
+            draft,
+            kind=SubmissionKind.RECOVERED,
+            source="pop_all",
+        )
+        return self._receipt_unlocked(
+            action,
+            True,
+            tuple(affected),
+            "",
+            claimed=claimed,
+        )
 
     def _convert_unlocked(self, action: ControlAction) -> ControlReceipt:
         """Move one queued entry between the steer and follow-up lanes.

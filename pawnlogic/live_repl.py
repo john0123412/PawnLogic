@@ -252,17 +252,53 @@ def build_prompt_toolkit_bindings(
 
     @bindings.add("escape", "up")
     def _(event: Any) -> None:
-        """Recall the newest queued or recovered entry without consuming it."""
+        """Pop the queued messages into the composer without consuming history.
+
+        Alt+Up mirrors claude-code's "editable queued command" gesture:
+        the queued rows move out of the queue and into the editor in
+        one piece (the non-consuming single-item ``recall`` remains
+        available as ``/queue recall <id>`` for scripts).
+        """
         session._live_input_buffer = event.current_buffer
-        recall = getattr(session, "recall_queued_turn", None)
-        content = recall() if callable(recall) else None
-        if content:
-            event.current_buffer.text = content
-            event.current_buffer.cursor_position = len(content)
+        if not _pop_queued_to_composer(event.current_buffer):
+            # Nothing queued: fall back to the non-consuming recall so the
+            # pre-0.3.7 muscle memory keeps working.
+            recall = getattr(session, "recall_queued_turn", None)
+            content = recall() if callable(recall) else None
+            if content:
+                event.current_buffer.text = content
+                event.current_buffer.cursor_position = len(content)
+
+    def _pop_queued_to_composer(buffer: Any) -> bool:
+        """Pop every queued message into the composer for editing.
+
+        The claude-code gesture contract: when the input is empty, Esc
+        (and Up on the composer's first row) move the queued messages
+        out of the queue and into the editor so the user can rework
+        them before resubmitting. Returns True when something was
+        popped; the caller must not also run history recall then.
+        """
+        if buffer.text.strip():
+            return False
+        pop_all = getattr(session, "pop_all_queued_turns", None)
+        content = pop_all() if callable(pop_all) else None
+        if not content:
+            return False
+        buffer.text = content
+        buffer.cursor_position = len(content)
+        return True
 
     @bindings.add("escape")
     def _(event: Any) -> None:
-        """Interrupt active Turn, then steer with the first queued item."""
+        """Interrupt + steer while running; pop the queue when idle.
+
+        While a Turn runs, Esc interrupts it and converts the first
+        queued item to a steer (the scheduler picks the new direction
+        up at the next safe point). While idle with queued messages
+        and an empty composer, Esc empties the queue into the editor
+        for editing — the claude-code gesture; without it, queued
+        input could only be discarded, never reworked.
+        """
         if running_turn():
             schedule_interrupt(event)
             if queued_work():
@@ -273,6 +309,8 @@ def build_prompt_toolkit_bindings(
                 queue_control = getattr(session, "queue_control", None)
                 if callable(queue_control):
                     queue_control(action)
+            return
+        _pop_queued_to_composer(event.current_buffer)
 
     @bindings.add("c-c")
     @bindings.add("<sigint>")
@@ -300,6 +338,10 @@ def build_prompt_toolkit_bindings(
         buffer = event.app.current_buffer
         if _has_completion_menu(event):
             buffer.complete_previous()
+            return
+        # claude-code gesture: Up on an empty composer pops the queued
+        # messages into the editor instead of walking history.
+        if _pop_queued_to_composer(buffer):
             return
         buffer.history_backward()
 

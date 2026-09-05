@@ -74,6 +74,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   visible instead of silently queuing input. A failed session
   collapses the rows to the one-line parked summary with the
   resume/discard hints.
+- **Queued messages are reworkable, claude-code style.** A new
+  `POP_ALL` scheduler control atomically empties the queued
+  steer/follow-up lanes and the recovered slot into one joined
+  draft (admission order, blank-line separated). The gestures:
+  with an idle session, empty composer, and queued messages, a
+  bare `Esc` — or `Up` on the empty composer, or `Alt+Up` — pops
+  the whole queue into the composer for editing and resubmitting.
+  While a Turn runs, `Esc` keeps its interrupt-and-steer meaning.
+  `/queue` remains hidden from the command surface; the queue is
+  managed by gestures and the dim preview rows, not commands.
 - **`/abort` merged.** The previous `--all` form is removed; plain
   `/abort` now interrupts the active Turn and clears the queue in
   one call. Failure is silent on the user UI, so the only

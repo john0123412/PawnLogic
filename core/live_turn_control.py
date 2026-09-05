@@ -204,6 +204,22 @@ def remove_session_queue(session: Any, submission_id: str) -> Any:
     )
 
 
+def pop_all_session_queue(session: Any) -> str | None:
+    """Pop every queued/recovered message into one editable draft.
+
+    The claude-code gesture contract: empty-input Esc (or Up on the
+    composer's first row) moves the queued messages out of the queue
+    and into the editor. Returns the joined draft content, or ``None``
+    when nothing was queued. The active Turn is never touched.
+    """
+    receipt = session._turn_scheduler.control(
+        ControlAction(ControlKind.POP_ALL)
+    )
+    if not receipt.accepted or receipt.claimed is None:
+        return None
+    return receipt.claimed.content
+
+
 def convert_session_queue(
     session: Any,
     submission_id: str,

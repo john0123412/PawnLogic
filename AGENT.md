@@ -812,6 +812,14 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   (the owner's real-usage regression report after the initial
   hidden-queue re-scope); tests pin the empty/queued/failed
   render states.
+- Queued messages are reworkable through gestures, not commands:
+  ``ControlKind.POP_ALL`` atomically drains the queued lanes and
+  the recovered slot into one editable draft, driven by bare Esc /
+  Up / Alt+Up on an empty, idle composer (the claude-code
+  gesture). Esc while a Turn runs keeps the interrupt + CLAIM_STEER
+  meaning. ``pop_all_session_queue`` is the session seam;
+  ``/queue`` stays hidden from the command surface with its
+  resume/clear aliases intact.
 - The bottom toolbar renders fields within a width budget (see
   ``_TOOLBAR_HARD_MAX`` / ``_TOOLBAR_WIDE_MIN`` in
   ``pawnlogic/live_repl.py``); adding a toolbar field must keep the

@@ -513,3 +513,90 @@ def test_queue_preview_is_conditionally_rendered() -> None:
     assert len(parked) == 1
     assert "parked after the failure" in parked[0][1]
     assert "/queue resume" in parked[0][1]
+
+
+def test_empty_escape_and_up_pop_queued_messages_into_composer() -> None:
+    """Esc on an idle, empty composer pops the queue into the editor.
+
+    The claude-code gesture contract: queued messages are reworkable,
+    not discard-only. With queued follow-ups, no active Turn, and an
+    empty composer, a bare Esc empties the queue and fills the composer
+    with the joined draft (recovered first, then queue order). The
+    bare-Esc press is exercised on the real PersistentTerminal
+    application — its key registry is what the live REPL runs with.
+    """
+    from types import SimpleNamespace as _NS
+
+    from core.turn_scheduler import (
+        SubmissionKind,
+        SubmissionStatus,
+        SubmissionView,
+    )
+
+    def _view_item(content: str, kind: SubmissionKind) -> SubmissionView:
+        return SubmissionView(
+            submission_id=f"id-{content}",
+            sequence=1,
+            kind=kind,
+            content=content,
+            source="test",
+            status=SubmissionStatus.QUEUED,
+        )
+
+    class _QueuedView:
+        active = None
+        recovered = None
+        steer: tuple = ()
+        follow_up = (
+            _view_item("q1", SubmissionKind.FOLLOW_UP),
+            _view_item("q2", SubmissionKind.FOLLOW_UP),
+        )
+        session_status = "running"
+
+    session = _NS(
+        queue_status=lambda: {"pending_count": 0, "queue_depth": 2},
+        queue_view=lambda: _QueuedView(),
+        _live_input_buffer=None,
+        pop_all_queued_turns=lambda: "q1\n\nq2",
+        recall_queued_turn=lambda *_a: None,
+    )
+
+    async def scenario() -> None:
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(
+                input=pipe,
+                output=DummyOutput(),
+                key_bindings=bindings,
+                submission_kind=lambda: SubmissionKind.START,
+            )
+            run_task = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+            try:
+                # Bare Escape resolves after the bounded prefix window.
+                pipe.send_text("\x1b")
+                await asyncio.sleep(0.5)
+                assert terminal.draft == "q1\n\nq2", (
+                    f"Esc must pop the queue into the composer; got {terminal.draft!r}"
+                )
+                # The second Esc finds an empty queue and leaves the draft.
+                pipe.send_text("\x1b")
+                await asyncio.sleep(0.4)
+                assert terminal.draft == "q1\n\nq2"
+            finally:
+                terminal.close()
+                await asyncio.gather(run_task, return_exceptions=True)
+
+    from prompt_toolkit.input.defaults import create_pipe_input
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.output import DummyOutput
+
+    from pawnlogic.live_terminal import PersistentTerminal
+
+    bindings, _state = build_prompt_toolkit_bindings(
+        KeyBindings,
+        session=session,
+        read_text_cache=lambda _p: "",
+        restore_last_input_buffer=lambda *_a: False,
+        last_input_path=Path(".last_input"),
+    )
+    asyncio.run(scenario())
