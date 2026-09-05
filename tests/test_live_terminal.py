@@ -596,6 +596,7 @@ def test_body_layout_uses_a_single_output_window_not_two_conditional_containers(
     """
     from prompt_toolkit.layout import (
         ConditionalContainer,
+        DynamicContainer,
         FloatContainer,
         HSplit,
     )
@@ -611,6 +612,8 @@ def test_body_layout_uses_a_single_output_window_not_two_conditional_containers(
         body = root
         if isinstance(body, FloatContainer):
             body = body.content
+        if isinstance(body, DynamicContainer):
+            body = body.get_container()
         assert isinstance(body, HSplit), (
             f"layout root body must be HSplit, got {type(body).__name__}"
         )

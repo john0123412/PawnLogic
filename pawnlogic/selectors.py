@@ -34,10 +34,50 @@ into the registry by the controller when the command is dispatched.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from prompt_toolkit.formatted_text import FormattedText
+
+
+@dataclass(frozen=True)
+class ModalSpec:
+    """Description of a selector mounted in the live application.
+
+    ``container`` and ``focus`` are Prompt Toolkit objects, kept as ``Any``
+    here so this small state module does not depend on the layout package.
+    ``key_bindings`` is merged into the host application's bindings while the
+    modal is active.  A selector may call the refresh callback supplied by
+    ``build_modal`` when its panel changes; the host then swaps the dynamic
+    container without replacing the host ``Application`` or its ``Layout``.
+    """
+
+    container: Any
+    key_bindings: Any
+    focus: Any | None = None
+
+
+@runtime_checkable
+class EmbeddedSelector(Protocol):
+    """Public seam for a stateful selector hosted by PersistentTerminal."""
+
+    def build_modal(
+        self,
+        on_close: Callable[[Any], None],
+        on_refresh: Callable[[ModalSpec], None],
+    ) -> ModalSpec:
+        """Build the current view and bind it to the host callbacks."""
+        ...
+
+    @property
+    def is_closed(self) -> bool:
+        """Whether the embedded selector has completed."""
+        ...
+
+    def close(self, result: Any = None) -> None:
+        """Close the embedded selector with an optional result."""
+        ...
 
 
 @dataclass
@@ -127,7 +167,7 @@ class SelectorHost(Protocol):
         """Install a selector as the live modal and return its result future."""
         ...
 
-    def close_selector(self) -> None:
+    def close_selector(self) -> bool:
         """Close the current selector (if any) and resolve its future."""
         ...
 
@@ -150,21 +190,25 @@ class SelectorRegistry:
     the registry synchronous and easy to reason about in tests.
     """
 
-    _active: SelectorState | None = None
+    _active: Any | None = None
     _future: asyncio.Future[Any] | None = field(default=None)
+    _modal: ModalSpec | None = field(default=None)
 
     @property
-    def active_selector(self) -> SelectorState | None:
+    def active_selector(self) -> Any | None:
         return self._active
 
     @property
     def has_active(self) -> bool:
-        return self._active is not None and not self._active.is_closed
+        return self._active is not None and not bool(
+            getattr(self._active, "is_closed", False)
+        )
 
     def install_active(
         self,
-        selector: SelectorState,
+        selector: Any,
         future: asyncio.Future[Any],
+        modal: ModalSpec | None = None,
     ) -> None:
         """Make ``selector`` the active modal and resolve ``future`` on close.
 
@@ -173,16 +217,19 @@ class SelectorRegistry:
         cancels) or the host (when the live terminal closes for
         another reason).
         """
-        if self._active is not None and not self._active.is_closed:
-            # Stale selector; resolve it as cancelled so the prior
-            # awaiting command does not hang.
+        if self._active is not None:
+            # A newer selector supersedes the old one.  Resolve both the
+            # state object and its future even if the object already marked
+            # itself closed: a command can still be awaiting that future
+            # when its view is replaced.
             self._active.close(result=None)
             if self._future is not None and not self._future.done():
                 self._future.set_result(None)
         self._active = selector
         self._future = future
+        self._modal = modal
 
-    def consume_active(self) -> tuple[SelectorState, asyncio.Future[Any]] | None:
+    def consume_active(self) -> tuple[Any, asyncio.Future[Any]] | None:
         """Atomically take ownership of the active selector and its future."""
         if self._active is None or self._future is None:
             return None
@@ -190,29 +237,82 @@ class SelectorRegistry:
         future = self._future
         self._active = None
         self._future = None
+        self._modal = None
         return selector, future
 
-    def resolve(self, result: Any) -> bool:
+    @property
+    def modal(self) -> ModalSpec | None:
+        """Return the active embedded view, if this is an embedded selector."""
+        return self._modal
+
+    @property
+    def has_embedded(self) -> bool:
+        return self.has_active and self._modal is not None
+
+    @property
+    def has_state(self) -> bool:
+        """Whether the active selector uses the lightweight key dispatcher."""
+        return self.has_active and isinstance(self._active, SelectorState)
+
+    def replace_modal(
+        self,
+        modal: ModalSpec,
+        *,
+        selector: Any | None = None,
+        future: asyncio.Future[Any] | None = None,
+    ) -> bool:
+        """Replace the active view after a selector state transition.
+
+        ``selector``/``future`` are optional identity guards.  Embedded
+        selectors keep callbacks from their own modal build, so an old
+        callback must not replace the view of a newer selector.
+        """
+        if not self.has_active or self._modal is None:
+            return False
+        if selector is not None and self._active is not selector:
+            return False
+        if future is not None and self._future is not future:
+            return False
+        self._modal = modal
+        return True
+
+    def key_bindings(self) -> Any:
+        """Return bindings for the active embedded selector, if any."""
+        return self._modal.key_bindings if self._modal is not None else None
+
+    def resolve(
+        self,
+        result: Any,
+        *,
+        selector: Any | None = None,
+        future: asyncio.Future[Any] | None = None,
+    ) -> bool:
         """Resolve the current selector's future with ``result``.
 
         Returns True when an active selector was resolved, False
-        when there was no active selector (a benign no-op).
+        when there was no active selector or the supplied identity does
+        not match it (both are benign no-ops).
         """
         if self._active is None or self._future is None:
+            return False
+        if selector is not None and self._active is not selector:
+            return False
+        if future is not None and self._future is not future:
             return False
         self._active.close(result=result)
         future = self._future
         self._active = None
         self._future = None
+        self._modal = None
         if not future.done():
             future.set_result(result)
         return True
 
     def formatted_text(self) -> FormattedText:
         """Snapshot the active selector's formatted text, or empty."""
-        if self._active is None or self._active.is_closed:
+        if self._active is None or getattr(self._active, "is_closed", False):
             return FormattedText([])
-        return self._active.formatted_text
+        return getattr(self._active, "formatted_text", FormattedText([]))
 
 
 # Sentinel type used by selectors that have no result.  Returning
@@ -248,6 +348,8 @@ def style_dict() -> dict[str, str]:
 __all__ = [
     "DEFAULT_SELECTOR_STYLE",
     "NO_RESULT",
+    "EmbeddedSelector",
+    "ModalSpec",
     "ModelSelector",
     "PlanGuardSelector",
     "SelectorHost",

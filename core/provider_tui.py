@@ -5,7 +5,8 @@ All UI text in English. API Keys never displayed in plain text.
 """
 from __future__ import annotations
 import asyncio, json, os
-from typing import ClassVar, Optional
+from collections.abc import Callable
+from typing import Any, ClassVar, Optional
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.key_binding import KeyBindings
@@ -24,6 +25,7 @@ from config.providers import (
     remove_model,
 )
 from core.provider_tui_state import ProviderTUIState
+from pawnlogic.selectors import ModalSpec
 from core.provider_runtime import (
     candidate_save_alias as _candidate_save_alias,
     connection_result_from_response as _connection_result_from_response,
@@ -172,6 +174,12 @@ class ProviderTUI:
     def __init__(self):
         self._state = ProviderTUIState()
         self._app: Optional[Application] = None
+        self._embedded = False
+        self._modal_close: Callable[[Any], None] | None = None
+        self._modal_refresh: Callable[[ModalSpec], None] | None = None
+        self._modal_key_bindings: Any = None
+        self._modal_closed = False
+        self._saved = False
         self._panel: str = "main"
         # main
         self._main_cursor: int = 0
@@ -259,6 +267,67 @@ class ProviderTUI:
         if target is not None:
             self._app.layout.focus(target)
         self._app.invalidate()
+
+    def bind_application(self, application: Application) -> None:
+        """Use the host application's loop when mounted as a live modal."""
+        self._app = application
+
+    def _refresh_layout(self) -> None:
+        """Refresh this panel without replacing the host application layout."""
+        layout = self._build_layout()
+        if self._embedded and self._modal_refresh is not None:
+            self._modal_refresh(
+                ModalSpec(
+                    container=layout.container,
+                    key_bindings=self._modal_key_bindings,
+                    focus=layout.current_window,
+                )
+            )
+            return
+        if self._app:
+            self._app.layout = layout
+            self._app.invalidate()
+
+    def _finish(self, result: Any = None) -> None:
+        """Finish either the embedded modal or the standalone TUI."""
+        if self._embedded:
+            self._modal_closed = True
+            callback = self._modal_close
+            if callback is not None:
+                callback(result if result is not None else self._saved)
+            return
+        if self._app:
+            self._app.exit()
+
+    @property
+    def is_closed(self) -> bool:
+        return self._modal_closed
+
+    def close(self, result: Any = None) -> None:
+        """Close the embedded selector when the host resolves its future."""
+        self._modal_closed = True
+        if result is not None:
+            self._saved = bool(result)
+
+    def build_modal(
+        self,
+        on_close: Callable[[Any], None],
+        on_refresh: Callable[[ModalSpec], None],
+    ) -> ModalSpec:
+        """Build provider panels as a view owned by the live Application."""
+        if self._app is None:
+            raise RuntimeError("bind_application() is required before build_modal()")
+        self._embedded = True
+        self._modal_close = on_close
+        self._modal_refresh = on_refresh
+        self._modal_closed = False
+        layout = self._build_layout()
+        self._modal_key_bindings = self._build_kb()
+        return ModalSpec(
+            container=layout.container,
+            key_bindings=self._modal_key_bindings,
+            focus=layout.current_window,
+        )
 
     # ── render: main ─────────────────────────────────────────────────────────
 
@@ -569,9 +638,7 @@ class ProviderTUI:
                 self._app.invalidate()
 
         def rebuild():
-            if self._app:
-                self._app.layout = self._build_layout()
-                self._app.invalidate()
+            self._refresh_layout()
 
         # ── dialogs ───────────────────────────────────────────────────────────
         _dlg = Condition(lambda: self._dialog is not None)
@@ -666,7 +733,7 @@ class ProviderTUI:
         @kb.add("q",      filter=_main)
         @kb.add("Q",      filter=_main)
         @kb.add("escape", filter=_main)
-        def _m_quit(e): e.app.exit()
+        def _m_quit(e): self._finish(False)
 
         # ── detail ────────────────────────────────────────────────────────────
         _det = Condition(lambda: self._panel == "detail" and not self._dialog and not self._detail_key_active)
@@ -932,9 +999,7 @@ class ProviderTUI:
         rows = self._provider_rows()
         self._main_cursor = min(self._main_cursor, max(0, len(rows) - 1))
         self._panel = "main"
-        if self._app:
-            self._app.layout = self._build_layout()
-            self._app.invalidate()
+        self._refresh_layout()
 
     def _toggle_provider_active(self, pname: str):
         if pname in _ALWAYS_ACTIVE:
@@ -951,19 +1016,14 @@ class ProviderTUI:
         else:
             self._detail_status = f"✗ {msg}"
             self._detail_status_style = "class:error"
-        if self._app:
-            self._app.layout = self._build_layout()
-            self._app.invalidate()
+        self._refresh_layout()
 
     def _cancel_model_selector(self, close: bool = False):
         if close:
-            if self._app:
-                self._app.exit()
+            self._finish(False)
             return
         self._state.cancel_model_selection()
-        if self._app:
-            self._app.layout = self._build_layout()
-            self._app.invalidate()
+        self._refresh_layout()
 
     def _do_save_models(self):
         pname = self._ms_provider
@@ -994,13 +1054,11 @@ class ProviderTUI:
         close_after_save = self._ms_save_exit
         self._ms_save_exit = False
         if close_after_save:
-            if self._app:
-                self._app.exit()
+            self._saved = True
+            self._finish(True)
             return
         self._panel = self._ms_caller
-        if self._app:
-            self._app.layout = self._build_layout()
-            self._app.invalidate()
+        self._refresh_layout()
 
     def _do_save_provider_no_test(self):
         if not self._wiz_fields_pending:
@@ -1019,9 +1077,7 @@ class ProviderTUI:
             return
         init_providers(force=True)
         self._panel = "main"
-        if self._app:
-            self._app.layout = self._build_layout()
-            self._app.invalidate()
+        self._refresh_layout()
 
     async def _run_test_detail(self, pname: str):
         pinfo = _provider_snapshot().get(pname, {})
@@ -1076,18 +1132,14 @@ class ProviderTUI:
                 _model_alias_changes(pname, candidates),
             ),
         )
-        if self._app:
-            self._app.layout = self._build_layout()
-            self._app.invalidate()
+        self._refresh_layout()
 
     async def _detail_action(self):
         pname = self._detail_provider
         cur = self._detail_cursor
         if cur == 0:
             self._dialog = "security"; self._dialog_cursor = 0
-            if self._app:
-                self._app.layout = self._build_layout()
-                self._app.invalidate()
+            self._refresh_layout()
         elif cur == 1:
             await self._open_model_selector(pname, "detail")
         elif cur == 2:
@@ -1107,9 +1159,7 @@ class ProviderTUI:
             self._mm_status = ""
             self._mm_status_style = ""
             self._panel = "manage"
-            if self._app:
-                self._app.layout = self._build_layout()
-                self._app.invalidate()
+            self._refresh_layout()
         elif cur == 4:
             self._toggle_provider_active(pname)
         elif cur == 5:  # Delete Provider
@@ -1119,9 +1169,7 @@ class ProviderTUI:
                 if self._app: self._app.invalidate()
             else:
                 self._dialog = "delete"; self._dialog_cursor = 0
-                if self._app:
-                    self._app.layout = self._build_layout()
-                    self._app.invalidate()
+                self._refresh_layout()
 
     async def _wizard_confirm(self):
         self._sync_wizard_fields_from_inputs()
@@ -1152,9 +1200,7 @@ class ProviderTUI:
         self._wiz_status = "✅ Saved inactive. Activate it from the detail panel to show models in /model."
         self._wiz_status_style = "class:success"
         self._panel = "main"
-        if self._app:
-            self._app.layout = self._build_layout()
-            self._app.invalidate()
+        self._refresh_layout()
 
     # ── run ───────────────────────────────────────────────────────────────────
 

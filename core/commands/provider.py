@@ -671,11 +671,17 @@ async def _handle_provider_cmd(
     if not sub:
         if _HAS_PROMPT_TOOLKIT:
             try:
-                from core.provider_tui import run_provider_tui
+                from core.provider_tui import ProviderTUI, run_provider_tui
                 if terminal_controller is not None and getattr(
                     terminal_controller, "run_selector", None
                 ) is not None:
-                    await terminal_controller.run_selector(run_provider_tui)
+                    # Build the panel as a view for the already-running live
+                    # Application.  Passing the legacy coroutine here would
+                    # make the controller launch a second Application.
+                    provider_tui = ProviderTUI()
+                    await terminal_controller.run_selector(
+                        lambda: provider_tui
+                    )
                 else:
                     await run_provider_tui()
             except Exception as _tui_err:

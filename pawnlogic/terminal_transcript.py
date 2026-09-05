@@ -80,9 +80,10 @@ class TerminalTranscript:
     preserved.
 
     The host :attr:`sink` is consulted only when :meth:`flush` is
-    explicitly called. Producers that want streaming output should
-    call ``append`` followed by ``flush``; the persistent terminal
-    does this on every redraw so the user sees incremental progress.
+    explicitly called. The persistent terminal uses
+    :meth:`pending_host_flush` to hand complete lines to Prompt Toolkit's
+    ``run_in_terminal`` context, while the final close handoff may include
+    an unfinished partial line.
 
     The class does not raise on a misbehaving sink. A sink that throws
     is treated as a dropped chunk: the in-memory buffer still holds the
@@ -93,6 +94,7 @@ class TerminalTranscript:
     __slots__ = (
         "_char_count",
         "_chunks",
+        "_host_flush_offset",
         "_lock",
         "_max_chars",
         "_recovery_draft",
@@ -113,6 +115,10 @@ class TerminalTranscript:
         self._chunks: deque[str] = deque()
         self._char_count = 0
         self._lock = threading.Lock()
+        # Number of buffered characters already handed to the host terminal.
+        # This cursor lets a live flush stream only newly completed lines and
+        # lets close() flush the remaining partial line exactly once.
+        self._host_flush_offset = 0
         self._recovery_draft = False
         self._version = 0
 
@@ -186,6 +192,7 @@ class TerminalTranscript:
             text = "".join(self._chunks)
             self._chunks.clear()
             self._char_count = 0
+            self._host_flush_offset = 0
             return text
 
     def replace(self, text: str) -> None:
@@ -197,15 +204,26 @@ class TerminalTranscript:
         the cap.
         """
         with self._lock:
+            previous = "".join(self._chunks)
+            previous_offset = self._host_flush_offset
             self._chunks.clear()
             self._char_count = 0
             self._version += 1
             if not text:
+                self._host_flush_offset = 0
                 return
             if len(text) > self._max_chars:
                 text = text[-self._max_chars :]
             self._chunks.append(text)
             self._char_count = len(text)
+            # CR/BS rewrites normally touch only the current, unflushed line.
+            # Preserve the cursor in that case. If an unusual rewrite changes
+            # already-emitted content, the host terminal cannot retract its
+            # scrollback, so advance to the new end and avoid duplicating it.
+            if previous_offset and text[:previous_offset] != previous[:previous_offset]:
+                self._host_flush_offset = len(text)
+            else:
+                self._host_flush_offset = min(previous_offset, len(text))
 
     # ------------------------------------------------------------------
     # Producer API
@@ -224,9 +242,46 @@ class TerminalTranscript:
             self._version += 1
             while self._char_count > self._max_chars and self._chunks:
                 removed = self._chunks.popleft()
-                self._char_count -= len(removed)
+                removed_len = len(removed)
+                self._char_count -= removed_len
+                self._host_flush_offset = max(
+                    0, self._host_flush_offset - removed_len
+                )
             if self._char_count < 0:
                 self._char_count = 0
+
+    def pending_host_flush(
+        self, *, include_partial: bool = False
+    ) -> tuple[str, int, str]:
+        """Return text not yet sent to the host and its stable prefix.
+
+        Live rendering sends only complete lines so a streaming partial line
+        remains owned by Prompt Toolkit.  ``include_partial=True`` is used by
+        the final close handoff.  The returned prefix is an opaque consistency
+        marker for :meth:`mark_host_flushed`; it prevents a worker-thread
+        carriage-return/backspace rewrite from advancing the cursor for an
+        obsolete payload.
+        """
+        with self._lock:
+            text = "".join(self._chunks)
+            start = min(self._host_flush_offset, len(text))
+            if include_partial:
+                end = len(text)
+            else:
+                newline = text.rfind("\n")
+                end = newline + 1 if newline >= 0 else start
+            if end <= start:
+                return "", end, text[:end]
+            return text[start:end], end, text[:end]
+
+    def mark_host_flushed(self, end: int, expected_prefix: str = "") -> bool:
+        """Advance the host flush cursor if the payload is still current."""
+        with self._lock:
+            text = "".join(self._chunks)
+            if expected_prefix and not text.startswith(expected_prefix):
+                return False
+            self._host_flush_offset = min(max(0, end), len(text))
+            return True
 
     def flush(self) -> None:
         """Push the buffered text to the configured :attr:`sink`.

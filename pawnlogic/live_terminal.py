@@ -23,6 +23,7 @@ import time
 from typing import Any, TextIO
 
 from prompt_toolkit.application import Application
+from prompt_toolkit.application import run_in_terminal as _run_in_terminal
 from prompt_toolkit.auto_suggest import AutoSuggest
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.completion import Completer
@@ -30,14 +31,21 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import ANSI, fragment_list_to_text, to_formatted_text
 from prompt_toolkit.history import History
 from prompt_toolkit.input.base import Input
-from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
+from prompt_toolkit.key_binding import DynamicKeyBindings, KeyBindings, merge_key_bindings
 
 from .terminal_transcript import TerminalTranscript
-from .selectors import SelectorRegistry, SelectorState, style_dict as _selector_style_dict
+from .selectors import (
+    EmbeddedSelector,
+    ModalSpec,
+    SelectorRegistry,
+    SelectorState,
+    style_dict as _selector_style_dict,
+)
 from prompt_toolkit.key_binding.key_bindings import KeyBindingsBase
 from prompt_toolkit.layout import Dimension, Layout
 from prompt_toolkit.layout.containers import (
     ConditionalContainer,
+    DynamicContainer,
     Float,
     FloatContainer,
     HSplit,
@@ -58,6 +66,13 @@ from core.turn_scheduler import SubmissionKind
 
 _ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 _KEY_SEQUENCE_TIMEOUT_SECONDS = 0.1
+# Host scrollback is best-effort: a broken stdout must not take down the
+# persistent Prompt Toolkit application or keep its event loop busy forever.
+# These are total attempts (initial write plus retries), not an unbounded
+# retry count.
+_HOST_FLUSH_MAX_ATTEMPTS = 3
+_HOST_FLUSH_RETRY_BASE_SECONDS = 0.05
+_HOST_FLUSH_RETRY_MAX_SECONDS = 0.2
 # Only the trailing lines of the transcript are rendered in the live
 # viewport. The full transcript still exists for scrollback flushing;
 # this cap keeps render cost constant for very large sessions.
@@ -263,6 +278,18 @@ class PersistentTerminal:
         # instance. All writers (TerminalSink, the stdout/stderr proxy, the
         # legacy append_output path) must route through it. See ADR 0010.
         self._transcript = TerminalTranscript(max_chars=max_output_chars)
+        # Host scrollback is flushed from the Prompt Toolkit event loop via
+        # ``run_in_terminal``.  A single in-flight future serializes writes
+        # while producers may continue appending from worker threads.
+        self._host_flush_scheduled = False
+        self._host_flush_task: asyncio.Future[Any] | None = None
+        self._host_flush_end = 0
+        self._host_flush_prefix = ""
+        self._host_flush_is_final = False
+        self._host_flush_closing = False
+        self._host_flush_attempts = 0
+        self._host_flush_retry_handle: asyncio.TimerHandle | None = None
+        self._host_flush_circuit_open = False
         # ``None`` follows the newest output.  An integer is a user-owned
         # viewport offset and must survive redraws and new stream chunks.
         self._output_scroll_offset: int | None = None
@@ -342,19 +369,82 @@ class PersistentTerminal:
         self._schedule_invalidation_locked()
         return future
 
-    def close_selector(self, result: Any = None) -> bool:
+    def open_embedded_selector(
+        self, selector: EmbeddedSelector, modal: ModalSpec
+    ) -> asyncio.Future[Any]:
+        """Install a rich selector view in the live application's modal float."""
+        loop = self._loop
+        if loop is None:
+            loop = asyncio.get_running_loop()
+        future: asyncio.Future[Any] = loop.create_future()
+        self._selector_registry.install_active(selector, future, modal=modal)
+        self._modal_active = True
+        application = self._application
+        if application is not None and modal.focus is not None:
+            with contextlib.suppress(ValueError, RuntimeError):
+                application.layout.focus(modal.focus)
+        self._schedule_invalidation_locked()
+        return future
+
+    def replace_embedded_selector(
+        self,
+        modal: ModalSpec,
+        *,
+        selector: Any | None = None,
+        future: asyncio.Future[Any] | None = None,
+    ) -> bool:
+        """Refresh an embedded selector's view and focus target.
+
+        The optional identity guards protect against a stale callback from
+        an older modal replacing the container of a newer selector.
+        """
+        replaced = self._selector_registry.replace_modal(
+            modal,
+            selector=selector,
+            future=future,
+        )
+        if not replaced:
+            return False
+        application = self._application
+        if application is not None and modal.focus is not None:
+            with contextlib.suppress(ValueError, RuntimeError):
+                application.layout.focus(modal.focus)
+        self._schedule_invalidation_locked()
+        return True
+
+    def close_selector(
+        self,
+        result: Any = None,
+        *,
+        selector: Any | None = None,
+        future: asyncio.Future[Any] | None = None,
+    ) -> bool:
         """Resolve the active selector's future with ``result``.
 
-        Returns True when a selector was active and resolved, False
-        otherwise.  The Float disappears and the main
-        ``Application`` is invalidated so the next redraw removes
-        the overlay.
+        ``selector`` and ``future`` are optional identity guards used by
+        selector-owned callbacks and command ``finally`` blocks.  A stale
+        command must not close a newer selector that has since replaced it.
+        Returns True when the matching selector was resolved, False
+        otherwise.  The Float disappears and the main ``Application`` is
+        invalidated so the next redraw removes the overlay.
         """
-        resolved = self._selector_registry.resolve(result)
+        resolved = self._selector_registry.resolve(
+            result,
+            selector=selector,
+            future=future,
+        )
         if resolved:
             self._modal_active = self._selector_registry.has_active
+            application = self._application
+            if application is not None and self._composer is not None:
+                with contextlib.suppress(ValueError, RuntimeError):
+                    application.layout.focus(self._composer)
             self._schedule_invalidation_locked()
         return resolved
+
+    def _close_selector_on_ui(self) -> None:
+        """Resolve the active selector from the Prompt Toolkit event loop."""
+        self.close_selector()
 
     def _selector_formatted_text(self) -> Any:
         """Return the FormattedText for the active selector Float.
@@ -363,6 +453,13 @@ class PersistentTerminal:
         any tests can both observe the same content.
         """
         return self._selector_registry.formatted_text()
+
+    def _selector_modal_container(self) -> Any:
+        """Return the active rich selector container for the modal Float."""
+        modal = self._selector_registry.modal
+        if modal is not None:
+            return modal.container
+        return Window(FormattedTextControl(lambda: ""))
 
     @property
     def transcript(self) -> TerminalTranscript:
@@ -428,6 +525,7 @@ class PersistentTerminal:
                 return
             self._append_terminal_text_locked(text)
             self._schedule_invalidation_locked()
+            self._schedule_host_flush_locked()
 
     def _append_terminal_text_locked(self, text: str) -> None:
         """Apply carriage-return/backspace semantics inside the output pane.
@@ -596,6 +694,7 @@ class PersistentTerminal:
             if event is not None:
                 event.set()
             self._start_status_ticker()
+            self._schedule_host_flush_locked()
 
         try:
             await application.run_async(pre_run=mark_ready, handle_sigint=False)
@@ -621,6 +720,8 @@ class PersistentTerminal:
                     self._loop = application.loop
                 self._ready_event.set()
                 self._start_status_ticker()
+                with self._lock:
+                    self._schedule_host_flush_locked()
 
             application.run(pre_run=mark_ready, handle_sigint=False)
         finally:
@@ -642,50 +743,296 @@ class PersistentTerminal:
 
     def close(self) -> None:
         """Close the application and wake any consumer waiting for input."""
-        self._flush_scrollback_to_stdout()
         self._stop_status_ticker()
         with self._lock:
             if self._closed:
                 return
             self._closed = True
+            self._host_flush_closing = True
             self._wake_submission_waiter_locked()
             application = self._application
             loop = self._loop
             running = self._running
 
-        if application is None or not running:
+        if application is None or not running or loop is None or loop.is_closed():
+            # There is no active Prompt Toolkit renderer to suspend.  A
+            # synchronous handoff is safe in this path and also covers a
+            # terminal that was populated before ``run()`` started.
+            self.close_selector()
+            self._flush_scrollback_to_stdout()
             return
-        callback = application.exit
-        self._schedule_on_loop(callback, loop=loop)
 
-    def _flush_scrollback_to_stdout(self) -> None:
-        """Flush full transcript to original stdout for terminal scrollback.
+        # A host that has exhausted the bounded retry budget is considered
+        # unavailable for this terminal lifetime.  Do not reset the breaker
+        # on close and start another retry storm; the transcript remains in
+        # memory while the application still shuts down cleanly.
+        with self._lock:
+            circuit_open = self._host_flush_circuit_open
+        if circuit_open:
+            self._schedule_on_loop(self._close_selector_on_ui, loop=loop)
+            self._schedule_on_loop(self._finish_close_on_ui, loop=loop)
+            return
 
-        Writes the plain-text conversation to the host terminal's scrollback
-        buffer so the user can scroll up with the mouse wheel to review past
-        output after the application exits. This runs only when the
-        application is closing, so it never conflicts with PT's VT100
-        cursor positioning.
-        """
-        text = self._transcript.snapshot()
-        if not text:
-            return
-        plain = _ANSI_ESCAPE.sub("", text)
-        if not plain:
-            return
+        # Resolve the selector before scheduling the final host flush.  A
+        # command may be awaiting this future while the application is being
+        # closed; leaving it pending makes controller.close() hang forever.
+        # Schedule through the PT loop when close() came from another thread,
+        # because asyncio.Future.set_result is not thread-safe.
+        self._schedule_on_loop(self._close_selector_on_ui, loop=loop)
+
+        # The final host flush is serialized after any live flush already in
+        # flight.  Its completion callback exits the Application, so close()
+        # never races a direct write against Prompt Toolkit's renderer.
+        with self._lock:
+            retry_pending = self._host_flush_retry_handle is not None
+        if not retry_pending:
+            self._schedule_on_loop(self._start_host_flush_on_ui, loop=loop)
+
+    def _host_stdout(self) -> TextIO | None:
+        """Return the original stdout captured before the proxy was installed."""
         with self._stdout_lock:
-            original_stdout = self._stdout_frames[0][0] if self._stdout_frames else None
+            stream = self._stdout_frames[0][0] if self._stdout_frames else None
+        if stream is None:
+            return None
+        # Host scrollback is meaningful only for an interactive terminal.
+        # In pipes and pytest capture streams, writing while the Application
+        # is live would be an unexpected side effect and would defeat the
+        # transcript-only contract used by non-TTY adapters.
+        isatty = getattr(stream, "isatty", None)
+        if not callable(isatty):
+            return None
+        try:
+            return stream if bool(isatty()) else None
+        except Exception:
+            return None
+
+    def _write_host_payload(
+        self, original_stdout: TextIO, payload: str, *, include_partial: bool
+    ) -> bool:
+        """Write a transcript payload while Prompt Toolkit is suspended."""
+        plain = _ANSI_ESCAPE.sub("", payload)
+        if not plain:
+            return True
+        if include_partial and not plain.endswith("\n"):
+            plain = f"{plain}\n"
+        # Keep the payload and a close-time newline in one write call.  If a
+        # second write fails, replaying the whole snapshot could duplicate a
+        # partial tail in host scrollback.  Permissive text streams may return
+        # ``None``; otherwise reject a short write so the cursor is retried.
+        written = original_stdout.write(plain)
+        if isinstance(written, int) and written != len(plain):
+            raise OSError("host stdout accepted only a partial transcript write")
+        flush = getattr(original_stdout, "flush", None)
+        if callable(flush):
+            # The write has already been accepted by the host.  A flush
+            # method that raises must not replay accepted text and duplicate
+            # it on the next attempt.
+            with contextlib.suppress(Exception):
+                flush()
+        return True
+
+    @staticmethod
+    def _host_flush_retry_delay(attempts: int) -> float:
+        """Return the bounded delay before the next host flush attempt."""
+        exponent = max(0, attempts - 1)
+        return min(
+            _HOST_FLUSH_RETRY_MAX_SECONDS,
+            _HOST_FLUSH_RETRY_BASE_SECONDS * (2**exponent),
+        )
+
+    def _schedule_host_flush_retry_locked(self) -> None:
+        """Schedule one bounded retry; caller holds ``self._lock``."""
+        if self._host_flush_retry_handle is not None:
+            return
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        # _host_flush_done runs on the Prompt Toolkit event loop, therefore
+        # call_later is safe here. The timer handle prevents appends from
+        # bypassing backoff and creating a retry storm.
+        self._host_flush_retry_handle = loop.call_later(
+            self._host_flush_retry_delay(self._host_flush_attempts),
+            self._start_host_flush_on_ui,
+        )
+
+    def _schedule_host_flush_locked(self) -> None:
+        """Schedule one serialized host flush from the PT event loop.
+
+        This method is called with ``self._lock`` held, often by a worker
+        thread.  Only the event-loop callback calls ``run_in_terminal``; the
+        producer never writes to the physical TTY directly.
+        """
+        if self._host_flush_scheduled or self._host_flush_task is not None:
+            return
+        if self._host_flush_retry_handle is not None:
+            return
+        if self._host_flush_circuit_open and not self._host_flush_closing:
+            return
+        if self._closed and not self._host_flush_closing:
+            return
+        loop = self._loop
+        if loop is None or loop.is_closed() or self._application is None:
+            return
+        if not self._running:
+            return
+        self._host_flush_scheduled = True
+        self._schedule_on_loop(self._start_host_flush_on_ui, loop=loop)
+
+    def _start_host_flush_on_ui(self) -> None:
+        """Start a live or final flush; this callback runs on PT's loop."""
+        with self._lock:
+            # If this callback came from a retry timer, release its timer
+            # reservation before taking the next snapshot.
+            self._host_flush_retry_handle = None
+            self._host_flush_scheduled = False
+            if self._host_flush_task is not None:
+                return
+            if self._application is None or not self._running:
+                return
+            include_partial = self._host_flush_closing
+            payload, end, prefix = self._transcript.pending_host_flush(
+                include_partial=include_partial
+            )
+            is_closing = self._host_flush_closing if not payload else include_partial
+            original_stdout = self._host_stdout()
+            if original_stdout is None:
+                payload = ""
+
+        if not payload:
+            if is_closing:
+                self._finish_close_on_ui()
+            return
         if original_stdout is None:
             return
+
+        with self._lock:
+            self._host_flush_attempts += 1
+
+        async def _flush() -> bool:
+            try:
+                # Prompt Toolkit temporarily erases and redraws its interface
+                # around this callback.  That is the supported way to append
+                # to the host terminal without fighting VT100 cursor state.
+                await _run_in_terminal(
+                    lambda: self._write_host_payload(
+                        original_stdout,
+                        payload,
+                        include_partial=include_partial,
+                    )
+                )
+            except Exception:
+                return False
+            return True
+
+        task = asyncio.ensure_future(_flush())
+        with self._lock:
+            self._host_flush_task = task
+            self._host_flush_end = end
+            self._host_flush_prefix = prefix
+            self._host_flush_is_final = include_partial
+        task.add_done_callback(self._host_flush_done)
+
+    def _host_flush_done(self, task: asyncio.Future[Any]) -> None:
+        """Commit a completed host flush and schedule the next snapshot."""
+        with self._lock:
+            if self._host_flush_task is not task:
+                return
+            end = self._host_flush_end
+            prefix = self._host_flush_prefix
+            is_final = self._host_flush_is_final
+            self._host_flush_task = None
+            self._host_flush_end = 0
+            self._host_flush_prefix = ""
+            self._host_flush_is_final = False
         try:
-            original_stdout.write(plain)
-            if not plain.endswith("\n"):
-                original_stdout.write("\n")
-            flush = getattr(original_stdout, "flush", None)
-            if callable(flush):
-                flush()
+            succeeded = bool(task.result())
         except Exception:
-            pass
+            succeeded = False
+        if succeeded:
+            self._transcript.mark_host_flushed(end, prefix)
+
+        with self._lock:
+            closing = self._host_flush_closing
+            if succeeded:
+                # A successful snapshot establishes a new retry generation.
+                # Future output gets the full bounded budget again.
+                self._host_flush_attempts = 0
+                self._host_flush_circuit_open = False
+                if not closing and not is_final:
+                    self._schedule_host_flush_locked()
+                    return
+                if not is_final:
+                    # A live flush completed after close() was requested; run
+                    # one final include-partial handoff before exiting.
+                    self._schedule_host_flush_locked()
+                    return
+                # The final task includes the current partial line.  No
+                # further producer can append after close() marks the
+                # terminal closed, so it is now safe to release the app.
+            else:
+                # A failed task did not advance the transcript cursor. Keep
+                # the exact payload pending and retry with exponential
+                # backoff until the finite budget is exhausted.
+                if self._host_flush_attempts < _HOST_FLUSH_MAX_ATTEMPTS:
+                    self._schedule_host_flush_retry_locked()
+                    return
+                # Open the breaker after the final allowed attempt. This is
+                # deliberately sticky for this terminal lifetime: new output
+                # must not turn a dead host into a busy-loop.
+                self._host_flush_circuit_open = True
+                if not closing:
+                    return
+        self._finish_close_on_ui()
+
+    def _finish_close_on_ui(self) -> None:
+        """Exit Prompt Toolkit after the serialized final flush."""
+        with self._lock:
+            application = self._application
+            running = self._running
+            retry_handle = self._host_flush_retry_handle
+            self._host_flush_retry_handle = None
+            self._host_flush_closing = False
+        if retry_handle is not None:
+            with contextlib.suppress(Exception):
+                retry_handle.cancel()
+        if application is None or not running:
+            return
+        with contextlib.suppress(Exception):
+            application.exit()
+
+    def _flush_scrollback_to_stdout(self) -> None:
+        """Flush the remaining transcript to original stdout once.
+
+        This synchronous fallback is used only when no Prompt Toolkit
+        renderer is active.  While the application is alive, callers must use
+        ``_start_host_flush_on_ui`` so ``run_in_terminal`` owns the handoff.
+        """
+        payload, end, prefix = self._transcript.pending_host_flush(
+            include_partial=True
+        )
+        if not payload:
+            return
+        original_stdout = self._host_stdout()
+        if original_stdout is None:
+            return
+        for attempt in range(1, _HOST_FLUSH_MAX_ATTEMPTS + 1):
+            try:
+                succeeded = self._write_host_payload(
+                    original_stdout, payload, include_partial=True
+                )
+            except Exception:
+                succeeded = False
+            if succeeded:
+                self._transcript.mark_host_flushed(end, prefix)
+                with self._lock:
+                    self._host_flush_attempts = 0
+                    self._host_flush_circuit_open = False
+                return
+            if attempt < _HOST_FLUSH_MAX_ATTEMPTS:
+                time.sleep(self._host_flush_retry_delay(attempt))
+        with self._lock:
+            self._host_flush_attempts = _HOST_FLUSH_MAX_ATTEMPTS
+            self._host_flush_circuit_open = True
 
     def install_output_proxy(self) -> _StdoutProxy:
         """Route ordinary stdout/stderr writes into the output buffer."""
@@ -786,28 +1133,28 @@ class PersistentTerminal:
         # priorities and run *before* the (read-only) composer
         # absorbs the event.
         for _k in ("enter", "c-j", "c-m"):
-            @bindings.add(_k, filter=Condition(lambda: self._selector_registry.has_active), eager=True)
+            @bindings.add(_k, filter=Condition(lambda: self._selector_registry.has_state), eager=True)
             def _sel_enter(event: Any, _key: str = _k) -> None:
                 self._selector_dispatch_key("enter")
 
-        @bindings.add("escape", filter=Condition(lambda: self._selector_registry.has_active), eager=True)
+        @bindings.add("escape", filter=Condition(lambda: self._selector_registry.has_state), eager=True)
         def _sel_escape(event: Any) -> None:
             self._selector_dispatch_key("escape")
 
-        @bindings.add("c-c", filter=Condition(lambda: self._selector_registry.has_active), eager=True)
+        @bindings.add("c-c", filter=Condition(lambda: self._selector_registry.has_state), eager=True)
         def _sel_c_c(event: Any) -> None:
             self._selector_dispatch_key("c-c")
 
-        @bindings.add("up", filter=Condition(lambda: self._selector_registry.has_active), eager=True)
+        @bindings.add("up", filter=Condition(lambda: self._selector_registry.has_state), eager=True)
         def _sel_up(event: Any) -> None:
             self._selector_dispatch_key("up")
 
-        @bindings.add("down", filter=Condition(lambda: self._selector_registry.has_active), eager=True)
+        @bindings.add("down", filter=Condition(lambda: self._selector_registry.has_state), eager=True)
         def _sel_down(event: Any) -> None:
             self._selector_dispatch_key("down")
 
         for _d in range(1, 10):
-            @bindings.add(str(_d), filter=Condition(lambda: self._selector_registry.has_active), eager=True)
+            @bindings.add(str(_d), filter=Condition(lambda: self._selector_registry.has_state), eager=True)
             def _sel_digit(event: Any, _digit: int = _d) -> None:
                 self._selector_dispatch_key(str(_digit))
 
@@ -825,7 +1172,16 @@ class PersistentTerminal:
         def _scroll_down(_event: Any) -> None:
             self.scroll_output(3)
 
-        bindings = merge_key_bindings([bindings, scroll_bindings])
+        # Rich provider/skills selectors contribute their own bindings only
+        # while mounted.  DynamicKeyBindings keeps this list attached to the
+        # same long-lived Application instead of rebuilding key processors.
+        bindings = merge_key_bindings(
+            [
+                bindings,
+                scroll_bindings,
+                DynamicKeyBindings(self._selector_registry.key_bindings),
+            ]
+        )
 
         self._composer = TextArea(
             text=self._default_text,
@@ -916,8 +1272,25 @@ class PersistentTerminal:
         body = HSplit(
             [status_window, output_window, queue_preview, self._composer.window, toolbar_window]
         )
+        def root_content() -> Any:
+            """Select the body that determines the inline app's height.
+
+            Inline Prompt Toolkit applications use the preferred height of
+            their root rather than the full terminal height.  A rich
+            selector mounted as a Float therefore used to inherit the
+            three-row composer height: the Float was clipped to its title
+            and status row even though its own container had more content.
+            Make the selector the root content while it is mounted.  This
+            keeps the same Application and key processor, while allowing
+            the selector's preferred height to reach the host renderer.
+            """
+            modal = self._selector_registry.modal
+            if self._selector_registry.has_embedded and modal is not None:
+                return modal.container
+            return body
+
         root = FloatContainer(
-            content=body,
+            content=DynamicContainer(root_content),
             floats=[
                 Float(
                     xcursor=True,
@@ -975,9 +1348,13 @@ class PersistentTerminal:
         if selector.handle_key(key_name):
             self._schedule_invalidation_locked()
         if selector.is_closed:
-            self._selector_registry.resolve(selector.result)
-            self._modal_active = self._selector_registry.has_active
-            self._schedule_invalidation_locked()
+            resolved = self._selector_registry.resolve(
+                selector.result,
+                selector=selector,
+            )
+            if resolved:
+                self._modal_active = self._selector_registry.has_active
+                self._schedule_invalidation_locked()
 
     def _accept_handler(self, buffer: Buffer) -> None:
         text = buffer.text
@@ -1441,7 +1818,7 @@ class PersistentTerminalController:
     ) -> Any:
         """Open a selector dialog in the live Application.
 
-        Two factory patterns are supported:
+        Two selector shapes are supported:
 
         1. **State-machine selector** (ADR 0010): ``selector_factory()``
            returns a :class:`~pawnlogic.selectors.SelectorState` (or any
@@ -1453,20 +1830,11 @@ class PersistentTerminalController:
            the selector Float becomes visible, and the awaiting
            command blocks until the user confirms or cancels.
 
-        2. **Nested-Application TUI** (transitional): some interactive
-           TUIs (notably :func:`core.provider_tui.run_provider_tui` and
-           :func:`core.skill_tui.run_skill_pack_tui`) still drive their
-           own ``Application`` and only return ``None`` when the user
-           exits.  ``selector_factory()`` is detected as a callable
-           that returns an awaitable; the controller schedules it as
-           a background task on the live ``Application`` so the main
-           ``Application`` identity stays stable across the round
-           trip even though the inner TUI spins up its own
-           ``Application.run_async()`` and exits it.  The full
-           in-Application Float rewrite for these panels is the
-           documented follow-up; this branch keeps them functional in
-           0.3.7 while ADR 0010 is honoured for the main
-           ``Application``.
+        2. **Embedded selector**: a stateful provider or skills panel
+           implements ``build_modal`` and contributes a container and
+           key bindings.  Those objects are mounted in the live
+           application's dynamic Float; they must never create another
+           Prompt Toolkit ``Application``.
 
         Returns the selector's result (typically a string alias for
         ``/model`` and ``/planguard``) or ``None`` if the user
@@ -1489,56 +1857,43 @@ class PersistentTerminalController:
             try:
                 return await future
             finally:
-                self.terminal.close_selector()
-        # Nested-Application TUI path: the factory returned either
-        # a callable that produces an awaitable, or an awaitable
-        # itself (a coroutine).  Schedule it on the live Application
-        # as a background task so the main Application identity is
-        # kept.
-        if callable(produced) or inspect.isawaitable(produced):
-            run_callable: Any
-            if callable(produced):
+                self.terminal.close_selector(future=future)
+        # Rich selectors are mounted through the same Application.  Do
+        # not retain a coroutine fallback here: awaiting one would make
+        # the command responsible for creating a second Application and
+        # would reintroduce the cursor/input race this controller owns.
+        build_modal = getattr(produced, "build_modal", None)
+        if callable(build_modal):
+            bind_application = getattr(produced, "bind_application", None)
+            if callable(bind_application):
+                bind_application(application)
 
-                async def _await_factory_result() -> Any:
-                    return await produced()
+            # Bind callbacks to this selector's identity.  If another
+            # command replaces it before a delayed refresh/close callback
+            # runs, that callback must not mutate or close the replacement.
+            def _close(result: Any = None) -> None:
+                self.terminal.close_selector(result, selector=produced)
 
-                run_callable = _await_factory_result()
-            else:
-                run_callable = produced
-            # A nested ``Application.run_async()`` must be the only
-            # live Application on the PTY. Running it beside the main
-            # Application produced the interleaved/scrambled provider
-            # and skills panels the owner reported: two VT100 render
-            # loops fight over cursor positioning and both key
-            # processors read the same input stream. The 0.3.6
-            # pause/teardown/resume lifecycle is therefore restored for
-            # this transitional path: the main Application exits (its
-            # state lives on in the terminal object), the proxy is
-            # restored, the nested TUI runs alone, and the main
-            # Application is rebuilt afterwards. State-machine
-            # selectors (ADR 0010 path above) never pause anything.
-            if self._proxy_active:
-                self.terminal.restore_output_proxy()
-                self._proxy_active = False
-            self._session._live_terminal_active = False
-            if self._fallback_sink is not None:
-                self._activate_sink(self._fallback_sink)
-            if self._task is not None and not self._task.done():
-                self.terminal.pause()
-                await asyncio.gather(self._task, return_exceptions=True)
+            def _refresh(modal: ModalSpec) -> None:
+                self.terminal.replace_embedded_selector(
+                    modal,
+                    selector=produced,
+                )
+
+            modal = build_modal(
+                _close,
+                _refresh,
+            )
+            future = self.terminal.open_embedded_selector(produced, modal)
             try:
-                result = await run_callable
+                return await future
             finally:
-                if not self.terminal.is_closed:
-                    self._session._live_terminal_active = True
-                    self._activate_sink(self.terminal.sink)
-                    self.terminal.install_output_proxy()
-                    self._proxy_active = True
-                    self.terminal.prepare_run()
-                    self._task = asyncio.create_task(self.terminal.run())
-                    self._task.add_done_callback(self._observe_terminal_task)
-                    await self.terminal.wait_until_ready()
-            return result
+                self.terminal.close_selector(future=future)
+        if inspect.isawaitable(produced):
+            raise TypeError(
+                "live selectors must implement build_modal or SelectorState; "
+                "nested Prompt Toolkit Applications are not supported"
+            )
         # Last resort: treat the produced object itself as a
         # SelectorState-like object.  Fall back to the state-machine
         # path so future selectors that don't subclass
@@ -1547,7 +1902,7 @@ class PersistentTerminalController:
         try:
             return await future
         finally:
-            self.terminal.close_selector()
+            self.terminal.close_selector(future=future)
 
     def _observe_terminal_task(self, task: asyncio.Task[None]) -> None:
         """Log an unexpected Prompt Toolkit exit instead of hiding its cause."""
