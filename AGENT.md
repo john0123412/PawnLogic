@@ -665,9 +665,8 @@ are source-checkout or user-installed assets; pip/curl installations should use
   `loop.call_later` ticker keeps the seconds counter honest while
   the model runs, so the event loop stays free for key dispatch and
   mid-turn typing echoes into the composer instead of being
-  swallowed. The same cycle hides the queue UI from the user
-  surface entirely: the toolbar's `Queue:` segment is dropped,
-  `build_queue_preview` is removed from `pawnlogic.live_repl`,
+  swallowed. The same cycle hides the queue counters from the
+  user surface: the toolbar's `Queue:` segment is dropped,
   `core/queue_tui.toolbar_queue_status` returns a label-only
   string, and `/queue` is gone from the help block, the cmdhelp
   dictionary, the top-of-file command summary, and the live
@@ -801,12 +800,18 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   rejected until the user explicitly resumes (``/queue resume`` or
   Enter on the recovered draft, carried by ``ControlAction.explicit``).
   New user input still queues normally; only the automatic drain is
-  gated. Tests pin the parked cascade, the explicit pass-through, the
-  label-only ``Failed`` toolbar status, and the
-  ``core/queue_tui.toolbar_queue_status`` label contract. The 0.3.7
-  live terminal hides the parked state from the user UI; the
-  internal anti-cascade gate is preserved but failure is silent on
-  the user surface.
+  gated. Tests pin the parked cascade and the explicit pass-through.
+  The 0.3.7 live terminal keeps failure silent in the toolbar
+  (label-only ``Failed``); the internal anti-cascade gate is
+  preserved.
+- The queue preview above the composer is a CONDITIONAL surface: it
+  renders nothing while the queue is empty (the 0.3.7 clean-composer
+  goal) and shows the muted ``↳ queued [kind]`` rows the moment a
+  steer or follow-up is queued. Removing it again would make
+  Enter-while-running and the Esc→CLAIM_STEER handoff invisible
+  (the owner's real-usage regression report after the initial
+  hidden-queue re-scope); tests pin the empty/queued/failed
+  render states.
 - The bottom toolbar renders fields within a width budget (see
   ``_TOOLBAR_HARD_MAX`` / ``_TOOLBAR_WIDE_MIN`` in
   ``pawnlogic/live_repl.py``); adding a toolbar field must keep the

@@ -445,15 +445,71 @@ def test_bottom_toolbar_strips_dir_on_120_column_live_terminal(monkeypatch):
     assert "Queue:" not in plain
 
 
-def test_queue_preview_was_removed_in_0_3_7() -> None:
-    """The live composer no longer renders a queue preview above the
-    input.  ``build_queue_preview`` is gone from ``pawnlogic.live_repl``;
-    the live terminal renders only the status line, the output
-    transcript, and the composer itself.
-    """
-    import pawnlogic.live_repl as live_repl
+def test_queue_preview_is_conditionally_rendered() -> None:
+    """Queued rows reappear above the composer only when work exists.
 
-    assert not hasattr(live_repl, "build_queue_preview"), (
-        "build_queue_preview should be removed in 0.3.7; the live "
-        "terminal no longer surfaces queued rows above the composer"
+    Owner real-usage feedback after the hidden-queue-UI re-scope: with
+    no visible queue, Enter-while-running and the Esc→CLAIM_STEER
+    handoff happen invisibly and queued input feels lost. The preview
+    is therefore restored as a CONDITIONAL surface: an empty queue
+    renders nothing (the clean-composer goal holds), a queued follow-up
+    renders the muted rows, and a failed session collapses them to the
+    one-line parked summary with resume/discard hints.
+    """
+    from types import SimpleNamespace as _NS
+
+    import pawnlogic.live_repl as live_repl
+    from core.turn_scheduler import (
+        SubmissionKind,
+        SubmissionStatus,
+        SubmissionView,
     )
+
+    assert hasattr(live_repl, "build_queue_preview")
+
+    def _view_item(content: str, kind: SubmissionKind) -> SubmissionView:
+        return SubmissionView(
+            submission_id=f"id-{content}",
+            sequence=1,
+            kind=kind,
+            content=content,
+            source="test",
+            status=SubmissionStatus.QUEUED,
+        )
+
+    class _EmptyView:
+        active = None
+        recovered = None
+        steer: tuple = ()
+        follow_up: tuple = ()
+        session_status = "idle"
+
+    session_empty = _NS(queue_view=lambda: _EmptyView())
+    assert live_repl.build_queue_preview(session_empty)() == [], (
+        "an empty queue must render no preview rows"
+    )
+
+    class _QueuedView:
+        active = None
+        recovered = None
+        steer: tuple = ()
+        follow_up = (
+            _view_item("q1", SubmissionKind.FOLLOW_UP),
+            _view_item("q2", SubmissionKind.FOLLOW_UP),
+        )
+        session_status = "running"
+
+    session_queued = _NS(queue_view=lambda: _QueuedView())
+    preview = live_repl.build_queue_preview(session_queued)()
+    assert preview, "queued follow-ups must render muted preview rows"
+    text = preview[0][1]
+    assert "q1" in text and "q2" in text
+
+    class _FailedView(_QueuedView):
+        session_status = "failed"
+
+    session_failed = _NS(queue_view=lambda: _FailedView())
+    parked = live_repl.build_queue_preview(session_failed)()
+    assert len(parked) == 1
+    assert "parked after the failure" in parked[0][1]
+    assert "/queue resume" in parked[0][1]

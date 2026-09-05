@@ -54,18 +54,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   parks the queue internally but does not surface a `Failed · +N
   parked` label to the user.
 - **Queue UI hidden.** The 0.3.7 live terminal no longer surfaces
-  queue counters, parked summaries, or the queue preview above the
-  composer. The bottom toolbar drops the `Queue: Idle · steer:N ·
-  follow-up:N` segment; `core/queue_tui.toolbar_queue_status`
-  returns a single label (`Idle` / `Running` / `Queued` /
-  `Recoverable` / `Failed`); the `build_queue_preview` helper is
-  removed from `pawnlogic.live_repl`. `/queue` is no longer in the
-  help block, the cmdhelp dictionary, the top-of-file
-  `core/commands/session.py` summary, or the live composer's
-  "controls allowed while running" notice. `/queue resume` and
-  `/queue clear` survive as internal aliases reachable through
-  `ControlAction(kind=RESUME, explicit=True)` and the existing
-  command registration, so any script that types them still works.
+  queue counters or parked summaries in the bottom toolbar. The
+  toolbar drops the `Queue: Idle · steer:N · follow-up:N` segment;
+  `core/queue_tui.toolbar_queue_status` returns a single label
+  (`Idle` / `Running` / `Queued` / `Recoverable` / `Failed`).
+  `/queue` is no longer in the help block, the cmdhelp dictionary,
+  the top-of-file `core/commands/session.py` summary, or the live
+  composer's "controls allowed while running" notice. `/queue
+  resume` and `/queue clear` survive as internal aliases reachable
+  through `ControlAction(kind=RESUME, explicit=True)` and the
+  existing command registration, so any script that types them
+  still works.
+- **Queue preview restored as a conditional surface** (owner
+  real-usage feedback after the initial hidden-queue re-scope):
+  the muted `↳ queued [kind] …` rows above the composer render
+  only while a steer or follow-up is actually queued; an empty
+  queue renders nothing, so the clean-composer goal holds. The
+  rows make Enter-while-running and the Esc→CLAIM_STEER handoff
+  visible instead of silently queuing input. A failed session
+  collapses the rows to the one-line parked summary with the
+  resume/discard hints.
 - **`/abort` merged.** The previous `--all` form is removed; plain
   `/abort` now interrupts the active Turn and clears the queue in
   one call. Failure is silent on the user UI, so the only

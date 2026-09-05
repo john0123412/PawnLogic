@@ -17,6 +17,7 @@ import sys
 import time
 from typing import Any
 
+from core.queue_tui import queue_rows
 from core.turn_scheduler import SubmissionKind
 from utils.ansi import YELLOW, c
 
@@ -536,6 +537,54 @@ def build_bottom_toolbar(
     return bottom_toolbar
 
 
+def build_queue_preview(
+    session: Any,
+    *,
+    max_items: int = 3,
+) -> Callable[[], list[tuple[str, str]]]:
+    """Build muted, read-only rows for queued input above the composer.
+
+    Conditionally rendered: an empty queue produces no output, so the
+    composer area stays clean while nothing is queued — the 0.3.7
+    "hidden queue UI" goal holds for the common case. The moment the
+    user queues a second message, the muted rows reappear so steering
+    and follow-up input stay visible (the owner's real-usage feedback
+    after 6317195: without them, Enter-while-running and the
+    Esc→CLAIM_STEER handoff happen invisibly and feel like lost input).
+
+    While the session is failed or aborted the queue is parked (the
+    scheduler refuses automatic drains), so scrolling every queued row
+    on each redraw would fill the composer area with the same parked
+    items. A parked queue renders one summary line plus the resume
+    hint instead of the per-item list.
+    """
+    def queue_preview() -> list[tuple[str, str]]:
+        queue_view = getattr(session, "queue_view", None)
+        if not callable(queue_view):
+            return []
+        view = queue_view()
+        rows = [row for row in queue_rows(view) if row.status != "running"]
+        if not rows:
+            return []
+        if view.session_status in {"failed", "aborted"}:
+            return [(
+                "class:queue-preview",
+                f"  ⏸ {len(rows)} message(s) parked after the failure — "
+                "/queue resume to run them, /abort to discard",
+            )]
+        visible = rows[:max_items]
+        lines = [
+            f"  ↳ queued [{row.kind.value}] {row.summary}"
+            for row in visible
+        ]
+        remaining = len(rows) - len(visible)
+        if remaining:
+            lines.append(f"  … +{remaining} more queued")
+        return [("class:queue-preview", "\n".join(lines))]
+
+    return queue_preview
+
+
 def build_live_style(style_factory: Any) -> Any:
     """Build the persistent composer style outside the CLI facade."""
     return style_factory.from_dict({
@@ -647,6 +696,7 @@ __all__ = [
     "build_bottom_toolbar",
     "build_live_style",
     "build_prompt_toolkit_bindings",
+    "build_queue_preview",
     "dispatch_live_input",
     "dispatch_live_slash",
     "install_live_interrupt_handler",
