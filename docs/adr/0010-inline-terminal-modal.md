@@ -1,6 +1,7 @@
 # ADR 0010 — Inline Terminal and Single-Application Modal
 
-> **Status:** Proposed (local implementation repaired; release paused).
+> **Status:** Proposed (implementation merged and owner PTY accepted;
+> publication pending).
 > The 0.3.7 candidate implements `full_screen=False`,
 > `mouse_support=False`, live host-scrollback handoff through
 > `TerminalTranscript`, and one in-Application modal host for every
@@ -69,7 +70,7 @@ PRs can be rejected on sight if they violate them.
   contract covered manually.
 - The terminal layer now owns more state (modal stack, focus memory,
   transcript). `pawnlogic/terminal_transcript` is included in the
-  typed-island list; remote CI remains an acceptance gate.
+  typed-island list; the merge and post-merge remote CI gates are green.
 
 ## Acceptance
 
