@@ -585,128 +585,122 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.3.6`. PyPI, GitHub Release, and latest tag
-  are `v0.3.6`, published 2026-09-02 through Trusted Publishing after the
+- Current published release: `0.3.7`. PyPI, GitHub Release, and latest tag
+  are `v0.3.7`, published 2026-09-05 through Trusted Publishing after the
   full test gate, Dynamic E2E, distribution build, and PyPI fresh-install
-  smoke. The `0.3.5` release remains complete.
-- Release finalization: `v0.3.6` was published on 2026-09-02 through Trusted
-  Publishing. The release workflow completed its full test gate, Dynamic E2E,
+  smoke. The `0.3.6` release remains complete. PyPI project page:
+  <https://pypi.org/project/pawnlogic/0.3.7/>. GitHub Release:
+  <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.7>.
+- Release finalization: `v0.3.7` was published on 2026-09-05 through Trusted
+  Publishing from the `Publish to PyPI` workflow run
+  [`33974631898`](https://github.com/john0123412/PawnLogic/actions/runs/33974631898).
+  The release workflow completed its full test gate, Dynamic E2E,
   distribution build, PyPI fresh-install smoke, and GitHub Release creation.
-  PR #122 carried the README version-pointer alignment required by
-  `tools/check_release_consistency.py`; the v0.3.6 tag was force-updated
-  to point at that commit because the tag ruleset blocks deletion.
+  PR #126 carried the README version-pointer alignment + `.release-ready`
+  marker required by `tools/check_release_consistency.py`; the `v0.3.7`
+  tag was force-updated to point at that commit because the tag ruleset
+  blocks deletion.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Active plan: `0.3.7-inline-terminal-stability.md` is the active plan,
-  merged to `main` by PR #124. It restores native terminal
-  scrollback / mouse selection / copy by removing the alternate-screen
-  application mode and unifies interactive selectors under a single
-  Prompt Toolkit Application dialog state. The 0.3.6 plan is
-  **complete** and moved to Completed Plans in `docs/plans/INDEX.md`;
-  the architecture is captured by
-  [ADR 0010](docs/adr/0010-inline-terminal-modal.md) in **Proposed**
-  state (implementation merged and owner PTY accepted; publication pending).
+- Released plan: `0.3.7-inline-terminal-stability.md` is **complete** —
+  merged to `main` by PR #124 and shipped in `v0.3.7`. It restored
+  native terminal scrollback / mouse selection / copy by removing the
+  alternate-screen application mode and unifies interactive selectors
+  under a single Prompt Toolkit Application dialog state. The plan is
+  moved to Completed Plans in `docs/plans/INDEX.md`; the architecture
+  is captured by [ADR 0010](docs/adr/0010-inline-terminal-modal.md)
+  which is now **Accepted** (implementation merged, owner PTY smoke
+  passed, PyPI published, tag ruleset force-updated per AGENT.md).
   The earlier rebuild history remains available for diff and
-  forensics. Independent
-  `pawnlogic-security` 0.1.0 published from
+  forensics. Independent `pawnlogic-security` 0.1.0 published from
   `john0123412/pawnlogic-security` on 2026-07-28.
-- 0.3.7 release prep remains paused on `main`; the repair is committed,
-  pushed, and merged, but no tag or publish is authorized. The owner PTY
-  gate passed on 2026-09-05. Phase A (the persistent
-  terminal itself) and Phase B (the four interactive selectors —
-  `/model`, `/planguard`, `/provider`, `/skills`) now have local
-  implementation and regression evidence.
-  `/model` and `/planguard` use the state-machine selector path that
-  installs the selector in the live `Application`'s
-  `SelectorRegistry`; `/provider` and `/skills` expose rich
-  `ModalSpec` containers and dynamic key bindings that are mounted in
-  that same Application. Their standalone Applications are used only
-  by the serial/readline fallback. `controller.run_selector` rejects
-  awaitable live factories so a nested `Application.run_async()`
-  cannot silently return. Completed transcript lines reach the host
-  stdout through Prompt Toolkit's `run_in_terminal` handoff while the
-  Application remains alive; partial lines flush once at close, worker
-  bursts are serialized, and transient host-write failures retry
-  without advancing the flush cursor. The bare-Escape binding now routes the
-  queue-first-item conversion through
-  `ControlAction(kind=CLAIM_STEER)` plus `session.queue_control` so
-  the scheduler correctly marks the queued entry as a steer instead
-  of creating a fresh turn. The persistent composer's `TextArea`
-  height is now `Dimension(min=1, max=5)` so long wrapped input
-  grows up to five rows instead of being clipped to a single fixed
-  row. A follow-up audit cycle (350abfa) reverted the
-  ``@bindings.add('enter', eager=True)`` flag and removed the
-  ``@bindings.add('c-j')`` binding from ``pawnlogic/live_repl.py``:
-  both were added by the b88cea3 multiline-composer commit but
-  empirically they break the live composer's normal text-insert
-  path.  The PTY e2e suite sends text + LF (``\n``) via
-  ``pexpect.sendline`` and ``\n`` maps to ``Keys.ControlJ`` in
-  Prompt Toolkit; the custom c-j binding ate that press as a
-  literal-newline insertion and the model never got called, while
-  the ``eager=True`` flag on the enter binding dropped the first
-  typed character on its own.  Leaving ``c-j`` to PT's default
-  ``_newline2`` handler (which re-feeds ``\n`` as ``ControlM``)
-  and relying on the ``_CombinedRegistry`` to resolve ``enter`` to
-  the LAST matching handler in the merged list restores the e2e
-  flow.  The multiline composer's ``Dimension(min=1, max=5)`` and
-  ``wrap_lines=True`` stay in place; only the literal-newline
-  insertion path is removed (no ``c-j`` binding) until a
-  /draft-style command is added to drive ``buffer.insert_text``
-  explicitly.  A follow-up cycle (6317195) added a persistent
-  1-line status indicator above the composer so the user always
-  sees what the worker thread is doing: `[model]  Idle`,
-  `[model]  ⏱ Ns · Esc to interrupt` while a Turn is in flight,
-  `[model]  ⏸ interrupted by user` for 1.5 s after a user-initiated
-  Esc / Ctrl+C interrupt, and `[model]  Idle — edit the draft and
-  press Enter` for 1.5 s after a recovery prefill. A 250 ms
-  `loop.call_later` ticker keeps the seconds counter honest while
-  the model runs, so the event loop stays free for key dispatch and
-  mid-turn typing echoes into the composer instead of being
-  swallowed. The same cycle hides the queue counters from the
-  user surface: the toolbar's `Queue:` segment is dropped,
-  `core/queue_tui.toolbar_queue_status` returns a label-only
-  string, and `/queue` is gone from the help block, the cmdhelp
-  dictionary, the top-of-file command summary, and the live
-  composer's "controls allowed while running" notice. `/queue
-  resume` and `/queue clear` survive as internal aliases
-  reachable through `ControlAction(kind=RESUME, explicit=True)`
-  and the existing command registration, so scripts that type
-  them keep working. The `/abort` command is merged: the previous
-  `--all` form is removed and plain `/abort` interrupts the active
-  Turn and clears the queue in one call. Failure is silent on the
-  user UI — a failed Turn parks the queue internally but the
-  persistent status line simply returns to `Idle` with no `Failed
-  · +N parked` label — so the only outward sign of a failure is
-  a 1.5 s `interrupted by user` banner when the user pressed
-  Esc. The internal anti-cascade gate
-  (`ControlAction(explicit=True)`) is preserved exactly as it
-  was. Release-prep edits in this cycle:
-  `config/paths.py:VERSION` `0.3.6` → `0.3.7`, the `0.3.7` section
-  added to `CHANGELOG.md`, `0.3.7` row added to `SECURITY.md`, and
-  [ADR 0010](docs/adr/0010-inline-terminal-modal.md) header updated
-  to record that the implementation has landed while keeping the
-  acceptance gates (`main` merge, PyPI publish, owner PTY smoke) as
-  the conditions for moving the ADR to **Accepted**. The merge and owner
-  PTY gates are complete; PyPI publication remains open. The two real-path
-  TUI tests for `/provider` and `/skills` are green, and the 12 E2E
-  tests that were failing on 3be257b's HEAD because of the c-j binding
-  all pass after 350abfa's revert of the eager / c-j additions. Ruff,
-  typed-island mypy
-  for `pawnlogic/terminal_transcript.py`,
-  `pawnlogic/live_terminal.py`, `pawnlogic/selectors.py`, and
-  `pawnlogic/restart_recovery.py`, `git diff --check`, leak scans,
-  `check_doc_structure.py`, and `check_release_consistency.py` are
-  all clean. The accepted repair has evidence of 1,521 non-E2E tests and
-  29/29 Dynamic E2E tests. PR #124 merged to `main` as `7a40374`; its
-  required checks, the same-SHA Python 3.10/3.11/3.12 matrix, and the
-  post-merge main CI are green. The owner completed the manual PTY smoke
-  on 2026-09-05. `main` must not be force-pushed, and `v0.3.7` must not
-  be tagged or pushed to PyPI until the owner explicitly resumes release.
-- 0.3.6 release gates all closed: 1,470 non-E2E tests, 26 Dynamic E2E,
-  Ruff, typed-island mypy (42 modules), documentation and language guards,
-  release consistency, architecture budget, package build, twine metadata,
-  isolated fresh-install smoke, Python 3.10/3.11/3.12 matrix, and remote
-  Dynamic E2E all green. PR #120 (release prep), PR #121 (post-merge docs),
-  and PR #122 (README version-pointer alignment) all merged into `main`.
+- 0.3.7 fix recap (per the user-supplied release acceptance note):
+  - **Terminal scrollback** uses the host terminal rather than the
+    alternate-screen application mode, so wheel / mouse / copy / paste
+    work natively.
+  - **Single-Application selectors** — `/model`, `/planguard`,
+    `/provider`, and `/skills` all mount into the same persistent
+    `Application` (state-machine `SelectorRegistry` for `/model` /
+    `/planguard`; `ModalSpec` containers + dynamic key bindings for
+    `/provider` / `/skills`). Their standalone Applications are only
+    used by the serial/readline fallback. `controller.run_selector`
+    rejects awaitable live factories so a nested
+    `Application.run_async()` cannot silently return.
+  - **Transcript handoff** — completed transcript lines reach the host
+    stdout through Prompt Toolkit's `run_in_terminal` handoff while the
+    Application remains alive; partial lines flush once at close, worker
+    bursts are serialized, and transient host-write failures retry
+    without advancing the flush cursor (bounded retry + backoff +
+    circuit breaker, so the legacy "retry storm" no longer happens).
+  - **Continuous input** — the 1-line persistent status indicator
+    above the composer shows `[model]  Idle`,
+    `[model]  ⏱ Ns · Esc to interrupt` while a Turn is in flight,
+    `[model]  ⏸ interrupted by user` for 1.5 s after a user-initiated
+    Esc / Ctrl+C interrupt, and `[model]  Idle — edit the draft and
+    press Enter` for 1.5 s after a recovery prefill. The Turn runs in
+    a worker thread so key dispatch and the 250 ms ticker keep the
+    event loop free; mid-turn typing echoes into the composer
+    instead of being swallowed.
+  - **Esc behavior** — bare Esc routes the queue-first-item conversion
+    through `ControlAction(kind=CLAIM_STEER)` + `session.queue_control`
+    so the queued entry is a steer, not a fresh turn. Esc during a
+    non-empty queue interrupts the active Turn and lets the queue
+    take over; Esc on an empty queue prefills a recovered draft the
+    user can edit and resubmit. `_recover_active_unlocked` does **not**
+    mint a recovered draft when the queue is non-empty
+    (the recovered-draft edit flow applies only to empty-queue
+    interrupts).
+  - **`/q` mid-Turn exit** — `/q` is in `LIVE_SLASH_COMMANDS` so it is
+    accepted while a Turn is running; the exit path is wrapped so
+    `asyncio.to_thread` + `loop.call_later` cannot escape onto a
+    closed loop and trigger the "Event loop is closed / lost
+    sys.stderr" traceback.
+  - **Queue UI is hidden** — toolbar's `Queue:` segment is dropped,
+    `core/queue_tui.toolbar_queue_status` returns a label-only string,
+    and `/queue` is gone from the help block, the cmdhelp dictionary,
+    the top-of-file command summary, and the live composer's
+    "controls allowed while running" notice. `/queue resume` and
+    `/queue clear` survive as internal aliases reachable through
+    `ControlAction(kind=RESUME, explicit=True)` and the existing
+    command registration, so scripts that type them keep working.
+  - **`/abort` is merged** — the previous `--all` form is removed and
+    plain `/abort` interrupts the active Turn and clears the queue in
+    one call. Failure is silent on the user UI — a failed Turn parks
+    the queue internally but the persistent status line simply
+    returns to `Idle` with no `Failed · +N parked` label; the only
+    outward sign of a failure is a 1.5 s `interrupted by user`
+    banner when the user pressed Esc. The internal anti-cascade
+    gate (`ControlAction(explicit=True)`) is preserved exactly as
+    it was.
+  - **Selector cleanup** — replacing a selector or closing the
+    terminal no longer leaves a dangling `Application.run_async()`
+    task behind; the live factory contract is awaited synchronously
+    and the host Application/task identity is preserved.
+  - **Multiline composer** keeps `Dimension(min=1, max=5)` +
+    `wrap_lines=True`; the legacy `c-j` binding (which intercepted
+    the PTY e2e suite's `\n`) and the `eager=True` flag on the
+    enter binding were reverted; literal-newline insertion is
+    intentionally removed until a `/draft`-style command is added.
+- 0.3.7 release gates all closed: 1,509 non-E2E tests, 29/29 Dynamic
+  E2E, Ruff, typed-island mypy
+  (`pawnlogic/terminal_transcript.py`,
+  `pawnlogic/live_terminal.py`, `pawnlogic/selectors.py`,
+  `pawnlogic/restart_recovery.py`, and the
+  `tools/` + `core/` typed-island modules), documentation and
+  language guards, release consistency, architecture budget,
+  package build, twine metadata, isolated fresh-install smoke on
+  PyPI, Python 3.10/3.11/3.12 matrix, and remote Dynamic E2E all
+  green. PR #124 (inline terminal repair, `7a40374`),
+  PR #125 (post-merge owner-acceptance record, `58ae1e8`), and
+  PR #126 (release-prep README + `.release-ready`, `530d8df`) all
+  merged into `main`. The first two attempts at the tag-driven
+  publish workflow hit a transient Dynamic E2E flake on
+  `test_live_bare_escape_interrupts_one_turn_without_another_keypress`
+  (CI-runner `pexpect` timed out waiting for the post-Esc
+  "Status: interrupted" banner); the rerun
+  `33974631898` cleared it, the test passes locally and on the
+  owner PTY, and the underlying PTY esc behavior is intact. See
+  "Known Risks" for the retained note about this environment-
+  sensitive flake.
 - `main` protected by branch rule requiring PR, up-to-date branches, and four
   checks: ruff, docs guard, mypy, fast tests. Tag ruleset protects `v*.*.*`.
 - Publishing uses Trusted Publishing / OIDC. GitHub Release waits on
@@ -840,6 +834,27 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 - English and zh-CN docs drifting in structure or command examples.
 - Release prep editing version literals outside fixed locations.
 - Packaging accidentally including `skills/` content.
+- The Dynamic E2E case
+  `test_live_bare_escape_interrupts_one_turn_without_another_keypress`
+  has shown a transient environment-sensitive flake in CI: the
+  `pexpect` expectation `Status: interrupted` (the 1.5 s
+  `⏸ interrupted by user` post-Esc banner) sometimes times out at
+  10 s on GitHub-hosted runners while passing locally and on the
+  owner PTY. The publish workflow for `v0.3.7` saw this on
+  `33973977545`; a re-run (`33974631898`) cleared it and the
+  underlying PTY esc behavior is intact (C1 / C2 / C3 owner smoke
+  in `/tmp/smoke_0_3_7_v4/pty_smoke_v4.py` all green). This is a
+  flake, not a product regression, but it should be re-checked
+  before the next PyPI publish and the `pexpect` window may need
+  widening (or the test split into "Esc → banner shows" vs
+  "Esc → worker settles within N s" to isolate the failure
+  signature).
+- The PyPI project page's rendered "What's New" still shows an
+  older 0.3.2-era summary. PyPI does not refresh the long
+  description of an already-uploaded version when the GitHub
+  `README.md` is updated later, so the project page will only be
+  corrected on the next release (per the release-rule note in this
+  file). This is documentation drift, not a product defect.
 
 ## Agent Workflow
 
