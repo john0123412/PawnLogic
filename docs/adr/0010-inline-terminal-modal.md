@@ -1,11 +1,10 @@
 # ADR 0010 — Inline Terminal and Single-Application Modal
 
-> **Status:** Proposed (implementation landed in 0.3.7; acceptance
-> gates pending). The 0.3.7 rebuild on
-> `rebuild/inline-terminal-0.3.7` implements every decision in this
-> ADR: `full_screen=False`, `mouse_support=False`, the
-> `TerminalTranscript` single owner, and the dual-path
-> `controller.run_selector` dispatch for every interactive selector.
+> **Status:** Proposed (local implementation repaired; release paused).
+> The 0.3.7 candidate implements `full_screen=False`,
+> `mouse_support=False`, live host-scrollback handoff through
+> `TerminalTranscript`, and one in-Application modal host for every
+> interactive selector.
 > Per the Acceptance section below, the ADR moves to **Accepted** only
 > after the 0.3.7 PR is merged, the 0.3.7 release is published to
 > PyPI, and the owner runs a real PTY smoke against the live composer.
@@ -43,8 +42,9 @@ PRs can be rejected on sight if they violate them.
 4. The terminal layer owns the modal lifecycle: overlay placement, focus
    save and restore, key bindings while a modal is open, a bounded modal
    stack, and `Application.invalidate()` when the modal state changes.
-   Command-layer code must not know about the specific `Application`,
-   the controller, or the alternate screen at all.
+   Command handlers may ask the narrow `SelectorHost`/controller seam to
+   run a selector, but must not know about a concrete `Application`, its
+   layout, renderer, task, or alternate-screen lifecycle.
 5. The persistent transcript must be routed through a single
    `TerminalTranscript` owned by the persistent terminal. The
    `TerminalSink` and stdout/stderr proxy must both write to that
@@ -68,9 +68,8 @@ PRs can be rejected on sight if they violate them.
   PTY smoke tests must keep the host terminal scrollback / selection
   contract covered manually.
 - The terminal layer now owns more state (modal stack, focus memory,
-  transcript). The stable typed-island list in `AGENT.md` will grow by
-  one (`pawnlogic/terminal_transcript`) only after the implementation
-  lands and passes CI.
+  transcript). `pawnlogic/terminal_transcript` is included in the
+  typed-island list; remote CI remains an acceptance gate.
 
 ## Acceptance
 

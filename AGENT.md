@@ -597,40 +597,36 @@ are source-checkout or user-installed assets; pip/curl installations should use
   to point at that commit because the tag ruleset blocks deletion.
 - Runtime version source of truth: `config/paths.py:VERSION`.
 - Active plan: `0.3.7-inline-terminal-stability.md` is the active plan
-  on `rebuild/inline-terminal-0.3.7`. It restores native terminal
+  currently being repaired locally on `test/release-0.3.7`. It restores native terminal
   scrollback / mouse selection / copy by removing the alternate-screen
   application mode and unifies interactive selectors under a single
   Prompt Toolkit Application dialog state. The 0.3.6 plan is
   **complete** and moved to Completed Plans in `docs/plans/INDEX.md`;
   the architecture is captured by
   [ADR 0010](docs/adr/0010-inline-terminal-modal.md) in **Proposed**
-  state (implementation landed in 0.3.7; acceptance gates pending).
-  The previous `test/release-0.3.7` branch and its 7 commits
-  are preserved at `backup/pre-audit-0.3.7` for diff and forensics;
-  the rebuild branch carries the corrected work. Independent
+  state (local implementation repaired; acceptance gates pending).
+  The earlier rebuild history remains available for diff and
+  forensics. Independent
   `pawnlogic-security` 0.1.0 published from
   `john0123412/pawnlogic-security` on 2026-07-28.
-- 0.3.7 release prep is staged on `rebuild/inline-terminal-0.3.7`
-  (HEAD ahead of `origin/main` by 14 commits, working tree clean).
-  Phase A (the persistent terminal itself) and Phase B (porting the
-  four interactive selectors — `/model`, `/planguard`, `/provider`,
-  `/skills` — to `controller.run_selector`) are both committed.
+- 0.3.7 release prep is paused for local repair on
+  `test/release-0.3.7`; no repair commit, push, merge, tag, or publish
+  may happen before the owner PTY gate. Phase A (the persistent
+  terminal itself) and Phase B (the four interactive selectors —
+  `/model`, `/planguard`, `/provider`, `/skills`) now have local
+  implementation and regression evidence.
   `/model` and `/planguard` use the state-machine selector path that
   installs the selector in the live `Application`'s
-  `SelectorRegistry`; `/provider` and `/skills` still drive their own
-  nested `Application` (the full in-Application Float rewrite is the
-  documented follow-up) but the main `Application` task identity is
-  now preserved across the round trip in both cases.
-  `controller.run_selector` accepts either a state-machine factory
-  or an awaitable factory and routes them through the correct path.
-  After a first attempt to dual-write complete transcript lines to
-  the host stdout on every `append_output` call turned out to break
-  the live PT UI (the parallel writer fights PT's VT100 cursor
-  positioning), the scrollback flush was re-scoped: `append_output`
-  no longer touches the host stdout while the application is alive,
-  and the new `PersistentTerminal._flush_scrollback_to_stdout` writes
-  the ANSI-stripped full transcript to the original stdout exactly
-  once, from `close()`. The bare-Escape binding now routes the
+  `SelectorRegistry`; `/provider` and `/skills` expose rich
+  `ModalSpec` containers and dynamic key bindings that are mounted in
+  that same Application. Their standalone Applications are used only
+  by the serial/readline fallback. `controller.run_selector` rejects
+  awaitable live factories so a nested `Application.run_async()`
+  cannot silently return. Completed transcript lines reach the host
+  stdout through Prompt Toolkit's `run_in_terminal` handoff while the
+  Application remains alive; partial lines flush once at close, worker
+  bursts are serialized, and transient host-write failures retry
+  without advancing the flush cursor. The bare-Escape binding now routes the
   queue-first-item conversion through
   `ControlAction(kind=CLAIM_STEER)` plus `session.queue_control` so
   the scheduler correctly marks the queued entry as a steer instead
@@ -689,17 +685,18 @@ are source-checkout or user-installed assets; pip/curl installations should use
   [ADR 0010](docs/adr/0010-inline-terminal-modal.md) header updated
   to record that the implementation has landed while keeping the
   acceptance gates (`main` merge, PyPI publish, owner PTY smoke) as
-  the conditions for moving the ADR to **Accepted**. Local non-E2E:
-  1,484 pass. Local Dynamic E2E: 29/29 pass (the two new TUI tests
-  for `/provider` and `/skills` are green, and the 12 E2E tests that
-  were failing on 3be257b's HEAD because of the c-j binding all pass
-  after 350abfa's revert of the eager / c-j additions). Ruff,
+  the conditions for moving the ADR to **Accepted**. The two real-path
+  TUI tests for `/provider` and `/skills` are green, and the 12 E2E
+  tests that were failing on 3be257b's HEAD because of the c-j binding
+  all pass after 350abfa's revert of the eager / c-j additions. Ruff,
   typed-island mypy
   for `pawnlogic/terminal_transcript.py`,
   `pawnlogic/live_terminal.py`, `pawnlogic/selectors.py`, and
   `pawnlogic/restart_recovery.py`, `git diff --check`, leak scans,
   `check_doc_structure.py`, and `check_release_consistency.py` are
-  all clean. The release PR (#124) is open against `main` from
+  all clean. The current local repair has combined evidence of 1,521
+  non-E2E tests and 29/29 Dynamic E2E tests; remote CI and owner PTY
+  acceptance have not run against it. The release PR (#124) is open against `main` from
   `rebuild/inline-terminal-0.3.7`; `main` must not be force-pushed
   and `v0.3.7` must not be tagged or pushed to PyPI until the remote
   Actions on the release PR are green and the owner has run the
@@ -792,10 +789,15 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   ``take_using_weights`` into an infinite layout loop (frozen page,
   dead keys on wrapped input). The narrow live-terminal suite and the
   e2e live-composer flows pin the working combination.
-- Nested-Application TUIs (``/provider``, ``/skills``) rely on the
-  controller's pause/teardown/resume lifecycle; a flag-flip-only
-  ``pause_for_modal`` lets two VT100 render loops fight the same PTY.
-  The full in-Application rewrite (ADR 0010 §3) remains the follow-up.
+- Rich in-Application TUIs (`/provider`, `/skills`) contribute dynamic
+  containers, key bindings, and focus targets to the persistent
+  Application. Their live command factories must never return an
+  awaitable or start a nested `Application`; tests must execute the real
+  command path and preserve the host Application/task identity.
+- Live host scrollback must use Prompt Toolkit's `run_in_terminal`
+  handoff. Worker threads must never write directly to the TTY; complete
+  lines stream live, partial lines flush once at close, and a failed host
+  write must not advance the transcript flush cursor.
 - A failed or aborted Turn parks the queue: implicit RESUME drains are
   rejected until the user explicitly resumes (``/queue resume`` or
   Enter on the recovered draft, carried by ``ControlAction.explicit``).

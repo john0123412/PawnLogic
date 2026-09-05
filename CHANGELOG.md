@@ -13,12 +13,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   legacy output buffer all route through. The transcript owns a pluggable
   host sink so the rendered text is forwarded to the host terminal and
   captured by its native scrollback for mouse-wheel and copy/paste.
-- Added `controller.run_selector` on the live terminal controller, with
-  a dual-path dispatch: a state-machine factory installs a
-  `SelectorState` into the live `Application`'s `SelectorRegistry` and
-  runs entirely inside the existing `Application` loop, while an
-  awaitable factory runs a nested `Application.run_async()` and keeps
-  the main `Application` task identity alive across the round trip.
+- Added `controller.run_selector` on the live terminal controller. A
+  lightweight `SelectorState` or a rich `ModalSpec` is mounted inside
+  the existing live `Application`; live selectors no longer accept an
+  awaitable that can start a nested Prompt Toolkit application.
 - Added the `pawnlogic/selectors.py` typed module with `SelectorState`,
   `SelectorRegistry`, the `PlanGuardSelector` state machine, and the
   `ModelSelector` state machine that backs `/model`.
@@ -33,9 +31,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Routed every interactive selector (`/model`, `/planguard`,
   `/provider`, `/skills`) through the single-`Application` modal
   pattern from ADR 0010. `/model` and `/planguard` install a state
-  machine in the live `Application`; `/provider` and `/skills` round
-  trip through a nested `Application` while keeping the main
-  `Application` task alive. The previous exit-rebuild handoff is gone.
+  machine in the live `Application`; `/provider` and `/skills` mount
+  their complete containers, focus targets, and key bindings through a
+  dynamic modal root. No selector creates a second `Application` or
+  exits/rebuilds the persistent one.
 - The bare `/queue` command in the persistent terminal now renders
   queue status in the output viewport without pausing the interface or
   the active Turn.
@@ -53,18 +52,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   while the model is running. Failure is silent: a failed Turn
   parks the queue internally but does not surface a `Failed · +N
   parked` label to the user.
-- **Queue UI hidden.** The 0.3.7 live terminal no longer surfaces
+- **Queue toolbar simplified.** The 0.3.7 live terminal no longer surfaces
   queue counters or parked summaries in the bottom toolbar. The
   toolbar drops the `Queue: Idle · steer:N · follow-up:N` segment;
   `core/queue_tui.toolbar_queue_status` returns a single label
   (`Idle` / `Running` / `Queued` / `Recoverable` / `Failed`).
-  `/queue` is no longer in the help block, the cmdhelp dictionary,
-  the top-of-file `core/commands/session.py` summary, or the live
-  composer's "controls allowed while running" notice. `/queue
-  resume` and `/queue clear` survive as internal aliases reachable
-  through `ControlAction(kind=RESUME, explicit=True)` and the
-  existing command registration, so any script that types them
-  still works.
+  primary live-composer help is intentionally gesture-first. The
+  registered `/queue` inspection and management commands remain
+  available as advanced controls and continue to render without
+  pausing the active Turn.
 - **Queue preview restored as a conditional surface** (owner
   real-usage feedback after the initial hidden-queue re-scope):
   the muted `↳ queued [kind] …` rows above the composer render
@@ -100,24 +96,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   bare `Esc` — or `Up` on the empty composer, or `Alt+Up` — pops
   the whole queue into the composer for editing and resubmitting.
   While a Turn runs, `Esc` keeps its interrupt-and-steer meaning.
-  `/queue` remains hidden from the command surface; the queue is
-  managed by gestures and the dim preview rows, not commands.
+  Gestures and dim preview rows are the primary queue surface; the
+  `/queue` commands remain available for explicit inspection and
+  recovery.
 - **`/abort` merged.** The previous `--all` form is removed; plain
   `/abort` now interrupts the active Turn and clears the queue in
   one call. Failure is silent on the user UI, so the only
   user-visible queue control is now a single, unambiguous verb.
 
 ### Fixed
-- Fixed the persistent terminal not writing to the host scrollback
-  by routing the full transcript to the original stdout exactly once
-  at `close()` time, via the new
-  `PersistentTerminal._flush_scrollback_to_stdout` helper. The flush
-  strips ANSI escapes so the scrollback receives plain text. A first
-  attempt to dual-write every complete transcript line on the live
-  `append_output` path was reverted: writing to the host stdout
-  while the application is alive fights Prompt Toolkit's VT100
-  cursor positioning and corrupts the visible output. The flush now
-  runs only after PT releases the terminal.
+- Fixed live host scrollback without introducing a competing VT100
+  writer. Completed output lines are handed to the original stdout by
+  Prompt Toolkit's `run_in_terminal` while the persistent Application
+  stays alive; an unfinished partial line is emitted once during the
+  final close handoff. Flushes are serialized across worker bursts,
+  strip ANSI escapes, retry transient host-write failures with bounded
+  backoff, and open a circuit breaker after repeated failures instead of
+  spinning the event loop. The final partial-line handoff uses the same
+  finite retry contract, and output publication never calls
+  `Application.exit()`.
+- Fixed embedded-selector replacement and shutdown races. Selector close
+  and refresh callbacks are identity-guarded, so an older command's
+  `finally` block cannot dismiss a newer modal; closing the persistent
+  terminal also resolves the active selector future so command tasks do
+  not remain suspended during CLI shutdown.
 - Fixed the bare-Esc binding: pressing Escape while a Turn runs now
   interrupts the active Turn and, when the queue is non-empty, sends
   `ControlAction(kind=CLAIM_STEER)` through `session.queue_control`
@@ -152,13 +154,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   terminal sink (in-Application transcript) instead of raw host-PTY
   writes that interleaved with PT's VT100 cursor positioning (the
   `Select modelel for this session` scramble).
-- Restored the pause/teardown/resume lifecycle for nested-Application
-  TUIs (`/provider`, `/skills`). The 0.3.7 flag-flip-only
-  `pause_for_modal` let the nested `Application.run_async()` fight the
-  live Application for the PTY (the interleaved provider/skills
-  panels). The controller now tears the main Application down before
-  the nested TUI runs and rebuilds it afterwards; state-machine
-  selectors keep the single-Application modal path.
+- Replaced the pause/teardown/resume workaround for `/provider` and
+  `/skills` with embedded modal containers. Their standalone
+  Applications remain available only to the serial/readline path; the
+  live path keeps one Application, one key processor, and one PTY
+  renderer for the whole selector round trip.
 - Bounded the live render cost for large sessions. The output window
   renders the trailing `1000` transcript lines (not the full buffer),
   caches the render against the transcript's monotonic version, and
@@ -198,10 +198,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   terminal contract: native keyboard events stay in the host terminal
   while a modal is open, the persistent composer's `wrap_lines` is
   True, and stdout restoration round trips cleanly.
-- Added `tests/test_model_selector_modal.py` covering the single-
-  `Application` modal path for `/model` and the controller's dual
-  dispatch. PTY smoke covers the host-terminal scrollback / mouse /
-  copy contract.
+- Added `tests/test_model_selector_modal.py` coverage that executes
+  the real `/model`, `/planguard`, `/provider`, and `/skills` command
+  paths and rejects a second Application or host-Application exit.
+  Added live host-flush coverage for complete lines, partial lines,
+  CR/BS rewrites, worker bursts, close de-duplication, and transient
+  write failures. Manual PTY mouse-selection/copy acceptance remains a
+  pre-release gate.
 - Added `tests/test_status_line.py` pinning the persistent status
   line contract: the running indicator shows the elapsed seconds
   while a Turn is in flight, the post-interrupt banner holds for
