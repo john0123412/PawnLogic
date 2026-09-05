@@ -596,22 +596,22 @@ are source-checkout or user-installed assets; pip/curl installations should use
   `tools/check_release_consistency.py`; the v0.3.6 tag was force-updated
   to point at that commit because the tag ruleset blocks deletion.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Active plan: `0.3.7-inline-terminal-stability.md` is the active plan
-  currently being repaired locally on `test/release-0.3.7`. It restores native terminal
+- Active plan: `0.3.7-inline-terminal-stability.md` is the active plan,
+  merged to `main` by PR #124. It restores native terminal
   scrollback / mouse selection / copy by removing the alternate-screen
   application mode and unifies interactive selectors under a single
   Prompt Toolkit Application dialog state. The 0.3.6 plan is
   **complete** and moved to Completed Plans in `docs/plans/INDEX.md`;
   the architecture is captured by
   [ADR 0010](docs/adr/0010-inline-terminal-modal.md) in **Proposed**
-  state (local implementation repaired; acceptance gates pending).
+  state (implementation merged and owner PTY accepted; publication pending).
   The earlier rebuild history remains available for diff and
   forensics. Independent
   `pawnlogic-security` 0.1.0 published from
   `john0123412/pawnlogic-security` on 2026-07-28.
-- 0.3.7 release prep is paused for local repair on
-  `test/release-0.3.7`; no repair commit, push, merge, tag, or publish
-  may happen before the owner PTY gate. Phase A (the persistent
+- 0.3.7 release prep remains paused on `main`; the repair is committed,
+  pushed, and merged, but no tag or publish is authorized. The owner PTY
+  gate passed on 2026-09-05. Phase A (the persistent
   terminal itself) and Phase B (the four interactive selectors —
   `/model`, `/planguard`, `/provider`, `/skills`) now have local
   implementation and regression evidence.
@@ -685,7 +685,8 @@ are source-checkout or user-installed assets; pip/curl installations should use
   [ADR 0010](docs/adr/0010-inline-terminal-modal.md) header updated
   to record that the implementation has landed while keeping the
   acceptance gates (`main` merge, PyPI publish, owner PTY smoke) as
-  the conditions for moving the ADR to **Accepted**. The two real-path
+  the conditions for moving the ADR to **Accepted**. The merge and owner
+  PTY gates are complete; PyPI publication remains open. The two real-path
   TUI tests for `/provider` and `/skills` are green, and the 12 E2E
   tests that were failing on 3be257b's HEAD because of the c-j binding
   all pass after 350abfa's revert of the eager / c-j additions. Ruff,
@@ -694,13 +695,12 @@ are source-checkout or user-installed assets; pip/curl installations should use
   `pawnlogic/live_terminal.py`, `pawnlogic/selectors.py`, and
   `pawnlogic/restart_recovery.py`, `git diff --check`, leak scans,
   `check_doc_structure.py`, and `check_release_consistency.py` are
-  all clean. The current local repair has combined evidence of 1,521
-  non-E2E tests and 29/29 Dynamic E2E tests; remote CI and owner PTY
-  acceptance have not run against it. The release PR (#124) is open against `main` from
-  `rebuild/inline-terminal-0.3.7`; `main` must not be force-pushed
-  and `v0.3.7` must not be tagged or pushed to PyPI until the remote
-  Actions on the release PR are green and the owner has run the
-  manual PTY smoke.
+  all clean. The accepted repair has evidence of 1,521 non-E2E tests and
+  29/29 Dynamic E2E tests. PR #124 merged to `main` as `7a40374`; its
+  required checks, the same-SHA Python 3.10/3.11/3.12 matrix, and the
+  post-merge main CI are green. The owner completed the manual PTY smoke
+  on 2026-09-05. `main` must not be force-pushed, and `v0.3.7` must not
+  be tagged or pushed to PyPI until the owner explicitly resumes release.
 - 0.3.6 release gates all closed: 1,470 non-E2E tests, 26 Dynamic E2E,
   Ruff, typed-island mypy (42 modules), documentation and language guards,
   release consistency, architecture budget, package build, twine metadata,
