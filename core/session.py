@@ -561,12 +561,19 @@ _refresh_legacy_tool_globals()
 # Called once after init_db and before AgentSession creation.
 # ════════════════════════════════════════════════════════
 
+# Set by attach_external_mcp_tools when at least one external MCP server
+# actually started. detach_external_mcp_tools runs on every CLI exit path,
+# so it must skip the mcp_client_manager import entirely when no server
+# was ever attached (importing it probes the mcp package, ~240 ms).
+_EXTERNAL_MCP_ATTACHED = False
+
 def attach_external_mcp_tools() -> None:
     """
     Merge external MCP tools discovered by mcp_client_manager into TOOL_MAP,
     TOOLS_SCHEMA, and AGENT_PHASES. If no config exists or all servers fail to
     start, this function is a no-op.
     """
+    global _EXTERNAL_MCP_ATTACHED
     try:
         from core.mcp_client_manager import init_external_mcp
     except ImportError:
@@ -576,6 +583,8 @@ def attach_external_mcp_tools() -> None:
     mgr = init_external_mcp()
     if mgr is None:
         return
+
+    _EXTERNAL_MCP_ATTACHED = True
 
     # 1. Adapt complete MCP definitions at the same registry seam as built-ins.
     handlers = mgr.build_pawnlogic_handlers()
@@ -612,13 +621,13 @@ def attach_external_mcp_tools() -> None:
 
 def detach_external_mcp_tools() -> None:
     """Shut down background threads and external MCP subprocesses idempotently."""
-    try:
-        from core.mcp_client_manager import shutdown_external_mcp
-        shutdown_external_mcp()
-    except Exception:  # noqa: BLE001
-        pass  # never raise from shutdown/finally paths
-    finally:
-        _refresh_legacy_tool_globals()
+    if _EXTERNAL_MCP_ATTACHED:
+        try:
+            from core.mcp_client_manager import shutdown_external_mcp
+            shutdown_external_mcp()
+        except Exception:  # noqa: BLE001
+            pass  # never raise from shutdown/finally paths
+    _refresh_legacy_tool_globals()
 
 
 # ════════════════════════════════════════════════════════

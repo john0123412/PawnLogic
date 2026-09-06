@@ -427,27 +427,44 @@ def tool_web_navigate(a: dict) -> str:
 # Status checks.
 # ════════════════════════════════════════════════════════
 
-_scrapling_ok = False
-_patchright_ok = False
+# Tri-state probes: None until first checked. The probe must stay out of
+# module import — importing scrapling/patchright pulls the whole browser
+# stack (~200 ms), and core.session imports this module at every startup.
+_scrapling_ok: bool | None = None
+_patchright_ok: bool | None = None
 
-try:
-    from scrapling import StealthyFetcher as _SF  # noqa: F401
-    _scrapling_ok = True
-except ImportError:
-    pass
 
-try:
-    from patchright.sync_api import sync_playwright as _sp  # noqa: F401
-    _patchright_ok = True
-except ImportError:
-    pass
+def _probe_scrapling() -> bool:
+    """Probe scrapling availability on first use; cache the result."""
+    global _scrapling_ok
+    if _scrapling_ok is None:
+        try:
+            from scrapling import StealthyFetcher  # noqa: F401
+            _scrapling_ok = True
+        except ImportError:
+            _scrapling_ok = False
+    return _scrapling_ok
+
+
+def _probe_patchright() -> bool:
+    """Probe patchright availability on first use; cache the result."""
+    global _patchright_ok
+    if _patchright_ok is None:
+        try:
+            from patchright.sync_api import sync_playwright  # noqa: F401
+            _patchright_ok = True
+        except ImportError:
+            _patchright_ok = False
+    return _patchright_ok
 
 
 def browser_tool_status() -> str:
     """Return browser tool availability status."""
+    _scrapling_installed = _probe_scrapling()
+    _patchright_installed = _probe_patchright()
     parts = [
-        ("Scrapling",       _scrapling_ok,    "pip install 'pawnlogic[browser]'" if not _scrapling_ok else "installed"),
-        ("Patchright",      _patchright_ok,   "pip install 'pawnlogic[browser]' && patchright install chromium" if not _patchright_ok else "installed"),
+        ("Scrapling",       _scrapling_installed,    "pip install 'pawnlogic[browser]'" if not _scrapling_installed else "installed"),
+        ("Patchright",      _patchright_installed,   "pip install 'pawnlogic[browser]' && patchright install chromium" if not _patchright_installed else "installed"),
         ("Browser instance", _page is not None and not (_page.is_closed() if _page else True),
                                                "not started; starts automatically on first use" if _page is None else "connected"),
         ("Screenshot dir",   True,             SCREENSHOT_DIR),
