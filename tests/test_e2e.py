@@ -6,6 +6,7 @@ exit cleanly without requiring real API keys (PAWNLOGIC_TEST_MODE=true).
 """
 
 import importlib.util
+import io
 import json
 import os
 import re
@@ -1093,3 +1094,37 @@ def test_readline_fallback_stays_serial_during_blocking_tool(tmp_path):
         child.expect("follow-up done", timeout=10)
     finally:
         child.close(force=True)
+
+
+def test_live_terminal_never_enters_alternate_screen_or_mouse_capture(tmp_path):
+    """ADR 0010 byte-level contract: native scrolling and copy/paste are
+    sacred. The live terminal must never emit the alternate-screen mode or
+    mouse-tracking mode sequences — those are what silently break the
+    terminal's own scrollback, text selection, and wheel scrolling."""
+    _require_prompt_toolkit()
+    child = _spawn_pawnlogic_process(tmp_path, prompt_toolkit_enabled=True)
+    stream = io.StringIO()
+    child.logfile_read = stream
+    try:
+        # Startup + composer render is where the terminal modes would be
+        # set; no command interaction is needed to detect them. The live
+        # composer ignores bare EOF, so exit via the quit command.
+        _wait_for_prompt(child, timeout=30)
+        child.sendline("/quit")
+        child.expect(pexpect.EOF, timeout=15)
+    finally:
+        if child.isalive():
+            child.close(force=True)
+    raw = stream.getvalue()
+    forbidden = (
+        "\x1b[?1049h", "\x1b[?1049l",          # alternate screen
+        "\x1b[?1000h", "\x1b[?1000l",          # mouse tracking
+        "\x1b[?1002h", "\x1b[?1002l",
+        "\x1b[?1003h", "\x1b[?1003l",
+        "\x1b[?1006h", "\x1b[?1006l",
+    )
+    for sequence in forbidden:
+        assert sequence not in raw, (
+            f"forbidden mode sequence {sequence!r} found in the live stream; "
+            "native scrolling/copy would break (ADR 0010)"
+        )
