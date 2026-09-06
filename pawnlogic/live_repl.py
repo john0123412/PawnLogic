@@ -289,25 +289,22 @@ def build_prompt_toolkit_bindings(
 
     @bindings.add("escape")
     def _(event: Any) -> None:
-        """Interrupt + steer while running; pop the queue when idle.
+        """Interrupt while running; pop the queue into the editor when idle.
 
-        While a Turn runs, Esc interrupts it and converts the first
-        queued item to a steer (the scheduler picks the new direction
-        up at the next safe point). While idle with queued messages
-        and an empty composer, Esc empties the queue into the editor
-        for editing — the claude-code gesture; without it, queued
-        input could only be discarded, never reworked.
+        P2-0 (ADR 0009 revision): Esc is a pure interrupt. The scheduler's
+        settlement path already hands the queue the baton — the drive loop
+        pops the oldest queued entry as a brand-new Turn the moment the
+        interrupted one settles (and refuses to mint a recovered draft
+        while the queue is non-empty). The previous CLAIM_STEER probe here
+        popped the oldest queued message out of the steer lane and dropped
+        the receipt, silently losing it when the interrupted Turn could
+        never resume; if it was the only queued item the session parked
+        with empty lanes. With queued messages, Esc therefore behaves like
+        claude-code's: the current Turn dies immediately and the next
+        message starts as a fresh Turn with no further user action.
         """
         if running_turn():
             schedule_interrupt(event)
-            if queued_work():
-                # Convert the first queued item to STEER so the scheduler
-                # picks it up as a directional steer when the turn resumes.
-                from core.turn_scheduler import ControlAction, ControlKind
-                action = ControlAction(kind=ControlKind.CLAIM_STEER)
-                queue_control = getattr(session, "queue_control", None)
-                if callable(queue_control):
-                    queue_control(action)
             return
         _pop_queued_to_composer(event.current_buffer)
 

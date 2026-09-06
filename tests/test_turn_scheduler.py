@@ -1477,6 +1477,60 @@ def test_interrupt_with_queue_hands_baton_no_recovered_draft() -> None:
         scheduler.control(ControlAction(ControlKind.SHUTDOWN))
 
 
+def test_interrupt_with_steer_lane_hands_baton_and_never_loses_the_message() -> None:
+    """P2-0 contract: Esc is a pure interrupt; the steer lane's oldest
+    entry starts as a brand-new Turn (new cancellation token, running
+    status) after the interrupted one settles. Nothing is claimed out of
+    the lane by the Esc path, so the message can never be silently lost —
+    the live-REPL regression the CLAIM_STEER probe produced.
+    """
+    started = Event()
+    release = Event()
+    runs: list[str] = []
+    tokens: list[TurnCancellationToken] = []
+
+    class Executor:
+        def execute_with_cancellation(
+            self, item: Submission, token: TurnCancellationToken
+        ) -> object:
+            runs.append(item.content)
+            tokens.append(token)
+            started.set()
+            if item.content == "active":
+                token.wait(timeout=5)
+                release.set()
+                return TurnExecutionResult(TurnExecutionStatus.INTERRUPTED)
+            return TurnExecutionResult(TurnExecutionStatus.COMPLETED)
+
+    scheduler = TurnScheduler(Executor(), background=True)
+    try:
+        scheduler.submit(Submission("active"))
+        assert started.wait(timeout=5)
+        started.clear()
+        scheduler.submit(Submission("redirect", kind=SubmissionKind.STEER))
+        # Pure interrupt: no CLAIM_STEER from the key path.
+        assert scheduler.control(
+            ControlAction(ControlKind.INTERRUPT_ACTIVE)
+        ).accepted
+        assert release.wait(timeout=5)
+        import time as _time
+
+        deadline = _time.monotonic() + 5
+        while _time.monotonic() < deadline:
+            if runs == ["active", "redirect"]:
+                break
+            _time.sleep(0.02)
+        assert runs == ["active", "redirect"], runs
+        view = scheduler.view()
+        assert view.recovered is None
+        assert view.steer == ()
+        # The continuation ran under a fresh cancellation token: a
+        # brand-new Turn, not a resumed one.
+        assert len(tokens) == 2 and tokens[0] is not tokens[1]
+    finally:
+        scheduler.control(ControlAction(ControlKind.SHUTDOWN))
+
+
 def test_interrupt_with_empty_queue_parks_as_recovered_draft() -> None:
     """The other half of the contract: an empty-queue interrupt keeps
     the edit-and-retry recovered draft (prefilled composer path)."""

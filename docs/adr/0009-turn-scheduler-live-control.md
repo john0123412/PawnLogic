@@ -172,3 +172,49 @@ version PR stays unmerged until the previous release completes.
   same commit series so no mixed semantics remain.
 - Cross-process control stays out of scope until a socket/app-server layer
   exists.
+
+
+## Revision (P2-0, 2026-09-06): Esc is a pure interrupt with queue handoff
+
+The owner redefined the Esc-with-queued-work semantics after real-usage
+comparison with Codex/Claude Code: Esc must **terminate the active Turn
+immediately and start the oldest queued message as a brand-new Turn**,
+with no parked/recovered-draft step and no further user action.
+
+Audit of the 0.3.7 implementation found the intended handoff was already
+implemented in `TurnScheduler._drive` (the interrupted-settlement branch
+refuses to mint a recovered draft while queue lanes are non-empty and
+continues driving with the queue head as a fresh Turn under a new
+cancellation token). The defect was in the live-REPL Esc binding: it also
+issued a `CLAIM_STEER` control and discarded the receipt, which popped the
+oldest queued message out of the steer lane into nowhere — silently losing
+it, and parking the session when it was the only queued item.
+
+Changes:
+
+1. The live-REPL Esc binding no longer sends `CLAIM_STEER`. Esc is a pure
+   interrupt; the settlement path's drive continuation provides the
+   `INTERRUPT_AND_RUN_NEXT` semantic (realized by `INTERRUPT_ACTIVE` +
+   drive continuation, not a new ControlKind — the drain is `_drive`'s
+   own loop, so an extra alias would be a misnomer).
+2. `_drive`'s `except KeyboardInterrupt` no longer unconditionally
+   re-raises: a **user-requested** interrupt (`_interrupt_requested`) with
+   queued work continues the drive loop instead of unwinding it. The
+   re-raise remains for aborts and unrequested console interrupts. This
+   re-raise stranded the queue in the live path — the second half of the
+   lost-message defect.
+3. `CLAIM_STEER` and mid-turn safe-point injection are unchanged for the
+   non-interrupt steer path (Enter-while-running; delivered at the next
+   Tool safe point or drained as a fresh Turn when the active Turn
+   settles first).
+4. The headless serve wire gains `prompt` + `"steer": true` (queue a
+   steer for the active turn; error `stage: steer` when no turn is
+   active), so frontends get the same semantics over the ADR 0011 wire.
+5. The anti-cascade gate is preserved verbatim: `_resume_unlocked`
+   still refuses non-explicit resume while failed/aborted, and the drive
+   continuation checks the same lanes-condition.
+
+Regression coverage: scheduler-level steer-lane baton test (message never
+lost, fresh cancellation token, no recovered draft), live E2E with the
+controlled-turn harness (queued steer + Esc → fresh Turn completes and
+reaches the transcript), and an owner-PTY smoke against the real API.

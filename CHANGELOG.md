@@ -8,6 +8,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Esc-with-queued-work is now a pure interrupt with queue handoff
+  (P2-0, ADR 0009 revision): the active Turn terminates immediately and
+  the oldest queued message starts as a brand-new Turn — no parked or
+  recovered-draft step, no further user action, matching the Codex /
+  Claude Code steer gesture. Two defects fixed on the way: the live-REPL
+  Esc binding used to send a `CLAIM_STEER` control and discard the
+  receipt, silently dropping the oldest queued message (and parking the
+  session when it was the only queued item); and the scheduler's drive
+  loop used to unwind on the interrupted turn's `KeyboardInterrupt`,
+  stranding any queued work in the live path. `pawn serve` gains
+  `prompt` + `"steer": true` for the same semantics over the headless
+  wire.
+
+### Added
 - `pawn serve` (ADR 0011, accepted): headless NDJSON-over-stdio protocol
   server driving one session. v1 request surface is `prompt`, `command`,
   `interrupt`, and `shutdown`; events (`status`, `stream`, `tool`,

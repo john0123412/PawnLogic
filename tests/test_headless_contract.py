@@ -548,6 +548,60 @@ def test_interrupt_retry_covers_turn_registration_race():
     assert "result" not in [e["type"] for e in events]
 
 
+# ════════════════════════════════════════════════════════
+# steer request (prompt with "steer": true, P2-0)
+# ════════════════════════════════════════════════════════
+
+def test_steer_requires_an_active_turn():
+    """prompt + "steer": true without a running turn is a stage=steer
+    error, pointing the client at a plain prompt instead."""
+    session = FakeSession()
+    server, events = make_server(
+        [
+            line_request({"type": "prompt", "text": "hi", "steer": True}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+    assert code == 0
+    error = next(e for e in events if e["type"] == "error")
+    assert error["stage"] == "steer"
+    assert "active turn" in error["detail"]
+    assert session.run_turn_calls == []
+
+
+def test_steer_with_active_turn_queues_and_reports():
+    """prompt + "steer": true with an active turn submits a STEER entry
+    through the scheduler (single control seam as the live Esc), never
+    calls run_turn inline, and reports steer_queued."""
+    session = FakeSession()
+    scheduler_view = types.SimpleNamespace(active=object())
+    session._turn_scheduler.view = lambda: scheduler_view
+    submitted: list[Any] = []
+
+    def _fake_submit(submission: Any) -> None:
+        submitted.append(submission)
+
+    session._turn_scheduler.submit = _fake_submit
+
+    server, events = make_server(
+        [
+            line_request({"type": "prompt", "text": "go left", "steer": True}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+    assert code == 0
+    assert len(submitted) == 1
+    assert submitted[0].content == "go left"
+    assert submitted[0].kind.value == "steer"
+    assert submitted[0].source == "serve"
+    assert session.run_turn_calls == []
+    assert any(e.get("stage") == "steer_queued" for e in events)
+
+
 def test_missing_key_detail_helper_matches_pre_flight(monkeypatch):
     session = FakeSession(model_alias=DEFAULT_MODEL)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
