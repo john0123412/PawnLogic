@@ -4,7 +4,8 @@ Versioned NDJSON over stdio: one JSON object per line in both
 directions, every message carrying a `{"v": 1, "type": ...}` envelope.
 
 Request surface (v1): `prompt`, `command`, `shutdown`. Event vocabulary:
-`status`, `result`, `error` (with `stage`), `command_result`. Unknown
+`status`, `stream` (content deltas), `tool` (started/result), `result`,
+`error` (with `stage`), `command_result`. Unknown
 request types are ignored so the wire can evolve without a handshake.
 
 One process serves exactly one AgentSession, and requests are processed
@@ -133,6 +134,7 @@ class HeadlessServer:
             self._emit(make_event("error", stage="api_key", detail=detail))
             return
 
+        unsubscribe = self._subscribe_event_forwarder()
         buf = io.StringIO()
         try:
             with contextlib.redirect_stdout(buf):
@@ -142,6 +144,8 @@ class HeadlessServer:
                 "error", stage="run_turn", detail=str(exc),
             ))
             return
+        finally:
+            unsubscribe()
 
         api_error = getattr(self._session, "last_turn_api_error", None)
         if api_error:
@@ -161,6 +165,56 @@ class HeadlessServer:
             completion_tokens=self._session.total_completion_tokens,
             tool_calls=self._session.total_tool_calls,
         ))
+
+    def _subscribe_event_forwarder(self) -> Callable[[], None]:
+        """Map the session's Agent Events onto the wire while a turn runs.
+
+        The Python core already publishes a typed event stream
+        (core.agent_events); this forwarder is the only bridge to the
+        headless wire, so event fidelity cannot drift between --eval,
+        the REPL, and serve. Sessions without a runtime context (fakes,
+        some tests) simply get no live events.
+        """
+        context = getattr(self._session, "runtime_context", None)
+        publisher = getattr(context, "event_publisher", None)
+        if publisher is None or not hasattr(publisher, "subscribe"):
+            return lambda: None
+
+        def forward(event: Any) -> None:
+            kind = getattr(getattr(event, "event_type", None), "value", "")
+            payload = getattr(event, "payload", {}) or {}
+            if kind == "text.delta":
+                text = payload.get("text")
+                if isinstance(text, str) and text:
+                    self._emit(make_event("stream", text=text))
+            elif kind == "tool.started":
+                self._emit(make_event(
+                    "tool", stage="started",
+                    tool_call_id=payload.get("tool_call_id"),
+                    tool_name=payload.get("tool_name"),
+                    iteration=payload.get("iteration"),
+                ))
+            elif kind == "tool.result":
+                self._emit(make_event(
+                    "tool", stage="result",
+                    tool_call_id=payload.get("tool_call_id"),
+                    tool_name=payload.get("tool_name"),
+                    iteration=payload.get("iteration"),
+                    status=payload.get("status"),
+                    error_type=payload.get("error_type"),
+                    side_effect=payload.get("side_effect"),
+                ))
+            elif kind in ("turn.started", "turn.completed", "turn.failed", "turn.cancelled"):
+                stage = "turn_" + kind.split(".", 1)[1]
+                fields: dict = {"stage": stage}
+                if payload.get("model_alias") is not None:
+                    fields["model"] = payload["model_alias"]
+                if payload.get("phase") is not None:
+                    fields["phase"] = payload["phase"]
+                self._emit(make_event("status", **fields))
+            # Everything else stays internal to the core.
+
+        return publisher.subscribe(forward)
 
     def _handle_command(self, request: dict) -> None:
         from core.commands import CommandContext, dispatch
@@ -216,12 +270,17 @@ def asyncio_run(awaitable: Any) -> Any:
 
 def run_serve(session: Any) -> int:
     """CLI entry: serve the protocol over real stdin/stdout."""
+    # Bind the real stdout now: prompt handling redirects sys.stdout into a
+    # capture buffer while a turn runs, and in-turn events must still reach
+    # the wire, not that buffer.
+    wire = sys.stdout
+
     def read_line() -> str | None:
         raw = sys.stdin.readline()
         return raw if raw else None
 
     def emit(event: dict) -> None:
-        sys.stdout.write(json.dumps(event, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+        wire.write(json.dumps(event, ensure_ascii=False) + "\n")
+        wire.flush()
 
     return HeadlessServer(session, read_line=read_line, emit=emit).serve()

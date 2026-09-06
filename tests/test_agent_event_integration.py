@@ -150,3 +150,29 @@ def test_turn_interruption_closes_an_open_tool_event(tmp_path):
         AgentEventKind.TURN_CANCELLED,
     ]
     assert sink.events[-2].payload["status"] == "interrupted"
+
+
+def test_content_delta_publishes_text_delta_in_sequence(tmp_path):
+    """content_delta feeds the typed stream: TEXT_DELTA lands in subscriber
+    order with the renderer-approved text, so sinks can render or forward
+    it without touching stdout."""
+    sink = CaptureEventSink()
+    context = RuntimeContext.for_test(
+        cwd=tmp_path,
+        workspace_dir=tmp_path / "workspace",
+        sink=sink,
+    )
+    emitter = SessionEventEmitter(context, "session-1")
+
+    emitter.start_turn("model-a", "RECON")
+    emitter.content_delta("Hel")
+    emitter.content_delta("lo!")
+    emitter.finish("completed", FakeMetrics())
+
+    assert [event.event_type for event in sink.events] == [
+        AgentEventKind.TURN_STARTED,
+        AgentEventKind.TEXT_DELTA,
+        AgentEventKind.TEXT_DELTA,
+        AgentEventKind.TURN_COMPLETED,
+    ]
+    assert [event.payload["text"] for event in sink.events[1:3]] == ["Hel", "lo!"]

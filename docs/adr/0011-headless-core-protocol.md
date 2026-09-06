@@ -1,11 +1,9 @@
 # ADR 0011 — Headless Core Protocol
 
-> **Status:** Proposed.
-> Phase 1 of the post-0.3.7 roadmap. This ADR proposes the process
-> boundary that lets a future native frontend (Rust/ratatui candidate,
-> Phase 2) or any script drive the existing Python core. It moves to
-> **Accepted** only after the owner approves the protocol shape and the
-> first contract tests land.
+> **Status:** Accepted (2026-09-06).
+> The owner reviewed the proposal in-session and directed continued
+> implementation; the contract tests and the `pawn serve` skeleton
+> landed first, so acceptance rests on a working, tested wire.
 
 ## Context
 
@@ -76,9 +74,13 @@ on sight if they violate them.
 
 ## Acceptance
 
-- [ ] Owner approves the protocol shape (transport, request surface,
-      event vocabulary, versioning).
+- [x] Owner approves the protocol shape (transport, request surface,
+      event vocabulary, versioning) — approved in-session on 2026-09-06.
 - [x] Contract tests for the v1 event/request vocabulary merged.
 - [x] `pawn serve` skeleton implemented behind those tests, sharing the
       core driver loop with `--eval` (the `--eval` pre-flight and result
       extraction now share `pawnlogic/headless.py` helpers).
+- [x] Live turn events (`stream`/`tool`/turn `status`) forwarded from
+      the core's typed Agent Event stream via
+      `SessionEventEmitter.content_delta`; no subscriber means zero
+      REPL behavior change.

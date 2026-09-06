@@ -1541,6 +1541,7 @@ class AgentSession:
                 reasoning_printed = False
             printable = renderer.feed(chunk)
             if printable:
+                self._event_emitter().content_delta(printable)
                 sys.stdout.write(printable)
                 sys.stdout.flush()
 

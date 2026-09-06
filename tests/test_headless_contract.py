@@ -301,6 +301,65 @@ def test_blank_lines_are_skipped():
 # Shared --eval pre-flight helper
 # ════════════════════════════════════════════════════════
 
+def test_prompt_streams_live_events_before_result(tmp_path):
+    """While a turn runs, the session's typed events are forwarded on the
+    wire in order: status(turn_started), stream deltas, tool events —
+    all before the final result event."""
+    from core.runtime_context import RuntimeContext
+    from core.session_events import SessionEventEmitter
+    from core.tool_executor import ToolExecutionOutcome
+
+    session = FakeSession()
+    context = RuntimeContext.for_test(
+        cwd=tmp_path,
+        workspace_dir=tmp_path / "workspace",
+    )
+    session.runtime_context = context
+    emitter = SessionEventEmitter(context, session.session_id)
+
+    def _fake_run_turn(prompt: str) -> None:
+        emitter.start_turn(session.model_alias, "RECON")
+        emitter.content_delta("Hel")
+        emitter.content_delta("lo!")
+        tool_call = {"id": "call-1", "name": "read_file"}
+        emitter.tool_started(tool_call, 0)
+        emitter.tool_result(
+            tool_call,
+            ToolExecutionOutcome(status="success", content="x"),
+            0,
+        )
+
+    session.run_turn = _fake_run_turn
+    server, events = make_server(
+        [
+            line_request({"type": "prompt", "text": "hi"}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+    assert code == 0
+    assert [e["type"] for e in events] == [
+        "status",   # ready
+        "status",   # turn_started
+        "stream",
+        "stream",
+        "tool",
+        "tool",
+        "result",
+        "status",   # shutdown
+    ]
+    assert [e["text"] for e in events if e["type"] == "stream"] == ["Hel", "lo!"]
+    tool_events = [e for e in events if e["type"] == "tool"]
+    assert tool_events[0]["stage"] == "started"
+    assert tool_events[0]["tool_name"] == "read_file"
+    assert tool_events[1]["stage"] == "result"
+    assert tool_events[1]["status"] == "success"
+    turn_started = events[1]
+    assert turn_started["stage"] == "turn_started"
+    assert turn_started["model"] == "test-fake-model"
+
+
 def test_missing_key_detail_helper_matches_pre_flight(monkeypatch):
     session = FakeSession(model_alias=DEFAULT_MODEL)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)

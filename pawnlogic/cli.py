@@ -1100,8 +1100,15 @@ async def _main_impl():
             ))
 
     # Prompt Toolkit owns a live composer on the main thread.  The readline
-    # fallback and --eval deliberately keep the historical synchronous path.
-    live_turns_enabled = prompt_toolkit_enabled and not args.eval and not args.json
+    # fallback and --eval deliberately keep the historical synchronous path,
+    # and so does `serve`: its wire is serial and must observe the whole
+    # turn synchronously (a live worker would publish after unsubscribe).
+    live_turns_enabled = (
+        prompt_toolkit_enabled
+        and not args.eval
+        and not args.json
+        and args.command != "serve"
+    )
     session = AgentSession(live_turns=live_turns_enabled)
     _EXTENSION_HOST.mount(session)
     if first_run_model_alias and first_run_model_alias in MODELS:
