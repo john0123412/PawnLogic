@@ -275,7 +275,8 @@ def test_eval_with_session_calls_session_load(
         load_calls.append(query)
         return f"OK loaded session '{query}'"
 
-    monkeypatch.setattr(patched_main, "session_load", _fake_load)
+    # _run_eval_mode now lives in pawnlogic.headless; patch its namespace.
+    monkeypatch.setattr("pawnlogic.headless.session_load", _fake_load)
 
     with pytest.raises(SystemExit) as excinfo:
         asyncio.run(patched_main._run_eval_mode(
@@ -295,7 +296,7 @@ def test_eval_with_failed_session_load_exits_2_and_skips_run_turn(
 
     fake_session.run_turn = MagicMock()
     monkeypatch.setattr(
-        patched_main, "session_load",
+        "pawnlogic.headless.session_load",
         lambda s, q: "ERROR session not found",
     )
 

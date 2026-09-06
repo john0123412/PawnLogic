@@ -869,6 +869,9 @@ def _load_state_md(cwd: str) -> str:
 # ════════════════════════════════════════════════════════
 
 class AgentSession:
+    # Class-level defaults; assigned per instance in __init__ / methods.
+    last_turn_api_error: str | None = None;  _current_tool_activity: str | None = None
+
     def __init__(self, *, live_turns: bool = False):
         self.session_id  = _gen_id()
         self.model_alias = DEFAULT_MODEL
@@ -882,9 +885,6 @@ class AgentSession:
         self._events = SessionEventEmitter(self.runtime_context, self.session_id)
         self._sync_runtime_context()
         self.current_phase = "RECON"   # initial MoE phase
-        # Detail of the last API stream error in the current turn, or None.
-        # Consumed by non-interactive --eval mode to signal failure via exit code.
-        self.last_turn_api_error: str | None = None
         init_db()
         # P1: time-aware scheduling state. Must exist before _reset_system_prompt.
         self._turn_start_time        = 0.0
@@ -923,11 +923,7 @@ class AgentSession:
         # autosaves at the session seam while the scheduler owns all queue and
         # lifecycle state.
         self._live_turns_enabled = bool(live_turns)
-        # Current tool activity for the live terminal's fixed status area.
-        # Set while a tool executes, cleared with its result; the live
-        # terminal reads it instead of the session printing progress lines
-        # into the permanent scrollback transcript.
-        self._current_tool_activity: str | None = None
+
         self._turn_scheduler = build_session_scheduler(
             self,
             live_turns=self._live_turns_enabled,
@@ -1924,14 +1920,10 @@ class AgentSession:
                 print(c(GREEN, f"  🚀 [P6] Running automated validation script for {_pack_hint}...") + f" {iter_tag}")
 
         if not _is_skill_call:
+            self._current_tool_activity = f"{name} [{iteration+1}/{max_iter}]"
             if _debug_mode():
                 print(c(YELLOW, f"  🔧 {name}") + c(GRAY, f"({preview[:80]})") + f" {iter_tag}")
-            elif getattr(self, "_live_turns_enabled", False):
-                # Live terminal: transient tool progress belongs in the fixed
-                # status area. Printing here would append one permanent
-                # scrollback line per tool call (owner-reported clutter).
-                self._current_tool_activity = f"{name} [{iteration+1}/{max_iter}]"
-            else:
+            elif not getattr(self, "_live_turns_enabled", False):
                 print(c(YELLOW, f"  Working with {name}...") + f" {iter_tag}")
 
         # switch_phase intercept; mutate instance state directly.
@@ -2289,8 +2281,7 @@ class AgentSession:
 
     def run_turn(self, user_input: str):
         """Submit one prompt, preserving synchronous and live session modes."""
-        self.last_turn_api_error = None
-        return run_session_turn(self, user_input)
+        self.last_turn_api_error = None;  return run_session_turn(self, user_input)
 
     def retry_interrupted_turn(self, user_input: str) -> bool:
         """Replace and resume a recoverable prompt without duplicating it."""

@@ -5,7 +5,7 @@ PawnLogic CLI.
 Multi-provider runtime, vision support, SQLite persistence, CoT guidance,
 GSA skill archive, spec-driven execution, and GSD project state.
 """
-import os, sys, shutil, argparse, asyncio, traceback, signal
+import os, sys, shutil, argparse, asyncio, signal
 from typing import Any
 from pawnlogic.repl import (
     ReplSignalState,
@@ -16,6 +16,7 @@ from pawnlogic.repl import (
     write_text_cache as _write_text_cache,
 )
 from pawnlogic.extension_host import ExtensionHost
+from pawnlogic.headless import _run_eval_mode
 from pawnlogic.completion_sources import (
     FallbackCompletion,
     builtin_command_completion_words as _builtin_command_completion_words,
@@ -807,135 +808,6 @@ def _prompt_startup_resume(session: AgentSession) -> bool:
 def _ensure_runtime_dir_writable(path: Path) -> None:
     ensure_runtime_dir_writable(path)
     _ensure_runtime_templates(path)
-
-
-# ════════════════════════════════════════════════════════
-# Stage-2: --eval single-shot execution mode
-# ════════════════════════════════════════════════════════
-
-async def _run_eval_mode(session: AgentSession, args, sink) -> None:
-    """Single-shot run: execute one prompt and exit.
-
-    Behavior:
-      · If `--session <id>` is given, load that session first; on failure
-        emit a structured error and exit non-zero.
-      · Run `session.run_turn(args.eval)`. In human (default) mode, the
-        agent's streaming output flows directly to stdout exactly as it
-        would in the REPL.
-      · In JSON mode the streaming output is captured (so the JSON wire
-        stays clean), and a single structured `result` event is emitted
-        from the final assistant message in `session.messages`.
-      · If the turn fails at the API level (retries exhausted, circuit
-        breaker open), emit a structured error and exit non-zero.
-      · A missing provider key for the selected model exits 2 before any
-        API call is attempted.
-      · Always shut down MCP subprocesses on exit.
-    """
-    is_json = bool(args.json)
-
-    # 1. Optionally load a saved session before running.
-    if args.session:
-        result = session_load(session, args.session)
-        if not result.startswith("OK"):
-            if is_json:
-                sink.print_json({
-                    "type":  "error",
-                    "stage": "session_load",
-                    "query": args.session,
-                    "detail": result,
-                })
-            else:
-                sink.print(c(RED, f"  ✗ Session load failed: {result}"))
-            detach_external_mcp_tools()
-            sys.exit(2)
-
-    # 2. Fail fast on a missing provider key: a 401 cannot recover, so
-    #    spending the retry/circuit-breaker budget on it only wastes time.
-    #    Shared with the headless server so both surfaces agree on the
-    #    pre-flight semantics (unknown aliases keep the historical
-    #    DEFAULT_MODEL fallback).
-    from pawnlogic.headless import final_assistant_text, missing_key_detail
-
-    detail = missing_key_detail(session)
-    if detail:
-        if is_json:
-            sink.print_json({
-                "type":   "error",
-                "stage":  "api_key",
-                "detail": detail,
-            })
-        else:
-            sink.print(c(RED, f"  ✗ {detail}"))
-        detach_external_mcp_tools()
-        sys.exit(2)
-
-    # 3. Execute one turn.
-    if is_json:
-        # Suppress streaming prints so the JSON wire stays valid;
-        # we re-emit the final assistant text as a structured event.
-        import contextlib
-        import io
-        buf = io.StringIO()
-        try:
-            with contextlib.redirect_stdout(buf):
-                session.run_turn(args.eval)
-        except Exception as exc:  # noqa: BLE001
-            sink.print_json({
-                "type":   "error",
-                "stage":  "run_turn",
-                "detail": str(exc),
-            })
-            detach_external_mcp_tools()
-            sys.exit(1)
-
-        api_error = getattr(session, "last_turn_api_error", None)
-        if api_error:
-            # The turn ended without raising (stream errors are consumed by
-            # the retry/circuit-breaker layer); signal failure via exit code.
-            sink.print_json({
-                "type":   "error",
-                "stage":  "run_turn",
-                "detail": f"API turn failed: {api_error}",
-                "session_id":        session.session_id,
-                "model":             session.model_alias,
-                "prompt_tokens":     session.total_prompt_tokens,
-                "completion_tokens": session.total_completion_tokens,
-                "tool_calls":        session.total_tool_calls,
-            })
-            detach_external_mcp_tools()
-            sys.exit(1)
-
-        last_assistant = final_assistant_text(session.messages)
-        sink.print_json({
-            "type":         "result",
-            "prompt":       args.eval,
-            "response":     last_assistant,
-            "session_id":   session.session_id,
-            "model":        session.model_alias,
-            "prompt_tokens":     session.total_prompt_tokens,
-            "completion_tokens": session.total_completion_tokens,
-            "tool_calls":        session.total_tool_calls,
-        })
-    else:
-        # Human mode — let run_turn print directly, exactly as in the REPL.
-        try:
-            session.run_turn(args.eval)
-        except Exception as exc:  # noqa: BLE001
-            sink.print(c(RED, f"  ✗ {exc}"))
-            if _runtime_state.debug_mode:
-                traceback.print_exc()
-            detach_external_mcp_tools()
-            sys.exit(1)
-
-        api_error = getattr(session, "last_turn_api_error", None)
-        if api_error:
-            sink.print(c(RED, f"  ✗ API turn failed: {api_error}"))
-            detach_external_mcp_tools()
-            sys.exit(1)
-
-    # 4. Clean shutdown of MCP subprocesses.
-    detach_external_mcp_tools()
-    sys.exit(0)
 
 
 def _run_repl_turn(session: AgentSession, raw: str, *, retry_interrupted: bool) -> None:
