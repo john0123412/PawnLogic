@@ -1541,9 +1541,10 @@ class AgentSession:
                 reasoning_printed = False
             printable = renderer.feed(chunk)
             if printable:
+                # Single rendering path: the runtime context auto-subscribes
+                # the active sink, whose emit() renders text.delta. Writing
+                # here as well would render every chunk twice.
                 self._event_emitter().content_delta(printable)
-                sys.stdout.write(printable)
-                sys.stdout.flush()
 
         try:
             cancellation = current_turn_cancellation()
