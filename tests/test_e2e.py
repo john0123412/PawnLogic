@@ -943,6 +943,54 @@ def test_live_bare_escape_interrupts_one_turn_without_another_keypress(tmp_path)
             child.close(force=True)
 
 
+def test_live_escape_with_queued_steer_starts_fresh_turn(tmp_path):
+    """P2-0 contract (ADR 0009 revision): Esc during a Turn with queued
+    input is a pure interrupt — the queued head starts as a brand-new Turn
+    and the interrupted prompt is not parked as a recovered draft.
+
+    Regression: the previous Esc binding also sent CLAIM_STEER and
+    discarded the receipt, popping the queued message out of the steer
+    lane and losing it when the interrupted Turn could never resume.
+    """
+    _require_prompt_toolkit()
+    process = _spawn_controlled_turn_process(
+        tmp_path, prompt_toolkit_enabled=True, stream_mode="cancel"
+    )
+    child = process["child"]
+    try:
+        _wait_for_prompt(child)
+        child.sendline("first task")
+        _wait_for_control_trace(process["trace"], 1)
+        _wait_for_control_marker(process["tool_started"])
+
+        # Queue a steer while the first Turn is blocked inside the tool.
+        child.sendline("second task")
+        child.expect(r"queued \[", timeout=5)
+
+        child.send("\x1b")
+        _wait_for_control_marker(process["cancellation_observed"], timeout=1.0)
+
+        # The queued head must now run as a fresh Turn: request 2 exists and
+        # carries the queued message (conversation history persists across
+        # turns, so earlier user messages remain in the users list).
+        process["release"].write_text("go")
+        entries = _wait_for_control_trace(process["trace"], 2)
+        assert entries[0]["users"] == ["first task"]
+        assert "second task" in entries[1]["users"], entries[1]
+
+        # The fresh Turn runs to completion and its reply reaches the
+        # transcript ("first turn done" is the controlled stream's answer
+        # to the second request). No "Status: interrupted" lingers — the
+        # queue took over, which is the P2-0 point.
+        child.expect("first turn done", timeout=10)
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"live Escape steer handoff failed: {e}")
+    finally:
+        if child.isalive():
+            child.close(force=True)
+
+
 def test_live_escape_prefills_recovered_draft_for_edit_and_replace(tmp_path):
     """Escape stops once and makes the recovered prompt directly editable.
 
@@ -1015,7 +1063,13 @@ def test_prompt_toolkit_text_stream_is_not_torn_apart(tmp_path):
         child.expect("second chunk", timeout=10)
         records = _wait_for_control_trace(process["trace"], 2)
         assert records[1]["users"][-1] == "follow-up after text"
-        child.expect("follow-up done", timeout=10)
+        try:
+            child.expect("follow-up done", timeout=10)
+        except pexpect.TIMEOUT:
+            child.sendline("/queue")
+            child.expect(["Queued:", pexpect.TIMEOUT], timeout=3)
+            print(f"\n=== CHILD TAIL AT TIMEOUT ===\n{child.before!r}")
+            raise
     finally:
         child.close(force=True)
 
@@ -1091,7 +1145,13 @@ def test_readline_fallback_stays_serial_during_blocking_tool(tmp_path):
 
         records = _wait_for_control_trace(process["trace"], 3)
         assert records[2]["users"][-1] == "buffered follow-up"
-        child.expect("follow-up done", timeout=10)
+        try:
+            child.expect("follow-up done", timeout=10)
+        except pexpect.TIMEOUT:
+            child.sendline("/queue")
+            child.expect(["Queued:", pexpect.TIMEOUT], timeout=3)
+            print(f"\n=== CHILD TAIL AT TIMEOUT ===\n{child.before!r}")
+            raise
     finally:
         child.close(force=True)
 

@@ -75,13 +75,14 @@ def test_active_escape_and_ctrl_c_share_interrupt_control():
     assert session.interrupt_active.call_count == 2
 
 
-def test_escape_while_running_with_queued_work_claims_steer():
-    """Regression: live_repl.Esc binding must import ControlAction from
-    ``core.turn_scheduler``, not ``core.queue``. The latter module does
-    not exist; importing it inside the binding raised ModuleNotFoundError
-    on every Escape keypress, which PT then rendered as
-    "Press ENTER to continue..." — and the host stdout proxy routed
-    that string into the in-Application transcript, scrambling the UI.
+def test_escape_while_running_with_queued_work_is_pure_interrupt():
+    """P2-0 contract (ADR 0009 revision): Esc with queued work is a pure
+    interrupt. The scheduler's settlement path hands the queue the baton —
+    the drive loop pops the oldest queued entry as a fresh Turn. The Esc
+    binding must NOT claim the steer lane itself: the previous CLAIM_STEER
+    probe popped the oldest queued message and dropped the receipt,
+    silently losing it (and parking the session when it was the only
+    queued item).
     """
     queue_control = MagicMock()
 
@@ -98,15 +99,12 @@ def test_escape_while_running_with_queued_work_claims_steer():
         app=SimpleNamespace(current_buffer=SimpleNamespace()),
     )
 
-    # The binding runs ``schedule_interrupt`` in a background task when
-    # ``app.create_background_task`` is present. The local-import error
-    # is raised synchronously in the binding body, so the assertion here
-    # would fail loudly if the wrong module name regressed.
     bindings.handlers[("escape",)](event)
-    queue_control.assert_called_once()
-    from core.turn_scheduler import ControlAction, ControlKind  # noqa: F401
-    action = queue_control.call_args[0][0]
-    assert action.kind is ControlKind.CLAIM_STEER
+    # The interrupt is requested exactly once, through the session seam.
+    assert session.interrupt_active.call_count == 1
+    # No lane-mutating control is sent from the Esc path: the queue must
+    # still be intact for the scheduler to drain after settlement.
+    queue_control.assert_not_called()
 
 
 def test_escape_interrupt_runs_off_ui_thread_and_notifies_after_settle():

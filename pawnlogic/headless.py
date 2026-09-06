@@ -3,7 +3,8 @@
 Versioned NDJSON over stdio: one JSON object per line in both
 directions, every message carrying a `{"v": 1, "type": ...}` envelope.
 
-Request surface (v1): `prompt`, `command`, `interrupt`, `shutdown`. Event vocabulary:
+Request surface (v1): `prompt` (with optional `"steer": true` for the
+active turn), `command`, `interrupt`, `shutdown`. Event vocabulary:
 `status`, `stream` (content deltas), `tool` (started/result), `result`,
 `error` (with `stage`), `command_result`. Unknown
 request types are ignored so the wire can evolve without a handshake.
@@ -188,6 +189,10 @@ class HeadlessServer:
             ))
             return
 
+        if bool(request.get("steer")):
+            self._handle_steer(text)
+            return
+
         detail = missing_key_detail(self._session)
         if detail:
             self._emit(make_event("error", stage="api_key", detail=detail))
@@ -307,6 +312,33 @@ class HeadlessServer:
             "status", stage="interrupt_ignored",
             detail="no active turn",
         ))
+
+    def _handle_steer(self, text: str) -> None:
+        """Queue a steer for the active turn (prompt with "steer": true).
+
+        The steer is delivered at the next Tool safe point of the running
+        turn, or — when the turn settles first — starts as a fresh turn
+        from the queue lanes. Requires an active turn; without one a plain
+        prompt request is the correct call.
+        """
+        from core.turn_scheduler import Submission, SubmissionKind
+
+        scheduler = getattr(self._session, "_turn_scheduler", None)
+        view = getattr(scheduler, "view", None)
+        if scheduler is None or view is None or view().active is None:
+            self._emit(make_event(
+                "error", stage="steer",
+                detail="steer requires an active turn; send a prompt instead",
+            ))
+            return
+        try:
+            scheduler.submit(
+                Submission(text, kind=SubmissionKind.STEER, source="serve")
+            )
+        except Exception as exc:
+            self._emit(make_event("error", stage="steer", detail=str(exc)))
+            return
+        self._emit(make_event("status", stage="steer_queued"))
 
     def _handle_command(self, request: dict) -> None:
         from core.commands import CommandContext, dispatch

@@ -591,6 +591,11 @@ are source-checkout or user-installed assets; pip/curl installations should use
   smoke. The `0.3.6` release remains complete. PyPI project page:
   <https://pypi.org/project/pawnlogic/0.3.7/>. GitHub Release:
   <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.7>.
+- Phase 2 (P2-0, in progress): Esc-with-queued-work is a pure
+  interrupt with queue handoff (INTERRUPT_AND_RUN_NEXT semantics per the
+  ADR 0009 revision); the CLAIM_STEER probe and the drive-loop unwind
+  that stranded queued work are fixed. Release gate for 0.3.8: P2-0
+  merged with all gates green (owner decision).
 - Release finalization: `v0.3.7` was published on 2026-09-05 through Trusted
   Publishing from the `Publish to PyPI` workflow run
   [`33974631898`](https://github.com/john0123412/PawnLogic/actions/runs/33974631898).
@@ -834,6 +839,13 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 - English and zh-CN docs drifting in structure or command examples.
 - Release prep editing version literals outside fixed locations.
 - Packaging accidentally including `skills/` content.
+- Steer semantics changed in P2-0 (ADR 0009 revision): Esc with queued
+  work now discards the interrupted prompt's parked-draft path entirely
+  (the queue takes over; empty-queue Esc still parks as a recovered
+  draft). Client scripts or UI tests that relied on the interrupted
+  prompt reappearing as an editable draft while a steer was queued will
+  see the queued turn run instead — this is the intended contract, not a
+  regression.
 - The Dynamic E2E case
   `test_live_bare_escape_interrupts_one_turn_without_another_keypress`
   has shown a transient environment-sensitive flake in CI: the

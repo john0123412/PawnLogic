@@ -852,12 +852,21 @@ class TurnScheduler:
                     raw_result = self._execute(active.submission, cancellation)
                 except KeyboardInterrupt:
                     with self._lock:
+                        user_requested = self._interrupt_requested
                         view = (
                             self._abort_active_unlocked()
                             if self._abort_requested
                             else self._recover_active_unlocked()
                         )
+                        queued = bool(self._steer or self._follow_up)
                     self._notify(view)
+                    # P2-0 (ADR 0009 revision): a user-requested interrupt
+                    # with queued work must not kill the drive loop. The
+                    # queued head starts as a fresh Turn — re-raising here
+                    # stranded the queue and lost the steer (the worker
+                    # died between settlement and the next _drive round).
+                    if user_requested and queued and not self._abort_requested:
+                        continue
                     raise
                 except Exception:
                     with self._lock:
