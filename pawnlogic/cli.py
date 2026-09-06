@@ -5,7 +5,7 @@ PawnLogic CLI.
 Multi-provider runtime, vision support, SQLite persistence, CoT guidance,
 GSA skill archive, spec-driven execution, and GSD project state.
 """
-import os, sys, shutil, argparse, asyncio, traceback, signal
+import os, sys, shutil, argparse, asyncio, signal
 from typing import Any
 from pawnlogic.repl import (
     ReplSignalState,
@@ -16,6 +16,7 @@ from pawnlogic.repl import (
     write_text_cache as _write_text_cache,
 )
 from pawnlogic.extension_host import ExtensionHost
+from pawnlogic.headless import _run_eval_mode
 from pawnlogic.completion_sources import (
     FallbackCompletion,
     builtin_command_completion_words as _builtin_command_completion_words,
@@ -809,92 +810,6 @@ def _ensure_runtime_dir_writable(path: Path) -> None:
     _ensure_runtime_templates(path)
 
 
-# ════════════════════════════════════════════════════════
-# Stage-2: --eval single-shot execution mode
-# ════════════════════════════════════════════════════════
-
-async def _run_eval_mode(session: AgentSession, args, sink) -> None:
-    """Single-shot run: execute one prompt and exit.
-
-    Behavior:
-      · If `--session <id>` is given, load that session first; on failure
-        emit a structured error and exit non-zero.
-      · Run `session.run_turn(args.eval)`. In human (default) mode, the
-        agent's streaming output flows directly to stdout exactly as it
-        would in the REPL.
-      · In JSON mode the streaming output is captured (so the JSON wire
-        stays clean), and a single structured `result` event is emitted
-        from the final assistant message in `session.messages`.
-      · Always shut down MCP subprocesses on exit.
-    """
-    is_json = bool(args.json)
-
-    # 1. Optionally load a saved session before running.
-    if args.session:
-        result = session_load(session, args.session)
-        if not result.startswith("OK"):
-            if is_json:
-                sink.print_json({
-                    "type":  "error",
-                    "stage": "session_load",
-                    "query": args.session,
-                    "detail": result,
-                })
-            else:
-                sink.print(c(RED, f"  ✗ Session load failed: {result}"))
-            detach_external_mcp_tools()
-            sys.exit(2)
-
-    # 2. Execute one turn.
-    if is_json:
-        # Suppress streaming prints so the JSON wire stays valid;
-        # we re-emit the final assistant text as a structured event.
-        import contextlib
-        import io
-        buf = io.StringIO()
-        try:
-            with contextlib.redirect_stdout(buf):
-                session.run_turn(args.eval)
-        except Exception as exc:  # noqa: BLE001
-            sink.print_json({
-                "type":   "error",
-                "stage":  "run_turn",
-                "detail": str(exc),
-            })
-            detach_external_mcp_tools()
-            sys.exit(1)
-
-        last_assistant = next(
-            (m.get("content", "") for m in reversed(session.messages)
-             if m.get("role") == "assistant" and m.get("content")),
-            "",
-        )
-        sink.print_json({
-            "type":         "result",
-            "prompt":       args.eval,
-            "response":     last_assistant,
-            "session_id":   session.session_id,
-            "model":        session.model_alias,
-            "prompt_tokens":     session.total_prompt_tokens,
-            "completion_tokens": session.total_completion_tokens,
-            "tool_calls":        session.total_tool_calls,
-        })
-    else:
-        # Human mode — let run_turn print directly, exactly as in the REPL.
-        try:
-            session.run_turn(args.eval)
-        except Exception as exc:  # noqa: BLE001
-            sink.print(c(RED, f"  ✗ {exc}"))
-            if _runtime_state.debug_mode:
-                traceback.print_exc()
-            detach_external_mcp_tools()
-            sys.exit(1)
-
-    # 3. Clean shutdown of MCP subprocesses.
-    detach_external_mcp_tools()
-    sys.exit(0)
-
-
 def _run_repl_turn(session: AgentSession, raw: str, *, retry_interrupted: bool) -> None:
     """Run a REPL turn, replacing rather than duplicating an interrupted prompt."""
     with turn_interrupt_handler():
@@ -1057,8 +972,15 @@ async def _main_impl():
             ))
 
     # Prompt Toolkit owns a live composer on the main thread.  The readline
-    # fallback and --eval deliberately keep the historical synchronous path.
-    live_turns_enabled = prompt_toolkit_enabled and not args.eval and not args.json
+    # fallback and --eval deliberately keep the historical synchronous path,
+    # and so does `serve`: its wire is serial and must observe the whole
+    # turn synchronously (a live worker would publish after unsubscribe).
+    live_turns_enabled = (
+        prompt_toolkit_enabled
+        and not args.eval
+        and not args.json
+        and args.command != "serve"
+    )
     session = AgentSession(live_turns=live_turns_enabled)
     _EXTENSION_HOST.mount(session)
     if first_run_model_alias and first_run_model_alias in MODELS:
@@ -1070,6 +992,12 @@ async def _main_impl():
             session.model_alias = args.model
         else:
             print(c(YELLOW, f"  ⚠ Unknown --model '{args.model}'; using the default model."))
+
+    # Headless NDJSON protocol server (ADR 0011). Intercepted before the
+    # recovery loader so `serve` is never mistaken for a session query.
+    if args.command == "serve":
+        from pawnlogic.headless import run_serve
+        sys.exit(run_serve(session))
 
     # Explicit restart recovery loads history and leaves the recovered prompt
     # in the editor; it never calls run_turn automatically.  ``--eval`` keeps

@@ -150,3 +150,88 @@ def test_turn_interruption_closes_an_open_tool_event(tmp_path):
         AgentEventKind.TURN_CANCELLED,
     ]
     assert sink.events[-2].payload["status"] == "interrupted"
+
+
+def test_content_delta_publishes_text_delta_in_sequence(tmp_path):
+    """content_delta feeds the typed stream: TEXT_DELTA lands in subscriber
+    order with the renderer-approved text, so sinks can render or forward
+    it without touching stdout."""
+    sink = CaptureEventSink()
+    context = RuntimeContext.for_test(
+        cwd=tmp_path,
+        workspace_dir=tmp_path / "workspace",
+        sink=sink,
+    )
+    emitter = SessionEventEmitter(context, "session-1")
+
+    emitter.start_turn("model-a", "RECON")
+    emitter.content_delta("Hel")
+    emitter.content_delta("lo!")
+    emitter.finish("completed", FakeMetrics())
+
+    assert [event.event_type for event in sink.events] == [
+        AgentEventKind.TURN_STARTED,
+        AgentEventKind.TEXT_DELTA,
+        AgentEventKind.TEXT_DELTA,
+        AgentEventKind.TURN_COMPLETED,
+    ]
+    assert [event.payload["text"] for event in sink.events[1:3]] == ["Hel", "lo!"]
+
+
+def test_stream_delta_renders_exactly_once(monkeypatch, capsys):
+    """Regression (owner-reported live-terminal doubling): the session must
+    render a content delta exactly once. The runtime context auto-subscribes
+    the active sink, so a direct stdout write on top of the published
+    text.delta event rendered every chunk twice in the live terminal.
+
+    Contract: the ONLY render path is the subscribed sink's emit/write;
+    no direct stdout write may run beside the published event.
+    """
+    import re as _re
+
+    import core.session as session_mod
+    from core.commands._common import set_active_sink
+    from core.output import HumanSink
+    from core.session import AgentSession, _PlanRenderer
+    from core.state import set_output_mode
+    from core.turn_api import TurnApiResult
+
+    renders: list[str] = []
+
+    class CountingSink(HumanSink):
+        def write(self, text: str) -> None:
+            renders.append(text)  # record without touching real stdout
+
+    saved_sink = None
+    from core.commands import _common as _common_mod
+    saved_sink = _common_mod._active_sink
+    try:
+        set_output_mode(debug_mode=False)
+        set_active_sink(CountingSink())
+        session = AgentSession()
+
+        def fake_consume(stream_request, **kwargs):
+            kwargs["on_content"]("Hello")
+            kwargs["on_content"](" world\n")
+            return TurnApiResult()
+
+        monkeypatch.setattr(session_mod, "consume_model_stream", fake_consume)
+
+        result = session._consume_api_stream_attempt(
+            api_msgs=[],
+            current_tools=None,
+            current_max_tokens=64,
+            renderer=_PlanRenderer(),
+            iteration=0,
+        )
+        assert result.error is None
+
+        joined = "".join(renders)
+        plain = _re.sub(r"\x1b\[[0-9;]*m", "", joined)
+        # Exactly one render of each fragment, via the subscribed sink only.
+        assert plain.count("Hello") == 1, renders
+        assert plain.count("world") == 1, renders
+        # No direct stdout write may run beside the published event.
+        assert "Hello" not in capsys.readouterr().out
+    finally:
+        set_active_sink(saved_sink)

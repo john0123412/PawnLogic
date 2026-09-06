@@ -34,7 +34,7 @@ def fake_session():
     s = MagicMock(spec=[
         "session_id", "model_alias", "messages",
         "total_prompt_tokens", "total_completion_tokens", "total_tool_calls",
-        "run_turn",
+        "run_turn", "last_turn_api_error",
     ])
     s.session_id = "test-session-1"
     s.model_alias = "ds-fake"
@@ -42,6 +42,7 @@ def fake_session():
     s.total_prompt_tokens = 0
     s.total_completion_tokens = 0
     s.total_tool_calls = 0
+    s.last_turn_api_error = None
     return s
 
 
@@ -154,6 +155,106 @@ def test_eval_json_emits_only_valid_json_lines(
     assert final["data"]["prompt"] == "hi"
 
 
+def test_eval_json_api_failure_emits_error_event_and_exits_1(
+    patched_main, fake_session, make_args, capsys
+):
+    """When the turn fails at the API level (no exception raised), --eval --json
+    emits a structured error event and exits 1 instead of a silent success."""
+    from core.output import JsonSink
+
+    def _fake_failed_run_turn(prompt: str) -> None:
+        # Stream errors are consumed by the retry/circuit-breaker layer:
+        # run_turn returns normally, records the error, produces no content.
+        fake_session.last_turn_api_error = "circuit open: paused 30s"
+
+    fake_session.run_turn = MagicMock(side_effect=_fake_failed_run_turn)
+
+    with pytest.raises(SystemExit) as excinfo:
+        asyncio.run(patched_main._run_eval_mode(
+            fake_session, make_args(eval="hi", json=True), JsonSink(),
+        ))
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out.strip().splitlines()
+    payload = json.loads(out[-1])
+    assert payload["type"] == "json"
+    assert payload["data"]["type"] == "error"
+    assert payload["data"]["stage"] == "run_turn"
+    assert "circuit open" in payload["data"]["detail"]
+    assert payload["data"]["session_id"] == "test-session-1"
+
+
+def test_eval_human_api_failure_exits_1(patched_main, fake_session, make_args, capsys):
+    """Human-mode --eval exits 1 on an API-level turn failure."""
+    from core.output import HumanSink
+
+    def _fake_failed_run_turn(prompt: str) -> None:
+        fake_session.last_turn_api_error = "HTTP 429 rate limited"
+
+    fake_session.run_turn = MagicMock(side_effect=_fake_failed_run_turn)
+
+    with pytest.raises(SystemExit) as excinfo:
+        asyncio.run(patched_main._run_eval_mode(
+            fake_session, make_args(eval="hi"), HumanSink(),
+        ))
+
+    assert excinfo.value.code == 1
+    assert "API turn failed" in capsys.readouterr().out
+
+
+def test_eval_missing_api_key_fails_fast_exit_2(
+    patched_main, fake_session, make_args, monkeypatch, capsys
+):
+    """A known model alias with no provider key exits 2 before run_turn,
+    without spending the retry/circuit-breaker budget on a doomed call."""
+    from core.output import JsonSink
+    from config.providers import DEFAULT_MODEL
+
+    fake_session.model_alias = DEFAULT_MODEL
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    fake_session.run_turn = MagicMock()
+
+    with pytest.raises(SystemExit) as excinfo:
+        asyncio.run(patched_main._run_eval_mode(
+            fake_session, make_args(eval="hi", json=True), JsonSink(),
+        ))
+
+    assert excinfo.value.code == 2
+    fake_session.run_turn.assert_not_called()
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["type"] == "json"
+    assert payload["data"]["type"] == "error"
+    assert payload["data"]["stage"] == "api_key"
+    assert "DEEPSEEK_API_KEY" in payload["data"]["detail"]
+
+
+def test_eval_with_configured_key_runs_turn(
+    patched_main, fake_session, make_args, monkeypatch
+):
+    """A known alias with a configured key proceeds normally — the key
+    pre-flight must not over-block."""
+    from core.output import HumanSink
+    from config.providers import DEFAULT_MODEL
+
+    fake_session.model_alias = DEFAULT_MODEL
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-dummy-value")
+
+    def _fake_run_turn(prompt: str) -> None:
+        fake_session.messages.append(
+            {"role": "assistant", "content": "mock reply"}
+        )
+
+    fake_session.run_turn = MagicMock(side_effect=_fake_run_turn)
+
+    with pytest.raises(SystemExit) as excinfo:
+        asyncio.run(patched_main._run_eval_mode(
+            fake_session, make_args(eval="hi"), HumanSink(),
+        ))
+
+    assert excinfo.value.code == 0
+    fake_session.run_turn.assert_called_once_with("hi")
+
+
 # ════════════════════════════════════════════════════════
 # 3-4. --session loading
 # ════════════════════════════════════════════════════════
@@ -174,7 +275,8 @@ def test_eval_with_session_calls_session_load(
         load_calls.append(query)
         return f"OK loaded session '{query}'"
 
-    monkeypatch.setattr(patched_main, "session_load", _fake_load)
+    # _run_eval_mode now lives in pawnlogic.headless; patch its namespace.
+    monkeypatch.setattr("pawnlogic.headless.session_load", _fake_load)
 
     with pytest.raises(SystemExit) as excinfo:
         asyncio.run(patched_main._run_eval_mode(
@@ -194,7 +296,7 @@ def test_eval_with_failed_session_load_exits_2_and_skips_run_turn(
 
     fake_session.run_turn = MagicMock()
     monkeypatch.setattr(
-        patched_main, "session_load",
+        "pawnlogic.headless.session_load",
         lambda s, q: "ERROR session not found",
     )
 

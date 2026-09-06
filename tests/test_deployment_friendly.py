@@ -350,7 +350,14 @@ def test_fresh_install_generates_runtime_config_templates(tmp_path):
         timeout=30,
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    # No API key is configured in this isolated env, so the eval turn fails
+    # fast with the api_key error event (exit 2). A fresh install must still
+    # generate every runtime config template before that failure.
+    assert result.returncode == 2, result.stdout + result.stderr
+    error_payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert error_payload["type"] == "json"
+    assert error_payload["data"]["type"] == "error"
+    assert error_payload["data"]["stage"] == "api_key"
     env_template = runtime_home / "env.example"
     mcp_template = runtime_home / "mcp_configs.example.json"
     assert env_template.exists()

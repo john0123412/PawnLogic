@@ -1239,20 +1239,11 @@ class PersistentTerminal:
             FormattedTextControl(self._render_toolbar),
             height=Dimension.exact(1),
         )
-        # Persistent 1-line status indicator (Idle / Running / interrupted).
-        # The window only takes a row when a ``live_status`` callable was
-        # supplied (e.g. via the inline terminal owner), so the readline
-        # fallback (which supplies nothing) keeps the same compact layout
-        # as 0.3.6.
-        status_window = ConditionalContainer(
-            Window(
-                FormattedTextControl(self._render_status),
-                height=Dimension.exact(1),
-                wrap_lines=False,
-                always_hide_cursor=True,
-            ),
-            filter=Condition(lambda: self._live_status is not None),
-        )
+        # Transient turn status (Running / ⏱ / tool activity) renders inside
+        # the toolbar row via _render_toolbar, not as its own window: a
+        # separate status row is the app block's TOP row, so whenever a host
+        # flush pushes the block down, the stale copy lands in the permanent
+        # scrollback (owner-reported clutter).
         queue_preview = ConditionalContainer(
             Window(
                 FormattedTextControl(self._render_queue_preview),
@@ -1270,7 +1261,7 @@ class PersistentTerminal:
         # the "two output panes stacked" scramble on small terminals
         # and guarantees the selector sees the full body height.
         body = HSplit(
-            [status_window, output_window, queue_preview, self._composer.window, toolbar_window]
+            [output_window, queue_preview, self._composer.window, toolbar_window]
         )
         def root_content() -> Any:
             """Select the body that determines the inline app's height.
@@ -1419,44 +1410,40 @@ class PersistentTerminal:
         return self._render_output()
 
     def _render_toolbar(self) -> Any:
-        return self._toolbar_text()
-
-    def _render_status(self) -> Any:
-        callback = self._live_status
-        if callback is None:
-            return []
+        text = self._toolbar_text()
+        # Fold the transient turn status into the fixed toolbar row. Only
+        # non-Idle states are appended — the toolbar already says what the
+        # session is via its own fields.
         try:
-            text = callback() or ""
+            status = self._build_status() or ""
         except Exception:
-            return []
-        if not text:
-            return []
-        # The status window is always exactly one row.  Keep the line
-        # within the live terminal's visible width; on PT exception or
-        # before the layout knows its size, fall back to a 120-column
-        # budget so the test surface still sees a sane string.
+            status = ""
+        if status and "Idle" not in status:
+            text = f"{text}  ·  {status}"
         try:
             from prompt_toolkit.application.current import get_app
 
             columns = get_app().output.get_size().columns
         except Exception:
             columns = 120
-        return self._clip_line(str(text), max(20, int(columns) - 1))
+        return self._clip_line(text, max(20, int(columns) - 1))
 
     def _build_status(self) -> str:
-        """Return the persistent one-line status text (HTML, bold model).
+        """Return the transient turn status text (plain, toolbar-rendered).
 
-        The 0.3.7 inline terminal always tells the user what the worker
-        is doing so they never have to wonder whether a Turn is still
-        running.  States, in priority order:
+        The live terminal always tells the user what the worker is doing so
+        they never have to wonder whether a Turn is still running.  The
+        text renders inside the fixed toolbar row — never as its own
+        transcript line.  States, in priority order:
 
         * **Esc interrupt** — ``[model]  ⏸ interrupted by user`` for
           1.5 s after the last interrupt, then back to ``Idle``.
         * **Recovered draft** — ``[model]  Idle — edit the draft and
           press Enter`` for 1.5 s after a recovery prefill.
-        * **Running** — ``[model]  ⏱ Ns · Esc to interrupt`` while
-          ``pending_count > 0``; the 250 ms ticker keeps the seconds
-          counter honest.
+        * **Running** — ``[model]  ⏱ Ns · <tool> [n/m] · Esc to
+          interrupt`` while ``pending_count > 0``; the 250 ms ticker
+          keeps the seconds counter honest and ``_current_tool_activity``
+          shows which tool is executing.
         * **Idle** — ``[model]  Idle`` otherwise.
 
         Failure is silent: a failed Turn parks the queue but does NOT
@@ -1464,18 +1451,15 @@ class PersistentTerminal:
         see the parked rows via ``/queue`` (internal alias) or abort
         them with ``/abort``.
         """
-        import html as _html
-
         session = getattr(self, "_session", None)
         if session is None:
             return ""
         now = time.monotonic()
         model = str(getattr(session, "model_alias", "model") or "model")
-        model_bold = f"<b>{_html.escape(model)}</b>"
 
         interrupt_at = getattr(session, "_last_interrupt_at", None)
         if interrupt_at is not None and (now - float(interrupt_at)) < 1.5:
-            return f"{model_bold}  ⏸ interrupted by user"
+            return f"{model}  ⏸ interrupted by user"
 
         recovery_at = getattr(self, "_last_recovery_at", None)
         if (
@@ -1483,7 +1467,7 @@ class PersistentTerminal:
             and (now - float(recovery_at)) < 1.5
             and getattr(self, "_draft_is_recovery", False)
         ):
-            return f"{model_bold}  Idle — edit the draft and press Enter"
+            return f"{model}  Idle — edit the draft and press Enter"
 
         try:
             pending = int(
@@ -1494,9 +1478,13 @@ class PersistentTerminal:
         if pending > 0:
             started = float(getattr(session, "_turn_start_time", 0.0) or 0.0)
             elapsed = int(max(0, now - started)) if started > 0 else 0
-            return f"{model_bold}  ⏱ {elapsed}s · Esc to interrupt"
+            activity = str(getattr(session, "_current_tool_activity", "") or "")
+            line = f"{model}  ⏱ {elapsed}s"
+            if activity:
+                line += f" · {activity}"
+            return f"{line} · Esc to interrupt"
 
-        return f"{model_bold}  Idle"
+        return f"{model}  Idle"
 
     def _render_queue_preview(self) -> Any:
         callback = self._queue_preview

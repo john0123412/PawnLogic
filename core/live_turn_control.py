@@ -27,7 +27,11 @@ def build_session_scheduler(session: Any, *, live_turns: bool) -> TurnScheduler:
     return TurnScheduler(
         TurnExecutorAdapter(
             session._run_scheduled_turn,
-            cancellation_aware=enabled,
+            # Cancellation awareness is not live-mode-only: synchronous
+            # sessions (readline REPL, --eval, headless serve) must also
+            # receive the scheduler's turn token, otherwise a cross-thread
+            # INTERRUPT_ACTIVE cancels a token the turn never observes.
+            cancellation_aware=True,
         ),
         id_prefix=f"{session.session_id[:8]}-turn",
         background=enabled,

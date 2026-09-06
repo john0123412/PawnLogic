@@ -84,6 +84,20 @@ class SessionEventEmitter:
             source="provider",
         )
 
+    def content_delta(self, text: str) -> None:
+        """Publish one renderer-approved content delta (AgentEventKind.TEXT_DELTA).
+
+        Sinks decide what to do with it: HumanSink renders the text,
+        JsonSink wraps it in an event record, and the headless server maps
+        it to a `stream` wire event. Nothing here prints — publishing is
+        silent when no subscriber is attached (the default REPL flow).
+        """
+        self._publish(
+            AgentEventKind.TEXT_DELTA,
+            {"text": str(text)},
+            source="stream",
+        )
+
     def tool_started(self, tool_call: Mapping[str, Any], iteration: int) -> None:
         self._open_tools[str(tool_call["id"])] = (
             str(tool_call["name"]),

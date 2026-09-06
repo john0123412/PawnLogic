@@ -5,6 +5,57 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- `pawn serve` (ADR 0011, accepted): headless NDJSON-over-stdio protocol
+  server driving one session. v1 request surface is `prompt`, `command`,
+  `interrupt`, and `shutdown`; events (`status`, `stream`, `tool`,
+  `result`, `error`, `command_result`) carry a `{"v": 1}` version
+  envelope and extend the `--eval --json` wire. `interrupt` is
+  dispatched from a daemon reader thread so it reaches the scheduler
+  while a turn blocks the main loop, cancelling it via the same typed
+  control seam as the live REPL's Esc (the scheduler is
+  cancellation-aware for synchronous sessions now, not live-mode only);
+  a declined interrupt reports `interrupt_ignored`, an interrupted turn
+  reports `turn_interrupted` instead of a result. Unknown request types
+  are ignored; malformed lines produce a `protocol` error without
+  stopping the server. While a turn runs, the session's typed Agent
+  Events are forwarded live — content deltas as `stream`, tool
+  lifecycle as `tool`, turn lifecycle as `status` — published via
+  `SessionEventEmitter.content_delta`, which is silent for any session
+  without subscribers (the REPL is unaffected). Guarded by contract
+  tests in `tests/test_headless_contract.py`.
+
+### Fixed
+- Live terminal no longer clutters the permanent scrollback with transient
+  turn state. The per-tool-call `Working with <name>... [n/m]` print used to
+  append one scrollback line per tool call, and the status indicator was its
+  own row at the TOP of the inline app block, so every host flush left a
+  stale copy in the scrollback (with literal `<b>` markup). Tool progress now
+  routes into `session._current_tool_activity` and renders inside the fixed
+  toolbar row (`⏱ Ns · <tool> [n/m] · Esc to interrupt`, plain text); the
+  separate status window is removed. The serial readline path keeps the
+  historical print. Verified at the PTY byte-stream level.
+- `pawn --eval` now exits non-zero when the turn fails at the API level
+  (retries exhausted, circuit breaker open). Previously the process exited 0
+  with an empty response, so non-interactive callers could not detect the
+  failure. JSON mode emits a structured `error` event with `stage: run_turn`,
+  the failure detail, and the session id for later resume.
+- `pawn --eval` fails fast (exit 2, `stage: api_key`) when the selected
+  model's provider key is missing, instead of burning the retry/circuit
+  breaker budget on a doomed call and exiting 0 silently.
+
+### Changed
+- Startup no longer imports heavy optional stacks. The scrapling/patchright
+  browser stack is probed on first use (surfaced by `/tools` status), and the
+  `mcp` SDK is probed only when an MCP config actually starts servers or a
+  session tears them down. Warm `--help` startup drops from ~0.70 s to
+  ~0.24 s; tool surfaces and MCP behavior are unchanged. Guarded by
+  `tests/test_startup_import_budget.py`.
+
+---
+
 ## [0.3.7] - 2026-09-03
 
 ### Added

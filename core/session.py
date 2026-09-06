@@ -561,12 +561,19 @@ _refresh_legacy_tool_globals()
 # Called once after init_db and before AgentSession creation.
 # ════════════════════════════════════════════════════════
 
+# Set by attach_external_mcp_tools when at least one external MCP server
+# actually started. detach_external_mcp_tools runs on every CLI exit path,
+# so it must skip the mcp_client_manager import entirely when no server
+# was ever attached (importing it probes the mcp package, ~240 ms).
+_EXTERNAL_MCP_ATTACHED = False
+
 def attach_external_mcp_tools() -> None:
     """
     Merge external MCP tools discovered by mcp_client_manager into TOOL_MAP,
     TOOLS_SCHEMA, and AGENT_PHASES. If no config exists or all servers fail to
     start, this function is a no-op.
     """
+    global _EXTERNAL_MCP_ATTACHED
     try:
         from core.mcp_client_manager import init_external_mcp
     except ImportError:
@@ -576,6 +583,8 @@ def attach_external_mcp_tools() -> None:
     mgr = init_external_mcp()
     if mgr is None:
         return
+
+    _EXTERNAL_MCP_ATTACHED = True
 
     # 1. Adapt complete MCP definitions at the same registry seam as built-ins.
     handlers = mgr.build_pawnlogic_handlers()
@@ -612,13 +621,13 @@ def attach_external_mcp_tools() -> None:
 
 def detach_external_mcp_tools() -> None:
     """Shut down background threads and external MCP subprocesses idempotently."""
-    try:
-        from core.mcp_client_manager import shutdown_external_mcp
-        shutdown_external_mcp()
-    except Exception:  # noqa: BLE001
-        pass  # never raise from shutdown/finally paths
-    finally:
-        _refresh_legacy_tool_globals()
+    if _EXTERNAL_MCP_ATTACHED:
+        try:
+            from core.mcp_client_manager import shutdown_external_mcp
+            shutdown_external_mcp()
+        except Exception:  # noqa: BLE001
+            pass  # never raise from shutdown/finally paths
+    _refresh_legacy_tool_globals()
 
 
 # ════════════════════════════════════════════════════════
@@ -860,6 +869,9 @@ def _load_state_md(cwd: str) -> str:
 # ════════════════════════════════════════════════════════
 
 class AgentSession:
+    # Class-level defaults; assigned per instance in __init__ / methods.
+    last_turn_api_error: str | None = None;  _current_tool_activity: str | None = None
+
     def __init__(self, *, live_turns: bool = False):
         self.session_id  = _gen_id()
         self.model_alias = DEFAULT_MODEL
@@ -911,6 +923,7 @@ class AgentSession:
         # autosaves at the session seam while the scheduler owns all queue and
         # lifecycle state.
         self._live_turns_enabled = bool(live_turns)
+
         self._turn_scheduler = build_session_scheduler(
             self,
             live_turns=self._live_turns_enabled,
@@ -1498,6 +1511,7 @@ class AgentSession:
 
         def on_api_error(err_detail: str) -> None:
             spinner.stop()
+            self.last_turn_api_error = err_detail
             if _user_mode():
                 print(c(RED, f"\n  {user_friendly_error(err_detail)}"))
             else:
@@ -1528,8 +1542,10 @@ class AgentSession:
                 reasoning_printed = False
             printable = renderer.feed(chunk)
             if printable:
-                sys.stdout.write(printable)
-                sys.stdout.flush()
+                # Single rendering path: the runtime context auto-subscribes
+                # the active sink, whose emit() renders text.delta. Writing
+                # here as well would render every chunk twice.
+                self._event_emitter().content_delta(printable)
 
         try:
             cancellation = current_turn_cancellation()
@@ -1904,9 +1920,10 @@ class AgentSession:
                 print(c(GREEN, f"  🚀 [P6] Running automated validation script for {_pack_hint}...") + f" {iter_tag}")
 
         if not _is_skill_call:
+            self._current_tool_activity = f"{name} [{iteration+1}/{max_iter}]"
             if _debug_mode():
                 print(c(YELLOW, f"  🔧 {name}") + c(GRAY, f"({preview[:80]})") + f" {iter_tag}")
-            else:
+            elif not getattr(self, "_live_turns_enabled", False):
                 print(c(YELLOW, f"  Working with {name}...") + f" {iter_tag}")
 
         # switch_phase intercept; mutate instance state directly.
@@ -2045,6 +2062,7 @@ class AgentSession:
             ),
         )
         self._event_emitter().tool_result(tc, outcome, iteration)
+        self._current_tool_activity = None
         return current_tools, outcome
 
     def _inject_plan_missing_signal(self) -> None:
@@ -2263,7 +2281,7 @@ class AgentSession:
 
     def run_turn(self, user_input: str):
         """Submit one prompt, preserving synchronous and live session modes."""
-        return run_session_turn(self, user_input)
+        self.last_turn_api_error = None;  return run_session_turn(self, user_input)
 
     def retry_interrupted_turn(self, user_input: str) -> bool:
         """Replace and resume a recoverable prompt without duplicating it."""

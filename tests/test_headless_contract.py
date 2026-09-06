@@ -1,0 +1,634 @@
+"""Contract tests for the headless core protocol (ADR 0011).
+
+These pin the v1 wire: NDJSON over stdio, a `{"v": 1, "type": ...}`
+envelope on every message, the minimal request surface (prompt /
+command / shutdown), and the event vocabulary (status / result / error /
+command_result). Schema-level and mock-driven — no real API calls.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import sys
+import threading
+import types
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from pawnlogic import headless
+from pawnlogic.headless import HeadlessServer, make_event
+
+from config.providers import DEFAULT_MODEL
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+# ════════════════════════════════════════════════════════
+# Helpers
+# ════════════════════════════════════════════════════════
+
+class FakeSession:
+    """Stand-in for AgentSession with the attributes the server reads."""
+
+    def __init__(self, *, model_alias: str = "test-fake-model"):
+        self.session_id = "sess-headless-1"
+        self.model_alias = model_alias
+        self.messages: list[dict] = []
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
+        self.total_tool_calls = 0
+        self.last_turn_api_error: str | None = None
+        self.shutdown_calls = 0
+        self.run_turn_calls: list[str] = []
+        self.control_actions: list[str] = []
+        self.scheduler_accepts_control = True
+        # Set by the fake scheduler control when an interrupt is accepted;
+        # a blocking fake run_turn waits on it.
+        self.cancel_event = threading.Event()
+
+        def _control(action: Any) -> Any:
+            self.control_actions.append(getattr(action.kind, "value", str(action)))
+            accepted = self.scheduler_accepts_control
+            if accepted and getattr(action.kind, "value", "") == "interrupt_active":
+                self.cancel_event.set()
+            return types.SimpleNamespace(accepted=accepted, affected_ids=[])
+
+        self._turn_scheduler = types.SimpleNamespace(control=_control)
+
+    def run_turn(self, prompt: str) -> None:
+        self.run_turn_calls.append(prompt)
+
+    def shutdown(self) -> bool:
+        self.shutdown_calls += 1
+        return True
+
+
+def make_server(lines: list[str], session: FakeSession):
+    """Build a server over scripted stdin, collecting emitted events."""
+    stream = io.StringIO("".join(line + "\n" for line in lines))
+    events: list[dict] = []
+
+    def read_line() -> str | None:
+        raw = stream.readline()
+        return raw if raw else None
+
+    server = HeadlessServer(session, read_line=read_line, emit=events.append)
+    return server, events
+
+
+def line_request(payload: dict | list | str) -> str:
+    if isinstance(payload, str):
+        return payload
+    return json.dumps(payload)
+
+
+# ════════════════════════════════════════════════════════
+# Envelope contract
+# ════════════════════════════════════════════════════════
+
+def test_make_event_always_carries_version_envelope():
+    event = make_event("result", prompt="hi")
+    assert event["v"] == headless.PROTOCOL_VERSION == 1
+    assert event["type"] == "result"
+    assert event["prompt"] == "hi"
+
+
+def test_every_emitted_message_carries_envelope():
+    session = FakeSession()
+
+    def _fake_run_turn(prompt: str) -> None:
+        session.messages.append({"role": "assistant", "content": "ok"})
+
+    session.run_turn = _fake_run_turn
+    server, events = make_server(
+        [
+            line_request({"v": 1, "type": "prompt", "text": "hello"}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+    assert code == 0
+    assert events
+    for event in events:
+        assert event["v"] == 1, event
+        assert isinstance(event.get("type"), str) and event["type"], event
+
+
+# ════════════════════════════════════════════════════════
+# Request surface
+# ════════════════════════════════════════════════════════
+
+def test_ready_status_is_first_event():
+    session = FakeSession()
+    server, events = make_server([line_request({"type": "shutdown"})], session)
+    server.serve()
+    assert events[0]["type"] == "status"
+    assert events[0]["stage"] == "ready"
+    assert events[0]["model"] == "test-fake-model"
+    assert events[0]["session_id"] == "sess-headless-1"
+
+
+def test_prompt_runs_turn_and_emits_result():
+    session = FakeSession()
+
+    def _fake_run_turn(prompt: str) -> None:
+        session.run_turn_calls.append(prompt)
+        session.messages.append({"role": "assistant", "content": "mock reply"})
+        session.total_prompt_tokens = 10
+        session.total_completion_tokens = 3
+
+    session.run_turn = _fake_run_turn
+    server, events = make_server(
+        [
+            line_request({"v": 1, "type": "prompt", "text": "hello"}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+    assert code == 0
+    assert session.run_turn_calls == ["hello"]
+    result = next(e for e in events if e["type"] == "result")
+    assert result["prompt"] == "hello"
+    assert result["response"] == "mock reply"
+    assert result["session_id"] == "sess-headless-1"
+    assert result["model"] == "test-fake-model"
+    assert result["prompt_tokens"] == 10
+    assert result["completion_tokens"] == 3
+    assert result["tool_calls"] == 0
+
+
+def test_prompt_api_failure_emits_error_and_keeps_serving():
+    session = FakeSession()
+
+    def _fake_failed_run_turn(prompt: str) -> None:
+        session.last_turn_api_error = "circuit open"
+
+    session.run_turn = _fake_failed_run_turn
+    server, events = make_server(
+        [
+            line_request({"type": "prompt", "text": "hi"}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+    assert code == 0  # serve keeps accepting requests after a failed turn
+    error = next(e for e in events if e["type"] == "error")
+    assert error["stage"] == "run_turn"
+    assert "circuit open" in error["detail"]
+
+
+def test_prompt_missing_api_key_fails_fast_without_turn():
+    session = FakeSession(model_alias=DEFAULT_MODEL)
+    server, events = make_server(
+        [
+            line_request({"type": "prompt", "text": "hi"}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+    assert code == 0
+    assert session.run_turn_calls == []
+    error = next(e for e in events if e["type"] == "error")
+    assert error["stage"] == "api_key"
+    assert "DEEPSEEK_API_KEY" in error["detail"]
+
+
+def test_empty_prompt_text_rejected():
+    session = FakeSession()
+    server, events = make_server(
+        [
+            line_request({"type": "prompt"}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    server.serve()
+    assert session.run_turn_calls == []
+    error = next(e for e in events if e["type"] == "error")
+    assert error["stage"] == "prompt"
+
+
+def test_command_dispatches_and_emits_command_result():
+    session = FakeSession()
+    server, events = make_server(
+        [
+            line_request({"type": "command", "line": "/keys"}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+    assert code == 0
+    result = next(e for e in events if e["type"] == "command_result")
+    assert result["verb"] == "/keys"
+    assert isinstance(result["output"], list) and result["output"]
+
+
+def test_shutdown_stops_session_and_emits_status():
+    session = FakeSession()
+    server, events = make_server([line_request({"type": "shutdown"})], session)
+    code = server.serve()
+    assert code == 0
+    assert session.shutdown_calls == 1
+    assert events[-1]["type"] == "status"
+    assert events[-1]["stage"] == "shutdown"
+
+
+def test_eof_shuts_down_gracefully():
+    session = FakeSession()
+    server, events = make_server([], session)
+    code = server.serve()
+    assert code == 0
+    assert session.shutdown_calls == 1
+    assert events[-1]["stage"] == "shutdown"
+
+
+# ════════════════════════════════════════════════════════
+# Protocol robustness
+# ════════════════════════════════════════════════════════
+
+def test_malformed_json_line_emits_protocol_error_and_continues():
+    session = FakeSession()
+    server, events = make_server(
+        [
+            "{not json",
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+    assert code == 0
+    error = next(e for e in events if e["type"] == "error")
+    assert error["stage"] == "protocol"
+    assert session.shutdown_calls == 1
+
+
+def test_non_object_request_rejected():
+    session = FakeSession()
+    server, events = make_server(
+        [
+            line_request([1, 2, 3]),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+    assert code == 0
+    error = next(e for e in events if e["type"] == "error")
+    assert error["stage"] == "protocol"
+
+
+def test_unknown_request_type_is_ignored():
+    session = FakeSession()
+    server, events = make_server(
+        [
+            line_request({"type": "hover_widget", "x": 3}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+    assert code == 0
+    assert not any(e["type"] == "error" for e in events)
+    assert session.shutdown_calls == 1
+
+
+def test_blank_lines_are_skipped():
+    session = FakeSession()
+    server, events = make_server(
+        [
+            "",
+            "   ",
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+    assert code == 0
+    assert not any(e["type"] == "error" for e in events)
+
+
+# ════════════════════════════════════════════════════════
+# Shared --eval pre-flight helper
+# ════════════════════════════════════════════════════════
+
+def test_prompt_streams_live_events_before_result(tmp_path):
+    """While a turn runs, the session's typed events are forwarded on the
+    wire in order: status(turn_started), stream deltas, tool events —
+    all before the final result event."""
+    from core.runtime_context import RuntimeContext
+    from core.session_events import SessionEventEmitter
+    from core.tool_executor import ToolExecutionOutcome
+
+    session = FakeSession()
+    context = RuntimeContext.for_test(
+        cwd=tmp_path,
+        workspace_dir=tmp_path / "workspace",
+    )
+    session.runtime_context = context
+    emitter = SessionEventEmitter(context, session.session_id)
+
+    def _fake_run_turn(prompt: str) -> None:
+        emitter.start_turn(session.model_alias, "RECON")
+        emitter.content_delta("Hel")
+        emitter.content_delta("lo!")
+        tool_call = {"id": "call-1", "name": "read_file"}
+        emitter.tool_started(tool_call, 0)
+        emitter.tool_result(
+            tool_call,
+            ToolExecutionOutcome(status="success", content="x"),
+            0,
+        )
+
+    session.run_turn = _fake_run_turn
+    server, events = make_server(
+        [
+            line_request({"type": "prompt", "text": "hi"}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+    assert code == 0
+    assert [e["type"] for e in events] == [
+        "status",   # ready
+        "status",   # turn_started
+        "stream",
+        "stream",
+        "tool",
+        "tool",
+        "result",
+        "status",   # shutdown
+    ]
+    assert [e["text"] for e in events if e["type"] == "stream"] == ["Hel", "lo!"]
+    tool_events = [e for e in events if e["type"] == "tool"]
+    assert tool_events[0]["stage"] == "started"
+    assert tool_events[0]["tool_name"] == "read_file"
+    assert tool_events[1]["stage"] == "result"
+    assert tool_events[1]["status"] == "success"
+    turn_started = events[1]
+    assert turn_started["stage"] == "turn_started"
+    assert turn_started["model"] == "test-fake-model"
+
+
+# ════════════════════════════════════════════════════════
+# interrupt request (dispatched from the reader thread)
+# ════════════════════════════════════════════════════════
+
+def test_interrupt_cancels_blocking_turn():
+    """An interrupt arriving while a prompt turn blocks must reach the
+    scheduler immediately (reader thread), cancel the turn, and surface
+    status turn_interrupted instead of a result event."""
+    from core.session import TurnInterrupted
+
+    session = FakeSession()
+
+    def _blocking_run_turn(prompt: str) -> None:
+        session.run_turn_calls.append(prompt)
+        session._turn_started.set()
+        if not session.cancel_event.wait(timeout=5):
+            raise AssertionError("interrupt never reached the blocking turn")
+        raise TurnInterrupted()
+
+    session._turn_started = threading.Event()
+    session.run_turn = _blocking_run_turn
+
+    server, events = make_server(
+        [
+            line_request({"v": 1, "type": "prompt", "text": "long turn"}),
+            line_request({"type": "interrupt"}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+
+    assert code == 0
+    assert "interrupt_active" in session.control_actions
+    types_in_order = [e["type"] for e in events]
+    assert "result" not in types_in_order
+    by_type = {e["type"] + ":" + str(e.get("stage", "")) for e in events}
+    assert "status:interrupt_requested" in by_type
+    assert "status:turn_interrupted" in by_type
+    assert events[0]["stage"] == "ready"
+    assert events[-1]["stage"] == "shutdown"
+
+
+def test_interrupt_without_active_turn_is_ignored():
+    """When the scheduler declines (no active turn), the wire reports
+    interrupt_ignored and the server keeps serving."""
+    session = FakeSession()
+    session.scheduler_accepts_control = False
+
+    server, events = make_server(
+        [
+            line_request({"type": "interrupt"}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+
+    assert code == 0
+    ignored = [e for e in events if e.get("stage") == "interrupt_ignored"]
+    assert ignored, f"expected interrupt_ignored event, got: {events!r}"
+    assert "no active turn" in ignored[0]["detail"]
+    assert not any(e.get("stage") == "interrupt_requested" for e in events)
+    assert session.shutdown_calls == 1
+
+
+def test_run_serve_inside_running_loop_serves_normally(capsys, monkeypatch):
+    """Regression (real-API T4b): run_serve is called from inside the CLI's
+    async main, and `_handle_command` needs its own event loop for
+    dispatch. The serve loop must move to a worker thread and still drive
+    the full wire."""
+    import asyncio
+
+    session = FakeSession()
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(line_request({"type": "shutdown"}) + "\n")
+    )
+
+    async def fake_main() -> int:
+        return headless.run_serve(session)
+
+    code = asyncio.run(fake_main())
+
+    assert code == 0
+    assert session.shutdown_calls == 1
+    wire_lines = [json.loads(l) for l in capsys.readouterr().out.splitlines() if l.strip()]
+    assert wire_lines[0]["stage"] == "ready"
+    assert wire_lines[-1]["stage"] == "shutdown"
+
+
+def test_run_serve_command_inside_running_loop_dispatches(capsys, monkeypatch):
+    """The original T4b defect: /keys inside a running loop failed with
+    "asyncio.run() cannot be called from a running event loop". The worker
+    thread gives dispatch a fresh loop, so command_result is emitted."""
+    import asyncio
+
+    session = FakeSession()
+    stdin_lines = (
+        line_request({"type": "command", "line": "/keys"})
+        + "\n"
+        + line_request({"type": "shutdown"})
+        + "\n"
+    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin_lines))
+
+    async def fake_main() -> int:
+        return headless.run_serve(session)
+
+    code = asyncio.run(fake_main())
+
+    assert code == 0
+    wire_lines = [json.loads(l) for l in capsys.readouterr().out.splitlines() if l.strip()]
+    command_results = [e for e in wire_lines if e["type"] == "command_result"]
+    assert command_results and command_results[0]["verb"] == "/keys"
+    assert not any(
+        e["type"] == "error" and e.get("stage") == "command" for e in wire_lines
+    )
+
+
+def test_interrupt_retry_covers_turn_registration_race():
+    """Real-API T5 race: an interrupt dispatched between the prompt request
+    being read and the scheduler registering the turn used to be declined
+    as "no active turn" and lost, leaving the turn to run to completion.
+    The handler must retry briefly so the registration window is covered."""
+    from core.session import TurnInterrupted
+
+    session = FakeSession()
+    session._declines_remaining = 2  # first two control calls decline
+    session._turn_started = threading.Event()
+
+    real_control = session._turn_scheduler.control
+
+    def _racy_control(action: Any) -> Any:
+        receipt = real_control(action)
+        if (
+            getattr(action.kind, "value", "") == "interrupt_active"
+            and session._declines_remaining > 0
+        ):
+            session._declines_remaining -= 1
+            return types.SimpleNamespace(accepted=False, affected_ids=[])
+        return receipt
+
+    session._turn_scheduler.control = _racy_control
+
+    def _blocking_run_turn(prompt: str) -> None:
+        session.run_turn_calls.append(prompt)
+        session._turn_started.set()
+        if not session.cancel_event.wait(timeout=5):
+            raise AssertionError("interrupt never reached the blocking turn")
+        raise TurnInterrupted()
+
+    session.run_turn = _blocking_run_turn
+
+    server, events = make_server(
+        [
+            line_request({"v": 1, "type": "prompt", "text": "long turn"}),
+            line_request({"type": "interrupt"}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+
+    assert code == 0
+    by_type = {e["type"] + ":" + str(e.get("stage", "")) for e in events}
+    assert "status:interrupt_requested" in by_type
+    assert "status:turn_interrupted" in by_type
+    assert "result" not in [e["type"] for e in events]
+
+
+def test_missing_key_detail_helper_matches_pre_flight(monkeypatch):
+    session = FakeSession(model_alias=DEFAULT_MODEL)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    detail = headless.missing_key_detail(session)
+    assert detail is not None
+    assert "DEEPSEEK_API_KEY" in detail
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-dummy-value")
+    assert headless.missing_key_detail(session) is None
+
+
+def test_missing_key_detail_skips_unknown_aliases():
+    session = FakeSession(model_alias="totally-unknown-alias")
+    assert headless.missing_key_detail(session) is None
+
+
+# ════════════════════════════════════════════════════════
+# CLI surface: parser validation and real-process wire
+# ════════════════════════════════════════════════════════
+
+def test_parser_accepts_serve_and_rejects_session_arg(monkeypatch):
+    import argparse
+    import sys
+
+    from pawnlogic.restart_recovery import parse_cli_arguments
+
+    monkeypatch.setattr(sys, "argv", ["pawn", "serve"])
+    parser = argparse.ArgumentParser(prog="pawn")
+    parser.add_argument("--eval", "-e", default=None)
+    parser.add_argument("--session", "-s", default=None)
+    parser.add_argument("--json", action="store_true", default=False)
+    args = parse_cli_arguments(parser)
+    assert args.command == "serve"
+
+    monkeypatch.setattr(sys, "argv", ["pawn", "serve", "sid"])
+    parser = argparse.ArgumentParser(prog="pawn")
+    parser.add_argument("--eval", "-e", default=None)
+    parser.add_argument("--session", "-s", default=None)
+    parser.add_argument("--json", action="store_true", default=False)
+    with pytest.raises(SystemExit) as excinfo:
+        parse_cli_arguments(parser)
+    assert excinfo.value.code == 2
+
+
+def test_serve_end_to_end_over_real_stdin(tmp_path):
+    """`pawn serve` speaks the real wire: ready status, prompt pre-flight
+    error (no key in this env), graceful shutdown, exit 0."""
+    import os
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if not k.endswith("API_KEY")}
+    env.update({
+        "PAWNLOGIC_HOME": str(tmp_path / "home"),
+        "PAWNLOGIC_TEST_MODE": "true",
+        "MCP_ENABLED": "false",
+        "PROMPT_TOOLKIT_ENABLED": "0",
+        "TERM": "dumb",
+        "NO_COLOR": "1",
+    })
+    stdin_data = (
+        line_request({"v": 1, "type": "prompt", "text": "hi"})
+        + "\n"
+        + line_request({"type": "shutdown"})
+        + "\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "pawnlogic", "serve"],
+        input=stdin_data,
+        text=True,
+        capture_output=True,
+        env=env,
+        cwd=str(ROOT),
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+    assert events, "expected at least one event on the wire"
+    for event in events:
+        assert event["v"] == 1 and event["type"], event
+    assert events[0]["type"] == "status" and events[0]["stage"] == "ready"
+    api_key_errors = [e for e in events if e["type"] == "error" and e["stage"] == "api_key"]
+    assert api_key_errors, f"expected api_key pre-flight error, got: {events!r}"
+    assert events[-1]["type"] == "status" and events[-1]["stage"] == "shutdown"

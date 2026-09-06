@@ -213,6 +213,9 @@ def test_eval_user_mode_exception_hides_traceback(monkeypatch, capsys):
         run_turn=lambda _prompt: (_ for _ in ()).throw(RuntimeError("provider exploded")),
     )
     args = SimpleNamespace(eval="hi", json=False, session=None)
+    # Provide a dummy key so the --eval api_key pre-flight does not fire;
+    # these tests exercise the run_turn exception rendering path.
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-dummy-value")
     monkeypatch.setattr(cli_mod, "detach_external_mcp_tools", lambda: None)
 
     set_output_mode(debug_mode=False)
@@ -242,6 +245,9 @@ def test_eval_debug_mode_exception_keeps_traceback(monkeypatch, capsys):
         run_turn=lambda _prompt: (_ for _ in ()).throw(RuntimeError("debug detail")),
     )
     args = SimpleNamespace(eval="hi", json=False, session=None)
+    # Provide a dummy key so the --eval api_key pre-flight does not fire;
+    # these tests exercise the run_turn exception rendering path.
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-dummy-value")
     monkeypatch.setattr(cli_mod, "detach_external_mcp_tools", lambda: None)
 
     set_output_mode(debug_mode=True)
@@ -365,3 +371,108 @@ def test_tool_call_display_hides_argument_preview_until_debug(capsys):
     assert "hidden-command" not in user_output
     assert "run_shell" in debug_output
     assert "hidden-command" in debug_output
+
+
+def test_live_session_routes_tool_progress_to_status_area(capsys):
+    """Regression (owner-reported): in the live terminal the per-tool-call
+    ``Working with <name>... [n/m]`` print appended one permanent scrollback
+    line per tool call. The live session must route that progress into
+    ``_current_tool_activity`` (rendered by the fixed status area) instead,
+    and clear it when the tool result lands. The serial readline path keeps
+    the historical print."""
+    import json as _json
+    from types import SimpleNamespace
+
+    from core.session import AgentSession
+    from core.state import set_output_mode
+
+    set_output_mode(debug_mode=False)
+    session = AgentSession()
+    session._live_turns_enabled = True
+
+    class FakeProcessor:
+        def reset_directory_counter(self):
+            pass
+
+    class FakeExecutor:
+        def execute_phase_switch(self, *, fn_args, current_phase):
+            # Snapshot the activity while the tool is executing.
+            calls["during"] = session._current_tool_activity
+            return SimpleNamespace(
+                content="switched",
+                switched=True,
+                active_tools=None,
+                old_phase=current_phase,
+                target_phase="EXPLOIT",
+                reason="test",
+            )
+
+    calls: dict = {}
+    tc = {
+        "id": "call-1",
+        "name": "switch_phase",
+        "args": _json.dumps({"target_phase": "EXPLOIT"}),
+    }
+    _current_tools, outcome = session._execute_one_tool_call(
+        0,
+        tc,
+        iteration=0,
+        max_iter=30,
+        tool_executor=FakeExecutor(),
+        result_processor=FakeProcessor(),
+        current_tools=None,
+    )
+
+    # Live mode: no transcript print; activity set during execution.
+    assert "Working with" not in capsys.readouterr().out
+    assert calls["during"] == "switch_phase [1/30]"
+    assert outcome.status == "success"
+    # Cleared once the tool result lands.
+    assert session._current_tool_activity is None
+
+
+def test_serial_session_still_prints_tool_progress(capsys):
+    """The serial readline path keeps the historical print: it has no fixed
+    status area to surface tool activity."""
+    import json as _json
+    from types import SimpleNamespace
+
+    from core.session import AgentSession
+    from core.state import set_output_mode
+
+    set_output_mode(debug_mode=False)
+    session = AgentSession()
+    session._live_turns_enabled = False
+
+    class FakeProcessor:
+        def reset_directory_counter(self):
+            pass
+
+    class FakeExecutor:
+        def execute_phase_switch(self, *, fn_args, current_phase):
+            return SimpleNamespace(
+                content="switched",
+                switched=True,
+                active_tools=None,
+                old_phase=current_phase,
+                target_phase="EXPLOIT",
+                reason="test",
+            )
+
+    tc = {
+        "id": "call-1",
+        "name": "switch_phase",
+        "args": _json.dumps({"target_phase": "EXPLOIT"}),
+    }
+    session._execute_one_tool_call(
+        0,
+        tc,
+        iteration=0,
+        max_iter=30,
+        tool_executor=FakeExecutor(),
+        result_processor=FakeProcessor(),
+        current_tools=None,
+    )
+
+    assert "Working with switch_phase" in capsys.readouterr().out
+    assert session._current_tool_activity is None

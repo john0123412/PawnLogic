@@ -30,22 +30,42 @@ import time
 import traceback
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from core.path_policy import resolve_within, safe_filename_fragment
 
-try:
-    from mcp import ClientSession, StdioServerParameters
-    from mcp.client.stdio import stdio_client
-    from mcp.types import ListRootsResult, Root
-    _MCP_AVAILABLE = True
-except ImportError:
-    _MCP_AVAILABLE = False
-    ClientSession = None
-    StdioServerParameters = None
-    stdio_client = None
-    ListRootsResult = None
-    Root = None
+# The `mcp` package is probed lazily. Module import must stay cheap because
+# session teardown imports this module on every CLI exit path, and importing
+# `mcp` pulls in starlette/anyio/pydantic (~240 ms). The lazily-bound names
+# are Any-typed: they only resolve after a successful _ensure_mcp_imported().
+_MCP_AVAILABLE: Optional[bool] = None
+ClientSession: Any = None
+StdioServerParameters: Any = None
+stdio_client: Any = None
+ListRootsResult: Any = None
+Root: Any = None
+
+
+def _ensure_mcp_imported() -> bool:
+    """Probe the `mcp` package on first use; cache the result."""
+    global _MCP_AVAILABLE, ClientSession, StdioServerParameters
+    global stdio_client, ListRootsResult, Root
+    if _MCP_AVAILABLE is None:
+        try:
+            from mcp import ClientSession as _ClientSession
+            from mcp import StdioServerParameters as _StdioServerParameters
+            from mcp.client.stdio import stdio_client as _stdio_client
+            from mcp.types import ListRootsResult as _ListRootsResult
+            from mcp.types import Root as _Root
+            ClientSession = _ClientSession
+            StdioServerParameters = _StdioServerParameters
+            stdio_client = _stdio_client
+            ListRootsResult = _ListRootsResult
+            Root = _Root
+            _MCP_AVAILABLE = True
+        except ImportError:
+            _MCP_AVAILABLE = False
+    return _MCP_AVAILABLE
 
 from core.logger import logger
 from core.network_policy import NetworkOperation, NetworkPolicy
@@ -179,7 +199,7 @@ def _resolve_roots() -> list[Path]:
 
 
 async def _roots_cb(_context: object) -> "ListRootsResult":
-    if ListRootsResult is None or Root is None:
+    if not _ensure_mcp_imported():
         raise RuntimeError("MCP root types are unavailable")
     return ListRootsResult(
         roots=[
@@ -647,7 +667,7 @@ def init_external_mcp(config_path: Optional[Path] = None) -> Optional["MCPClient
     """
     if _is_mcp_disabled():
         return None
-    if not _MCP_AVAILABLE:
+    if not _ensure_mcp_imported():
         return None
     global _GLOBAL_MANAGER
     if _GLOBAL_MANAGER is not None:
