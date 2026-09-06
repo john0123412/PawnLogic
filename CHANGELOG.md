@@ -22,6 +22,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `tests/test_headless_contract.py`.
 
 ### Fixed
+- Live terminal no longer clutters the permanent scrollback with transient
+  turn state. The per-tool-call `Working with <name>... [n/m]` print used to
+  append one scrollback line per tool call, and the status indicator was its
+  own row at the TOP of the inline app block, so every host flush left a
+  stale copy in the scrollback (with literal `<b>` markup). Tool progress now
+  routes into `session._current_tool_activity` and renders inside the fixed
+  toolbar row (`⏱ Ns · <tool> [n/m] · Esc to interrupt`, plain text); the
+  separate status window is removed. The serial readline path keeps the
+  historical print. Verified at the PTY byte-stream level.
 - `pawn --eval` now exits non-zero when the turn fails at the API level
   (retries exhausted, circuit breaker open). Previously the process exited 0
   with an empty response, so non-interactive callers could not detect the

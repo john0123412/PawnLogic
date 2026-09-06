@@ -923,6 +923,11 @@ class AgentSession:
         # autosaves at the session seam while the scheduler owns all queue and
         # lifecycle state.
         self._live_turns_enabled = bool(live_turns)
+        # Current tool activity for the live terminal's fixed status area.
+        # Set while a tool executes, cleared with its result; the live
+        # terminal reads it instead of the session printing progress lines
+        # into the permanent scrollback transcript.
+        self._current_tool_activity: str | None = None
         self._turn_scheduler = build_session_scheduler(
             self,
             live_turns=self._live_turns_enabled,
@@ -1921,6 +1926,11 @@ class AgentSession:
         if not _is_skill_call:
             if _debug_mode():
                 print(c(YELLOW, f"  🔧 {name}") + c(GRAY, f"({preview[:80]})") + f" {iter_tag}")
+            elif getattr(self, "_live_turns_enabled", False):
+                # Live terminal: transient tool progress belongs in the fixed
+                # status area. Printing here would append one permanent
+                # scrollback line per tool call (owner-reported clutter).
+                self._current_tool_activity = f"{name} [{iteration+1}/{max_iter}]"
             else:
                 print(c(YELLOW, f"  Working with {name}...") + f" {iter_tag}")
 
@@ -2060,6 +2070,7 @@ class AgentSession:
             ),
         )
         self._event_emitter().tool_result(tc, outcome, iteration)
+        self._current_tool_activity = None
         return current_tools, outcome
 
     def _inject_plan_missing_signal(self) -> None:

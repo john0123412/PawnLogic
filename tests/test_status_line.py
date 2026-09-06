@@ -139,3 +139,68 @@ def test_status_line_does_not_show_queue_counters(monkeypatch):
     assert "follow-up:" not in plain
     assert "parked" not in plain
     assert "+1" not in plain and "+2" not in plain and "+3" not in plain
+
+
+def test_toolbar_folds_running_status_and_tool_activity(monkeypatch):
+    """Regression (owner-reported): the status line used to be its own row
+    at the TOP of the app block, so every host flush left a stale copy in
+    the permanent scrollback. It must render inside the fixed toolbar row
+    instead, including the current tool activity."""
+    from types import SimpleNamespace
+
+    from pawnlogic.live_terminal import PersistentTerminal
+
+    session = SimpleNamespace(
+        model_alias="bai:glm-5.3-flash",
+        _last_interrupt_at=None,
+        _turn_start_time=time.monotonic() - 31.0,
+        _current_tool_activity="list_dir [2/30]",
+        queue_status=lambda: {"pending_count": 1},
+    )
+    terminal = PersistentTerminal.__new__(PersistentTerminal)
+    terminal._session = session  # type: ignore[attr-defined]
+    terminal._toolbar_text = lambda: " Model: bai:glm-5.3-flash  Ctx: 17%"  # type: ignore[attr-defined]
+    terminal._build_status = lambda: PersistentTerminal._build_status(terminal)  # type: ignore[attr-defined]
+    terminal._clip_line = PersistentTerminal._clip_line  # type: ignore[attr-defined]
+    # Pin the width: a lingering PT app from another test must not shrink it.
+    monkeypatch.setattr(
+        "prompt_toolkit.application.current.get_app",
+        lambda: _fake_app(columns=200),
+    )
+
+    rendered = terminal._render_toolbar()  # type: ignore[arg-type]
+
+    assert "Esc to interrupt" in rendered
+    assert "⏱ 31s" in rendered
+    assert "list_dir [2/30]" in rendered
+    assert "<b>" not in rendered  # plain text, no stray HTML markup
+
+
+def test_toolbar_stays_clean_while_idle(monkeypatch):
+    """Idle state must not append a redundant status segment to the toolbar."""
+    from types import SimpleNamespace
+
+    from pawnlogic.live_terminal import PersistentTerminal
+
+    session = SimpleNamespace(
+        model_alias="bai:glm-5.3-flash",
+        _last_interrupt_at=None,
+        _turn_start_time=0.0,
+        _current_tool_activity=None,
+        queue_status=lambda: {"pending_count": 0},
+    )
+    terminal = PersistentTerminal.__new__(PersistentTerminal)
+    terminal._session = session  # type: ignore[attr-defined]
+    terminal._toolbar_text = lambda: " Model: bai:glm-5.3-flash  Ctx: 17%"  # type: ignore[attr-defined]
+    terminal._build_status = lambda: PersistentTerminal._build_status(terminal)  # type: ignore[attr-defined]
+    terminal._clip_line = PersistentTerminal._clip_line  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(
+        "prompt_toolkit.application.current.get_app",
+        lambda: _fake_app(columns=200),
+    )
+
+    rendered = terminal._render_toolbar()  # type: ignore[arg-type]
+
+    assert "Idle" not in rendered
+    assert "Esc to interrupt" not in rendered
