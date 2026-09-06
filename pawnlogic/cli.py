@@ -827,6 +827,8 @@ async def _run_eval_mode(session: AgentSession, args, sink) -> None:
         from the final assistant message in `session.messages`.
       · If the turn fails at the API level (retries exhausted, circuit
         breaker open), emit a structured error and exit non-zero.
+      · A missing provider key for the selected model exits 2 before any
+        API call is attempted.
       · Always shut down MCP subprocesses on exit.
     """
     is_json = bool(args.json)
@@ -847,7 +849,32 @@ async def _run_eval_mode(session: AgentSession, args, sink) -> None:
             detach_external_mcp_tools()
             sys.exit(2)
 
-    # 2. Execute one turn.
+    # 2. Fail fast on a missing provider key: a 401 cannot recover, so
+    #    spending the retry/circuit-breaker budget on it only wastes time.
+    #    Unknown aliases are skipped — they keep the historical fallback
+    #    to DEFAULT_MODEL inside get_provider_config.
+    from config.providers import MODELS, validate_api_key
+
+    model_alias = getattr(session, "model_alias", "")
+    if model_alias and model_alias in MODELS:
+        key_ok, key_env = validate_api_key(model_alias)
+        if not key_ok:
+            detail = (
+                f"no API key configured for model '{model_alias}' "
+                f"— set {key_env} or run /provider"
+            )
+            if is_json:
+                sink.print_json({
+                    "type":   "error",
+                    "stage":  "api_key",
+                    "detail": detail,
+                })
+            else:
+                sink.print(c(RED, f"  ✗ {detail}"))
+            detach_external_mcp_tools()
+            sys.exit(2)
+
+    # 3. Execute one turn.
     if is_json:
         # Suppress streaming prints so the JSON wire stays valid;
         # we re-emit the final assistant text as a structured event.
@@ -915,7 +942,7 @@ async def _run_eval_mode(session: AgentSession, args, sink) -> None:
             detach_external_mcp_tools()
             sys.exit(1)
 
-    # 3. Clean shutdown of MCP subprocesses.
+    # 4. Clean shutdown of MCP subprocesses.
     detach_external_mcp_tools()
     sys.exit(0)
 

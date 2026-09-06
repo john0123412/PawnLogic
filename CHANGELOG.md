@@ -13,6 +13,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   with an empty response, so non-interactive callers could not detect the
   failure. JSON mode emits a structured `error` event with `stage: run_turn`,
   the failure detail, and the session id for later resume.
+- `pawn --eval` fails fast (exit 2, `stage: api_key`) when the selected
+  model's provider key is missing, instead of burning the retry/circuit
+  breaker budget on a doomed call and exiting 0 silently.
 
 ### Changed
 - Startup no longer imports heavy optional stacks. The scrapling/patchright

@@ -213,6 +213,9 @@ def test_eval_user_mode_exception_hides_traceback(monkeypatch, capsys):
         run_turn=lambda _prompt: (_ for _ in ()).throw(RuntimeError("provider exploded")),
     )
     args = SimpleNamespace(eval="hi", json=False, session=None)
+    # Provide a dummy key so the --eval api_key pre-flight does not fire;
+    # these tests exercise the run_turn exception rendering path.
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-dummy-value")
     monkeypatch.setattr(cli_mod, "detach_external_mcp_tools", lambda: None)
 
     set_output_mode(debug_mode=False)
@@ -242,6 +245,9 @@ def test_eval_debug_mode_exception_keeps_traceback(monkeypatch, capsys):
         run_turn=lambda _prompt: (_ for _ in ()).throw(RuntimeError("debug detail")),
     )
     args = SimpleNamespace(eval="hi", json=False, session=None)
+    # Provide a dummy key so the --eval api_key pre-flight does not fire;
+    # these tests exercise the run_turn exception rendering path.
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-dummy-value")
     monkeypatch.setattr(cli_mod, "detach_external_mcp_tools", lambda: None)
 
     set_output_mode(debug_mode=True)

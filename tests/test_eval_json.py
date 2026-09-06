@@ -202,6 +202,59 @@ def test_eval_human_api_failure_exits_1(patched_main, fake_session, make_args, c
     assert "API turn failed" in capsys.readouterr().out
 
 
+def test_eval_missing_api_key_fails_fast_exit_2(
+    patched_main, fake_session, make_args, monkeypatch, capsys
+):
+    """A known model alias with no provider key exits 2 before run_turn,
+    without spending the retry/circuit-breaker budget on a doomed call."""
+    from core.output import JsonSink
+    from config.providers import DEFAULT_MODEL
+
+    fake_session.model_alias = DEFAULT_MODEL
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    fake_session.run_turn = MagicMock()
+
+    with pytest.raises(SystemExit) as excinfo:
+        asyncio.run(patched_main._run_eval_mode(
+            fake_session, make_args(eval="hi", json=True), JsonSink(),
+        ))
+
+    assert excinfo.value.code == 2
+    fake_session.run_turn.assert_not_called()
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["type"] == "json"
+    assert payload["data"]["type"] == "error"
+    assert payload["data"]["stage"] == "api_key"
+    assert "DEEPSEEK_API_KEY" in payload["data"]["detail"]
+
+
+def test_eval_with_configured_key_runs_turn(
+    patched_main, fake_session, make_args, monkeypatch
+):
+    """A known alias with a configured key proceeds normally — the key
+    pre-flight must not over-block."""
+    from core.output import HumanSink
+    from config.providers import DEFAULT_MODEL
+
+    fake_session.model_alias = DEFAULT_MODEL
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-dummy-value")
+
+    def _fake_run_turn(prompt: str) -> None:
+        fake_session.messages.append(
+            {"role": "assistant", "content": "mock reply"}
+        )
+
+    fake_session.run_turn = MagicMock(side_effect=_fake_run_turn)
+
+    with pytest.raises(SystemExit) as excinfo:
+        asyncio.run(patched_main._run_eval_mode(
+            fake_session, make_args(eval="hi"), HumanSink(),
+        ))
+
+    assert excinfo.value.code == 0
+    fake_session.run_turn.assert_called_once_with("hi")
+
+
 # ════════════════════════════════════════════════════════
 # 3-4. --session loading
 # ════════════════════════════════════════════════════════
