@@ -851,28 +851,23 @@ async def _run_eval_mode(session: AgentSession, args, sink) -> None:
 
     # 2. Fail fast on a missing provider key: a 401 cannot recover, so
     #    spending the retry/circuit-breaker budget on it only wastes time.
-    #    Unknown aliases are skipped — they keep the historical fallback
-    #    to DEFAULT_MODEL inside get_provider_config.
-    from config.providers import MODELS, validate_api_key
+    #    Shared with the headless server so both surfaces agree on the
+    #    pre-flight semantics (unknown aliases keep the historical
+    #    DEFAULT_MODEL fallback).
+    from pawnlogic.headless import final_assistant_text, missing_key_detail
 
-    model_alias = getattr(session, "model_alias", "")
-    if model_alias and model_alias in MODELS:
-        key_ok, key_env = validate_api_key(model_alias)
-        if not key_ok:
-            detail = (
-                f"no API key configured for model '{model_alias}' "
-                f"— set {key_env} or run /provider"
-            )
-            if is_json:
-                sink.print_json({
-                    "type":   "error",
-                    "stage":  "api_key",
-                    "detail": detail,
-                })
-            else:
-                sink.print(c(RED, f"  ✗ {detail}"))
-            detach_external_mcp_tools()
-            sys.exit(2)
+    detail = missing_key_detail(session)
+    if detail:
+        if is_json:
+            sink.print_json({
+                "type":   "error",
+                "stage":  "api_key",
+                "detail": detail,
+            })
+        else:
+            sink.print(c(RED, f"  ✗ {detail}"))
+        detach_external_mcp_tools()
+        sys.exit(2)
 
     # 3. Execute one turn.
     if is_json:
@@ -910,11 +905,7 @@ async def _run_eval_mode(session: AgentSession, args, sink) -> None:
             detach_external_mcp_tools()
             sys.exit(1)
 
-        last_assistant = next(
-            (m.get("content", "") for m in reversed(session.messages)
-             if m.get("role") == "assistant" and m.get("content")),
-            "",
-        )
+        last_assistant = final_assistant_text(session.messages)
         sink.print_json({
             "type":         "result",
             "prompt":       args.eval,
@@ -1122,6 +1113,12 @@ async def _main_impl():
             session.model_alias = args.model
         else:
             print(c(YELLOW, f"  ⚠ Unknown --model '{args.model}'; using the default model."))
+
+    # Headless NDJSON protocol server (ADR 0011). Intercepted before the
+    # recovery loader so `serve` is never mistaken for a session query.
+    if args.command == "serve":
+        from pawnlogic.headless import run_serve
+        sys.exit(run_serve(session))
 
     # Explicit restart recovery loads history and leaves the recovered prompt
     # in the editor; it never calls run_turn automatically.  ``--eval`` keeps

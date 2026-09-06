@@ -78,6 +78,7 @@ on sight if they violate them.
 
 - [ ] Owner approves the protocol shape (transport, request surface,
       event vocabulary, versioning).
-- [ ] Contract tests for the v1 event/request vocabulary merged.
-- [ ] `pawn serve` skeleton implemented behind those tests, sharing the
-      core driver loop with `--eval`.
+- [x] Contract tests for the v1 event/request vocabulary merged.
+- [x] `pawn serve` skeleton implemented behind those tests, sharing the
+      core driver loop with `--eval` (the `--eval` pre-flight and result
+      extraction now share `pawnlogic/headless.py` helpers).

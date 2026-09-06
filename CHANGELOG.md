@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- `pawn serve` (ADR 0011, proposed): headless NDJSON-over-stdio protocol
+  server driving one session. v1 request surface is `prompt`, `command`,
+  and `shutdown`; events (`status`, `result`, `error`, `command_result`)
+  carry a `{"v": 1}` version envelope and extend the `--eval --json`
+  wire. Unknown request types are ignored; malformed lines produce a
+  `protocol` error without stopping the server. Guarded by contract
+  tests in `tests/test_headless_contract.py`.
+
 ### Fixed
 - `pawn --eval` now exits non-zero when the turn fails at the API level
   (retries exhausted, circuit breaker open). Previously the process exited 0

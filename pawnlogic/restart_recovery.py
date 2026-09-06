@@ -19,7 +19,8 @@ def parse_cli_arguments(parser: argparse.ArgumentParser) -> Any:
         "command",
         nargs="?",
         metavar="COMMAND",
-        help="Use `resume <session>` to load a session without running it.",
+        help="Use `resume <session>` to load a session without running it; "
+             "`serve` runs the headless NDJSON protocol (ADR 0011).",
     )
     parser.add_argument(
         "command_arg",
@@ -28,8 +29,10 @@ def parse_cli_arguments(parser: argparse.ArgumentParser) -> Any:
         help="Session ID, name, or index used with `resume`.",
     )
     args = parser.parse_args()
-    if args.command and args.command.lower() != "resume":
+    if args.command and args.command.lower() not in ("resume", "serve"):
         parser.error(f"unknown command: {args.command}")
+    if args.command == "serve" and args.command_arg:
+        parser.error("serve takes no session argument")
     if args.command == "resume" and not args.command_arg:
         parser.error("resume requires a session ID, name, or index")
     if args.command_arg and args.command != "resume":
