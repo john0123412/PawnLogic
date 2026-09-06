@@ -5,6 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- `pawn --eval` now exits non-zero when the turn fails at the API level
+  (retries exhausted, circuit breaker open). Previously the process exited 0
+  with an empty response, so non-interactive callers could not detect the
+  failure. JSON mode emits a structured `error` event with `stage: run_turn`,
+  the failure detail, and the session id for later resume.
+
+### Changed
+- Startup no longer imports heavy optional stacks. The scrapling/patchright
+  browser stack is probed on first use (surfaced by `/tools` status), and the
+  `mcp` SDK is probed only when an MCP config actually starts servers or a
+  session tears them down. Warm `--help` startup drops from ~0.70 s to
+  ~0.24 s; tool surfaces and MCP behavior are unchanged. Guarded by
+  `tests/test_startup_import_budget.py`.
+
+---
+
 ## [0.3.7] - 2026-09-03
 
 ### Added

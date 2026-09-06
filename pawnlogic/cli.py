@@ -825,6 +825,8 @@ async def _run_eval_mode(session: AgentSession, args, sink) -> None:
       · In JSON mode the streaming output is captured (so the JSON wire
         stays clean), and a single structured `result` event is emitted
         from the final assistant message in `session.messages`.
+      · If the turn fails at the API level (retries exhausted, circuit
+        breaker open), emit a structured error and exit non-zero.
       · Always shut down MCP subprocesses on exit.
     """
     is_json = bool(args.json)
@@ -864,6 +866,23 @@ async def _run_eval_mode(session: AgentSession, args, sink) -> None:
             detach_external_mcp_tools()
             sys.exit(1)
 
+        api_error = getattr(session, "last_turn_api_error", None)
+        if api_error:
+            # The turn ended without raising (stream errors are consumed by
+            # the retry/circuit-breaker layer); signal failure via exit code.
+            sink.print_json({
+                "type":   "error",
+                "stage":  "run_turn",
+                "detail": f"API turn failed: {api_error}",
+                "session_id":        session.session_id,
+                "model":             session.model_alias,
+                "prompt_tokens":     session.total_prompt_tokens,
+                "completion_tokens": session.total_completion_tokens,
+                "tool_calls":        session.total_tool_calls,
+            })
+            detach_external_mcp_tools()
+            sys.exit(1)
+
         last_assistant = next(
             (m.get("content", "") for m in reversed(session.messages)
              if m.get("role") == "assistant" and m.get("content")),
@@ -887,6 +906,12 @@ async def _run_eval_mode(session: AgentSession, args, sink) -> None:
             sink.print(c(RED, f"  ✗ {exc}"))
             if _runtime_state.debug_mode:
                 traceback.print_exc()
+            detach_external_mcp_tools()
+            sys.exit(1)
+
+        api_error = getattr(session, "last_turn_api_error", None)
+        if api_error:
+            sink.print(c(RED, f"  ✗ API turn failed: {api_error}"))
             detach_external_mcp_tools()
             sys.exit(1)
 

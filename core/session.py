@@ -882,6 +882,9 @@ class AgentSession:
         self._events = SessionEventEmitter(self.runtime_context, self.session_id)
         self._sync_runtime_context()
         self.current_phase = "RECON"   # initial MoE phase
+        # Detail of the last API stream error in the current turn, or None.
+        # Consumed by non-interactive --eval mode to signal failure via exit code.
+        self.last_turn_api_error: str | None = None
         init_db()
         # P1: time-aware scheduling state. Must exist before _reset_system_prompt.
         self._turn_start_time        = 0.0
@@ -1507,6 +1510,7 @@ class AgentSession:
 
         def on_api_error(err_detail: str) -> None:
             spinner.stop()
+            self.last_turn_api_error = err_detail
             if _user_mode():
                 print(c(RED, f"\n  {user_friendly_error(err_detail)}"))
             else:
@@ -2272,6 +2276,7 @@ class AgentSession:
 
     def run_turn(self, user_input: str):
         """Submit one prompt, preserving synchronous and live session modes."""
+        self.last_turn_api_error = None
         return run_session_turn(self, user_input)
 
     def retry_interrupted_turn(self, user_input: str) -> bool:
