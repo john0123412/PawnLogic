@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import io
 import json
+import threading
+import types
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -39,6 +42,20 @@ class FakeSession:
         self.last_turn_api_error: str | None = None
         self.shutdown_calls = 0
         self.run_turn_calls: list[str] = []
+        self.control_actions: list[str] = []
+        self.scheduler_accepts_control = True
+        # Set by the fake scheduler control when an interrupt is accepted;
+        # a blocking fake run_turn waits on it.
+        self.cancel_event = threading.Event()
+
+        def _control(action: Any) -> Any:
+            self.control_actions.append(getattr(action.kind, "value", str(action)))
+            accepted = self.scheduler_accepts_control
+            if accepted and getattr(action.kind, "value", "") == "interrupt_active":
+                self.cancel_event.set()
+            return types.SimpleNamespace(accepted=accepted, affected_ids=[])
+
+        self._turn_scheduler = types.SimpleNamespace(control=_control)
 
     def run_turn(self, prompt: str) -> None:
         self.run_turn_calls.append(prompt)
@@ -358,6 +375,72 @@ def test_prompt_streams_live_events_before_result(tmp_path):
     turn_started = events[1]
     assert turn_started["stage"] == "turn_started"
     assert turn_started["model"] == "test-fake-model"
+
+
+# ════════════════════════════════════════════════════════
+# interrupt request (dispatched from the reader thread)
+# ════════════════════════════════════════════════════════
+
+def test_interrupt_cancels_blocking_turn():
+    """An interrupt arriving while a prompt turn blocks must reach the
+    scheduler immediately (reader thread), cancel the turn, and surface
+    status turn_interrupted instead of a result event."""
+    from core.session import TurnInterrupted
+
+    session = FakeSession()
+
+    def _blocking_run_turn(prompt: str) -> None:
+        session.run_turn_calls.append(prompt)
+        session._turn_started.set()
+        if not session.cancel_event.wait(timeout=5):
+            raise AssertionError("interrupt never reached the blocking turn")
+        raise TurnInterrupted()
+
+    session._turn_started = threading.Event()
+    session.run_turn = _blocking_run_turn
+
+    server, events = make_server(
+        [
+            line_request({"v": 1, "type": "prompt", "text": "long turn"}),
+            line_request({"type": "interrupt"}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+
+    assert code == 0
+    assert "interrupt_active" in session.control_actions
+    types_in_order = [e["type"] for e in events]
+    assert "result" not in types_in_order
+    by_type = {e["type"] + ":" + str(e.get("stage", "")) for e in events}
+    assert "status:interrupt_requested" in by_type
+    assert "status:turn_interrupted" in by_type
+    assert events[0]["stage"] == "ready"
+    assert events[-1]["stage"] == "shutdown"
+
+
+def test_interrupt_without_active_turn_is_ignored():
+    """When the scheduler declines (no active turn), the wire reports
+    interrupt_ignored and the server keeps serving."""
+    session = FakeSession()
+    session.scheduler_accepts_control = False
+
+    server, events = make_server(
+        [
+            line_request({"type": "interrupt"}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+
+    assert code == 0
+    ignored = [e for e in events if e.get("stage") == "interrupt_ignored"]
+    assert ignored, f"expected interrupt_ignored event, got: {events!r}"
+    assert "no active turn" in ignored[0]["detail"]
+    assert not any(e.get("stage") == "interrupt_requested" for e in events)
+    assert session.shutdown_calls == 1
 
 
 def test_missing_key_detail_helper_matches_pre_flight(monkeypatch):

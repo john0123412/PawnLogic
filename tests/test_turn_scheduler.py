@@ -641,7 +641,9 @@ def test_production_session_adapter_wires_scheduler_checkpoint(monkeypatch) -> N
     )
     session = SimpleNamespace(
         session_id="session-checkpoint",
-        _run_scheduled_turn=lambda _content: None,
+        # Production signature: the executor is cancellation-aware for
+        # synchronous sessions too, so the stub must accept the kwarg.
+        _run_scheduled_turn=lambda _content, *, cancellation=None: None,
     )
 
     scheduler = build_session_scheduler(session, live_turns=False)

@@ -10,16 +10,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - `pawn serve` (ADR 0011, accepted): headless NDJSON-over-stdio protocol
   server driving one session. v1 request surface is `prompt`, `command`,
-  and `shutdown`; events (`status`, `stream`, `tool`, `result`, `error`,
-  `command_result`) carry a `{"v": 1}` version envelope and extend the
-  `--eval --json` wire. Unknown request types are ignored; malformed
-  lines produce a `protocol` error without stopping the server. While a
-  turn runs, the session's typed Agent Events are forwarded live —
-  content deltas as `stream`, tool lifecycle as `tool`, turn lifecycle
-  as `status` — published via `SessionEventEmitter.content_delta`,
-  which is silent for any session without subscribers (the REPL is
-  unaffected). Guarded by contract tests in
-  `tests/test_headless_contract.py`.
+  `interrupt`, and `shutdown`; events (`status`, `stream`, `tool`,
+  `result`, `error`, `command_result`) carry a `{"v": 1}` version
+  envelope and extend the `--eval --json` wire. `interrupt` is
+  dispatched from a daemon reader thread so it reaches the scheduler
+  while a turn blocks the main loop, cancelling it via the same typed
+  control seam as the live REPL's Esc (the scheduler is
+  cancellation-aware for synchronous sessions now, not live-mode only);
+  a declined interrupt reports `interrupt_ignored`, an interrupted turn
+  reports `turn_interrupted` instead of a result. Unknown request types
+  are ignored; malformed lines produce a `protocol` error without
+  stopping the server. While a turn runs, the session's typed Agent
+  Events are forwarded live — content deltas as `stream`, tool
+  lifecycle as `tool`, turn lifecycle as `status` — published via
+  `SessionEventEmitter.content_delta`, which is silent for any session
+  without subscribers (the REPL is unaffected). Guarded by contract
+  tests in `tests/test_headless_contract.py`.
 
 ### Fixed
 - Live terminal no longer clutters the permanent scrollback with transient

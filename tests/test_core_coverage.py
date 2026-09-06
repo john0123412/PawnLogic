@@ -429,8 +429,12 @@ def test_production_scheduler_checkpoint_persists_latest_view(
         cwd=str(tmp_path),
         workspace_dir=str(tmp_path / "workspace"),
     )
-    session._run_scheduled_turn = lambda content: session.messages.append(
-        {"role": "user", "content": content}
+    # The executor is cancellation-aware for synchronous sessions too, so
+    # the stub must accept the cancellation kwarg like the real method.
+    session._run_scheduled_turn = (
+        lambda content, *, cancellation=None: session.messages.append(
+            {"role": "user", "content": content}
+        )
     )
 
     scheduler = build_session_scheduler(session, live_turns=False)
