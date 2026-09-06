@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [0.3.8] - 2026-09-06
 
 ### Added
 - Esc-with-queued-work is now a pure interrupt with queue handoff
