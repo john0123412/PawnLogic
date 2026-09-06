@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 import threading
 import types
 from pathlib import Path
@@ -441,6 +442,110 @@ def test_interrupt_without_active_turn_is_ignored():
     assert "no active turn" in ignored[0]["detail"]
     assert not any(e.get("stage") == "interrupt_requested" for e in events)
     assert session.shutdown_calls == 1
+
+
+def test_run_serve_inside_running_loop_serves_normally(capsys, monkeypatch):
+    """Regression (real-API T4b): run_serve is called from inside the CLI's
+    async main, and `_handle_command` needs its own event loop for
+    dispatch. The serve loop must move to a worker thread and still drive
+    the full wire."""
+    import asyncio
+
+    session = FakeSession()
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(line_request({"type": "shutdown"}) + "\n")
+    )
+
+    async def fake_main() -> int:
+        return headless.run_serve(session)
+
+    code = asyncio.run(fake_main())
+
+    assert code == 0
+    assert session.shutdown_calls == 1
+    wire_lines = [json.loads(l) for l in capsys.readouterr().out.splitlines() if l.strip()]
+    assert wire_lines[0]["stage"] == "ready"
+    assert wire_lines[-1]["stage"] == "shutdown"
+
+
+def test_run_serve_command_inside_running_loop_dispatches(capsys, monkeypatch):
+    """The original T4b defect: /keys inside a running loop failed with
+    "asyncio.run() cannot be called from a running event loop". The worker
+    thread gives dispatch a fresh loop, so command_result is emitted."""
+    import asyncio
+
+    session = FakeSession()
+    stdin_lines = (
+        line_request({"type": "command", "line": "/keys"})
+        + "\n"
+        + line_request({"type": "shutdown"})
+        + "\n"
+    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin_lines))
+
+    async def fake_main() -> int:
+        return headless.run_serve(session)
+
+    code = asyncio.run(fake_main())
+
+    assert code == 0
+    wire_lines = [json.loads(l) for l in capsys.readouterr().out.splitlines() if l.strip()]
+    command_results = [e for e in wire_lines if e["type"] == "command_result"]
+    assert command_results and command_results[0]["verb"] == "/keys"
+    assert not any(
+        e["type"] == "error" and e.get("stage") == "command" for e in wire_lines
+    )
+
+
+def test_interrupt_retry_covers_turn_registration_race():
+    """Real-API T5 race: an interrupt dispatched between the prompt request
+    being read and the scheduler registering the turn used to be declined
+    as "no active turn" and lost, leaving the turn to run to completion.
+    The handler must retry briefly so the registration window is covered."""
+    from core.session import TurnInterrupted
+
+    session = FakeSession()
+    session._declines_remaining = 2  # first two control calls decline
+    session._turn_started = threading.Event()
+
+    real_control = session._turn_scheduler.control
+
+    def _racy_control(action: Any) -> Any:
+        receipt = real_control(action)
+        if (
+            getattr(action.kind, "value", "") == "interrupt_active"
+            and session._declines_remaining > 0
+        ):
+            session._declines_remaining -= 1
+            return types.SimpleNamespace(accepted=False, affected_ids=[])
+        return receipt
+
+    session._turn_scheduler.control = _racy_control
+
+    def _blocking_run_turn(prompt: str) -> None:
+        session.run_turn_calls.append(prompt)
+        session._turn_started.set()
+        if not session.cancel_event.wait(timeout=5):
+            raise AssertionError("interrupt never reached the blocking turn")
+        raise TurnInterrupted()
+
+    session.run_turn = _blocking_run_turn
+
+    server, events = make_server(
+        [
+            line_request({"v": 1, "type": "prompt", "text": "long turn"}),
+            line_request({"type": "interrupt"}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+
+    assert code == 0
+    by_type = {e["type"] + ":" + str(e.get("stage", "")) for e in events}
+    assert "status:interrupt_requested" in by_type
+    assert "status:turn_interrupted" in by_type
+    assert "result" not in [e["type"] for e in events]
 
 
 def test_missing_key_detail_helper_matches_pre_flight(monkeypatch):

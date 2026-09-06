@@ -276,16 +276,29 @@ class HeadlessServer:
         Routes through the scheduler's typed control seam (the same path
         the live REPL's Esc uses): the scheduler cancels its active-turn
         token, which the synchronous executor now forwards into the turn.
+
+        An interrupt can legally arrive in the window between a prompt
+        request being read and the scheduler registering the turn (the
+        reader thread runs ahead). Declining there is a race, not a
+        user error, so the request is retried briefly before reporting
+        `interrupt_ignored`.
         """
+        import time
+
         from core.live_turn_control import interrupt_session
 
-        if interrupt_session(self._session):
-            self._emit(make_event("status", stage="interrupt_requested"))
-        else:
-            self._emit(make_event(
-                "status", stage="interrupt_ignored",
-                detail="no active turn",
-            ))
+        deadline = time.monotonic() + 2.0
+        while True:
+            if interrupt_session(self._session):
+                self._emit(make_event("status", stage="interrupt_requested"))
+                return
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+        self._emit(make_event(
+            "status", stage="interrupt_ignored",
+            detail="no active turn",
+        ))
 
     def _handle_command(self, request: dict) -> None:
         from core.commands import CommandContext, dispatch
@@ -339,8 +352,8 @@ def asyncio_run(awaitable: Any) -> Any:
     return asyncio.run(awaitable)
 
 
-def run_serve(session: Any) -> int:
-    """CLI entry: serve the protocol over real stdin/stdout."""
+def _serve_blocking(session: Any) -> int:
+    """Run the synchronous serve loop on the calling thread."""
     # Bind the real stdout now: prompt handling redirects sys.stdout into a
     # capture buffer while a turn runs, and in-turn events must still reach
     # the wire, not that buffer.
@@ -355,3 +368,32 @@ def run_serve(session: Any) -> int:
         wire.flush()
 
     return HeadlessServer(session, read_line=read_line, emit=emit).serve()
+
+
+def run_serve(session: Any) -> int:
+    """CLI entry: serve the protocol over real stdin/stdout.
+
+    Called from inside the CLI's running event loop (async main), the
+    serve loop must not stay on the loop thread: it is a blocking
+    synchronous pump, and `_handle_command` needs a fresh event loop for
+    `asyncio.run(dispatch(...))`. Running the loop on a worker thread
+    satisfies both; the CLI thread just joins it.
+    """
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return _serve_blocking(session)
+
+    result: list[int] = []
+
+    def _run() -> None:
+        result.append(_serve_blocking(session))
+
+    worker = threading.Thread(
+        target=_run, name="pawnlogic-serve", daemon=True,
+    )
+    worker.start()
+    worker.join()
+    return result[0]
