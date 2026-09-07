@@ -84,3 +84,34 @@ on sight if they violate them.
       the core's typed Agent Event stream via
       `SessionEventEmitter.content_delta`; no subscriber means zero
       REPL behavior change.
+
+
+## Revision (Phase 2b M3, 2026-09-06): protocol freeze discipline
+
+Phase 2 shipped the first two frontends of this protocol (the Python
+reference client, `frontends/serve_wire.py`, and the Rust ratatui
+client, `frontends/ratatui`). Both must keep speaking the identical
+wire, so the freeze rules are now explicit:
+
+1. **The golden fixture is the contract.**
+   `tests/fixtures/serve_events_v1.jsonl` must exercise every v1 message
+   type. The Python contract suite asserts its shape; the Rust
+   `wire::tests::parses_every_golden_fixture_line` test must accept the
+   same file. Changing the fixture requires the corresponding parser
+   change in BOTH languages in the same PR.
+2. **v1 is frozen.** Within `{"v": 1}`: event fields are additive only
+   (new optional fields are fine; renaming or re-typing existing fields
+   is not). New request types or event types require `v: 2` and a new
+   fixture (`serve_events_v2.jsonl`) side by side.
+3. **Version bump flow.** Bump `PROTOCOL_VERSION` in
+   `pawnlogic/headless.py` and the parser's accepted-version set in
+   `frontends/ratatui/src/wire.rs` together; the old fixture stays for
+   regression, and both frontends negotiate only their exact version.
+4. **CI gates.** The Python suite gates the wire on every PR; the 🦀
+   Rust Frontend job (cargo test --locked) gates the parser. A protocol
+   change that skips one language fails the other's tests.
+5. **Distribution decision (M3).** The Rust frontend ships as a
+   source-checkout crate only (`frontends/ratatui`), built with
+   `cargo build --release` by whoever runs it. No prebuilt binaries and
+   no PyPI changes for Phase 2; revisiting that requires a separate
+   owner decision because it changes the release pipeline.

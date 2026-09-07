@@ -23,7 +23,11 @@ use ui::{apply_event, handle_event, key_action, UiState};
 use wire::{parse_line, Event};
 
 #[derive(Parser, Debug)]
-#[command(name = "pawnlogic-tui", about = "RatatuI frontend for pawn serve")]
+#[command(
+    name = "pawnlogic-tui",
+    about = "RatatuI frontend for pawn serve (wire v1, ADR 0011)",
+    version
+)]
 struct Args {
     /// Model alias to start the server with.
     #[arg(long, default_value = "ds-v4-flash")]
