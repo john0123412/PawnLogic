@@ -12,15 +12,14 @@ mod wire;
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
-use crossterm::event::{Event as CEvent, EventStream, KeyCode, KeyEventKind};
-use futures::StreamExt;
+use crossterm::event::{Event as CEvent, KeyCode};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::Stdout;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ui::{apply_event, handle_event, key_action, UiState};
-use wire::{parse_line, Event};
+use ui::{apply_event, handle_event, UiState};
+use wire::parse_line;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -78,7 +77,7 @@ fn spawn_server(model: &str, extra_env: &[(String, String)]) -> Result<std::proc
         .arg(model)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
+        .stderr(std::process::Stdio::inherit());
     for (key, value) in extra_env {
         cmd.env(key, value);
     }
@@ -226,10 +225,10 @@ fn run_interactive(model: &str, extra_env: &[(String, String)]) -> Result<()> {
     crossterm::terminal::enable_raw_mode()?;
     crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
 
-    let mut events = EventStream::new();
-    let result = futures::executor::block_on(drive_loop(
-        &mut events, &state, &terminal, &mut composer, &mut stdin,
-    ));
+    // A synchronous poll loop, not an async event stream: the loop redraws
+    // every tick so server-driven state changes (ready, turn lifecycle,
+    // streamed text) appear without waiting for a keypress.
+    let result = drive_loop(&state, &terminal, &mut composer, &mut stdin);
 
     crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen)?;
     crossterm::terminal::disable_raw_mode()?;
@@ -238,8 +237,7 @@ fn run_interactive(model: &str, extra_env: &[(String, String)]) -> Result<()> {
     result
 }
 
-async fn drive_loop(
-    events: &mut EventStream,
+fn drive_loop(
     state: &Arc<Mutex<UiState>>,
     terminal: &Arc<Mutex<Terminal<CrosstermBackend<Stdout>>>>,
     composer: &mut String,
@@ -251,66 +249,62 @@ async fn drive_loop(
             let mut t = terminal.lock().unwrap();
             t.draw(|frame| ui::draw(frame, state, composer))?;
         }
-        if let Some(Ok(CEvent::Key(key))) = events.next().await {
-            if key.kind == KeyEventKind::Press {
-                if let Some(action) = key_action(&key) {
-                    match action {
-                        "interrupt" => {
-                            let running = state.lock().unwrap().running;
-                            if running {
-                                writeln!(stdin, "{}", wire::build_request("interrupt", "", false))?;
-                            }
-                        }
-                        "quit" => {
-                            writeln!(stdin, "{}", wire::build_request("shutdown", "", false))?;
-                            return Ok(());
-                        }
-                        _ => {}
-                    }
-                    continue;
-                }
-                match key.code {
-                    KeyCode::Char(ch) => composer.push(ch),
-                    KeyCode::Backspace => {
-                        composer.pop();
-                    }
-                    KeyCode::Enter => {
+        // Redraw every tick; poll waits up to 200ms for the next input.
+        if crossterm::event::poll(Duration::from_millis(200))? {
+            let event = crossterm::event::read()?;
+            // handle_event owns Esc/Ctrl+C actions, arrow/page scrolling,
+            // and mouse-wheel scrolling; it reports semantic actions.
+            if let Some(action) = handle_event(&event, state) {
+                match action {
+                    "interrupt" => {
                         let running = state.lock().unwrap().running;
                         if running {
                             writeln!(stdin, "{}", wire::build_request("interrupt", "", false))?;
                         }
                     }
-                    KeyCode::Char('c') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                    "quit" => {
                         writeln!(stdin, "{}", wire::build_request("shutdown", "", false))?;
                         return Ok(());
                     }
-                    KeyCode::Enter => {
-                        let text = composer.trim().to_string();
-                        composer.clear();
-                        if text == "/quit" {
-                            writeln!(stdin, "{}", wire::build_request("shutdown", "", false))?;
-                            return Ok(());
-                        }
-                        if !text.is_empty() {
-                            if text.starts_with('/') {
-                                // M2: slash commands ride the command request;
-                                // the core dispatches and answers command_result.
-                                writeln!(
-                                    stdin,
-                                    "{}",
-                                    wire::build_request("command", &text, false)
-                                )?;
-                            } else {
-                                let running = state.lock().unwrap().running;
-                                writeln!(
-                                    stdin,
-                                    "{}",
-                                    wire::build_request("prompt", &text, running)
-                                )?;
+                    _ => {}
+                }
+                continue;
+            }
+            if let CEvent::Key(key) = &event {
+                if key.kind == crossterm::event::KeyEventKind::Press {
+                    match key.code {
+                        KeyCode::Enter => {
+                            let text = composer.trim().to_string();
+                            composer.clear();
+                            if text == "/quit" {
+                                writeln!(stdin, "{}", wire::build_request("shutdown", "", false))?;
+                                return Ok(());
+                            }
+                            if !text.is_empty() {
+                                if text.starts_with('/') {
+                                    // M2: slash commands ride the command request;
+                                    // the core dispatches and answers command_result.
+                                    writeln!(
+                                        stdin,
+                                        "{}",
+                                        wire::build_request("command", &text, false)
+                                    )?;
+                                } else {
+                                    let running = state.lock().unwrap().running;
+                                    writeln!(
+                                        stdin,
+                                        "{}",
+                                        wire::build_request("prompt", &text, running)
+                                    )?;
+                                }
                             }
                         }
+                        KeyCode::Backspace => {
+                            composer.pop();
+                        }
+                        KeyCode::Char(ch) => composer.push(ch),
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }

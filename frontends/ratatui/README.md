@@ -58,6 +58,8 @@ section). Unknown versions or event types abort parsing loudly.
 
 ## Distribution status
 
-Source-checkout only for now: build locally with cargo. Prebuilt
-binaries and PyPI packaging for the frontend are deliberately deferred
-pending an owner decision (see ADR 0011, M3 distribution decision).
+Source-checkout build (above). Release tags additionally publish a
+prebuilt Linux binary — `pawnlogic-tui-<version>-x86_64-unknown-linux-gnu.tar.gz`
+with its sha256 — attached to the GitHub Release by the publish
+workflow (see ADR 0011, M3 distribution decision, owner-revised
+2026-09-06). PyPI packaging of the frontend remains out of scope.

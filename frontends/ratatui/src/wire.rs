@@ -28,10 +28,12 @@ pub struct Event {
 }
 
 impl Event {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn stage(&self) -> Option<&str> {
         self.payload.get("stage").and_then(|s| s.as_str())
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn text(&self) -> Option<&str> {
         self.payload.get("text").and_then(|s| s.as_str())
     }
@@ -63,6 +65,8 @@ pub fn parse_line(line: &str) -> Result<Event> {
 }
 
 /// Parse a full NDJSON transcript; unknown versions/types abort the parse.
+/// Test surface: exercised by the golden-fixture contract test.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn parse_lines(lines: &[&str]) -> Result<Vec<Event>> {
     lines.iter().map(|l| parse_line(l)).collect()
 }
