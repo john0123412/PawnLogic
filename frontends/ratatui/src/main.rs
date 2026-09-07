@@ -31,6 +31,9 @@ struct Args {
     /// Non-interactive acceptance mode: run one prompt, dump the screen, exit.
     #[arg(long)]
     once: Option<String>,
+    /// Non-interactive acceptance mode: run one slash command, dump the screen, exit.
+    #[arg(long)]
+    once_command: Option<String>,
     /// Where to write the final rendered screen (acceptance harness).
     #[arg(long)]
     dump: Option<PathBuf>,
@@ -48,6 +51,14 @@ fn main() -> Result<()> {
         }
     }
 
+    if let Some(command) = args.once_command {
+        return run_once_command(
+            &args.model,
+            &command,
+            args.dump.as_deref(),
+            &server_env,
+        );
+    }
     if let Some(prompt) = args.once {
         return run_once(&args.model, &prompt, args.dump.as_deref(), &server_env);
     }
@@ -68,6 +79,67 @@ fn spawn_server(model: &str, extra_env: &[(String, String)]) -> Result<std::proc
         cmd.env(key, value);
     }
     cmd.spawn().context("failed to spawn `pawn serve`")
+}
+
+/// One slash command, render the command_result, dump the screen, exit.
+fn run_once_command(
+    model: &str,
+    command: &str,
+    dump: Option<&std::path::Path>,
+    extra_env: &[(String, String)],
+) -> Result<()> {
+    let mut child = spawn_server(model, extra_env)?;
+    let mut stdin = child.stdin.take().context("server stdin")?;
+    let stdout = child.stdout.take().context("server stdout")?;
+    let state = Arc::new(Mutex::new(UiState::default()));
+    let reader_state = Arc::clone(&state);
+    let reader = std::thread::spawn(move || {
+        use std::io::BufRead;
+        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Ok(event) = parse_line(&line) {
+                apply_event(&reader_state, &event.kind, &event.payload);
+            }
+        }
+    });
+
+    use std::io::Write;
+    writeln!(stdin, "{}", wire::build_request("command", command, false))?;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let state = state.lock().unwrap();
+        let rendered = state
+            .history
+            .lines
+            .iter()
+            .any(|l| l.contains(&format!("── {command} ──")));
+        drop(state);
+        if rendered {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            bail!("acceptance timeout: command_result did not arrive in 60s");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    writeln!(stdin, "{}", wire::build_request("shutdown", "", false))?;
+    let _ = child.wait();
+    reader.join().ok();
+
+    if let Some(path) = dump {
+        let state = state.lock().unwrap();
+        std::fs::write(
+            path,
+            format!(
+                "model: {}\n---\n{}",
+                state.model,
+                state.history.lines.join("\n")
+            ),
+        )?;
+        println!("screen dumped to {}", path.display());
+    }
+    println!("ACCEPTANCE OK");
+    Ok(())
 }
 
 /// One prompt, render until the result arrives, dump the screen, exit.
@@ -216,12 +288,22 @@ async fn drive_loop(
                             return Ok(());
                         }
                         if !text.is_empty() {
-                            let running = state.lock().unwrap().running;
-                            writeln!(
-                                stdin,
-                                "{}",
-                                wire::build_request("prompt", &text, running)
-                            )?;
+                            if text.starts_with('/') {
+                                // M2: slash commands ride the command request;
+                                // the core dispatches and answers command_result.
+                                writeln!(
+                                    stdin,
+                                    "{}",
+                                    wire::build_request("command", &text, false)
+                                )?;
+                            } else {
+                                let running = state.lock().unwrap().running;
+                                writeln!(
+                                    stdin,
+                                    "{}",
+                                    wire::build_request("prompt", &text, running)
+                                )?;
+                            }
                         }
                     }
                     _ => {}

@@ -158,7 +158,10 @@ pub fn apply_event(state: &Arc<Mutex<UiState>>, kind: &str, payload: &serde_json
                     state.history.push(format!("── turn {stage} ──"));
                 }
                 "interrupt_requested" => state.history.push("· Esc → interrupt sent".into()),
-                "steer_accepted" => state.history.push("· steer accepted".into()),
+                "steer_accepted" => {
+                    state.last_status = "steer accepted — running next".into();
+                    state.history.push("· steer accepted".into());
+                }
                 "ready" => {
                     state.model = payload
                         .get("model")
@@ -197,6 +200,21 @@ pub fn apply_event(state: &Arc<Mutex<UiState>>, kind: &str, payload: &serde_json
             let stage = payload.get("stage").and_then(|s| s.as_str()).unwrap_or("");
             let name = payload.get("tool_name").and_then(|n| n.as_str()).unwrap_or("");
             state.history.push(format!("· tool {stage}: {name}"));
+            false
+        }
+        "command_result" => {
+            let verb = payload.get("verb").and_then(|v| v.as_str()).unwrap_or("");
+            let output = payload
+                .get("output")
+                .and_then(|o| o.as_array())
+                .cloned()
+                .unwrap_or_default();
+            state.history.push(format!("── {verb} ──"));
+            for row in output {
+                if let Some(text) = row.as_str() {
+                    state.history.push(text.to_string());
+                }
+            }
             false
         }
         _ => false,
@@ -248,5 +266,50 @@ pub fn handle_event(
             _ => None,
         },
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn command_result_lands_in_history() {
+        let state = Arc::new(Mutex::new(UiState::default()));
+        apply_event(
+            &state,
+            "command_result",
+            &json!({"verb": "/keys", "output": ["DEEPSEEK_API_KEY: true"]}),
+        );
+        let history = state.lock().unwrap().history.lines.clone();
+        assert!(history.iter().any(|l| l.contains("── /keys ──")));
+        assert!(history.iter().any(|l| l.contains("DEEPSEEK_API_KEY: true")));
+    }
+
+    #[test]
+    fn steer_accepted_surfaces_in_status_text() {
+        let state = Arc::new(Mutex::new(UiState::default()));
+        apply_event(&state, "status", &json!({"stage": "steer_accepted"}));
+        let state = state.lock().unwrap();
+        assert_eq!(state.last_status, "steer accepted — running next");
+    }
+
+    #[test]
+    fn tool_events_render_start_and_result() {
+        let state = Arc::new(Mutex::new(UiState::default()));
+        apply_event(
+            &state,
+            "tool",
+            &json!({"stage": "started", "tool_name": "list_dir", "iteration": 0}),
+        );
+        apply_event(
+            &state,
+            "tool",
+            &json!({"stage": "result", "tool_name": "list_dir", "iteration": 0, "status": "success"}),
+        );
+        let history = state.lock().unwrap().history.lines.clone();
+        assert!(history.iter().any(|l| l.contains("tool started: list_dir")));
+        assert!(history.iter().any(|l| l.contains("tool result: list_dir")));
     }
 }

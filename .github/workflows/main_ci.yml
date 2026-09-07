@@ -90,6 +90,33 @@ jobs:
           python tools/code_index.py build
           python tools/code_index.py check
 
+  # ── Rust frontend: protocol parser and UI unit tests ────────────────
+  rust-frontend:
+    name: "🦀 Rust Frontend (cargo test)"
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/index
+            frontends/ratatui/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('frontends/ratatui/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: cargo test
+        working-directory: frontends/ratatui
+        run: cargo test --locked
+
   # ── Typed island checks: keep scope narrow and fail fast ─────────────
   typecheck:
     name: "🔎 Type Check (mypy)"
