@@ -1,0 +1,13 @@
+{"v": 1, "type": "status", "stage": "ready", "model": "bai:glm-5.3-flash", "session_id": "sess-fixture-1"}
+{"v": 1, "type": "prompt"}
+{"v": 1, "type": "prompt", "text": "hi", "steer": false}
+{"v": 1, "type": "status", "stage": "turn_started", "model": "bai:glm-5.3-flash", "phase": "RECON"}
+{"v": 1, "type": "stream", "text": "Hello"}
+{"v": 1, "type": "stream", "text": " world"}
+{"v": 1, "type": "tool", "stage": "started", "tool_call_id": "call-1", "tool_name": "list_dir", "iteration": 0}
+{"v": 1, "type": "tool", "stage": "result", "tool_call_id": "call-1", "tool_name": "list_dir", "iteration": 0, "status": "success", "error_type": null, "side_effect": false}
+{"v": 1, "type": "status", "stage": "turn_completed"}
+{"v": 1, "type": "result", "prompt": "hi", "response": "Hello world", "session_id": "sess-fixture-1", "model": "bai:glm-5.3-flash", "prompt_tokens": 12, "completion_tokens": 4, "tool_calls": 1}
+{"v": 1, "type": "error", "stage": "api_key", "detail": "no API key configured"}
+{"v": 1, "type": "command_result", "verb": "/keys", "output": ["{\"type\": \"json\"}"]}
+{"v": 1, "type": "status", "stage": "shutdown"}

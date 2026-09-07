@@ -653,6 +653,35 @@ def test_steer_processed_in_serial_order_after_running_prompt():
     assert any(e.get("stage") == "steer_accepted" for e in events)
 
 
+# ════════════════════════════════════════════════════════
+# Golden fixture (shared with the Rust frontend, Phase 2b M1)
+# ════════════════════════════════════════════════════════
+
+KNOWN_V1_EVENT_TYPES = {
+    "status", "stream", "tool", "result", "error", "command_result", "prompt",
+}
+
+
+def test_golden_fixture_events_are_valid_v1_wire():
+    """tests/fixtures/serve_events_v1.jsonl is the protocol freeze sample
+    shared with the Rust frontend (Phase 2b M1). Every line must carry the
+    v1 envelope and use a known event type; every type in the fixture must
+    be covered by this suite's assertions elsewhere."""
+    fixture = ROOT / "tests" / "fixtures" / "serve_events_v1.jsonl"
+    assert fixture.exists(), "golden fixture missing"
+    kinds_seen = set()
+    for line in fixture.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        assert event["v"] == 1, event
+        assert event["type"] in KNOWN_V1_EVENT_TYPES, event
+        kinds_seen.add(event["type"])
+    # The fixture must exercise the full vocabulary so the Rust parser
+    # sees every wire shape (requests and events).
+    assert kinds_seen == KNOWN_V1_EVENT_TYPES, kinds_seen
+
+
 def test_missing_key_detail_helper_matches_pre_flight(monkeypatch):
     session = FakeSession(model_alias=DEFAULT_MODEL)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
