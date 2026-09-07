@@ -58,6 +58,11 @@ def _write_release_fixture(root: Path, *, version: str = "9.9.9") -> None:
         f"| {version} | \u2705 Yes |\n",
         encoding="utf-8",
     )
+    (root / "AGENT.md").write_text(
+        f"## Current Release State\n\n"
+        f"- Current published release: `{version}`.\n",
+        encoding="utf-8",
+    )
 
 
 def test_release_consistency_accepts_current_repository():
@@ -199,6 +204,43 @@ def test_release_consistency_accepts_explicit_release_ready_marker(tmp_path):
     errors = check_release_consistency.check_repository(tmp_path)
 
     assert errors == []
+
+
+def test_release_consistency_rejects_stale_agent_release_state(tmp_path):
+    _write_release_fixture(tmp_path, version="9.9.9")
+    _tag_fixture_repository(tmp_path, "v9.9.8")
+    (tmp_path / ".release-ready").write_text("9.9.9\n", encoding="utf-8")
+    # AGENT.md still naming the previous release is exactly the PR #139
+    # root cause: 0.3.9 shipped without rotating Current Release State.
+    (tmp_path / "AGENT.md").write_text(
+        "## Current Release State\n\n"
+        "- Current published release: `9.9.8`.\n",
+        encoding="utf-8",
+    )
+
+    errors = check_release_consistency.check_repository(tmp_path)
+
+    assert any(
+        "AGENT.md Current Release State published version is 9.9.8, expected 9.9.9"
+        in error
+        for error in errors
+    )
+
+
+def test_release_consistency_skips_agent_gate_before_finalization(tmp_path):
+    _write_release_fixture(tmp_path, version="9.9.9")
+    _tag_fixture_repository(tmp_path, "v9.9.8")
+    # No .release-ready marker: the working version is still a candidate,
+    # so AGENT.md may lag behind while release prep is in progress.
+    (tmp_path / "AGENT.md").write_text(
+        "## Current Release State\n\n"
+        "- Current published release: `9.9.8`.\n",
+        encoding="utf-8",
+    )
+
+    errors = check_release_consistency.check_repository(tmp_path)
+
+    assert not any("AGENT.md" in error for error in errors)
 
 
 def test_release_consistency_rejects_stale_release_ready_marker(tmp_path):

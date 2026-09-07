@@ -15,6 +15,16 @@ README_ZH_CN_RELEASE_RE = re.compile(
     r"\u5f53\u524d\u516c\u5f00\u53d1\u5e03\u7248\u672c\u662f "
     r"\*\*([0-9]+\.[0-9]+\.[0-9]+)\*\*\u3002"
 )
+# Matches the first paragraph of AGENT.md "Current Release State".
+# Anchored to the heading bullet so a stale "Current published release:
+# 0.3.7" on a 0.3.9 release branch is caught before tag. The version
+# is in backticks (Markdown code span) in AGENT.md, unlike the READMEs
+# which use `**x.y.z**`.
+AGENT_RELEASE_RE = re.compile(
+    r"^## Current Release State\s*\n\s*\n"
+    r"-\s*Current published release:\s*`([0-9]+\.[0-9]+\.[0-9]+)`",
+    re.MULTILINE,
+)
 README_CANDIDATE_RE = re.compile(
     r"Version\s+\*\*([0-9]+\.[0-9]+\.[0-9]+)\*\*\s+is an unreleased release candidate"
 )
@@ -183,6 +193,20 @@ def check_repository(root: Path) -> list[str]:
         expected_version=expected_public,
         description="public release version",
     )
+    # AGENT.md "Current Release State" first bullet is the human-curated
+    # record of the published version. When the release is finalized
+    # (VERSION == release-ready) it must match; otherwise the paragraph
+    # may lag a version behind, which is exactly the bug that
+    # PR #139 fixed post-release for 0.3.9.
+    if release_ready is not None and release_ready == version:
+        _check_single_version(
+            errors=errors,
+            relative_path="AGENT.md",
+            text=_read(root / "AGENT.md"),
+            pattern=AGENT_RELEASE_RE,
+            expected_version=version,
+            description="Current Release State published version",
+        )
 
     if version != expected_public:
         _check_release_candidate_is_declared(errors=errors, root=root, version=version)

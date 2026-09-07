@@ -1,0 +1,20 @@
+[toolchain]
+# Pin the Rust toolchain for the ratatui frontend crate. Reading this file
+# is what `cargo` and `rustup` do in this directory; CI uses the same
+# toolchain by virtue of running cargo from the crate root.
+#
+# Channel choice rationale: ratatui 0.29.0 MSRV is 1.75. We pin "stable"
+# (not a specific minor) so the crate benefits from compiler perf and
+# clippy improvements, but we lock the components so the toolchain
+# itself is reproducible on a per-day basis. The first CI run after a
+# stable minor bump may surface new clippy lints; those must be fixed
+# in the same PR that bumps the toolchain (or pinned explicitly with
+# `channel = "1.96.1"` if the project is in a freeze).
+#
+# `rustfmt` is required for the `cargo fmt --check` CI gate. `clippy`
+# is required for the `cargo clippy --all-targets -- -D warnings` CI
+# gate. `rust-src` enables rust-analyzer IDE integration if a future
+# editor config pulls in the toolchain.
+channel = "stable"
+components = ["clippy", "rustfmt", "rust-src"]
+profile = "minimal"
