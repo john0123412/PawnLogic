@@ -113,6 +113,10 @@
 | `pawnlogic/restart_recovery.py` | Restart CLI Adapter | `parse_cli_arguments()`, `load_cli_recovery()` | `test_cli_startup.py` | `--continue` and `resume <session>` load history and prefill a draft without automatically executing a Turn. |
 | `pawnlogic/startup.py` | Bootstrap | `setup_environment()` | `test_cli_startup.py` | First-run, env, debug mode. |
 | `pawnlogic/repl.py` | REPL loop | `run_repl()` | `test_cli_startup.py` | Signal handling, input restoration. |
+| `pawnlogic/headless.py` | Headless serve protocol server (ADR 0011) | `HeadlessServer.serve()`, `run_serve()`, `make_event()`, `missing_key_detail()`, `_run_eval_mode()` | `test_headless_contract.py` | Versioned NDJSON over stdio; one session per process; unknown request types ignored; reader thread dispatches interrupt and steer immediately; the golden fixture (tests/fixtures/serve_events_v1.jsonl) is the cross-language contract. |
+| `frontends/serve_wire.py` | Python reference wire client (Phase 2a) | `ServeWire`, `LatencyRecorder`, `build_request()` | `test_serve_client.py` | UI-free protocol client: spawns `pawn serve`, daemon reader thread, v1 envelope helpers; latency stats are additive observations only. |
+| `frontends/ratatui/src/wire.rs` | Rust wire parser (Phase 2b) | `parse_line()`, `build_request()` | cargo test (golden fixture alignment) | Accepts exactly the v1 vocabulary of the shared fixture; unknown version/type aborts parsing; both language parsers must accept the same fixture. |
+| `frontends/ratatui/src/ui.rs` + `main.rs` | Rust fullscreen UI (Phase 2b) | `apply_event()`, `handle_event()`, `drive_loop()` | cargo test (ui module) | Alternate-screen fullscreen with a floating TOP status bar and in-app scrolling; synchronous poll loop redraws server-driven state every tick (never keypress-only); Enter=prompt/steer, Esc=interrupt, Ctrl+C=shutdown. |
 
 ## Planned 0.3.0 Seams
 
