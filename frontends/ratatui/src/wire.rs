@@ -67,7 +67,7 @@ pub fn parse_lines(lines: &[&str]) -> Result<Vec<Event>> {
     lines.iter().map(|l| parse_line(l)).collect()
 }
 
-/// Build one versioned request (prompt/shutdown/interrupt) for the wire.
+/// Build one versioned request (prompt/command/shutdown/interrupt).
 pub fn build_request(kind: &str, text: &str, steer: bool) -> String {
     match kind {
         "prompt" => {
@@ -84,6 +84,15 @@ pub fn build_request(kind: &str, text: &str, steer: bool) -> String {
             }
             request.to_string()
         }
+        // A slash line from the composer rides the `command` request; the
+        // server dispatches it through core.commands and answers with a
+        // command_result event.
+        "command" => serde_json::json!({
+            "v": 1,
+            "type": "command",
+            "line": text,
+        })
+        .to_string(),
         other => serde_json::json!({ "v": 1, "type": other }).to_string(),
     }
 }
@@ -139,6 +148,23 @@ mod tests {
         assert!(steer.contains(r#""steer":true"#) && steer.contains(r#""text":"go left""#));
         let plain = build_request("prompt", "hi", false);
         assert!(!plain.contains("steer"));
+    }
+
+    #[test]
+    fn builds_command_requests_with_line_field() {
+        let request = build_request("command", "/keys", false);
+        assert!(request.contains(r#""type":"command""#));
+        assert!(request.contains(r#""line":"/keys""#));
+        assert!(request.contains(r#""v":1"#));
+    }
+
+    #[test]
+    fn command_result_payload_is_accepted() {
+        let event = parse_line(
+            r#"{"v": 1, "type": "command_result", "verb": "/keys", "output": ["{\"a\": true}"]}"#,
+        )
+        .unwrap();
+        assert_eq!(event.kind, "command_result");
     }
 
     #[test]
