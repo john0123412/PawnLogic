@@ -585,28 +585,41 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.3.7`. PyPI, GitHub Release, and latest tag
-  are `v0.3.7`, published 2026-09-05 through Trusted Publishing after the
-  full test gate, Dynamic E2E, distribution build, and PyPI fresh-install
-  smoke. The `0.3.6` release remains complete. PyPI project page:
-  <https://pypi.org/project/pawnlogic/0.3.7/>. GitHub Release:
-  <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.7>.
-- Phase 2 complete on `main` (recorded in
-  `docs/plans/p2-steer-and-headless-frontends.md`; unreleased — ships
-  in the next version): P2-0 Esc-steer handoff shipped in 0.3.8; 2a
-  Python reference client + latency report; 2b ratatui crate (golden-
-  fixture protocol freeze, command passthrough, cargo CI gate,
-  release-tag binary tarball attached to the GitHub Release per the
-  owner-revised ADR 0011 M3 decision).
-- Release finalization: `v0.3.7` was published on 2026-09-05 through Trusted
+- Current published release: `0.3.9`. PyPI, GitHub Release, and latest tag
+  are `v0.3.9`, published 2026-09-07 through Trusted Publishing after the
+  full test gate (Python 1604, cargo 11/11, ruff, mypy, docs guard,
+  release consistency, architecture budget), distribution build, PyPI
+  fresh-install smoke, and owner-PTY binary acceptance. The `0.3.8` and
+  `0.3.7` releases remain complete. PyPI project page:
+  <https://pypi.org/project/pawnlogic/0.3.9/>. GitHub Release:
+  <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.9>.
+- Phase 2 complete on `main` and shipped in `0.3.9` (recorded in
+  `docs/plans/p2-steer-and-headless-frontends.md`): P2-0 Esc-steer
+  handoff (0.3.8 carried the fix; 0.3.9 carries the post-acceptance
+  sharpenings); 2a Python reference client + latency report; 2b
+  ratatui crate (golden-fixture protocol freeze, command passthrough,
+  cargo CI gate, owner-side rustfmt + clippy gates in 0.3.9). Per the
+  ADR 0011 M3 owner decision, release tags now build, test, and attach
+  `pawnlogic-tui-<version>-x86_64-unknown-linux-gnu.tar.gz` plus
+  `ratatui-binary-sha256.txt` to the GitHub Release as additional
+  assets; the binary never enters the PyPI wheel. The Phase 2 record
+  in `docs/plans/` is now **complete-published**, not pending release.
+- Release finalization: `v0.3.9` was published on 2026-09-07 through Trusted
   Publishing from the `Publish to PyPI` workflow run
-  [`33974631898`](https://github.com/john0123412/PawnLogic/actions/runs/33974631898).
-  The release workflow completed its full test gate, Dynamic E2E,
-  distribution build, PyPI fresh-install smoke, and GitHub Release creation.
-  PR #126 carried the README version-pointer alignment + `.release-ready`
-  marker required by `tools/check_release_consistency.py`; the `v0.3.7`
-  tag was force-updated to point at that commit because the tag ruleset
-  blocks deletion.
+  [`34104085194`](https://github.com/john0123412/PawnLogic/actions/runs/34104085194),
+  triggered by force-pushing the `v0.3.9` tag onto the PR #137 merge
+  commit `8d7d14b` (the tag ruleset blocks deletion; re-pointing is the
+  standard move). The release workflow completed its full test gate,
+  distribution build, PyPI fresh-install smoke, GitHub Release creation,
+  and the new Rust-binary build + asset attach. PR #137 carried the
+  release-prep changes (VERSION bump, README / README_zh-CN / SECURITY
+  pointers, CHANGELOG `[Unreleased]` → `[0.3.9] - 2026-09-07`, the
+  `.release-ready` marker required by `tools/check_release_consistency.py`,
+  and the new `cargo fmt` + `cargo clippy --all-targets -D warnings`
+  frontend gates); PR #138 followed with a real-use fix surfaced by
+  owner-PTY binary acceptance (`PAWNLOGIC_TUI_SERVER` override so the
+  ratatui client no longer silently resolves a stale `python -m pawnlogic`
+  off `PATH`).
 - Runtime version source of truth: `config/paths.py:VERSION`.
 - Released plan: `0.3.7-inline-terminal-stability.md` is **complete** —
   merged to `main` by PR #124 and shipped in `v0.3.7`. It restored
