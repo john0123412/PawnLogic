@@ -5,6 +5,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- Rust ratatui frontend (Phase 2b): source-checkout crate under
+  `frontends/ratatui` speaking the v1 headless wire — fullscreen
+  alternate-screen UI with a floating TOP status bar, in-app scrolling
+  history, slash-command passthrough, Esc interrupt, and Enter-while-
+  running steering. Release tags now also build, test, and attach
+  `pawnlogic-tui-<version>-x86_64-unknown-linux-gnu.tar.gz` (with
+  sha256) to the GitHub Release.
+- Protocol freeze discipline (ADR 0011): the golden fixture
+  `tests/fixtures/serve_events_v1.jsonl` is pinned by both the Python
+  contract suite and the Rust parser; v1 fields are additive-only and
+  new message types require v:2. CI gains a 🦀 Rust Frontend job
+  (`cargo test --locked`) gating every PR.
+- Python reference client for the headless wire (Phase 2a):
+  `frontends/serve_wire.py` (wire layer + LatencyRecorder) and
+  `frontends/ptk_client.py` (Prompt Toolkit shell, `--report` writes
+  the latency report). Real-API latency: prompt→turn_started median
+  ~4ms, interrupt→turn_cancelled ~2.4ms.
+- `pawn serve` gains `prompt` + `"steer": true` — abort-and-requeue
+  semantics for the synchronous serve session, dispatched immediately
+  from the reader thread.
+
+### Fixed
+- The ratatui interactive loop redrew only on keypresses, hiding all
+  server-driven state changes (ready, turn lifecycle, streamed text)
+  until input arrived; it is now a synchronous poll loop that redraws
+  every 200ms tick (futures dependency dropped).
+
+---
+
 ## [0.3.8] - 2026-09-06
 
 ### Added

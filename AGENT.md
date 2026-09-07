@@ -591,14 +591,13 @@ are source-checkout or user-installed assets; pip/curl installations should use
   smoke. The `0.3.6` release remains complete. PyPI project page:
   <https://pypi.org/project/pawnlogic/0.3.7/>. GitHub Release:
   <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.7>.
-- Phase 2 complete: P2-0 (Esc-with-queued-work is a pure interrupt with
-  queue handoff, ADR 0009 revision; the CLAIM_STEER probe and the
-  drive-loop unwind that stranded queued work are fixed — shipped in
-  0.3.8), Phase 2a (headless wire reference client + latency report:
-  prompt->turn_started median ~4ms), and Phase 2b M1/M2/M3 (ratatui
-  crate with golden-fixture protocol freeze, command passthrough, cargo
-  CI gate; distribution stays source-checkout per the ADR 0011 M3
-  decision).
+- Phase 2 complete on `main` (recorded in
+  `docs/plans/p2-steer-and-headless-frontends.md`; unreleased — ships
+  in the next version): P2-0 Esc-steer handoff shipped in 0.3.8; 2a
+  Python reference client + latency report; 2b ratatui crate (golden-
+  fixture protocol freeze, command passthrough, cargo CI gate,
+  release-tag binary tarball attached to the GitHub Release per the
+  owner-revised ADR 0011 M3 decision).
 - Release finalization: `v0.3.7` was published on 2026-09-05 through Trusted
   Publishing from the `Publish to PyPI` workflow run
   [`33974631898`](https://github.com/john0123412/PawnLogic/actions/runs/33974631898).
