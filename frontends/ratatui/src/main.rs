@@ -64,7 +64,12 @@ fn main() -> Result<()> {
 }
 
 fn spawn_server(model: &str, extra_env: &[(String, String)]) -> Result<std::process::Child> {
-    let mut cmd = std::process::Command::new("python");
+    let server =
+        std::env::var("PAWNLOGIC_TUI_SERVER").unwrap_or_else(|_| "python -m pawnlogic".into());
+    let mut cmd = std::process::Command::new(server.split_whitespace().next().unwrap_or("python"));
+    for part in server.split_whitespace().skip(1) {
+        cmd.arg(part);
+    }
     cmd.arg("-m")
         .arg("pawnlogic")
         .arg("serve")

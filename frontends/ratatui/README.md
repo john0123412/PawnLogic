@@ -38,7 +38,10 @@ target/release/pawnlogic-tui --model bai:glm-5.3-flash \
 ```
 
 Environment: the spawned `pawn serve` inherits your environment; point
-`PAWNLOGIC_HOME` at an isolated directory for testing.
+`PAWNLOGIC_HOME` at an isolated directory for testing. The backend
+command defaults to `python -m pawnlogic` resolved from `PATH` — set
+`PAWNLOGIC_TUI_SERVER="python -m pawnlogic"` (or a venv's absolute
+python) when an older installed pawnlogic shadows the repository code.
 
 ## Keys
 
