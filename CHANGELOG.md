@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [0.3.9] - 2026-09-07
 
 ### Added
 - Rust ratatui frontend (Phase 2b): source-checkout crate under

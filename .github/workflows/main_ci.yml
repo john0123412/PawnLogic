@@ -113,6 +113,14 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('frontends/ratatui/Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
+      - name: cargo fmt
+        working-directory: frontends/ratatui
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        working-directory: frontends/ratatui
+        run: cargo clippy --all-targets --locked -- -D warnings
+
       - name: cargo test
         working-directory: frontends/ratatui
         run: cargo test --locked

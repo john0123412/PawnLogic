@@ -11,10 +11,10 @@ mod wire;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use std::path::PathBuf;
 use crossterm::event::{Event as CEvent, KeyCode};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::Stdout;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -55,12 +55,7 @@ fn main() -> Result<()> {
     }
 
     if let Some(command) = args.once_command {
-        return run_once_command(
-            &args.model,
-            &command,
-            args.dump.as_deref(),
-            &server_env,
-        );
+        return run_once_command(&args.model, &command, args.dump.as_deref(), &server_env);
     }
     if let Some(prompt) = args.once {
         return run_once(&args.model, &prompt, args.dump.as_deref(), &server_env);
@@ -98,7 +93,10 @@ fn run_once_command(
     let reader_state = Arc::clone(&state);
     let reader = std::thread::spawn(move || {
         use std::io::BufRead;
-        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+        for line in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
             if let Ok(event) = parse_line(&line) {
                 apply_event(&reader_state, &event.kind, &event.payload);
             }
@@ -159,7 +157,10 @@ fn run_once(
     let reader_state = Arc::clone(&state);
     let reader = std::thread::spawn(move || {
         use std::io::BufRead;
-        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+        for line in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
             if let Ok(event) = parse_line(&line) {
                 apply_event(&reader_state, &event.kind, &event.payload);
             }
@@ -211,7 +212,10 @@ fn run_interactive(model: &str, extra_env: &[(String, String)]) -> Result<()> {
     let reader_state = Arc::clone(&state);
     let reader = std::thread::spawn(move || {
         use std::io::BufRead;
-        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+        for line in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
             if let Ok(event) = parse_line(&line) {
                 apply_event(&reader_state, &event.kind, &event.payload);
             }
