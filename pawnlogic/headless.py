@@ -99,6 +99,7 @@ class HeadlessServer:
         self._read_line = read_line
         self._user_emit = emit
         self._emit_lock = threading.Lock()
+        self._requests: queue.Queue[str | None] = queue.Queue()
 
     def _emit(self, event: dict) -> None:
         with self._emit_lock:
@@ -108,16 +109,25 @@ class HeadlessServer:
 
     def serve(self) -> int:
         """Process requests until shutdown/EOF. Returns the exit code."""
-        requests: queue.Queue[str | None] = queue.Queue()
-
         def reader() -> None:
             while True:
                 line = self._read_line()
                 if line is None:
-                    requests.put(None)
+                    self._requests.put(None)
                     return
                 stripped = line.strip()
                 if not stripped:
+                    continue
+                if self._is_steer_request(stripped):
+                    # Immediate dispatch: the steer must arrive while the
+                    # turn is running; the serial main loop cannot serve it
+                    # until that turn settles (real-API defect).
+                    try:
+                        self._handle_steer_request(stripped)
+                    except Exception as exc:
+                        self._emit(make_event(
+                            "error", stage="steer", detail=str(exc),
+                        ))
                     continue
                 if self._is_interrupt_request(stripped):
                     # Dispatch immediately: the whole point of interrupt is
@@ -130,7 +140,7 @@ class HeadlessServer:
                             "error", stage="interrupt", detail=str(exc),
                         ))
                     continue
-                requests.put(stripped)
+                self._requests.put(stripped)
 
         # The ready event must precede reader startup: an interrupt on the
         # first line would otherwise race the ready status onto the wire.
@@ -145,7 +155,7 @@ class HeadlessServer:
         )
         reader_thread.start()
         while True:
-            line = requests.get()
+            line = self._requests.get()
             if line is None:
                 return self._shutdown()
             try:
@@ -172,12 +182,62 @@ class HeadlessServer:
             # Unknown request types are ignored per ADR 0011 (§2).
 
     @staticmethod
+    def _is_steer_request(line: str) -> bool:
+        try:
+            request = json.loads(line)
+        except json.JSONDecodeError:
+            return False
+        return (
+            isinstance(request, dict)
+            and request.get("type") == "prompt"
+            and bool(request.get("steer"))
+        )
+
+    def _handle_steer_request(self, line: str) -> None:
+        """steer:true = abort the running turn, then run this text fresh.
+
+        Serve sessions are synchronous (turns run inline on the main
+        loop), so the scheduler has no background drain for a steer lane.
+        The redirected prompt supersedes the running turn: abort it (no
+        recovered draft is minted on abort) and re-queue this text as a
+        plain prompt — the main loop drives it once the abort settles.
+        """
+        request = json.loads(line)
+        text = str(request.get("text", "")).strip()
+        if not text:
+            self._emit(make_event(
+                "error", stage="steer", detail="steer text is required",
+            ))
+            return
+        scheduler = getattr(self._session, "_turn_scheduler", None)
+        view = getattr(scheduler, "view", None)
+        active = None
+        if view is not None:
+            with contextlib.suppress(Exception):
+                active = view().active
+        if active is not None:
+            abort_all = getattr(self._session, "abort_all", None)
+            if callable(abort_all):
+                abort_all()
+                self._emit(make_event("status", stage="steer_accepted"))
+        else:
+            self._emit(make_event(
+                "status", stage="steer_ignored",
+                detail="no active turn; running as a fresh prompt",
+            ))
+        self._requests.put(
+            json.dumps({"v": PROTOCOL_VERSION, "type": "prompt", "text": text})
+        )
+
+    @staticmethod
     def _is_interrupt_request(line: str) -> bool:
         try:
             request = json.loads(line)
         except json.JSONDecodeError:
             return False
         return isinstance(request, dict) and request.get("type") == "interrupt"
+
+
 
     # ── request handlers ─────────────────────────────────
 
@@ -187,10 +247,6 @@ class HeadlessServer:
             self._emit(make_event(
                 "error", stage="prompt", detail="prompt.text is required",
             ))
-            return
-
-        if bool(request.get("steer")):
-            self._handle_steer(text)
             return
 
         detail = missing_key_detail(self._session)
@@ -312,33 +368,6 @@ class HeadlessServer:
             "status", stage="interrupt_ignored",
             detail="no active turn",
         ))
-
-    def _handle_steer(self, text: str) -> None:
-        """Queue a steer for the active turn (prompt with "steer": true).
-
-        The steer is delivered at the next Tool safe point of the running
-        turn, or — when the turn settles first — starts as a fresh turn
-        from the queue lanes. Requires an active turn; without one a plain
-        prompt request is the correct call.
-        """
-        from core.turn_scheduler import Submission, SubmissionKind
-
-        scheduler = getattr(self._session, "_turn_scheduler", None)
-        view = getattr(scheduler, "view", None)
-        if scheduler is None or view is None or view().active is None:
-            self._emit(make_event(
-                "error", stage="steer",
-                detail="steer requires an active turn; send a prompt instead",
-            ))
-            return
-        try:
-            scheduler.submit(
-                Submission(text, kind=SubmissionKind.STEER, source="serve")
-            )
-        except Exception as exc:
-            self._emit(make_event("error", stage="steer", detail=str(exc)))
-            return
-        self._emit(make_event("status", stage="steer_queued"))
 
     def _handle_command(self, request: dict) -> None:
         from core.commands import CommandContext, dispatch

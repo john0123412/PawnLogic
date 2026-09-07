@@ -57,6 +57,19 @@ class FakeSession:
             return types.SimpleNamespace(accepted=accepted, affected_ids=[])
 
         self._turn_scheduler = types.SimpleNamespace(control=_control)
+        self.has_active_turn = False
+        self.submitted: list[Any] = []
+
+        def _view() -> Any:
+            return types.SimpleNamespace(
+                active=object() if self.has_active_turn else None
+            )
+
+        def _submit(submission: Any) -> None:
+            self.submitted.append(submission)
+
+        self._turn_scheduler.view = _view
+        self._turn_scheduler.submit = _submit
 
     def run_turn(self, prompt: str) -> None:
         self.run_turn_calls.append(prompt)
@@ -552,9 +565,9 @@ def test_interrupt_retry_covers_turn_registration_race():
 # steer request (prompt with "steer": true, P2-0)
 # ════════════════════════════════════════════════════════
 
-def test_steer_requires_an_active_turn():
-    """prompt + "steer": true without a running turn is a stage=steer
-    error, pointing the client at a plain prompt instead."""
+def test_steer_without_active_turn_falls_back_to_prompt():
+    """prompt + "steer": true with no active turn runs the text as a plain
+    prompt (steer_ignored marks the fallback for clients)."""
     session = FakeSession()
     server, events = make_server(
         [
@@ -565,25 +578,26 @@ def test_steer_requires_an_active_turn():
     )
     code = server.serve()
     assert code == 0
-    error = next(e for e in events if e["type"] == "error")
-    assert error["stage"] == "steer"
-    assert "active turn" in error["detail"]
-    assert session.run_turn_calls == []
+    assert session.run_turn_calls == ["hi"]
+    ignored = [e for e in events if e.get("stage") == "steer_ignored"]
+    assert ignored and "no active turn" in ignored[0]["detail"]
 
 
-def test_steer_with_active_turn_queues_and_reports():
-    """prompt + "steer": true with an active turn submits a STEER entry
-    through the scheduler (single control seam as the live Esc), never
-    calls run_turn inline, and reports steer_queued."""
+def test_steer_with_active_turn_aborts_and_reports():
+    """prompt + "steer": true with an active turn translates P2-0 to the
+    synchronous serve session: abort the running turn (queue lanes
+    cleared), report steer_accepted, and the text re-enters the main
+    request queue as the next plain prompt."""
     session = FakeSession()
     scheduler_view = types.SimpleNamespace(active=object())
     session._turn_scheduler.view = lambda: scheduler_view
-    submitted: list[Any] = []
+    aborted: list[bool] = []
 
-    def _fake_submit(submission: Any) -> None:
-        submitted.append(submission)
+    def _abort_all(*args: Any, **kwargs: Any) -> int:
+        aborted.append(True)
+        return 1
 
-    session._turn_scheduler.submit = _fake_submit
+    session.abort_all = _abort_all
 
     server, events = make_server(
         [
@@ -594,12 +608,49 @@ def test_steer_with_active_turn_queues_and_reports():
     )
     code = server.serve()
     assert code == 0
-    assert len(submitted) == 1
-    assert submitted[0].content == "go left"
-    assert submitted[0].kind.value == "steer"
-    assert submitted[0].source == "serve"
-    assert session.run_turn_calls == []
-    assert any(e.get("stage") == "steer_queued" for e in events)
+    assert aborted == [True]
+    assert any(e.get("stage") == "steer_accepted" for e in events)
+    # The re-queued text runs as a plain prompt after the abort settles.
+    assert session.run_turn_calls == ["go left"]
+
+
+def test_steer_processed_in_serial_order_after_running_prompt():
+    """The steer request is processed by the serial main loop in wire
+    order: abort lands while the first prompt is still the request being
+    served, and the steer text runs as the next plain prompt."""
+    session = FakeSession()
+    session.has_active_turn = True
+    aborted: list[bool] = []
+
+    def _abort_all(*args: Any, **kwargs: Any) -> int:
+        aborted.append(True)
+        return 1
+
+    session.abort_all = _abort_all
+
+    def _fake_run_turn(prompt: str) -> None:
+        # Simulate the active turn the first prompt is serving.
+        session.has_active_turn = True
+        session.run_turn_calls.append(prompt)
+        if prompt == "long task":
+            session.has_active_turn = True
+
+    session.run_turn = _fake_run_turn
+
+    server, events = make_server(
+        [
+            line_request({"type": "prompt", "text": "long task"}),
+            line_request({"type": "prompt", "text": "STOP", "steer": True}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+
+    assert code == 0
+    assert aborted == [True]
+    assert session.run_turn_calls == ["long task", "STOP"]
+    assert any(e.get("stage") == "steer_accepted" for e in events)
 
 
 def test_missing_key_detail_helper_matches_pre_flight(monkeypatch):
