@@ -281,6 +281,61 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # ── Rust frontend binary (Phase 2b distribution) ──────────────────
+  build-ratatui-binary:
+    name: "🦀 Build ratatui binary"
+    needs: [test-before-publish, dynamic-test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/index
+            frontends/ratatui/target
+          key: cargo-release-${{ runner.os }}-${{ hashFiles('frontends/ratatui/Cargo.lock') }}
+          restore-keys: cargo-release-${{ runner.os }}-
+
+      - name: Test before packaging
+        working-directory: frontends/ratatui
+        run: cargo test --locked
+
+      - name: Build release binary
+        working-directory: frontends/ratatui
+        run: cargo build --release --locked
+
+      - name: Package binary
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          cp frontends/ratatui/target/release/pawnlogic-tui dist/
+          cp frontends/ratatui/README.md dist/RATATUI_FRONTEND.md
+          tar -czf "dist/pawnlogic-tui-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"             -C dist pawnlogic-tui RATATUI_FRONTEND.md
+          sha256sum "dist/pawnlogic-tui-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"             > dist/ratatui-binary-sha256.txt
+          ls -la dist
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ratatui-binary
+          path: |
+            dist/pawnlogic-tui-*.tar.gz
+            dist/ratatui-binary-sha256.txt
+          if-no-files-found: error
+          retention-days: 7
+
   # ── Publish with PyPI Trusted Publishing / OIDC ───────────────────
   publish-testpypi:
     name: "🚀 Publish to TestPyPI"
@@ -377,7 +432,7 @@ jobs:
 
   github-release:
     name: "🏷️ Create GitHub Release"
-    needs: smoke-pypi              # A release must not claim an uninstallable version
+    needs: [smoke-pypi, build-ratatui-binary]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -398,6 +453,12 @@ jobs:
           name: github-release-notes
           path: .
 
+      - name: Download ratatui binary
+        uses: actions/download-artifact@v7
+        with:
+          name: ratatui-binary
+          path: ratatui-binary
+
       # Create GitHub Release only for tag pushes, not workflow_dispatch dry-runs.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -409,3 +470,5 @@ jobs:
           files: |
             dist/*.whl
             dist/*.tar.gz
+            ratatui-binary/pawnlogic-tui-*.tar.gz
+            ratatui-binary/ratatui-binary-sha256.txt

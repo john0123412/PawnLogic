@@ -110,8 +110,12 @@ wire, so the freeze rules are now explicit:
 4. **CI gates.** The Python suite gates the wire on every PR; the 🦀
    Rust Frontend job (cargo test --locked) gates the parser. A protocol
    change that skips one language fails the other's tests.
-5. **Distribution decision (M3).** The Rust frontend ships as a
-   source-checkout crate only (`frontends/ratatui`), built with
-   `cargo build --release` by whoever runs it. No prebuilt binaries and
-   no PyPI changes for Phase 2; revisiting that requires a separate
-   owner decision because it changes the release pipeline.
+5. **Distribution decision (M3, revised by owner 2026-09-06).** The
+   Rust frontend builds from `frontends/ratatui` with
+   `cargo build --release --locked`. On tag pushes the publish workflow
+   builds, tests, and packages
+   `pawnlogic-tui-<version>-x86_64-unknown-linux-gnu.tar.gz` and
+   attaches it (with its sha256) to the GitHub Release alongside the
+   Python distributions. PyPI packaging of the frontend remains out of
+   scope — the crate version is bumped in the same release-prep commit
+   as `config/paths.py:VERSION`.

@@ -5,7 +5,6 @@
 //! pane, and a one-row composer. M1 renders read-only; the composer only
 //! sends prompts and Esc interrupts.
 
-use anyhow::Result;
 use crossterm::event::{Event as CEvent, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use ratatui::{
     layout::{Constraint, Layout, Position},
@@ -49,9 +48,6 @@ impl History {
         self.scroll_from_end = self.scroll_from_end.saturating_sub(rows);
     }
 
-    pub fn follow_tail(&mut self) {
-        self.scroll_from_end = 0;
-    }
 }
 
 /// Shared UI state between the render loop and the wire callbacks.
