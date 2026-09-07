@@ -587,19 +587,27 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 - Current published release: `0.3.9`. PyPI, GitHub Release, and latest tag
   are `v0.3.9`, published 2026-09-07 through Trusted Publishing after the
-  full test gate (Python 1604, cargo 11/11, ruff, mypy, docs guard,
-  release consistency, architecture budget), distribution build, PyPI
-  fresh-install smoke, and owner-PTY binary acceptance. The `0.3.8` and
-  `0.3.7` releases remain complete. PyPI project page:
+  full test gate (Python **1,566** non-E2E tests, **31/31** Dynamic E2E,
+  cargo **11/11**, ruff, mypy, docs guard, release consistency,
+  architecture budget), distribution build, PyPI fresh-install smoke,
+  and owner-PTY binary acceptance. The `0.3.8` and `0.3.7` releases
+  remain complete. PyPI project page:
   <https://pypi.org/project/pawnlogic/0.3.9/>. GitHub Release:
   <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.9>.
+  *(Gate numbers re-measured at the `v0.3.9` tag point, commit
+  `8d7d14b`, in a clean venv (`pip install -e ".[dev]"` against the
+  v0.3.9 worktree) with all provider API-key env vars unset. See the
+  `v0.3.9` worktree in `.git/worktrees/`-equivalent or
+  `/tmp/v039-verify` to reproduce.)*
 - Phase 2 complete on `main` and shipped in `0.3.9` (recorded in
   `docs/plans/p2-steer-and-headless-frontends.md`): P2-0 Esc-steer
   handoff (0.3.8 carried the fix; 0.3.9 carries the post-acceptance
   sharpenings); 2a Python reference client + latency report; 2b
   ratatui crate (golden-fixture protocol freeze, command passthrough,
-  cargo CI gate, owner-side rustfmt + clippy gates in 0.3.9). Per the
-  ADR 0011 M3 owner decision, release tags now build, test, and attach
+  cargo CI gate). 0.3.9 added `cargo fmt --check` and
+  `cargo clippy --all-targets -D warnings` to the Rust Frontend CI
+  job per the ADR 0011 M3 protocol-freeze discipline. Per the same
+  owner decision, release tags now build, test, and attach
   `pawnlogic-tui-<version>-x86_64-unknown-linux-gnu.tar.gz` plus
   `ratatui-binary-sha256.txt` to the GitHub Release as additional
   assets; the binary never enters the PyPI wheel. The Phase 2 record
