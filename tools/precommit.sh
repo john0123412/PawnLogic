@@ -6,17 +6,18 @@
 # Exit code 0 = pass, non-zero = block the commit.
 #
 # Phases:
-#   1. Python: ruff format --check on staged .py files (only if any are
-#      staged; otherwise skip). Uses the venv at venv/bin/ruff if present,
-#      otherwise the system `ruff` binary.
-#   2. Rust: cargo fmt --check in frontends/ratatui, only if a Rust file
-#      there is staged.
+#   1. Python: `ruff check` on staged .py files (only if any are
+#      staged; otherwise skip). Uses the venv at venv/bin/ruff if
+#      present, otherwise the system `ruff` binary. Matches what CI's
+#      🦀 Lint (ruff) job runs (`ruff check .`).
+#   2. Rust: `cargo fmt --check` in frontends/ratatui, only if a Rust
+#      file there is staged. Matches CI's 🦀 Rust Frontend gate.
 #   3. Sanity: no absolute local paths, no provider API keys in the
 #      staged diff (mirrors the AGENT.md "Before every commit" leak
 #      scan, scoped to the staged set).
 #
 # This script never modifies files. If a stage fails, fix the
-# formatting with `ruff format <file>` or `cargo fmt` and re-stage.
+# formatting with `ruff check --fix <file>` or `cargo fmt` and re-stage.
 #
 # To install as a real git hook:
 #   ln -s ../../tools/precommit.sh .git/hooks/pre-commit
@@ -32,10 +33,14 @@ STAGED_RS="$(git diff --cached --name-only --diff-filter=ACMR -- 'frontends/rata
 STAGED_ANY="$(git diff --cached --name-only --diff-filter=ACMR || true)"
 
 run_ruff() {
+    # Mirrors CI: only `ruff check` is run there, not `ruff format`.
+    # `format --check` is strictly stronger than what CI enforces and
+    # would block commits for style-only diffs on legacy files. Keep
+    # parity with CI so local hooks never say "fail" when CI says "ok".
     if [ -x venv/bin/ruff ]; then
-        venv/bin/ruff format --check "$@"
+        venv/bin/ruff check "$@"
     elif command -v ruff >/dev/null 2>&1; then
-        ruff format --check "$@"
+        ruff check "$@"
     else
         echo "  ✗ ruff not found (install with: pip install ruff)"
         return 1
@@ -57,7 +62,7 @@ count_lines() {
 echo "[pre-commit] staged files: $(count_lines "$STAGED_ANY")"
 
 if [ -n "$STAGED_PY" ]; then
-    echo "[pre-commit] ruff format --check on $(count_lines "$STAGED_PY") Python file(s)"
+    echo "[pre-commit] ruff check on $(count_lines "$STAGED_PY") Python file(s)"
     # shellcheck disable=SC2086
     run_ruff $STAGED_PY || exit 1
 else
