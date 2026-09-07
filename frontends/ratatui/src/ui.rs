@@ -41,13 +41,13 @@ impl History {
     }
 
     pub fn scroll_up(&mut self, rows: usize) {
-        self.scroll_from_end = (self.scroll_from_end + rows).min(self.lines.len().saturating_sub(1));
+        self.scroll_from_end =
+            (self.scroll_from_end + rows).min(self.lines.len().saturating_sub(1));
     }
 
     pub fn scroll_down(&mut self, rows: usize) {
         self.scroll_from_end = self.scroll_from_end.saturating_sub(rows);
     }
-
 }
 
 /// Shared UI state between the render loop and the wire callbacks.
@@ -73,10 +73,7 @@ pub fn draw(f: &mut Frame, state: &Arc<Mutex<UiState>>, composer: &str) {
     .split(f.area());
 
     // ── Floating TOP status bar (the Phase 2b signature) ──
-    let elapsed = state
-        .started_at
-        .map(|t| t.elapsed().as_secs())
-        .unwrap_or(0);
+    let elapsed = state.started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0);
     let state_text = if state.running {
         format!("⏱ {elapsed}s · streaming")
     } else if state.last_status.is_empty() {
@@ -88,7 +85,10 @@ pub fn draw(f: &mut Frame, state: &Arc<Mutex<UiState>>, composer: &str) {
         Line::from(vec![
             Span::styled(
                 " PawnLogic ",
-                Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
             Span::styled(&state.model, Style::default().add_modifier(Modifier::BOLD)),
@@ -123,7 +123,10 @@ pub fn draw(f: &mut Frame, state: &Arc<Mutex<UiState>>, composer: &str) {
 
     // Cursor sits at the composer so typing feels native.
     let cursor_col = 2 + composer_width(&composer_text);
-    f.set_cursor_position(Position::new(cursor_col.min(chunks[2].width - 1), chunks[2].y));
+    f.set_cursor_position(Position::new(
+        cursor_col.min(chunks[2].width - 1),
+        chunks[2].y,
+    ));
 }
 
 fn composer_width(composer: &str) -> u16 {
@@ -172,7 +175,12 @@ pub fn apply_event(state: &Arc<Mutex<UiState>>, kind: &str, payload: &serde_json
         }
         "stream" => {
             if let Some(text) = payload.get("text").and_then(|t| t.as_str()) {
-                if !state.history.lines.last().is_some_and(|l| l.starts_with('│')) {
+                if !state
+                    .history
+                    .lines
+                    .last()
+                    .is_some_and(|l| l.starts_with('│'))
+                {
                     state.history.push("│ ".into());
                 }
                 state.history.append_to_last(text);
@@ -182,7 +190,10 @@ pub fn apply_event(state: &Arc<Mutex<UiState>>, kind: &str, payload: &serde_json
         "result" => {
             state.running = false;
             state.last_status = "completed".into();
-            let response = payload.get("response").and_then(|r| r.as_str()).unwrap_or("");
+            let response = payload
+                .get("response")
+                .and_then(|r| r.as_str())
+                .unwrap_or("");
             state.history.push(format!("= {response:?}"));
             true
         }
@@ -194,7 +205,10 @@ pub fn apply_event(state: &Arc<Mutex<UiState>>, kind: &str, payload: &serde_json
         }
         "tool" => {
             let stage = payload.get("stage").and_then(|s| s.as_str()).unwrap_or("");
-            let name = payload.get("tool_name").and_then(|n| n.as_str()).unwrap_or("");
+            let name = payload
+                .get("tool_name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("");
             state.history.push(format!("· tool {stage}: {name}"));
             false
         }
@@ -230,10 +244,7 @@ pub fn key_action(key: &crossterm::event::KeyEvent) -> Option<&'static str> {
 }
 
 /// Consume one crossterm event, mutating history scroll or reporting actions.
-pub fn handle_event(
-    event: &CEvent,
-    state: &Arc<Mutex<UiState>>,
-) -> Option<&'static str> {
+pub fn handle_event(event: &CEvent, state: &Arc<Mutex<UiState>>) -> Option<&'static str> {
     match event {
         CEvent::Key(key) => {
             if let Some(action) = key_action(key) {
