@@ -105,23 +105,27 @@ use the additive `{"type":"event","data":{...}}` envelope.
 
 ## What's New
 
-Version 0.3.2 introduces bounded, isolation-proven two-worker delegation and
-unified skill pack management while preserving existing public contracts:
+Version 0.3.9 ships the Phase 2 turn-control and frontend layer while
+preserving existing public contracts:
 
-- A supported batch caller can run at most two delegated tasks while preserving
-  FIFO admission and input-order results; `delegate_task` remains a one-task
-  compatibility adapter and never creates implicit fan-out.
-- Each concurrent child receives a copied RuntimeContext, unique `.tasks/`
-  workspace, bounded output collector, and task-local cancellation token.
-- Shared token, Tool-call, and cost budgets retain atomic claim and settlement
-  behavior across queued, completed, cancelled, and deadline-expired tasks.
-- Concurrent children may use only task-isolated file Tools. Shell, network,
-  container, extension, MCP, browser, pwn, sandbox, and other non-isolated
-  Tool paths fail closed before handler execution.
-- Unified skill pack management under `/skills`: interactive TUI with
-  arrow-key navigation, space-to-toggle, search, and bulk operations.
-  `/sp` and `/skillpack` commands are removed; `/skills` is the single entry
-  point for install, sync, rescan, and enable/disable.
+- **Esc steering (Codex/Claude Code semantics):** Esc is a pure interrupt;
+  the queued follow-up runs immediately as a fresh turn — no extra
+  confirmation, no message loss. Steer works the same in the live REPL and
+  over the headless wire.
+- **Headless core protocol (v1):** every pawn process can serve
+  NDJSON-over-stdio (`pawn serve`) with a versioned envelope, making the
+  agent embeddable by any frontend. Golden-fixture pinned contract tests.
+- **Rust ratatui frontend (source-checkout crate):** fullscreen
+  alternate-screen UI with a floating top status bar, in-app scrolling
+  history, slash-command passthrough, and `PAWNLOGIC_TUI_SERVER` to point
+  a packaged binary at any backend. Release tags attach a Linux binary
+  tarball with a sha256 checksum.
+- **Reference PT client + latency harness:** `frontends/ptk_client.py`
+  measures prompt-to-turn-start, interrupt, and chunk-gap latencies
+  (median ~4 ms / ~2.4 ms / <100 ms on real API runs).
+- **Terminal hardening:** live output is single-owner — completed turns
+  appear exactly once in the native scrollback; 2 s flush debouncing,
+  wcwidth-aware pre-wrapping, and no close delay from throughput timers.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
