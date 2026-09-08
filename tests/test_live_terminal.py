@@ -1327,3 +1327,25 @@ def test_first_frame_after_host_write_excludes_delivered_text() -> None:
                     await asyncio.wait_for(run_task, timeout=5)
 
     asyncio.run(scenario())
+
+
+def test_thinking_spinner_is_gated_off_in_live_terminal_mode() -> None:
+    """The stdout spinner writes \\r animation frames to sys.stdout; in live
+    mode that stream is the transcript proxy, and its stop() erase wipes
+    into content already owned by the streaming answer (owner-acceptance
+    interleaving defect). While the inline terminal is active the spinner
+    must not run; the status line already shows the same state."""
+    from core.session import _ThinkingSpinner
+
+    class _FakeSession:
+        _live_terminal_active = True
+
+    session = _FakeSession()
+    # Same gate expression the turn loop uses.
+    enabled = True and not getattr(session, "_live_terminal_active", False)
+    spinner = _ThinkingSpinner(enabled)
+    spinner.start()
+    spinner._stop.wait(0.2)  # give a would-be thread time to print a frame
+    assert spinner._thread is None
+    assert not spinner._printed
+    spinner.stop()

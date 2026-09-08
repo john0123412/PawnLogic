@@ -216,11 +216,19 @@ def _refresh_legacy_tool_globals() -> None:
 
 
 class _ThinkingSpinner:
-    """Small terminal spinner shown while the model has not produced output."""
+    """Small terminal spinner shown while the model has not produced output.
 
-    def __init__(self, enabled: bool, label: str = "Thinking") -> None:
+    Disabled while the inline live terminal is active: the spinner writes
+    carriage-return animation frames straight to ``sys.stdout``, and in
+    live mode that stream is the output proxy feeding the transcript —
+    the ``\\r`` frames rewrite (and the stop() erase wipes into) content
+    already owned by the streaming answer. The live terminal surfaces the
+    same state via its status line, so nothing is lost.
+    """
+
+    def __init__(self, enabled: bool) -> None:
         self.enabled = enabled and sys.stdout.isatty()
-        self.label = label
+        self.label = "Thinking"
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._printed = False
@@ -1485,7 +1493,12 @@ class AgentSession:
         iteration: int,
     ) -> TurnApiResult:
         reasoning_printed = False
-        spinner = _ThinkingSpinner(_user_mode())
+        # Live-terminal mode: the status line already shows the same state;
+        # a stdout spinner would inject \r frames into the transcript and
+        # race the streaming answer (owner-acceptance defect).
+        spinner = _ThinkingSpinner(
+            _user_mode() and not getattr(self, "_live_terminal_active", False)
+        )
         spinner.start()
 
         def on_api_retry(retry_detail: str) -> None:
