@@ -276,7 +276,8 @@ MCP 子进程 stderr 默认写入 `~/.pawnlogic/logs/mcp/<server>.stderr.log`。
 ├── pawn.db                 # 会话、消息、知识库
 ├── global_skills.md        # GSA 技能存档
 ├── skills/                 # 可选用户安装 skill pack
-├── workspace/              # 每会话工作目录
+├── sessions/               # 每会话临时目录（session_<id>/）
+├── workspace/              # 自动命名的任务目录及 by-name/ 别名
 └── logs/                   # 审计日志
 ```
 

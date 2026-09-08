@@ -5,6 +5,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- Live terminal no longer renders completed output twice. Previously a
+  finished turn appeared both in the native host scrollback (via the
+  `run_in_terminal` flush) and again inside the application's transcript
+  viewport, which duplicated every streamed answer on wcwidth-mismatched
+  terminals (CJK text + emoji under Windows Terminal / WSL). The
+  application viewport now renders only text still awaiting host
+  delivery (a delivery cursor gates the render cache), so each line is
+  owned by exactly one surface; the flush commit advances the cursor
+  and invalidates the render immediately. Live host flushes are also
+  debounced to at most one per 2 s, flushed payloads are pre-wrapped
+  with the host's real column count (`wcwidth`-measured; a row that
+  cannot fit any glyph now emits one character instead of spinning,
+  and Tab is budgeted at its 8-column maximum while staying
+  byte-identical in the payload), and `close()` cancels the debounce
+  reservation instead of waiting out the window, so shutdown is never
+  delayed by a throughput timer. Verified by a new screen-ownership
+  regression that asserts the assistant output appears exactly once
+  across viewport and scrollback at three checkpoints.
+
+### Changed
+- Session scratch directories now live under `~/.pawnlogic/sessions/`
+  (`session_<id>/`) instead of cluttering `~/.pawnlogic/workspace/`.
+  `workspace/` keeps only auto-named task directories and their
+  `by-name/` aliases. Auto-naming promotes a session directory from
+  `sessions/` into `workspace/<slug>/` and leaves a relative symlink at
+  the old path so pre-swap absolute paths keep resolving; the
+  `by-name/<slug>` alias is now relative across both roots.
+
+---
+
 ## [0.3.9] - 2026-09-07
 
 ### Added

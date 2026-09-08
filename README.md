@@ -352,7 +352,8 @@ All runtime data and API keys are stored in `~/.pawnlogic/`.
 ├── pawn.db                 # sessions, messages, knowledge base
 ├── global_skills.md        # GSA skill archive
 ├── skills/                 # optional user-installed skill packs
-├── workspace/              # per-session working directories
+├── sessions/               # per-session scratch directories (session_<id>/)
+├── workspace/              # auto-named task directories plus by-name/ aliases
 └── logs/                   # audit logs
 ```
 

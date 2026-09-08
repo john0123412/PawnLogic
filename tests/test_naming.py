@@ -11,6 +11,7 @@ Covers:
   - _extract_json raises ValueError on empty input
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -145,3 +146,83 @@ def test_extract_json_empty_raises():
 def test_extract_json_whitespace_raises():
     with pytest.raises(ValueError, match="empty naming response"):
         _extract_json("   ")
+
+
+# ── stable_workspace_dir: sessions/ vs workspace/ split ─────────
+
+def _load_naming_module(monkeypatch, tmp_path: Path):
+    """Import core.naming against an isolated PAWNLOGIC_HOME."""
+    import importlib
+
+    runtime_home = tmp_path / "pawn-home"
+    monkeypatch.setenv("PAWNLOGIC_HOME", str(runtime_home))
+    for key in list(sys.modules):
+        if key == "config" or key.startswith("config.") or key == "core.naming":
+            sys.modules.pop(key, None)
+    core_pkg = sys.modules.get("core")
+    if core_pkg is not None and hasattr(core_pkg, "naming"):
+        delattr(core_pkg, "naming")
+    return importlib.import_module("core.naming")
+
+
+def test_stable_workspace_dir_creates_sessions_under_sessions_root(monkeypatch, tmp_path):
+    naming = _load_naming_module(monkeypatch, tmp_path)
+    path = Path(naming.stable_workspace_dir("sess0001"))
+
+    sessions_root = tmp_path / "pawn-home" / "sessions"
+    workspace_root = tmp_path / "pawn-home" / "workspace"
+    assert path.parent == sessions_root
+    assert path.name == "session_sess0001"
+    assert path.is_dir()
+    # The session scratch dir must not leak into the named-task workspace.
+    assert not (workspace_root / "session_sess0001").exists()
+
+
+def test_workspace_alias_lands_in_workspace_by_name(monkeypatch, tmp_path):
+    naming = _load_naming_module(monkeypatch, tmp_path)
+    sessions_dir = Path(naming.stable_workspace_dir("sess0002"))
+    (sessions_dir / "finding.md").write_text("report", encoding="utf-8")
+
+    alias = naming.create_workspace_alias(
+        "sess0002", "ctf-heap-writeup", str(sessions_dir)
+    )
+
+    by_name = tmp_path / "pawn-home" / "workspace" / "by-name" / alias
+    assert by_name.is_symlink()
+    assert (by_name / "finding.md").read_text(encoding="utf-8") == "report"
+
+
+def test_link_old_path_to_new_keeps_pre_swap_paths_resolvable(monkeypatch, tmp_path):
+    naming = _load_naming_module(monkeypatch, tmp_path)
+    home = tmp_path / "pawn-home"
+
+    # Cross-root promotion: sessions/session_x -> workspace/<slug>.
+    old = home / "sessions" / "session_x"
+    old.mkdir(parents=True)
+    (old / "finding.md").write_text("report", encoding="utf-8")
+    new = home / "workspace" / "ctf-heap-writeup"
+    new.parent.mkdir(parents=True, exist_ok=True)
+    os.rename(old, new)
+
+    naming.link_old_path_to_new(old, new)
+
+    assert old.is_symlink()
+    assert (old / "finding.md").read_text(encoding="utf-8") == "report"
+
+    # Same-root rename: workspace/session_y -> workspace/<slug>.
+    old2 = home / "workspace" / "session_y"
+    old2.mkdir(parents=True)
+    (old2 / "note.md").write_text("note", encoding="utf-8")
+    new2 = home / "workspace" / "web-recon-notes"
+    os.rename(old2, new2)
+
+    naming.link_old_path_to_new(old2, new2)
+
+    assert old2.is_symlink()
+    assert (old2 / "note.md").read_text(encoding="utf-8") == "note"
+
+    # An occupied old path is never clobbered by the fallback link.
+    occupied = home / "workspace" / "occupied-real"
+    occupied.mkdir()
+    naming.link_old_path_to_new(occupied, new2)
+    assert not occupied.is_symlink()
