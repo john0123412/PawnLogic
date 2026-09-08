@@ -5,27 +5,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [0.3.10] - 2026-09-08
+
+### Added
+- `PAWNLOGIC_TUI_SERVER` environment variable lets a packaged ratatui
+  frontend spawn an explicit backend command instead of resolving
+  `python` from the host PATH (release-binaries previously picked up an
+  old installed pawnlogic). Documented in `frontends/ratatui/README.md`.
 
 ### Fixed
+- The pre-commit leak scan could be silently bypassed for sibling files
+  by staging a deletion-only change to `tools/precommit.sh` in the same
+  commit: the self-exclusion filter collapsed to `grep -vF ""`, which
+  matches every line and emptied the scan set. The scanner's own file is
+  now excluded by pathspec and every other staged file is always scanned.
+  This closes that specific bypass; it does not claim the scanner is
+  immune to all future bypass classes (pinned by regression tests).
 - Live terminal no longer renders completed output twice. Previously a
   finished turn appeared both in the native host scrollback (via the
   `run_in_terminal` flush) and again inside the application's transcript
   viewport, which duplicated every streamed answer on wcwidth-mismatched
   terminals (CJK text + emoji under Windows Terminal / WSL). The
   application viewport now renders only text still awaiting host
-  delivery (a delivery cursor gates the render cache), so each line is
-  owned by exactly one surface; the flush commit advances the cursor
-  and invalidates the render immediately. Live host flushes are also
-  debounced to at most one per 2 s, flushed payloads are pre-wrapped
-  with the host's real column count (`wcwidth`-measured; a row that
-  cannot fit any glyph now emits one character instead of spinning,
-  and Tab is budgeted at its 8-column maximum while staying
-  byte-identical in the payload), and `close()` cancels the debounce
-  reservation instead of waiting out the window, so shutdown is never
-  delayed by a throughput timer. Verified by a new screen-ownership
-  regression that asserts the assistant output appears exactly once
-  across viewport and scrollback at three checkpoints.
+  delivery (a delivery cursor gates the render cache, committed inside
+  the `run_in_terminal` window so the first restored frame is already
+  post-delivery), so each line is owned by exactly one surface. Live
+  host flushes are also debounced to at most one per 2 s, flushed
+  payloads are pre-wrapped with the host's real column count
+  (`wcwidth`-measured; a row that cannot fit any glyph now emits one
+  character instead of spinning, and Tab is budgeted at its 8-column
+  maximum while staying byte-identical in the payload), and `close()`
+  cancels the debounce reservation instead of waiting out the window,
+  so shutdown is never delayed by a throughput timer. Verified by
+  screen-ownership and first-frame timing regressions.
 
 ### Changed
 - Session scratch directories now live under `~/.pawnlogic/sessions/`

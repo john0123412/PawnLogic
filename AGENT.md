@@ -585,20 +585,43 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.3.9`. PyPI, GitHub Release, and latest tag
-  are `v0.3.9`, published 2026-09-07 through Trusted Publishing after the
-  full test gate (Python **1,566** non-E2E tests, **31/31** Dynamic E2E,
-  cargo **11/11**, ruff, mypy, docs guard, release consistency,
-  architecture budget), distribution build, PyPI fresh-install smoke,
-  and owner-PTY binary acceptance. The `0.3.8` and `0.3.7` releases
-  remain complete. PyPI project page:
+- Current published release: `0.3.10`. **Status: release candidate — the
+  CHANGELOG, README pointers, SECURITY row, and `.release-ready` marker are
+  finalized on this branch; the `v0.3.10` tag, Trusted Publishing run, and
+  GitHub Release are pending full candidate acceptance (Python matrix +
+  Dynamic E2E on the release branch, build + fresh-install smoke, BAI
+  real-PTY acceptance) and owner terminal sign-off.** Until the tag exists,
+  the publicly released version on PyPI remains `0.3.9`; no published-
+  complete claim is made for `0.3.10` before the tag lands. The `0.3.9`,
+  `0.3.8`, and `0.3.7` releases remain complete. PyPI project page:
   <https://pypi.org/project/pawnlogic/0.3.9/>. GitHub Release:
   <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.9>.
-  *(Gate numbers re-measured at the `v0.3.9` tag point, commit
-  `8d7d14b`, in a clean venv (`pip install -e ".[dev]"` against the
-  v0.3.9 worktree) with all provider API-key env vars unset. See the
-  `v0.3.9` worktree in `.git/worktrees/`-equivalent or
-  `/tmp/v039-verify` to reproduce.)*
+- 0.3.10 recap (merged to `main` ahead of the release branch):
+  - **#138** — `PAWNLOGIC_TUI_SERVER` override so packaged ratatui
+    binaries stop silently resolving a stale `python -m pawnlogic`
+    off `PATH` (real-use defect from owner-PTY acceptance of 0.3.9).
+  - **#140** — pre-commit leak-scan bypass fix: staging a deletion-only
+    change to `tools/precommit.sh` collapsed the scan via
+    `grep -vF ""` and let a staged key in a sibling file pass. The
+    scanner's own file is excluded by pathspec; every other staged file
+    is always scanned. Scoped fix — it does not claim the scanner is
+    immune to all future bypass classes.
+  - **#141** — live-terminal display ownership: completed output is
+    single-owner (native scrollback), the delivery cursor commits inside
+    the `run_in_terminal` window (first restored frame is already
+    post-delivery), 2 s flush debouncing with wcwidth-aware pre-wrapping
+    (1-column wide-glyph hang fixed, Tab budgeted at 8 columns,
+    byte-identical payload), close no longer waits out the debounce
+    window, and session scratch directories split into
+    `~/.pawnlogic/sessions/`. Three acceptance review rounds; merged at
+    `b8968ff`.
+  - **#142** — 0.3.10 plan registration and stale Phase 2 publication
+    claims corrected; READMEs' What's New moved from 0.3.2 to shipped
+    0.3.9 content.
+  - Gate evidence on the pre-candidate tree: fast suite 1,583 passed /
+    38 deselected, Dynamic E2E 31/31, ruff + mypy + docs guards clean;
+    candidate matrix numbers are recorded at the tag point per the
+    plan (`docs/plans/0.3.10-terminal-and-release-hardening.md`).
 - Phase 2 complete on `main` and shipped in `0.3.9` (recorded in
   `docs/plans/p2-steer-and-headless-frontends.md`): P2-0 Esc-steer
   handoff (0.3.8 carried the fix; 0.3.9 carries the post-acceptance
