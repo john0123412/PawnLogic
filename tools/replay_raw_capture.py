@@ -1,5 +1,5 @@
 """Dump raw PTY bytes to a file for byte-level forensics of content loss."""
-import os, pexpect, sys, time
+import os, pexpect, time
 
 cols, rows = 80, 30
 out = open("/tmp/replay_raw.txt", "w")

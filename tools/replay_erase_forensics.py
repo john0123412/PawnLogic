@@ -17,7 +17,6 @@ class Feeder:
             lines = ["".join(r).rstrip() for r in screen.display]
             hist = ["".join(str(c.data if hasattr(c, "data") else c) for c in buf)
                     for buf in screen.history.top]
-            import json
             snapshots.append({
                 "eraseJ": counter[0],
                 "screen": lines,
@@ -51,7 +50,6 @@ finally:
         pass
 
 # find when each number disappears from (screen + history) union
-import json
 def visible(snap):
     blob = "\n".join(snap["screen"]) + "\n" + "\n".join(snap["history_tail"])
     return blob

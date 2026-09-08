@@ -1,7 +1,7 @@
 """Full-CLI replay harness: drives the real pawn binary under a PTY,
 records (1) raw PTY bytes, (2) pyte-emulated final screen, and reports
 duplicate/fragment analysis for the 1-50 counting acceptance gate."""
-import os, pexpect, pyte, re, sys, time
+import os, pexpect, pyte, re, time
 
 cols, rows = 80, 30
 screen = pyte.HistoryScreen(cols, rows, history=5000)
@@ -13,7 +13,11 @@ class Feeder:
 
 child = pexpect.spawn(
     "venv/bin/python", ["-m", "pawnlogic", "--model", "bai:glm-5.3-flash"],
-    env=os.environ.copy(), encoding="utf-8", timeout=120, dimensions=(rows, cols),
+    # TERM matters: PT disables CPR sync on TERM=dumb and falls back to
+    # arithmetic cursor positioning, which drifts on long streamed turns.
+    # Real user terminals report a real TERM; the probe must too.
+    env={**os.environ, "TERM": "xterm-256color"}, encoding="utf-8",
+    timeout=120, dimensions=(rows, cols),
 )
 child.logfile_read = Feeder()
 raw_all = []
@@ -43,9 +47,9 @@ hist = ["".join(str(c.data if hasattr(c, "data") else c) for c in buf) for buf i
 # analysis: numbers 1..20 visible, each exactly once, no "Thinking" fragments
 full = "\n".join(lines + hist)
 report = []
-for n in range(1, 21):
-    cnt = len(re.findall(rf"(?<!\d){n}(?!\d)", full))
-    report.append((n, cnt))
+def standalone_count(blob, n):
+    return sum(1 for line in blob.split("\n") if line.strip() == str(n))
+report = [(n, standalone_count(full, n)) for n in range(1, 21)]
 thinking = full.count("Thinking")
 frag = sum(1 for l in lines if re.match(r"^\s*[|/\\-]\s*Thinking", l))
 bad = [(n, c) for n, c in report if c != 1]
