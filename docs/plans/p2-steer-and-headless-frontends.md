@@ -1,6 +1,7 @@
 # Phase 2 — Steer Handoff and Headless Frontends
 
-> **Status:** Complete on `main` (unreleased; ships in the next version).
+> **Status:** Complete and published — P2-0 shipped in 0.3.8, 2a/2b and
+> closure in 0.3.9 (both on PyPI and GitHub Releases).
 > Owner-directed across five milestones, each merged through its own PR
 > with the full gate set and real-API (glm-5.3-flash via the bai route)
 > acceptance.

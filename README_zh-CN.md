@@ -94,13 +94,13 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 
 ## 新特性
 
-0.3.2 在保持现有公共 contract 不变的前提下，引入经过隔离证明的有界双 worker 委派和统一的 skill pack 管理：
+0.3.9 在保持现有公共 contract 不变的前提下，发布 Phase 2 的回合控制与前端层：
 
-- 支持的 batch caller 最多可并行运行两个委派 task，同时保留 FIFO 准入和按输入顺序返回结果；`delegate_task` 仍是单 task 兼容 Adapter，不会隐式 fan-out。
-- 每个并发 child 都获得复制的 RuntimeContext、唯一的 `.tasks/` workspace、有界 output collector 与 task-local cancellation token。
-- 共享 Token、Tool Call 和成本 budget 在排队、完成、取消和 deadline 到期时仍保持原子 claim 与 settle 行为。
-- 并发 child 只能使用完成 task 隔离的文件 Tool。shell、network、container、extension、MCP、browser、pwn、sandbox 及其他未隔离 Tool 会在 handler 执行前 fail closed。
-- 统一的 skill pack 管理入口 `/skills`：支持方向键导航、空格切换、搜索和批量操作的交互式 TUI。`/sp` 和 `/skillpack` 命令已移除；`/skills` 是安装、同步、重新扫描和启用/禁用的唯一入口。
+- **Esc 转向（Codex/Claude Code 语义）：** Esc 是纯中断，排队的追问立即作为新回合执行——无需额外确认，不丢消息。live REPL 与 headless wire 行为一致。
+- **Headless 核心协议（v1）：** 任意 pawn 进程可通过 `pawn serve` 提供 NDJSON-over-stdio 服务，带版本化信封，使 agent 可被任何前端嵌入。契约由 golden fixture 双端（Python/Rust）钉死。
+- **Rust ratatui 前端（源码 crate）：** 全屏 alternate-screen UI，悬浮顶部状态栏、应用内滚动历史、slash 命令透传，`PAWNLOGIC_TUI_SERVER` 可让打包二进制指向任意后端。Release tag 附带 Linux 二进制 tar 包及 sha256 校验。
+- **参考 PT 客户端与延迟测量：** `frontends/ptk_client.py` 实测 prompt→turn-start、中断、chunk 间隔延迟（真实 API 下中位数约 4 ms / 2.4 ms / <100 ms）。
+- **终端硬化：** 实时输出单一所有者——完成的回合在原生滚动区只出现一次；2 秒 flush 防抖、按 wcwidth 预折行、关闭不再被吞吐计时器延迟。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
