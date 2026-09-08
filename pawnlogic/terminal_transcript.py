@@ -180,8 +180,13 @@ class TerminalTranscript:
             if not self._chunks:
                 return ""
             start = min(self._host_flush_offset, self._char_count)
+            undelivered_len = self._char_count - start
             budget = max_lines * 400
-            if self._char_count - start > budget:
+            if undelivered_len > budget:
+                # Collect only a trailing span of the buffer. The span may
+                # still begin inside delivered territory (e.g. one huge
+                # chunk), so convert coordinates: drop the delivered prefix
+                # of the span instead of slicing with the absolute cursor.
                 parts: list[str] = []
                 collected = 0
                 for chunk in reversed(self._chunks):
@@ -190,9 +195,11 @@ class TerminalTranscript:
                     if collected >= budget:
                         break
                 text = "".join(reversed(parts))
+                delivered_in_span = collected - undelivered_len
+                if delivered_in_span > 0:
+                    text = text[delivered_in_span:]
             else:
-                text = "".join(self._chunks)
-            text = text[start:]
+                text = "".join(self._chunks)[start:]
         lines = text.split("\n")
         if len(lines) <= max_lines:
             return text

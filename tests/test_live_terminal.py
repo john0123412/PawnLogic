@@ -17,6 +17,7 @@ from prompt_toolkit.output import DummyOutput
 
 from core.turn_scheduler import SubmissionKind
 from pawnlogic.live_terminal import (
+    _HOST_FLUSH_MIN_INTERVAL_SECONDS,
     PersistentTerminal,
     PersistentTerminalController,
     TerminalSubmission,
@@ -995,23 +996,23 @@ def test_live_host_flush_is_debounced_between_flush_cycles() -> None:
 
 
 def test_delivered_lines_leave_the_application_viewport() -> None:
-    """Option-A display ownership: a completed line must be visible exactly
-    once — either in the live application viewport (not yet delivered) or in
-    the host scrollback (delivered), never in both.
+    """Display ownership: a completed line must be visible exactly once —
+    either in the live application viewport (not yet delivered) or in the
+    host scrollback (delivered), never in both.
 
-    This pins the double-render defect: before the ownership fix, the host
-    flush wrote a completed line to the host AND ``_render_output()`` kept
-    showing the same transcript tail inside the application, so the final
-    screen showed every turn twice. Uses distinct markers and checks three
-    checkpoints (after flush, second turn, after close). Timeouts and
-    missing output fail loudly instead of passing vacuously.
+    Pins the double-render defect. Deterministic markers, unconditional
+    assertions at every checkpoint, and a final exact-count audit of the
+    full host byte stream. Timeouts and missing output fail loudly.
     """
     async def scenario() -> None:
         with create_pipe_input() as pipe:
             terminal = PersistentTerminal(input=pipe, output=DummyOutput())
             run_task = asyncio.create_task(terminal.run())
             await terminal.wait_until_ready()
+            user_marker = "user-question-line"
             assistant_marker = "assistant-answer-line"
+            second_marker = "second-answer-line"
+            partial_tail = "partial-tail-no-newline"
             try:
                 host_writes: list[str] = []
                 real_stdout = sys.stdout
@@ -1033,61 +1034,89 @@ def test_delivered_lines_leave_the_application_viewport() -> None:
                 )
                 terminal._host_stdout = lambda: _Host()  # type: ignore[method-assign]
 
-                terminal.append_line("user-question-line")
-                terminal.append_line(assistant_marker)
+                async def wait_for_host(marker: str, timeout: float) -> None:
+                    """Await until the marker reached the host or fail."""
+                    deadline = 0.0
+                    while deadline < timeout:
+                        if any(marker in w for w in host_writes):
+                            return
+                        await asyncio.sleep(0.05)
+                        deadline += 0.05
+                    raise AssertionError(
+                        f"{marker!r} never reached the host within {timeout}s"
+                    )
 
-                # Checkpoint 1: run one real flush cycle through the event
-                # loop, then verify ownership flipped.
-                deadline = 5.0
-                waited = 0.0
-                while waited < deadline:
-                    if any(assistant_marker in w for w in host_writes):
-                        break
-                    await asyncio.sleep(0.05)
-                    waited += 0.05
-                assert waited < deadline, (
-                    "assistant line never reached the host within 5s"
-                )
-                # The production flush cycle already advanced the cursor
-                # (pending is empty); give the event loop a beat to re-render.
-                await asyncio.sleep(0.3)
+                # ── Turn 1: user line + assistant line ──────────────
+                terminal.append_line(user_marker)
+                terminal.append_line(assistant_marker)
+                await wait_for_host(assistant_marker, 5.0)
+                await asyncio.sleep(0.3)  # let the restored redraw land
 
                 screen = "\n".join(terminal.rendered_screen_lines())
                 assert assistant_marker not in screen, (
                     "delivered assistant line still rendered in the app "
                     "viewport (double render)"
                 )
-                assert assistant_marker in "".join(host_writes)
+                assert user_marker not in screen
 
-                # Checkpoint 2: a second turn must await delivery, not
-                # vanish, and keep transcript order intact.
-                host_writes.clear()
-                terminal.append_line(f"second-{assistant_marker}")
-                await asyncio.sleep(0.3)
-                joined = "".join(host_writes)
-                if f"second-{assistant_marker}" in joined:
-                    assert joined.index("user-question-line") < joined.index(
-                        f"second-{assistant_marker}"
-                    ) or "user-question-line" not in joined
+                # ── Turn 2: must be delivered through the debounce window,
+                # never silently skipped ────────────────────────────────
+                terminal.append_line(second_marker)
+                await wait_for_host(
+                    second_marker,
+                    2 * _HOST_FLUSH_MIN_INTERVAL_SECONDS + 1.0,
+                )
 
-                # Checkpoint 3: close must not wait on the debounce window
-                # and delivered content must not linger in the viewport.
-                close_started = 5.0
+                # ── Trailing partial line: undelivered until close ────
+                terminal.append_output(partial_tail)  # no newline
+                # A trailing partial line belongs to the streaming surface
+                # until close: never in the live-flush payload, never in the
+                # host stream, but present for the final include-partial
+                # handoff.
+                assert partial_tail not in terminal._transcript.pending_host_flush()[0]
+                assert (
+                    partial_tail
+                    in terminal._transcript.pending_host_flush(
+                        include_partial=True
+                    )[0]
+                )
+                assert partial_tail not in "".join(host_writes)
+
+                # ── Close: flushes the partial line, then audit ───────
                 terminal.close()
                 close_waited = 0.0
-                while close_waited < close_started and not run_task.done():
+                while close_waited < 5.0 and not run_task.done():
                     await asyncio.sleep(0.05)
                     close_waited += 0.05
                 assert run_task.done(), (
-                    f"close did not finish in {close_started}s "
-                    f"(waited {close_waited:.2f}s) — debounce must not "
-                    "delay close"
+                    f"close did not finish in 5s (waited {close_waited:.2f}s)"
                 )
+
+                joined = "".join(host_writes)
+                for marker in (
+                    user_marker,
+                    assistant_marker,
+                    second_marker,
+                    partial_tail,
+                ):
+                    count = joined.count(marker)
+                    assert count == 1, (
+                        f"{marker!r} appears {count}x in host stream, "
+                        "expected exactly once"
+                    )
+                assert (
+                    joined.index(user_marker)
+                    < joined.index(assistant_marker)
+                    < joined.index(second_marker)
+                    < joined.index(partial_tail)
+                ), "host stream must preserve transcript order"
+
                 final_screen = "\n".join(terminal.rendered_screen_lines())
-                assert assistant_marker not in final_screen, (
-                    "delivered content must not linger in the app viewport "
-                    "after close"
-                )
+                for marker in (user_marker, assistant_marker, second_marker):
+                    assert marker not in final_screen, (
+                        "delivered content must not linger in the app "
+                        "viewport after close"
+                    )
             finally:
                 sys.stdout = real_stdout
                 terminal._stdout_frames.clear()
@@ -1170,3 +1199,46 @@ def test_close_does_not_wait_for_the_debounce_window() -> None:
                     await asyncio.wait_for(run_task, timeout=5)
 
     asyncio.run(scenario())
+
+
+def test_undelivered_tail_survives_large_delivered_prefix() -> None:
+    """Regression: undelivered_tail() sliced with the absolute delivery
+    cursor against a budget-truncated span, so after a large delivered
+    prefix (production: ~600k chars) new output vanished from the
+    viewport projection. The span's delivered head must be converted to
+    span-local coordinates, including multi-chunk and buffer-cap cases.
+    """
+    from pawnlogic.terminal_transcript import TerminalTranscript
+
+    # Reviewer scenario: large delivered prefix, then fresh output.
+    transcript = TerminalTranscript(max_chars=2_000_000)
+    transcript.append("a" * 600_000)
+    end, prefix = transcript.pending_host_flush(include_partial=True)[1:]
+    assert transcript.mark_host_flushed(end, prefix)
+    transcript.append("b" * 500_000)
+    transcript.append("TAIL-MARKER-7f3a\n")
+
+    projection = transcript.undelivered_tail(1000)
+
+    assert "TAIL-MARKER-7f3a" in projection
+    assert projection.startswith("b"), (
+        "projection must start exactly at the delivery boundary"
+    )
+
+    # Multi-chunk: cursor inside one chunk, everything delivered.
+    small = TerminalTranscript(max_chars=2_000_000)
+    for index in range(100):
+        small.append(f"line-{index:03d}\n")
+    end, prefix = small.pending_host_flush()[1:]
+    assert small.mark_host_flushed(end, prefix)
+    assert small.undelivered_tail(50) == ""
+    small.append("new-line\n")
+    assert small.undelivered_tail(50) == "new-line\n"
+
+    # Buffer-cap trim moves the cursor down; projection must follow it.
+    capped = TerminalTranscript(max_chars=1000)
+    capped.append("x" * 900)
+    end, prefix = capped.pending_host_flush(include_partial=True)[1:]
+    assert capped.mark_host_flushed(end, prefix)
+    capped.append("y" * 500)
+    assert capped.undelivered_tail(50) == "y" * 500

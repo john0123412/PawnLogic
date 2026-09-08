@@ -1061,16 +1061,28 @@ class PersistentTerminal:
                 # Prompt Toolkit temporarily erases and redraws its interface
                 # around this callback.  That is the supported way to append
                 # to the host terminal without fighting VT100 cursor state.
-                await _run_in_terminal(
+                #
+                # The delivery cursor must advance INSIDE this run_in_terminal
+                # window, before PT restores and redraws the interface. If the
+                # cursor only advances in the later done-callback, the
+                # restored redraw still shows the just-delivered lines and
+                # they appear twice (the stale-redraw window the review
+                # measured). Committing here means the redraw projects the
+                # post-delivery state in the same frame the host received
+                # the bytes. On write failure the cursor stays put and the
+                # payload remains undelivered for the bounded retry.
+                written = await _run_in_terminal(
                     lambda: self._write_host_payload(
                         original_stdout,
                         payload,
                         include_partial=include_partial,
                     )
                 )
+                if written:
+                    self._transcript.mark_host_flushed(end, prefix)
+                return bool(written)
             except Exception:
                 return False
-            return True
 
         task = asyncio.ensure_future(_flush())
         with self._lock:
@@ -1085,8 +1097,6 @@ class PersistentTerminal:
         with self._lock:
             if self._host_flush_task is not task:
                 return
-            end = self._host_flush_end
-            prefix = self._host_flush_prefix
             is_final = self._host_flush_is_final
             self._host_flush_task = None
             self._host_flush_end = 0
@@ -1097,10 +1107,11 @@ class PersistentTerminal:
         except Exception:
             succeeded = False
         if succeeded:
-            self._transcript.mark_host_flushed(end, prefix)
-            # The delivered lines just changed ownership to the host
-            # scrollback; the viewport must drop them now, not at the next
-            # producer append (which may never come).
+            # The cursor was already committed inside the run_in_terminal
+            # window (before PT's restored redraw). Only invalidate here:
+            # the done-callback runs after that redraw, so re-marking would
+            # be a no-op, but the viewport must drop the delivered lines in
+            # case no render happened inside the window.
             with self._lock:
                 self._schedule_invalidation_locked()
 
