@@ -222,10 +222,8 @@ class _ThinkingSpinner:
     carriage-return animation frames straight to ``sys.stdout``, and in
     live mode that stream is the output proxy feeding the transcript —
     the ``\\r`` frames rewrite (and the stop() erase wipes into) content
-    already owned by the streaming answer, producing the interleaved
-    status fragments seen in owner acceptance. The live terminal surfaces
-    the same information through its own status line
-    (``_build_status`` -> "⏱ Ns · Esc to interrupt"), so nothing is lost.
+    already owned by the streaming answer. The live terminal surfaces the
+    same state via its status line, so nothing is lost.
     """
 
     def __init__(self, enabled: bool) -> None:
@@ -235,6 +233,7 @@ class _ThinkingSpinner:
         self._thread: threading.Thread | None = None
         self._printed = False
         self._stopped = False
+
     def start(self) -> None:
         if self._stopped or not self.enabled or self._thread is not None:
             return
@@ -1494,10 +1493,9 @@ class AgentSession:
         iteration: int,
     ) -> TurnApiResult:
         reasoning_printed = False
-        # Live-terminal mode: the status line already shows "⏱ Ns · Esc to
-        # interrupt"; a stdout spinner would inject \r frames into the
-        # transcript and race the streaming answer (owner-acceptance
-        # defect). Gate it off exactly like the [MODEL] header print.
+        # Live-terminal mode: the status line already shows the same state;
+        # a stdout spinner would inject \r frames into the transcript and
+        # race the streaming answer (owner-acceptance defect).
         spinner = _ThinkingSpinner(
             _user_mode() and not getattr(self, "_live_terminal_active", False)
         )
