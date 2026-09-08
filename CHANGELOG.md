@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- Live terminal no longer duplicates long streamed answers in the host
+  scrollback on wcwidth-mismatched terminals (CJK text + emoji under
+  Windows Terminal / WSL). Two changes: live host flushes are debounced
+  to at most one per 2 s so a streamed answer no longer triggers one
+  erase/redraw cycle per burst (each cycle could leave residue on
+  host-wrapped rows); and flushed payloads are pre-wrapped with the
+  host's real column count (measured with `wcwidth`, including wide and
+  zero-width glyphs) so the host terminal never wraps a flushed row
+  itself. The final close handoff is never debounced and still emits
+  the remaining transcript exactly once.
+
+### Changed
+- Session scratch directories now live under `~/.pawnlogic/sessions/`
+  (`session_<id>/`) instead of cluttering `~/.pawnlogic/workspace/`.
+  `workspace/` keeps only auto-named task directories and their
+  `by-name/` aliases. Auto-naming promotes a session directory from
+  `sessions/` into `workspace/<slug>/` and leaves a relative symlink at
+  the old path so pre-swap absolute paths keep resolving; the
+  `by-name/<slug>` alias is now relative across both roots.
+
+---
+
 ## [0.3.9] - 2026-09-07
 
 ### Added

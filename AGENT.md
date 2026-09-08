@@ -819,7 +819,21 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 - Live host scrollback must use Prompt Toolkit's `run_in_terminal`
   handoff. Worker threads must never write directly to the TTY; complete
   lines stream live, partial lines flush once at close, and a failed host
-  write must not advance the transcript flush cursor.
+  write must not advance the transcript flush cursor. Live flushes are
+  debounced (at most one per `_HOST_FLUSH_MIN_INTERVAL_SECONDS`) and
+  payloads are pre-wrapped with the host's real column count via
+  `_wrap_host_payload` (`pawnlogic/live_terminal.py`): an erase cycle
+  that assumes one row per logical line leaves residue on rows the host
+  wrapped itself (wcwidth mismatch on CJK/emoji), which previously
+  stacked into duplicated, interleaved scrollback. Tests pin the
+  debounce interval behavior and the wide-glyph pre-wrap folding.
+- Session scratch directories live under `~/.pawnlogic/sessions/`
+  (`core/naming.py:stable_workspace_dir`); `~/.pawnlogic/workspace/`
+  holds only auto-named task directories and `by-name/` aliases. The
+  auto-naming swap (`core/session.py:_swap_workspace_dir`) promotes a
+  session across roots with a relative reverse symlink so pre-swap
+  absolute paths keep resolving. Do not reintroduce `session_<id>/`
+  creation under `workspace/`.
 - A failed or aborted Turn parks the queue: implicit RESUME drains are
   rejected until the user explicitly resumes (``/queue resume`` or
   Enter on the recovered draft, carried by ``ControlAction.explicit``).
