@@ -3,10 +3,19 @@ core/naming.py — Semantic session naming and workspace aliases.
 """
 
 import json
+import os
 import re
 from pathlib import Path
 
-from config import WORKSPACE_DIR, NAMING_MODEL_CHAIN, MODELS, validate_api_key, is_fast_model, find_fast_peer
+from config import (
+    WORKSPACE_DIR,
+    NAMING_MODEL_CHAIN,
+    MODELS,
+    SESSIONS_DIR,
+    validate_api_key,
+    is_fast_model,
+    find_fast_peer,
+)
 from core.api_client import stream_request
 from core.logger import logger
 
@@ -49,7 +58,13 @@ def pick_naming_model(fallback: str) -> str:
 
 
 def stable_workspace_dir(session_id: str) -> str:
-    path = Path(WORKSPACE_DIR).expanduser() / f"session_{session_id}"
+    """Create the per-session working directory under ``~/.pawnlogic/sessions``.
+
+    Session scratch directories live under ``sessions/`` so they never mix
+    with named task outputs in ``workspace/``. Auto-naming later moves a
+    session that produced durable artifacts into ``workspace/<slug>/``.
+    """
+    path = Path(SESSIONS_DIR).expanduser() / f"session_{session_id}"
     path.mkdir(parents=True, exist_ok=True)
     return str(path.resolve())
 
@@ -92,6 +107,12 @@ def should_name_session(messages: list) -> bool:
 
 
 def create_workspace_alias(session_id: str, slug: str, workspace_dir: str) -> str:
+    """Link a session directory into ``workspace/by-name/<slug>``.
+
+    The session directory may live under ``sessions/`` (fresh session) or
+    ``workspace/`` (auto-named task); the symlink is relative to the
+    ``by-name`` parent so it resolves correctly across both roots.
+    """
     by_name = Path(WORKSPACE_DIR).expanduser() / "by-name"
     by_name.mkdir(parents=True, exist_ok=True)
     target = Path(workspace_dir).expanduser().resolve()
@@ -100,6 +121,7 @@ def create_workspace_alias(session_id: str, slug: str, workspace_dir: str) -> st
     candidates = [slug, f"{slug}-{short}"]
     candidates.extend(f"{slug}-{short}-{i}" for i in range(2, 100))
 
+    rel_target = os.path.relpath(target, by_name)
     for candidate in candidates:
         link = by_name / candidate
         try:
@@ -110,7 +132,7 @@ def create_workspace_alias(session_id: str, slug: str, workspace_dir: str) -> st
                 continue
             if link.exists():
                 continue
-            link.symlink_to(Path("..") / target.name)
+            link.symlink_to(rel_target)
             return candidate
         except OSError as exc:
             logger.warning("Workspace alias symlink failed | alias={} exc={!r}", candidate, exc)

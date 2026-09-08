@@ -145,3 +145,47 @@ def test_extract_json_empty_raises():
 def test_extract_json_whitespace_raises():
     with pytest.raises(ValueError, match="empty naming response"):
         _extract_json("   ")
+
+
+# ── stable_workspace_dir: sessions/ vs workspace/ split ─────────
+
+def _load_naming_module(monkeypatch, tmp_path: Path):
+    """Import core.naming against an isolated PAWNLOGIC_HOME."""
+    import importlib
+
+    runtime_home = tmp_path / "pawn-home"
+    monkeypatch.setenv("PAWNLOGIC_HOME", str(runtime_home))
+    for key in list(sys.modules):
+        if key == "config" or key.startswith("config.") or key == "core.naming":
+            sys.modules.pop(key, None)
+    core_pkg = sys.modules.get("core")
+    if core_pkg is not None and hasattr(core_pkg, "naming"):
+        delattr(core_pkg, "naming")
+    return importlib.import_module("core.naming")
+
+
+def test_stable_workspace_dir_creates_sessions_under_sessions_root(monkeypatch, tmp_path):
+    naming = _load_naming_module(monkeypatch, tmp_path)
+    path = Path(naming.stable_workspace_dir("sess0001"))
+
+    sessions_root = tmp_path / "pawn-home" / "sessions"
+    workspace_root = tmp_path / "pawn-home" / "workspace"
+    assert path.parent == sessions_root
+    assert path.name == "session_sess0001"
+    assert path.is_dir()
+    # The session scratch dir must not leak into the named-task workspace.
+    assert not (workspace_root / "session_sess0001").exists()
+
+
+def test_workspace_alias_lands_in_workspace_by_name(monkeypatch, tmp_path):
+    naming = _load_naming_module(monkeypatch, tmp_path)
+    sessions_dir = Path(naming.stable_workspace_dir("sess0002"))
+    (sessions_dir / "finding.md").write_text("report", encoding="utf-8")
+
+    alias = naming.create_workspace_alias(
+        "sess0002", "ctf-heap-writeup", str(sessions_dir)
+    )
+
+    by_name = tmp_path / "pawn-home" / "workspace" / "by-name" / alias
+    assert by_name.is_symlink()
+    assert (by_name / "finding.md").read_text(encoding="utf-8") == "report"

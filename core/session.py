@@ -1084,14 +1084,24 @@ class AgentSession:
                 return "", ""
 
             # 2. Reverse fallback symlink: old path -> new <slug>, when applicable.
+            #    sessions/ -> workspace/ moves (auto-naming promotion) and
+            #    archive/ -> workspace/ moves also get a symlink so pre-swap
+            #    absolute paths keep resolving. The link is relative to the
+            #    OLD directory's parent so it works across directory roots.
             try:
                 old_name = current_path.name
-                if current_path.parent == workspace_target:
+                old_parent = current_path.parent
+                if old_parent != workspace_target:
+                    old_link = old_parent / old_name
+                    if not old_link.exists() and not old_link.is_symlink():
+                        rel = os.path.relpath(new_path, old_parent)
+                        os.symlink(rel, str(old_link))
+                elif not current_path.exists():
+                    # In-place rename already moved the directory; recreate a
+                    # same-parent link from the old name to the slug.
                     old_link = workspace_target / old_name
                     if not old_link.exists() and not old_link.is_symlink():
-                        # Use a relative symlink so the workspace tree stays movable.
                         os.symlink(final_name, str(old_link))
-                # archive -> workspace moves do not benefit from a reverse symlink.
             except OSError as exc:
                 # Reverse symlink failure is non-fatal after rename succeeds.
                 logger.warning(
