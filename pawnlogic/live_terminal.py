@@ -239,12 +239,18 @@ def _wrap_host_payload(text: str, columns: int) -> str:
             out_lines.append("")
             continue
         remaining = logical
-        while True:
+        while remaining:
             width = 0
             cut = 0
             for idx, ch in enumerate(remaining):
                 if ch == "\t":
-                    ch_width = 1
+                    # Count Tab at its maximum expansion (8 columns): the
+                    # actual stop depends on the host's current column, which
+                    # we cannot know here. Overestimating only under-fills a
+                    # row; underestimating would let a row overflow into an
+                    # uncounted host wrap. The literal Tab stays in the
+                    # payload so copy/paste output is byte-identical.
+                    ch_width = 8
                 else:
                     ch_width = wcwidth.wcwidth(ch)
                     if ch_width is None or ch_width < 0:
@@ -256,6 +262,12 @@ def _wrap_host_payload(text: str, columns: int) -> str:
             if cut >= len(remaining):
                 out_lines.append(remaining)
                 break
+            if cut == 0:
+                # A single character wider than the available columns (1-col
+                # terminal + wide glyph) can never fit; emitting it verbatim
+                # guarantees the loop advances. The host may wrap that row —
+                # unavoidable at this width — but a hang is strictly worse.
+                cut = 1
             out_lines.append(remaining[:cut])
             remaining = remaining[cut:]
     return "\n".join(out_lines)
@@ -395,8 +407,10 @@ class PersistentTerminal:
         self._next_kind = SubmissionKind.START
         self._sink = TerminalSink(self)
         self._invalidation_scheduled = False
-        # (transcript version, rendered fragments) cache for _render_output.
-        self._render_cache: tuple[int, Any] | None = None
+        # (transcript version, host flush cursor, rendered fragments) cache
+        # for _render_output; the cursor alone must invalidate the cache or
+        # delivered lines keep a stale in-app copy.
+        self._render_cache: tuple[tuple[int, int], Any] | None = None
         # Monotonic timestamp of the last scheduled invalidation, for FPS
         # throttling of streaming producers.
         self._last_invalidation_ts = 0.0
@@ -867,15 +881,36 @@ class PersistentTerminal:
         # The final host flush is serialized after any live flush already in
         # flight.  Its completion callback exits the Application, so close()
         # never races a direct write against Prompt Toolkit's renderer.  A
-        # pending retry or debounce timer owns the next snapshot slot; when
-        # it fires the closing flag routes it through the final handoff.
+        # pending retry timer owns the next snapshot slot; when it fires the
+        # closing flag routes it through the final handoff.
+        #
+        # A pending *debounce* timer, however, must not delay shutdown: it is
+        # only a throughput reservation for live flushes, and close() may
+        # still have undelivered bytes (including a trailing partial line).
+        # Cancel it and start the final flush immediately — the closing flag
+        # makes that handoff include the partial line, and a failed write
+        # still goes through the bounded retry path.
         with self._lock:
-            retry_pending = (
-                self._host_flush_retry_handle is not None
-                or self._host_flush_debounce_handle is not None
+            retry_pending = self._host_flush_retry_handle is not None
+        if retry_pending:
+            self._schedule_on_loop(self._cancel_debounce_on_ui, loop=loop)
+        else:
+            self._schedule_on_loop(
+                self._cancel_debounce_and_start_final_on_ui, loop=loop
             )
-        if not retry_pending:
-            self._schedule_on_loop(self._start_host_flush_on_ui, loop=loop)
+
+    def _cancel_debounce_on_ui(self) -> None:
+        """Cancel a pending live-flush debounce timer (loop-thread only)."""
+        handle = self._host_flush_debounce_handle
+        if handle is not None:
+            with contextlib.suppress(Exception):
+                handle.cancel()
+            self._host_flush_debounce_handle = None
+
+    def _cancel_debounce_and_start_final_on_ui(self) -> None:
+        """Drop the debounce reservation and run the final flush now."""
+        self._cancel_debounce_on_ui()
+        self._start_host_flush_on_ui()
 
     def _host_stdout(self) -> TextIO | None:
         """Return the original stdout captured before the proxy was installed."""
@@ -1063,6 +1098,11 @@ class PersistentTerminal:
             succeeded = False
         if succeeded:
             self._transcript.mark_host_flushed(end, prefix)
+            # The delivered lines just changed ownership to the host
+            # scrollback; the viewport must drop them now, not at the next
+            # producer append (which may never come).
+            with self._lock:
+                self._schedule_invalidation_locked()
 
         with self._lock:
             closing = self._host_flush_closing
@@ -1487,7 +1527,17 @@ class PersistentTerminal:
         buffer.cursor_position = 0
 
     def _render_output(self) -> Any:
-        """Render the transcript tail, cached per transcript version.
+        """Render the *undelivered* transcript tail, cached per state.
+
+        Display ownership (ADR 0010 single-owner discipline): text the
+        host flush has already delivered to the native scrollback is
+        owned by the host and must NOT be re-rendered inside the
+        application viewport — doing so showed every completed turn twice
+        (once in the scrollback from ``run_in_terminal``, once here). The
+        viewport therefore renders only text still awaiting delivery,
+        which is exactly the streaming tail plus the current partial
+        line. The full transcript is untouched for close-time history
+        needs.
 
         Measured on the owner's real session scale (6,000 lines /
         250KB transcript), a full-transcript re-render costs ~50ms per
@@ -1495,25 +1545,26 @@ class PersistentTerminal:
         and queued key presses behind renders (reported as "page
         frozen, arrow keys dead"). Two mitigations:
 
-        - Only the trailing :data:`_RENDER_TAIL_LINES` lines are ever
-          rendered. The output viewport follows the tail anyway, and
-          the full transcript is still flushed to the host scrollback
-          on close, so nothing the user can see is lost.
+        - Only the trailing :data:`_RENDER_TAIL_LINES` *undelivered*
+          lines are ever rendered. The output viewport follows the tail
+          anyway; delivered lines live in the host scrollback, which the
+          user can scroll and copy natively.
         - The rendered value (and its line count) are cached against
-          the transcript's monotonic ``version()``; redraws that do
-          not change the transcript (focus changes, toolbar ticks,
-          queue updates) reuse the cached fragments instead of
-          re-parsing 250KB of ANSI text.
+          ``(version, host_flush_offset)``: ``mark_host_flushed``
+          advances the offset without bumping ``version()``, so the
+          cursor alone must invalidate the cache or a delivered line
+          would keep its stale in-app copy until the next append.
         """
         version = self._transcript.version()
+        offset = self._transcript.host_flush_offset()
         cached = self._render_cache
-        if cached is not None and cached[0] == version:
+        if cached is not None and cached[0] == (version, offset):
             return cached[1]
-        text = self._transcript.tail(_RENDER_TAIL_LINES)
+        text = self._transcript.undelivered_tail(_RENDER_TAIL_LINES)
         plain_text = _ANSI_ESCAPE.sub("", text)
         self._rendered_output_line_count = len(plain_text.split("\n"))
         rendered: Any = ANSI(text) if "\x1b[" in text else text
-        self._render_cache = (version, rendered)
+        self._render_cache = ((version, offset), rendered)
         return rendered
 
     def _output_or_selector_text(self) -> Any:
@@ -1644,10 +1695,13 @@ class PersistentTerminal:
         return toolbar or "Ready · steer:0 · follow-up:0"
 
     def _wrapped_output_lines(self, width: int) -> list[str]:
-        # Wrap the rendered tail, not the full transcript: the screen
-        # projection is height-bounded to the viewport anyway, and the
-        # full-text walk is O(transcript) on every call.
-        text = _ANSI_ESCAPE.sub("", self._transcript.tail(_RENDER_TAIL_LINES))
+        # Wrap the *undelivered* tail, matching the viewport's ownership
+        # projection: delivered lines belong to the host scrollback and
+        # must not reappear here. The projection is height-bounded to the
+        # viewport anyway, and the walk is O(undelivered) per call.
+        text = _ANSI_ESCAPE.sub(
+            "", self._transcript.undelivered_tail(_RENDER_TAIL_LINES)
+        )
         if not text:
             return []
         lines: list[str] = []
@@ -1669,7 +1723,9 @@ class PersistentTerminal:
 
     def _output_line_count(self) -> int:
         """Return the line count used by Prompt Toolkit's output control."""
-        text = _ANSI_ESCAPE.sub("", self._transcript.tail(_RENDER_TAIL_LINES))
+        text = _ANSI_ESCAPE.sub(
+            "", self._transcript.undelivered_tail(_RENDER_TAIL_LINES)
+        )
         if not text:
             return 1
         return len(text.split("\n"))

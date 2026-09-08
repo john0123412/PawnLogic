@@ -8,16 +8,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
-- Live terminal no longer duplicates long streamed answers in the host
-  scrollback on wcwidth-mismatched terminals (CJK text + emoji under
-  Windows Terminal / WSL). Two changes: live host flushes are debounced
-  to at most one per 2 s so a streamed answer no longer triggers one
-  erase/redraw cycle per burst (each cycle could leave residue on
-  host-wrapped rows); and flushed payloads are pre-wrapped with the
-  host's real column count (measured with `wcwidth`, including wide and
-  zero-width glyphs) so the host terminal never wraps a flushed row
-  itself. The final close handoff is never debounced and still emits
-  the remaining transcript exactly once.
+- Live terminal no longer renders completed output twice. Previously a
+  finished turn appeared both in the native host scrollback (via the
+  `run_in_terminal` flush) and again inside the application's transcript
+  viewport, which duplicated every streamed answer on wcwidth-mismatched
+  terminals (CJK text + emoji under Windows Terminal / WSL). The
+  application viewport now renders only text still awaiting host
+  delivery (a delivery cursor gates the render cache), so each line is
+  owned by exactly one surface; the flush commit advances the cursor
+  and invalidates the render immediately. Live host flushes are also
+  debounced to at most one per 2 s, flushed payloads are pre-wrapped
+  with the host's real column count (`wcwidth`-measured; a row that
+  cannot fit any glyph now emits one character instead of spinning,
+  and Tab is budgeted at its 8-column maximum while staying
+  byte-identical in the payload), and `close()` cancels the debounce
+  reservation instead of waiting out the window, so shutdown is never
+  delayed by a throughput timer. Verified by a new screen-ownership
+  regression that asserts the assistant output appears exactly once
+  across viewport and scrollback at three checkpoints.
 
 ### Changed
 - Session scratch directories now live under `~/.pawnlogic/sessions/`

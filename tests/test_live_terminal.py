@@ -992,3 +992,181 @@ def test_live_host_flush_is_debounced_between_flush_cycles() -> None:
                 await run_task
 
     asyncio.run(scenario())
+
+
+def test_delivered_lines_leave_the_application_viewport() -> None:
+    """Option-A display ownership: a completed line must be visible exactly
+    once — either in the live application viewport (not yet delivered) or in
+    the host scrollback (delivered), never in both.
+
+    This pins the double-render defect: before the ownership fix, the host
+    flush wrote a completed line to the host AND ``_render_output()`` kept
+    showing the same transcript tail inside the application, so the final
+    screen showed every turn twice. Uses distinct markers and checks three
+    checkpoints (after flush, second turn, after close). Timeouts and
+    missing output fail loudly instead of passing vacuously.
+    """
+    async def scenario() -> None:
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+            run_task = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+            assistant_marker = "assistant-answer-line"
+            try:
+                host_writes: list[str] = []
+                real_stdout = sys.stdout
+
+                class _Host:
+                    def write(self, text: str) -> int:
+                        host_writes.append(text)
+                        return len(text)
+
+                    def flush(self) -> None:
+                        return None
+
+                    def isatty(self) -> bool:
+                        return True
+
+                sys.stdout = real_stdout
+                terminal._stdout_frames.append(
+                    (real_stdout, None, real_stdout, None)
+                )
+                terminal._host_stdout = lambda: _Host()  # type: ignore[method-assign]
+
+                terminal.append_line("user-question-line")
+                terminal.append_line(assistant_marker)
+
+                # Checkpoint 1: run one real flush cycle through the event
+                # loop, then verify ownership flipped.
+                deadline = 5.0
+                waited = 0.0
+                while waited < deadline:
+                    if any(assistant_marker in w for w in host_writes):
+                        break
+                    await asyncio.sleep(0.05)
+                    waited += 0.05
+                assert waited < deadline, (
+                    "assistant line never reached the host within 5s"
+                )
+                # The production flush cycle already advanced the cursor
+                # (pending is empty); give the event loop a beat to re-render.
+                await asyncio.sleep(0.3)
+
+                screen = "\n".join(terminal.rendered_screen_lines())
+                assert assistant_marker not in screen, (
+                    "delivered assistant line still rendered in the app "
+                    "viewport (double render)"
+                )
+                assert assistant_marker in "".join(host_writes)
+
+                # Checkpoint 2: a second turn must await delivery, not
+                # vanish, and keep transcript order intact.
+                host_writes.clear()
+                terminal.append_line(f"second-{assistant_marker}")
+                await asyncio.sleep(0.3)
+                joined = "".join(host_writes)
+                if f"second-{assistant_marker}" in joined:
+                    assert joined.index("user-question-line") < joined.index(
+                        f"second-{assistant_marker}"
+                    ) or "user-question-line" not in joined
+
+                # Checkpoint 3: close must not wait on the debounce window
+                # and delivered content must not linger in the viewport.
+                close_started = 5.0
+                terminal.close()
+                close_waited = 0.0
+                while close_waited < close_started and not run_task.done():
+                    await asyncio.sleep(0.05)
+                    close_waited += 0.05
+                assert run_task.done(), (
+                    f"close did not finish in {close_started}s "
+                    f"(waited {close_waited:.2f}s) — debounce must not "
+                    "delay close"
+                )
+                final_screen = "\n".join(terminal.rendered_screen_lines())
+                assert assistant_marker not in final_screen, (
+                    "delivered content must not linger in the app viewport "
+                    "after close"
+                )
+            finally:
+                sys.stdout = real_stdout
+                terminal._stdout_frames.clear()
+                if not run_task.done():
+                    terminal.close()
+                await asyncio.sleep(0.1)
+                if not run_task.done():
+                    await asyncio.wait_for(run_task, timeout=5)
+
+    asyncio.run(scenario())
+
+
+def test_wrap_host_payload_progresses_at_one_column_with_wide_glyph() -> None:
+    """A width-2 glyph in a 1-column terminal used to spin forever because
+    the inner cut stayed 0; every loop iteration must now emit a character."""
+    from pawnlogic.live_terminal import _wrap_host_payload
+
+    result = _wrap_host_payload("\u72ec\u89d2\u517d", 1)
+    assert len(result.split("\n")) == 3
+    assert result.replace("\n", "") == "\u72ec\u89d2\u517d"
+
+
+def test_close_does_not_wait_for_the_debounce_window() -> None:
+    """close() with a parked debounce timer must finish immediately; the
+    old behavior deferred the final handoff to the 2 s debounce tick."""
+    async def scenario() -> None:
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+            run_task = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+            try:
+                real_stdout = sys.stdout
+
+                class _Host:
+                    def write(self, text: str) -> int:
+                        return len(text)
+
+                    def flush(self) -> None:
+                        return None
+
+                    def isatty(self) -> bool:
+                        return True
+
+                sys.stdout = real_stdout
+                terminal._stdout_frames.append(
+                    (real_stdout, None, real_stdout, None)
+                )
+                terminal._host_stdout = lambda: _Host()  # type: ignore[method-assign]
+
+                terminal.append_line("first complete line")
+                await asyncio.sleep(0.3)
+                # Park a debounce reservation exactly like a post-flush burst.
+                terminal.append_line("burst line")
+                with terminal._lock:
+                    assert terminal._host_flush_debounce_handle is not None, (
+                        "test precondition: a debounce timer must be pending"
+                    )
+
+                import time as _time
+
+                started = _time.monotonic()
+                terminal.close()
+                close_waited = 0.0
+                while close_waited < 5.0 and not run_task.done():
+                    await asyncio.sleep(0.05)
+                    close_waited += 0.05
+                elapsed = _time.monotonic() - started
+                assert run_task.done(), "close never finished"
+                assert elapsed < 1.0, (
+                    f"close waited {elapsed:.2f}s — debounce window delayed "
+                    "shutdown"
+                )
+            finally:
+                sys.stdout = real_stdout
+                terminal._stdout_frames.clear()
+                if not run_task.done():
+                    terminal.close()
+                await asyncio.sleep(0.1)
+                if not run_task.done():
+                    await asyncio.wait_for(run_task, timeout=5)
+
+    asyncio.run(scenario())

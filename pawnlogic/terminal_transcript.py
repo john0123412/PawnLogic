@@ -151,6 +151,53 @@ class TerminalTranscript:
         with self._lock:
             return "".join(self._chunks)
 
+    def host_flush_offset(self) -> int:
+        """Return the number of buffered characters already host-delivered.
+
+        Renderers include this cursor in their cache keys: advancing the
+        cursor alone (no new ``append``) must invalidate a cached
+        projection, otherwise the application keeps showing lines the
+        host scrollback already owns — the double-render defect.
+        """
+        with self._lock:
+            return self._host_flush_offset
+
+    def undelivered_tail(self, max_lines: int) -> str:
+        """Return the trailing ``max_lines`` lines of the *undelivered* text.
+
+        This is the display-ownership projection (ADR 0010 single-owner
+        discipline): text already handed to the host scrollback is owned
+        by the host and must NOT be re-rendered inside the application
+        viewport, while text still awaiting delivery stays visible in the
+        app. Like :meth:`tail`, the result always ends at the buffer end
+        and a leading partial line is kept. The full transcript is never
+        cleared or trimmed by this call — history stays intact for
+        diagnostics and session persistence.
+        """
+        if max_lines < 1:
+            return ""
+        with self._lock:
+            if not self._chunks:
+                return ""
+            start = min(self._host_flush_offset, self._char_count)
+            budget = max_lines * 400
+            if self._char_count - start > budget:
+                parts: list[str] = []
+                collected = 0
+                for chunk in reversed(self._chunks):
+                    parts.append(chunk)
+                    collected += len(chunk)
+                    if collected >= budget:
+                        break
+                text = "".join(reversed(parts))
+            else:
+                text = "".join(self._chunks)
+            text = text[start:]
+        lines = text.split("\n")
+        if len(lines) <= max_lines:
+            return text
+        return "\n".join(lines[-max_lines:])
+
     def tail(self, max_lines: int) -> str:
         """Return the trailing ``max_lines`` lines (plus any unterminated tail).
 
