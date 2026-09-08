@@ -18,6 +18,7 @@ from prompt_toolkit.output import DummyOutput
 from core.turn_scheduler import SubmissionKind
 from pawnlogic.live_terminal import (
     _HOST_FLUSH_MIN_INTERVAL_SECONDS,
+    _RENDER_TAIL_LINES,
     PersistentTerminal,
     PersistentTerminalController,
     TerminalSubmission,
@@ -1242,3 +1243,87 @@ def test_undelivered_tail_survives_large_delivered_prefix() -> None:
     assert capped.mark_host_flushed(end, prefix)
     capped.append("y" * 500)
     assert capped.undelivered_tail(50) == "y" * 500
+
+
+def test_first_frame_after_host_write_excludes_delivered_text() -> None:
+    """Timing regression: the delivery cursor must advance INSIDE the
+    run_in_terminal window, i.e. before Prompt Toolkit restores and redraws.
+    If the commit happens after the await (done-callback territory), the
+    restored first frame still shows the just-delivered lines — the stale
+    first frame the review measured (offset=0 redraw before offset=N)."""
+    async def scenario() -> None:
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+            run_task = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+            marker = "timing-probe-answer"
+            try:
+                real_stdout = sys.stdout
+                frames: list[tuple[str, ...]] = []
+
+                class _Host:
+                    def write(self, text: str) -> int:
+                        return len(text)
+
+                    def flush(self) -> None:
+                        return None
+
+                    def isatty(self) -> bool:
+                        return True
+
+                sys.stdout = real_stdout
+                terminal._stdout_frames.append(
+                    (real_stdout, None, real_stdout, None)
+                )
+                terminal._host_stdout = lambda: _Host()  # type: ignore[method-assign]
+
+                # Capture the application screen right after write() returns
+                # — still inside the suspended window — and again at the
+                # next renderer frame after the window closes.
+                terminal.append_line(marker)
+                deadline = 0.0
+                offset_advanced_in_window = False
+                while deadline < 5.0:
+                    transcript = terminal._transcript
+                    pending = transcript.pending_host_flush()[0]
+                    if pending == "" and marker in transcript.snapshot():
+                        offset_advanced_in_window = True
+                        break
+                    await asyncio.sleep(0.02)
+                    deadline += 0.02
+                assert offset_advanced_in_window, (
+                    "delivery cursor did not advance before pending drained"
+                )
+
+                # The cursor is committed before the write callable returns;
+                # sample the renderer's latest screen repeatedly across the
+                # resume boundary: no frame observed from now on may contain
+                # the delivered marker.
+                stale_frames = 0
+                for _ in range(20):
+                    lines = terminal.rendered_screen_lines()
+                    if lines:
+                        frames.append(lines)
+                        if any(marker in line for line in lines):
+                            stale_frames += 1
+                    await asyncio.sleep(0.05)
+                assert frames, "no frames rendered after delivery"
+                assert stale_frames == 0, (
+                    f"{stale_frames}/{len(frames)} frames after the "
+                    "in-window commit still show delivered text"
+                )
+
+                # And the projection itself is empty for delivered content.
+                assert marker not in terminal._transcript.undelivered_tail(
+                    _RENDER_TAIL_LINES
+                )
+            finally:
+                sys.stdout = real_stdout
+                terminal._stdout_frames.clear()
+                if not run_task.done():
+                    terminal.close()
+                await asyncio.sleep(0.1)
+                if not run_task.done():
+                    await asyncio.wait_for(run_task, timeout=5)
+
+    asyncio.run(scenario())
