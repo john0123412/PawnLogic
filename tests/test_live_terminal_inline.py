@@ -381,7 +381,19 @@ def test_failed_host_write_retries_without_dropping_reserved_lines() -> None:
                 await asyncio.sleep(0.05)
                 terminal.append_output("second line\n")
 
-                deadline = asyncio.get_running_loop().time() + 1.0
+                # A transient failure triggers the bounded retry; after the
+                # retry commits, the live-flush debounce parks the next
+                # snapshot for up to _HOST_FLUSH_MIN_INTERVAL_SECONDS, so
+                # the wait window must cover one full debounce interval.
+                from pawnlogic.live_terminal import (
+                    _HOST_FLUSH_MIN_INTERVAL_SECONDS,
+                )
+
+                deadline = (
+                    asyncio.get_running_loop().time()
+                    + 1.0
+                    + _HOST_FLUSH_MIN_INTERVAL_SECONDS
+                )
                 while not {
                     "first line\n",
                     "second line\n",

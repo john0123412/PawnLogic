@@ -363,6 +363,13 @@ class PersistentTerminal:
         self._host_flush_attempts = 0
         self._host_flush_retry_handle: asyncio.TimerHandle | None = None
         self._host_flush_circuit_open = False
+        # Debounce timer for live host flushes (see
+        # _HOST_FLUSH_MIN_INTERVAL_SECONDS). Kept separately from
+        # _host_flush_retry_handle: the retry timer replays a failed
+        # payload, the debounce timer coalesces new output; conflating
+        # them lets a failed flush and fresh appends cancel each other's
+        # reservations.
+        self._host_flush_debounce_handle: asyncio.TimerHandle | None = None
         # Timestamp of the last committed live host flush, used to debounce
         # live flushes (see _HOST_FLUSH_MIN_INTERVAL_SECONDS). The final
         # close handoff is never debounced.
@@ -859,9 +866,14 @@ class PersistentTerminal:
 
         # The final host flush is serialized after any live flush already in
         # flight.  Its completion callback exits the Application, so close()
-        # never races a direct write against Prompt Toolkit's renderer.
+        # never races a direct write against Prompt Toolkit's renderer.  A
+        # pending retry or debounce timer owns the next snapshot slot; when
+        # it fires the closing flag routes it through the final handoff.
         with self._lock:
-            retry_pending = self._host_flush_retry_handle is not None
+            retry_pending = (
+                self._host_flush_retry_handle is not None
+                or self._host_flush_debounce_handle is not None
+            )
         if not retry_pending:
             self._schedule_on_loop(self._start_host_flush_on_ui, loop=loop)
 
@@ -947,11 +959,15 @@ class PersistentTerminal:
         leaves residue that stacks into the duplicated/interleaved scrollback
         the owner reported.  A pending timer is the reservation; when it fires
         the accumulated complete lines flush in one batch.  The closing flush
-        bypasses the debounce so shutdown is never delayed.
+        bypasses the debounce so shutdown is never delayed, and an in-flight
+        retry (``_host_flush_retry_handle``) still has priority so a failed
+        write is replayed before any new snapshot.
         """
         if self._host_flush_task is not None:
             return
         if self._host_flush_retry_handle is not None:
+            return
+        if self._host_flush_debounce_handle is not None:
             return
         if self._host_flush_circuit_open and not self._host_flush_closing:
             return
@@ -966,15 +982,10 @@ class PersistentTerminal:
             now = loop.time()
             due = self._host_flush_last_ts + _HOST_FLUSH_MIN_INTERVAL_SECONDS
             if now < due:
-                if self._host_flush_scheduled:
-                    return
-                self._host_flush_scheduled = True
                 with contextlib.suppress(RuntimeError):
-                    self._host_flush_retry_handle = loop.call_later(
+                    self._host_flush_debounce_handle = loop.call_later(
                         due - now, self._start_host_flush_on_ui
                     )
-                if self._host_flush_retry_handle is None:
-                    self._host_flush_scheduled = False
                 return
         self._host_flush_scheduled = True
         self._schedule_on_loop(self._start_host_flush_on_ui, loop=loop)
@@ -982,9 +993,10 @@ class PersistentTerminal:
     def _start_host_flush_on_ui(self) -> None:
         """Start a live or final flush; this callback runs on PT's loop."""
         with self._lock:
-            # If this callback came from a retry timer, release its timer
-            # reservation before taking the next snapshot.
+            # If this callback came from a retry or debounce timer, release
+            # its reservation before taking the next snapshot.
             self._host_flush_retry_handle = None
+            self._host_flush_debounce_handle = None
             self._host_flush_scheduled = False
             if self._host_flush_task is not None:
                 return
@@ -1094,12 +1106,15 @@ class PersistentTerminal:
             application = self._application
             running = self._running
             retry_handle = self._host_flush_retry_handle
+            debounce_handle = self._host_flush_debounce_handle
             self._host_flush_retry_handle = None
+            self._host_flush_debounce_handle = None
             self._host_flush_scheduled = False
             self._host_flush_closing = False
-        if retry_handle is not None:
-            with contextlib.suppress(Exception):
-                retry_handle.cancel()
+        for handle in (retry_handle, debounce_handle):
+            if handle is not None:
+                with contextlib.suppress(Exception):
+                    handle.cancel()
         if application is None or not running:
             return
         with contextlib.suppress(Exception):

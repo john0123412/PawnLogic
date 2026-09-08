@@ -140,6 +140,28 @@ def create_workspace_alias(session_id: str, slug: str, workspace_dir: str) -> st
     return f"{slug}-{short}"
 
 
+def link_old_path_to_new(old_path: Path, new_path: Path) -> None:
+    """Leave a reverse symlink at ``old_path`` pointing at ``new_path``.
+
+    Used after the auto-naming rename so pre-swap absolute paths keep
+    resolving. The link is relative to the old directory's parent, so it
+    works for both same-root moves (workspace/ -> workspace/) and the
+    cross-root promotion (sessions/ -> workspace/). Failures are logged and
+    swallowed: the rename itself already succeeded.
+    """
+    old_parent = old_path.parent
+    try:
+        if old_path.exists() or old_path.is_symlink():
+            return
+        rel = os.path.relpath(new_path, old_parent)
+        os.symlink(rel, str(old_path))
+    except OSError as exc:
+        logger.warning(
+            "Reverse symlink failed (non-fatal) | old={} new={} exc={!r}",
+            old_path, new_path, exc,
+        )
+
+
 def _extract_json(text: str) -> dict:
     text = (text or "").strip()
     if not text:

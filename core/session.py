@@ -126,7 +126,7 @@ from tools.file_ops  import (tool_read_file, tool_read_file_lines, tool_write_fi
                               tool_patch_file, tool_list_dir, tool_find_files,
                               tool_run_shell, tool_run_interactive, sync_runtime_context,
                               FILE_SCHEMAS)
-from core.naming import stable_workspace_dir
+from core.naming import link_old_path_to_new, stable_workspace_dir
 from core import plan_guard as _plan_guard
 from tools.web_ops   import tool_web_search, tool_fetch_url, tool_git_op, WEB_SCHEMAS
 from tools.sandbox   import tool_run_code, SANDBOX_SCHEMAS
@@ -1083,31 +1083,11 @@ class AgentSession:
                 )
                 return "", ""
 
-            # 2. Reverse fallback symlink: old path -> new <slug>, when applicable.
-            #    sessions/ -> workspace/ moves (auto-naming promotion) and
-            #    archive/ -> workspace/ moves also get a symlink so pre-swap
-            #    absolute paths keep resolving. The link is relative to the
-            #    OLD directory's parent so it works across directory roots.
-            try:
-                old_name = current_path.name
-                old_parent = current_path.parent
-                if old_parent != workspace_target:
-                    old_link = old_parent / old_name
-                    if not old_link.exists() and not old_link.is_symlink():
-                        rel = os.path.relpath(new_path, old_parent)
-                        os.symlink(rel, str(old_link))
-                elif not current_path.exists():
-                    # In-place rename already moved the directory; recreate a
-                    # same-parent link from the old name to the slug.
-                    old_link = workspace_target / old_name
-                    if not old_link.exists() and not old_link.is_symlink():
-                        os.symlink(final_name, str(old_link))
-            except OSError as exc:
-                # Reverse symlink failure is non-fatal after rename succeeds.
-                logger.warning(
-                    "Reverse symlink failed (non-fatal) | old={} new={} exc={!r}",
-                    current_path.name, final_name, exc,
-                )
+            # 2. Reverse fallback symlink at the old path so pre-swap
+            #    absolute paths keep resolving. Works for same-root renames
+            #    and the sessions/ -> workspace/ promotion; failure is
+            #    non-fatal after the rename succeeded.
+            link_old_path_to_new(current_path, new_path)
 
             # 3. Atomic pointer update; CPython list-index assignment is atomic.
             new_abs = str(new_path.resolve())
