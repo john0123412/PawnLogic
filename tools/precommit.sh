@@ -80,19 +80,17 @@ if [ -n "$STAGED_ANY" ]; then
     echo "[pre-commit] leak scan on staged diff"
     # Only scan the *added* lines of the staged diff (those that begin
     # with `+` but not `+++` which is the file header). Source code
-    # legitimately contains the patterns as string literals (regex,
-    # test fixtures, test paths) so we additionally skip the staged
-    # diff hunks of `tools/precommit.sh` itself, which embeds the
-    # patterns as the very thing we are matching against.
-    ADDED_LINES="$(git diff --cached | grep -E '^\+' | grep -vE '^\+{3}' || true)"
-    SELF_DIFF=""
-    if echo "$STAGED_ANY" | grep -qE '^tools/precommit\.sh$'; then
-        SELF_DIFF="$(git diff --cached -- tools/precommit.sh | grep -E '^\+' | grep -vE '^\+{3}' || true)"
-        # `sort -u | grep -vF` may exit 1 when SELF_DIFF is empty, so wrap in
-        # `|| true` to keep `set -e` from killing the script during the
-        # self-exclude case.
-        ADDED_LINES="$(printf '%s\n%s\n' "$ADDED_LINES" "$SELF_DIFF" | sort -u | { grep -vF "$SELF_DIFF" || true; })"
-    fi
+    # legitimately contains the scan patterns as string literals (this
+    # script itself does), so `tools/precommit.sh` is excluded from the
+    # scan by pathspec: it is the scanner, and its own pattern lines are
+    # indistinguishable from real leaks at line granularity. Every other
+    # staged file is always scanned, no matter what else is staged — an
+    # earlier version filtered the self diff out of the combined added
+    # lines with `grep -vF "$SELF_DIFF"`, which collapsed the ENTIRE scan
+    # to nothing when the self diff was empty (deletion-only change) and
+    # silently passed a real key staged in another file. That bypass is
+    # pinned by tests/test_precommit_gates.py.
+    ADDED_LINES="$(git diff --cached -- . ':(exclude)tools/precommit.sh' | grep -E '^\+' | grep -vE '^\+{3}' || true)"
     if echo "$ADDED_LINES" | grep -nE "/home/[^/ ]+/|/Users/[^/ ]+/|C:\\\\Users\\\\" >/dev/null; then
         echo "  ✗ staged diff (added lines) contains an absolute local path"
         echo "$ADDED_LINES" | grep -nE "/home/[^/ ]+/|/Users/[^/ ]+/|C:\\\\Users\\\\" | head -3
