@@ -77,4 +77,5 @@ if 6 in last_seen:
         for l in snapshots[i+1]["screen"]:
             if l.strip(): print(repr(l[:70]))
 import pickle
-pickle.dump(snapshots, open("/tmp/replay_snaps.pkl", "wb"))
+with open("/tmp/replay_snaps.pkl", "wb") as fh:
+    pickle.dump(snapshots, fh)

@@ -2,7 +2,7 @@
 import os, pexpect, time
 
 cols, rows = 80, 30
-out = open("/tmp/replay_raw.txt", "w")
+out = open("/tmp/replay_raw.txt", "w")  # noqa: SIM115 - closed at finally
 child = pexpect.spawn(
     "venv/bin/python", ["-m", "pawnlogic", "--model", "bai:glm-5.3-flash"],
     env=os.environ.copy(), encoding="utf-8", timeout=120, dimensions=(rows, cols),
