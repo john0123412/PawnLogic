@@ -893,3 +893,102 @@ def test_auto_correction_notice_stays_in_transcript_not_host_stdout() -> None:
         asyncio.run(scenario())
     finally:
         sys.stdout = original_stdout
+
+
+# ── Host flush debounce + host-width pre-wrap (scrollback duplication fix) ──
+
+
+def test_wrap_host_payload_folds_cjk_rows_to_terminal_columns() -> None:
+    """Wide glyphs must be pre-wrapped so the host never wraps a flushed row.
+
+    Each host flush erases one screen row per logical line; a row the host
+    terminal wraps itself leaves a residue row the erase misses, which the
+    owner reported as duplicated/interleaved scrollback. Pre-wrapping with
+    the host's real column count keeps erase cycles row-accurate.
+    """
+    from pawnlogic.live_terminal import _wrap_host_payload
+
+    # A CJK glyph (U+4E2D) occupies 2 columns: 10 glyphs = 20 columns.
+    # Wide glyphs are the exact case where host-side wrapping leaves erase
+    # residue, so the pre-wrap must measure them with wcwidth.
+    cjk = "\u4e2d" * 10
+    assert _wrap_host_payload(cjk + "\n", 20) == cjk + "\n"
+    folded = _wrap_host_payload(cjk, 19)
+    assert folded == "\u4e2d" * 9 + "\n" + "\u4e2d"
+    # Narrow ASCII passes through untouched.
+    assert _wrap_host_payload("short line\n", 20) == "short line\n"
+    # A one-column terminal degenerates to one glyph per row, never hangs.
+    assert _wrap_host_payload("abc", 1) == "a\nb\nc"
+    # Unmeasurable glyphs fall back to one column and never loop forever.
+    assert _wrap_host_payload("a\u200bb", 10) == "a\u200bb"
+
+
+def test_live_host_flush_is_debounced_between_flush_cycles() -> None:
+    """Streaming bursts schedule at most one host flush per interval.
+
+    The write itself still happens on the debounce timer, so complete lines
+    reach the host scrollback without being dropped or duplicated.
+    """
+
+    from pawnlogic.live_terminal import _HOST_FLUSH_MIN_INTERVAL_SECONDS
+
+    async def scenario() -> None:
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+            run_task = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+            try:
+                host_writes: list[str] = []
+                real_stdout = sys.stdout
+
+                class _Host:
+                    def write(self, text: str) -> int:
+                        host_writes.append(text)
+                        return len(text)
+
+                    def flush(self) -> None:
+                        return None
+
+                    def isatty(self) -> bool:
+                        return True
+
+                sys.stdout = real_stdout
+                terminal._stdout_frames.append(
+                    (real_stdout, None, real_stdout, None)
+                )
+                terminal._host_stdout = lambda: _Host()  # type: ignore[method-assign]
+
+                # First flush goes through immediately (last_ts == 0).
+                terminal.append_line("first complete line")
+                await asyncio.sleep(0.3)
+                assert any("first complete line" in w for w in host_writes)
+
+                # A burst right after the committed flush must NOT schedule a
+                # second immediate flush; it parks on the debounce timer.
+                host_writes.clear()
+                for i in range(50):
+                    terminal.append_line(f"burst-{i}")
+                await asyncio.sleep(0.3)
+                assert host_writes == [], (
+                    "burst flushes must be debounced, saw "
+                    f"{len(host_writes)} writes"
+                )
+
+                # Once the debounce interval elapses, the timer flushes the
+                # accumulated complete lines exactly once.
+                await asyncio.sleep(
+                    _HOST_FLUSH_MIN_INTERVAL_SECONDS + 0.5
+                )
+                burst_writes = [w for w in host_writes if "burst-" in w]
+                assert burst_writes, "debounce timer must flush accumulated lines"
+                joined = "".join(burst_writes)
+                assert joined.count("burst-0\n") == 1
+                assert joined.count("burst-49\n") == 1
+            finally:
+                sys.stdout = real_stdout
+                terminal._stdout_frames.clear()
+                terminal.close()
+                await asyncio.sleep(0.1)
+                await run_task
+
+    asyncio.run(scenario())

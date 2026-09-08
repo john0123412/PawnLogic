@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import inspect
 import json
 import re
+import shutil
 import sys
 from threading import RLock
 import time
@@ -73,6 +74,15 @@ _KEY_SEQUENCE_TIMEOUT_SECONDS = 0.1
 _HOST_FLUSH_MAX_ATTEMPTS = 3
 _HOST_FLUSH_RETRY_BASE_SECONDS = 0.05
 _HOST_FLUSH_RETRY_MAX_SECONDS = 0.2
+# Minimum spacing between two live host flushes. Every ``run_in_terminal``
+# handoff erases and redraws the whole inline application; on hosts whose
+# wcwidth disagrees with the terminal (CJK text + emoji in Windows Terminal /
+# WSL), each erase leaves residue on wrapped rows, so a long streamed answer
+# accretes overlapping ghost copies in the scrollback. Batching live flushes
+# to at most one per interval shrinks the number of erase/redraw cycles from
+# one per burst to a bounded trickle; the final flush at close still emits
+# everything exactly once.
+_HOST_FLUSH_MIN_INTERVAL_SECONDS = 2.0
 # Only the trailing lines of the transcript are rendered in the live
 # viewport. The full transcript still exists for scrollback flushing;
 # this cap keeps render cost constant for very large sessions.
@@ -188,6 +198,69 @@ class _StdoutProxy:
             self.write(line)
 
 
+def _host_terminal_columns(fallback: int = 80) -> int:
+    """Return the host terminal's real column count, best-effort.
+
+    ``shutil.get_terminal_size`` consults ``COLUMNS`` then the stdout TTY,
+    which matches what the host terminal actually wraps at. Any failure
+    falls back to the conventional 80 columns.
+    """
+    try:
+        size = shutil.get_terminal_size()
+    except Exception:
+        return fallback
+    return size.columns if size.columns and size.columns > 0 else fallback
+
+
+def _wrap_host_payload(text: str, columns: int) -> str:
+    """Pre-wrap plain text so the host terminal never wraps a line itself.
+
+    Each host flush erases and redraws the inline application; the erase
+    assumes one screen row per logical line. When a flushed row is wider
+    than the terminal (CJK text and emoji rendered wider than the
+    application's wcwidth estimate), the host terminal wraps it onto extra
+    rows, the erase then only clears the first row, and the surviving
+    residue stacks into the duplicated, interleaved scrollback the owner
+    reported. Pre-wrapping with the same column count the host wraps at
+    keeps every flushed row within one physical row, so erase cycles stay
+    row-accurate.
+
+    Zero-width and wide characters are measured with ``wcwidth`` (already a
+    prompt_toolkit dependency); characters with no measurable width fall
+    back to one column so wrapping stays conservative.
+    """
+    if columns <= 0:
+        return text
+    import wcwidth
+
+    out_lines: list[str] = []
+    for logical in text.split("\n"):
+        if not logical:
+            out_lines.append("")
+            continue
+        remaining = logical
+        while True:
+            width = 0
+            cut = 0
+            for idx, ch in enumerate(remaining):
+                if ch == "\t":
+                    ch_width = 1
+                else:
+                    ch_width = wcwidth.wcwidth(ch)
+                    if ch_width is None or ch_width < 0:
+                        ch_width = 1
+                if width + ch_width > columns:
+                    break
+                width += ch_width
+                cut = idx + 1
+            if cut >= len(remaining):
+                out_lines.append(remaining)
+                break
+            out_lines.append(remaining[:cut])
+            remaining = remaining[cut:]
+    return "\n".join(out_lines)
+
+
 class TerminalSink:
     """Output-sink adapter that preserves command results across modal TUIs."""
 
@@ -290,6 +363,10 @@ class PersistentTerminal:
         self._host_flush_attempts = 0
         self._host_flush_retry_handle: asyncio.TimerHandle | None = None
         self._host_flush_circuit_open = False
+        # Timestamp of the last committed live host flush, used to debounce
+        # live flushes (see _HOST_FLUSH_MIN_INTERVAL_SECONDS). The final
+        # close handoff is never debounced.
+        self._host_flush_last_ts = 0.0
         # ``None`` follows the newest output.  An integer is a user-owned
         # viewport offset and must survive redraws and new stream chunks.
         self._output_scroll_offset: int | None = None
@@ -815,6 +892,7 @@ class PersistentTerminal:
             return True
         if include_partial and not plain.endswith("\n"):
             plain = f"{plain}\n"
+        plain = _wrap_host_payload(plain, _host_terminal_columns())
         # Keep the payload and a close-time newline in one write call.  If a
         # second write fails, replaying the whole snapshot could duplicate a
         # partial tail in host scrollback.  Permissive text streams may return
@@ -861,8 +939,17 @@ class PersistentTerminal:
         This method is called with ``self._lock`` held, often by a worker
         thread.  Only the event-loop callback calls ``run_in_terminal``; the
         producer never writes to the physical TTY directly.
+
+        Live flushes are debounced to at most one per
+        :data:`_HOST_FLUSH_MIN_INTERVAL_SECONDS`: each ``run_in_terminal``
+        handoff erases and redraws the inline application, and on hosts whose
+        effective column width disagrees with wcwidth (CJK + emoji), the erase
+        leaves residue that stacks into the duplicated/interleaved scrollback
+        the owner reported.  A pending timer is the reservation; when it fires
+        the accumulated complete lines flush in one batch.  The closing flush
+        bypasses the debounce so shutdown is never delayed.
         """
-        if self._host_flush_scheduled or self._host_flush_task is not None:
+        if self._host_flush_task is not None:
             return
         if self._host_flush_retry_handle is not None:
             return
@@ -875,6 +962,20 @@ class PersistentTerminal:
             return
         if not self._running:
             return
+        if not self._host_flush_closing:
+            now = loop.time()
+            due = self._host_flush_last_ts + _HOST_FLUSH_MIN_INTERVAL_SECONDS
+            if now < due:
+                if self._host_flush_scheduled:
+                    return
+                self._host_flush_scheduled = True
+                with contextlib.suppress(RuntimeError):
+                    self._host_flush_retry_handle = loop.call_later(
+                        due - now, self._start_host_flush_on_ui
+                    )
+                if self._host_flush_retry_handle is None:
+                    self._host_flush_scheduled = False
+                return
         self._host_flush_scheduled = True
         self._schedule_on_loop(self._start_host_flush_on_ui, loop=loop)
 
@@ -953,11 +1054,14 @@ class PersistentTerminal:
 
         with self._lock:
             closing = self._host_flush_closing
+            loop = self._loop
             if succeeded:
                 # A successful snapshot establishes a new retry generation.
                 # Future output gets the full bounded budget again.
                 self._host_flush_attempts = 0
                 self._host_flush_circuit_open = False
+                if loop is not None:
+                    self._host_flush_last_ts = loop.time()
                 if not closing and not is_final:
                     self._schedule_host_flush_locked()
                     return
@@ -991,6 +1095,7 @@ class PersistentTerminal:
             running = self._running
             retry_handle = self._host_flush_retry_handle
             self._host_flush_retry_handle = None
+            self._host_flush_scheduled = False
             self._host_flush_closing = False
         if retry_handle is not None:
             with contextlib.suppress(Exception):
