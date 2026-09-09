@@ -196,7 +196,13 @@ def test_prompt_api_failure_emits_error_and_keeps_serving():
     assert "circuit open" in error["detail"]
 
 
-def test_prompt_missing_api_key_fails_fast_without_turn():
+def test_prompt_missing_api_key_fails_fast_without_turn(monkeypatch):
+    # load_custom_providers calls dotenv.load_dotenv with override=True,
+    # which would re-inject the key from ~/.pawnlogic/.env even if we
+    # monkeypatch.delenv.  Disable the dotenv reload so the environment
+    # we control stays in effect during the test.
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **kw: None)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     session = FakeSession(model_alias=DEFAULT_MODEL)
     server, events = make_server(
         [
@@ -211,6 +217,35 @@ def test_prompt_missing_api_key_fails_fast_without_turn():
     error = next(e for e in events if e["type"] == "error")
     assert error["stage"] == "api_key"
     assert "DEEPSEEK_API_KEY" in error["detail"]
+
+
+def test_prompt_with_configured_api_key_emits_result(monkeypatch):
+    # Same dotenv isolation: prevent ~/.pawnlogic/.env from leaking a
+    # real key that would make the fake key assertion unreliable.
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **kw: None)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    session = FakeSession(model_alias=DEFAULT_MODEL)
+
+    def _fake_run_turn(prompt: str) -> None:
+        session.run_turn_calls.append(prompt)
+        session.messages.append({"role": "assistant", "content": "mock reply"})
+        session.total_prompt_tokens = 5
+        session.total_completion_tokens = 2
+
+    session.run_turn = _fake_run_turn
+    server, events = make_server(
+        [
+            line_request({"v": 1, "type": "prompt", "text": "hello"}),
+            line_request({"type": "shutdown"}),
+        ],
+        session,
+    )
+    code = server.serve()
+    assert code == 0
+    assert session.run_turn_calls == ["hello"]
+    result = next(e for e in events if e["type"] == "result")
+    assert result["prompt"] == "hello"
+    assert result["response"] == "mock reply"
 
 
 def test_empty_prompt_text_rejected():

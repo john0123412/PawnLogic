@@ -98,7 +98,7 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 
 - **Esc 转向（Codex/Claude Code 语义）：** Esc 是纯中断，排队的追问立即作为新回合执行——无需额外确认，不丢消息。live REPL 与 headless wire 行为一致。
 - **Headless 核心协议（v1）：** 任意 pawn 进程可通过 `pawn serve` 提供 NDJSON-over-stdio 服务，带版本化信封，使 agent 可被任何前端嵌入。契约由 golden fixture 双端（Python/Rust）钉死。
-- **Rust ratatui 前端（源码 crate）：** 全屏 alternate-screen UI，悬浮顶部状态栏、应用内滚动历史、slash 命令透传，`PAWNLOGIC_TUI_SERVER` 可让打包二进制指向任意后端。Release tag 附带 Linux 二进制 tar 包及 sha256 校验。
+- **实验性 Rust ratatui 前端（源码 crate）：** 全屏 alternate-screen UI，悬浮顶部状态栏、应用内滚动历史、支持光标的 Unicode 输入编辑、粘贴与鼠标滚轮、slash 命令透传，`PAWNLOGIC_TUI_SERVER` 可让打包二进制指向任意后端。Prompt Toolkit 交互选择器仍只在 Python REPL 中可用；wire 客户端会立即显示文本指引。此为协议验证客户端，不是 Python REPL 的替代品。Release tag 附带 Linux 二进制 tar 包及 sha256 校验（实验性，非默认入口）。
 - **参考 PT 客户端与延迟测量：** `frontends/ptk_client.py` 实测 prompt→turn-start、中断、chunk 间隔延迟（真实 API 下中位数约 4 ms / 2.4 ms / <100 ms）。
 - **终端硬化：** 实时输出单一所有者——完成的回合在原生滚动区只出现一次；2 秒 flush 防抖、按 wcwidth 预折行、关闭不再被吞吐计时器延迟。
 

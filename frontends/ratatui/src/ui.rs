@@ -15,6 +15,8 @@ use ratatui::{
 };
 use std::sync::{Arc, Mutex};
 
+use crate::composer::Composer;
+
 /// Which line the history pane highlights while the user scrolls.
 #[derive(Default)]
 pub struct History {
@@ -35,14 +37,10 @@ impl History {
             Some(last) => last.push_str(text),
             None => self.lines.push(text.to_string()),
         }
-        if self.scroll_from_end > 0 {
-            self.scroll_from_end = self.scroll_from_end.saturating_add(0);
-        }
     }
 
     pub fn scroll_up(&mut self, rows: usize) {
-        self.scroll_from_end =
-            (self.scroll_from_end + rows).min(self.lines.len().saturating_sub(1));
+        self.scroll_from_end = self.scroll_from_end.saturating_add(rows);
     }
 
     pub fn scroll_down(&mut self, rows: usize) {
@@ -59,11 +57,15 @@ pub struct UiState {
     pub running: bool,
     pub started_at: Option<std::time::Instant>,
     pub last_status: String,
+    pub result_received: bool,
+    pub command_received: bool,
+    pub last_error: Option<String>,
+    streamed_response: bool,
 }
 
 pub const STATUS_BAR_HEIGHT: u16 = 3;
 
-pub fn draw(f: &mut Frame, state: &Arc<Mutex<UiState>>, composer: &str) {
+pub fn draw(f: &mut Frame, state: &Arc<Mutex<UiState>>, composer: &Composer) {
     let state = state.lock().unwrap();
     let chunks = Layout::vertical([
         Constraint::Length(STATUS_BAR_HEIGHT),
@@ -100,21 +102,25 @@ pub fn draw(f: &mut Frame, state: &Arc<Mutex<UiState>>, composer: &str) {
     f.render_widget(status, chunks[0]);
 
     // ── History pane with in-app scroll ──
-    let total = state.history.lines.len();
-    let height = chunks[1].height as usize;
-    let end = total.saturating_sub(state.history.scroll_from_end);
-    let start = end.saturating_sub(height);
-    let visible: Vec<Line> = state.history.lines[start..end]
+    let all_lines: Vec<Line> = state
+        .history
+        .lines
         .iter()
         .map(|l| Line::from(l.clone()))
         .collect();
-    let history = Paragraph::new(visible)
+    let history = Paragraph::new(all_lines)
         .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::NONE));
+    let total_rows = wrapped_row_count(&state.history.lines, chunks[1].width);
+    let max_scroll = total_rows.saturating_sub(chunks[1].height as usize);
+    let from_end = state.history.scroll_from_end.min(max_scroll);
+    let scroll_top = max_scroll.saturating_sub(from_end);
+    let history = history.scroll((u16::try_from(scroll_top).unwrap_or(u16::MAX), 0));
     f.render_widget(history, chunks[1]);
 
     // ── Composer row ──
-    let composer_text = format!("▶ {composer}");
+    let (visible_text, cursor_width) = composer_view(composer, chunks[2].width);
+    let composer_text = format!("▶ {visible_text}");
     let composer_widget = Paragraph::new(Span::styled(
         composer_text.clone(),
         Style::default().add_modifier(Modifier::BOLD),
@@ -122,15 +128,37 @@ pub fn draw(f: &mut Frame, state: &Arc<Mutex<UiState>>, composer: &str) {
     f.render_widget(composer_widget, chunks[2]);
 
     // Cursor sits at the composer so typing feels native.
-    let cursor_col = 2 + composer_width(&composer_text);
-    f.set_cursor_position(Position::new(
-        cursor_col.min(chunks[2].width - 1),
-        chunks[2].y,
-    ));
+    if chunks[2].width > 0 {
+        let cursor_col = 2_u16.saturating_add(cursor_width);
+        f.set_cursor_position(Position::new(
+            cursor_col.min(chunks[2].width.saturating_sub(1)),
+            chunks[2].y,
+        ));
+    }
 }
 
-fn composer_width(composer: &str) -> u16 {
-    u16::try_from(composer.chars().count()).unwrap_or(0)
+fn composer_view(composer: &Composer, terminal_width: u16) -> (&str, u16) {
+    let text = composer.text();
+    let cursor = composer.cursor();
+    let budget = usize::from(terminal_width.saturating_sub(3));
+    let mut start = 0;
+    while Span::raw(&text[start..cursor]).width() > budget {
+        let Some((offset, ch)) = text[start..cursor].char_indices().next() else {
+            break;
+        };
+        start += offset + ch.len_utf8();
+    }
+    let width = Span::raw(&text[start..cursor]).width();
+    (&text[start..], u16::try_from(width).unwrap_or(u16::MAX))
+}
+
+fn wrapped_row_count(lines: &[String], width: u16) -> usize {
+    let width = usize::from(width.max(1));
+    lines
+        .iter()
+        .flat_map(|line| line.split('\n'))
+        .map(|line| Span::raw(line).width().max(1).div_ceil(width))
+        .sum()
 }
 
 /// Map one wire event into history lines. Returns true when the event was
@@ -144,6 +172,9 @@ pub fn apply_event(state: &Arc<Mutex<UiState>>, kind: &str, payload: &serde_json
                 "turn_started" => {
                     state.running = true;
                     state.started_at = Some(std::time::Instant::now());
+                    state.result_received = false;
+                    state.last_error = None;
+                    state.streamed_response = false;
                     state.history.push("── turn started ──".into());
                 }
                 "turn_completed" => {
@@ -151,7 +182,7 @@ pub fn apply_event(state: &Arc<Mutex<UiState>>, kind: &str, payload: &serde_json
                     state.last_status = "completed".into();
                     state.history.push("── turn completed ──".into());
                 }
-                "turn_interrupted" | "turn_failed" => {
+                "turn_interrupted" | "turn_cancelled" | "turn_failed" => {
                     state.running = false;
                     state.last_status = stage.to_string();
                     state.history.push(format!("── turn {stage} ──"));
@@ -184,22 +215,28 @@ pub fn apply_event(state: &Arc<Mutex<UiState>>, kind: &str, payload: &serde_json
                     state.history.push("│ ".into());
                 }
                 state.history.append_to_last(text);
+                state.streamed_response = true;
             }
             false
         }
         "result" => {
             state.running = false;
             state.last_status = "completed".into();
+            state.result_received = true;
             let response = payload
                 .get("response")
                 .and_then(|r| r.as_str())
                 .unwrap_or("");
-            state.history.push(format!("= {response:?}"));
+            if !state.streamed_response && !response.is_empty() {
+                state.history.push(format!("│ {response}"));
+            }
+            state.streamed_response = false;
             true
         }
         "error" => {
             let stage = payload.get("stage").and_then(|s| s.as_str()).unwrap_or("");
             let detail = payload.get("detail").and_then(|d| d.as_str()).unwrap_or("");
+            state.last_error = Some(format!("[{stage}] {detail}"));
             state.history.push(format!("✗ [{stage}] {detail}"));
             false
         }
@@ -213,6 +250,7 @@ pub fn apply_event(state: &Arc<Mutex<UiState>>, kind: &str, payload: &serde_json
             false
         }
         "command_result" => {
+            state.command_received = true;
             let verb = payload.get("verb").and_then(|v| v.as_str()).unwrap_or("");
             let output = payload
                 .get("output")
@@ -282,6 +320,22 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn history_scroll_uses_visual_row_offsets() {
+        let mut history = History::default();
+        history.push("one logical line can wrap across many visual rows".into());
+        history.scroll_up(10);
+        assert_eq!(history.scroll_from_end, 10);
+        history.scroll_down(3);
+        assert_eq!(history.scroll_from_end, 7);
+    }
+
+    #[test]
+    fn wrapped_history_counts_terminal_rows() {
+        let lines = vec!["123456".to_string(), String::new()];
+        assert_eq!(wrapped_row_count(&lines, 3), 3);
+    }
+
+    #[test]
     fn command_result_lands_in_history() {
         let state = Arc::new(Mutex::new(UiState::default()));
         apply_event(
@@ -318,5 +372,51 @@ mod tests {
         let history = state.lock().unwrap().history.lines.clone();
         assert!(history.iter().any(|l| l.contains("tool started: list_dir")));
         assert!(history.iter().any(|l| l.contains("tool result: list_dir")));
+    }
+
+    #[test]
+    fn final_result_does_not_duplicate_streamed_response() {
+        let state = Arc::new(Mutex::new(UiState::default()));
+        apply_event(&state, "stream", &json!({"text": "unique-answer"}));
+        apply_event(
+            &state,
+            "result",
+            &json!({"response": "unique-answer", "model": "test"}),
+        );
+
+        let rendered = state.lock().unwrap().history.lines.join("\n");
+        assert_eq!(rendered.matches("unique-answer").count(), 1, "{rendered}");
+    }
+
+    #[test]
+    fn final_result_renders_when_no_stream_was_received() {
+        let state = Arc::new(Mutex::new(UiState::default()));
+        apply_event(
+            &state,
+            "result",
+            &json!({"response": "fallback-answer", "model": "test"}),
+        );
+
+        let rendered = state.lock().unwrap().history.lines.join("\n");
+        assert_eq!(rendered.matches("fallback-answer").count(), 1, "{rendered}");
+    }
+
+    #[test]
+    fn composer_cursor_uses_terminal_cell_width() {
+        let mut composer = Composer::default();
+        composer.insert_str("a\u{4e2d}🙂");
+        let (_, cursor_width) = composer_view(&composer, 80);
+        assert_eq!(cursor_width, 5);
+    }
+
+    #[test]
+    fn cancelled_turn_leaves_the_running_state() {
+        let state = Arc::new(Mutex::new(UiState::default()));
+        apply_event(&state, "status", &json!({"stage": "turn_started"}));
+        apply_event(&state, "status", &json!({"stage": "turn_cancelled"}));
+
+        let state = state.lock().unwrap();
+        assert!(!state.running);
+        assert_eq!(state.last_status, "turn_cancelled");
     }
 }

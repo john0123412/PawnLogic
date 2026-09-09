@@ -115,11 +115,16 @@ preserving existing public contracts:
 - **Headless core protocol (v1):** every pawn process can serve
   NDJSON-over-stdio (`pawn serve`) with a versioned envelope, making the
   agent embeddable by any frontend. Golden-fixture pinned contract tests.
-- **Rust ratatui frontend (source-checkout crate):** fullscreen
-  alternate-screen UI with a floating top status bar, in-app scrolling
-  history, slash-command passthrough, and `PAWNLOGIC_TUI_SERVER` to point
-  a packaged binary at any backend. Release tags attach a Linux binary
-  tarball with a sha256 checksum.
+- **Experimental Rust ratatui frontend (source-checkout crate):**
+  fullscreen alternate-screen UI with a floating top status bar, in-app
+  scrolling history, cursor-aware Unicode composer editing, paste and
+  mouse-wheel handling, slash-command passthrough, and
+  `PAWNLOGIC_TUI_SERVER` to point a packaged binary at any backend.
+  Interactive Prompt Toolkit selectors remain Python-REPL-only; the wire
+  client gives immediate text guidance. This is a protocol-validation
+  client, not a full Python-REPL replacement. Release tags attach a Linux
+  binary tarball with a sha256 checksum (experimental — not the default
+  entry point).
 - **Reference PT client + latency harness:** `frontends/ptk_client.py`
   measures prompt-to-turn-start, interrupt, and chunk-gap latencies
   (median ~4 ms / ~2.4 ms / <100 ms on real API runs).

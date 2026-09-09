@@ -28,8 +28,7 @@ def _chinese_text_violations(root: Path, relative_paths: list[str]) -> list[str]
         source_path = Path(relative_path)
         if path.stem.endswith("_zh-CN") or source_path.parts[:1] == ("skills",):
             continue
-        # Third-party skill packs may contain Chinese content; they are
-        # source-checkout assets excluded from PyPI wheels and release
+# source-checkout assets excluded from PyPI wheels and release
         # archives via .gitattributes export-ignore.
         if relative_path.startswith("skills/"):
             continue
@@ -80,6 +79,25 @@ def test_language_policy_allows_chinese_in_skill_source_assets(tmp_path):
     )
 
     assert violations == []
+
+
+def test_language_policy_rejects_chinese_text_in_rs_source(tmp_path):
+    """Chinese literals in *.rs source/tests are still rejected.
+
+    CJK boundary tests must use Unicode escapes (e.g. \\u{4e2d}), not
+    literal Chinese characters, because AGENT.md requires English source and test
+    text outside _zh-CN files.
+    """
+    src = tmp_path / "src" / "composer.rs"
+    src.parent.mkdir()
+    # This contains a literal Chinese character U+4E2D in a Rust test context.
+    src.write_text("let s = \"a\u4e2d🙂z\";\n", encoding="utf-8")
+
+    violations = _chinese_text_violations(tmp_path, ["src/composer.rs"])
+
+    assert violations, "literal Chinese in .rs must be flagged"
+    assert violations[0].startswith("src/composer.rs:1:")
+    assert "\u4e2d" in violations[0]
 
 
 def test_legacy_cn_documentation_filenames_are_not_tracked():
