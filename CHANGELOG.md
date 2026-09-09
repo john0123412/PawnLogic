@@ -10,10 +10,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - `PAWNLOGIC_TUI_SERVER` environment variable lets a packaged ratatui
   frontend spawn an explicit backend command instead of resolving
-  `python` from the host PATH (release-binaries previously picked up an
-  old installed pawnlogic). Documented in `frontends/ratatui/README.md`.
+  `python3` from the host PATH (release-binaries previously picked up an
+  old installed pawnlogic). The override is now treated as the complete
+  command instead of receiving a duplicate `-m pawnlogic serve` suffix.
+  Documented in `frontends/ratatui/README.md`.
 
 ### Fixed
+- **Experimental** ratatui frontend: now behaves as a usable wire client
+  instead of a protocol-only shell: streamed responses are not appended
+  again from the final `result`, `turn_cancelled` leaves the running
+  state, backend EOF/protocol failures restore the terminal and surface
+  bounded stderr, and terminal modes are restored through an RAII guard.
+  The composer supports Unicode-safe cursor movement, Home/End,
+  Backspace/Delete, bracketed paste, and cell-width-aware cursor
+  placement; mouse capture is enabled for the documented wheel scrolling.
+  `/q`, `/quit`, and `/exit` shut down locally, while modal-only wire v1
+  commands fail fast with text alternatives. The Rust crate version is
+  synchronized to `0.3.10`.  The ratatui frontend is an experimental
+  protocol-validation client, not a full Python-REPL replacement.
 - The pre-commit leak scan could be silently bypassed for sibling files
   by staging a deletion-only change to `tools/precommit.sh` in the same
   commit: the self-exclusion filter collapsed to `grep -vF ""`, which

@@ -618,6 +618,14 @@ are source-checkout or user-installed assets; pip/curl installations should use
   - **#142** — 0.3.10 plan registration and stale Phase 2 publication
     claims corrected; READMEs' What's New moved from 0.3.2 to shipped
     0.3.9 content.
+  - **Post-candidate repair** — owner acceptance rejected the initial
+    ratatui surface. The repair branch removes stream/result duplication,
+    recognizes `turn_cancelled`, monitors backend EOF and protocol errors,
+    restores raw/alternate-screen/mouse/paste modes through an RAII guard,
+    and replaces the append-only input string with a Unicode-safe cursor
+    composer. Wire v1 still has no modal-selector protocol; bare interactive
+    commands fail fast with text alternatives instead of launching a hidden
+    Prompt Toolkit application.
   - Gate evidence on the pre-candidate tree: fast suite 1,583 passed /
     38 deselected, Dynamic E2E 31/31, ruff + mypy + docs guards clean;
     candidate matrix numbers are recorded at the tag point per the
@@ -797,6 +805,14 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   repainting, modal pause/resume, and TTY-owning interactive Tools can race;
   live-input tests must exercise the fixed-bottom application, stdout/stderr
   restoration, and serial readline fallback.
+- The ratatui frontend is a separate wire-v1 client, not a replacement UI
+  embedded into the Python REPL. Its terminal guard must restore raw mode,
+  alternate screen, mouse capture, bracketed paste, and cursor visibility on
+  every error path. The frontend must treat streamed answer text as the
+  authoritative rendered response and use `result` only as a non-streaming
+  fallback; rendering both duplicates every answer. Wire v1 cannot host the
+  Python Prompt Toolkit selectors, so modal-only commands must fail fast with
+  explicit text alternatives.
 - Prompt Toolkit key bindings classify intent before main-loop dispatch; the
   session Adapter must reconcile stale START/STEER/FOLLOW_UP hints against the
   latest scheduler view. Text-only completion must drain unclaimed steer input

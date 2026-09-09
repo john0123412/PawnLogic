@@ -39,9 +39,11 @@ target/release/pawnlogic-tui --model bai:glm-5.3-flash \
 
 Environment: the spawned `pawn serve` inherits your environment; point
 `PAWNLOGIC_HOME` at an isolated directory for testing. The backend
-command defaults to `python -m pawnlogic` resolved from `PATH` — set
-`PAWNLOGIC_TUI_SERVER="python -m pawnlogic"` (or a venv's absolute
-python) when an older installed pawnlogic shadows the repository code.
+command defaults to `python3 -m pawnlogic serve` resolved from `PATH`.
+Set `PAWNLOGIC_TUI_SERVER="$PWD/venv/bin/python -m pawnlogic serve"`
+when an older installed pawnlogic shadows the repository code. The
+override is the complete backend command; the client only appends
+`--model <alias>`.
 
 ## Keys
 
@@ -49,15 +51,26 @@ python) when an older installed pawnlogic shadows the repository code.
 |-----|--------|
 | Enter | submit — a plain prompt when idle, a steer while a Turn runs |
 | Esc | interrupt the active Turn |
+| Left/Right, Home/End | move the composer cursor |
+| Backspace/Delete | edit at the composer cursor |
+| Ctrl+A/Ctrl+E/Ctrl+U | move to start/end or clear the composer |
+| Bracketed paste | insert pasted text at the composer cursor |
 | Up/Down, PageUp/PageDown, mouse wheel | scroll the history pane |
-| Ctrl+C | shut the server down and exit |
+| Ctrl+C or `/q`/`/quit`/`/exit` | shut the server down and exit |
+
+Wire v1 has no modal-selector protocol. Use text forms such as
+`/model <alias>` and `/provider list`. Bare `/model`, `/provider`,
+`/skills`, and `/setkey` fail immediately with guidance instead of
+opening a hidden Prompt Toolkit application.
 
 ## Protocol freeze
 
 The client speaks wire v1 (ADR 0011). The contract sample is
 `tests/fixtures/serve_events_v1.jsonl`; the Rust parser and the Python
 contract suite must both accept it (see ADR 0011's freeze-discipline
-section). Unknown versions or event types abort parsing loudly.
+section). Unknown protocol versions and malformed events abort parsing
+loudly; unknown event types are ignored as required by ADR 0011 so v1
+can grow additively.
 
 ## Distribution status
 
