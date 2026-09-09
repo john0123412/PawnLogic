@@ -40,7 +40,7 @@ impl Event {
 }
 
 /// Parse one NDJSON line into an [`Event`].
-pub fn parse_line(line: &str) -> Result<Event> {
+pub fn parse_line(line: &str) -> Result<Option<Event>> {
     let value: Value = serde_json::from_str(line).context("invalid JSON line")?;
     let version = value
         .get("v")
@@ -55,20 +55,26 @@ pub fn parse_line(line: &str) -> Result<Event> {
         .context("missing message type field `type`")?
         .to_string();
     if !KNOWN_V1_EVENT_TYPES.contains(&kind.as_str()) {
-        bail!("unknown v1 event type: {kind}");
+        return Ok(None);
     }
-    Ok(Event {
+    Ok(Some(Event {
         version,
         kind,
         payload: value,
-    })
+    }))
 }
 
-/// Parse a full NDJSON transcript; unknown versions/types abort the parse.
+/// Parse a full NDJSON transcript; unknown versions abort and unknown types skip.
 /// Test surface: exercised by the golden-fixture contract test.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn parse_lines(lines: &[&str]) -> Result<Vec<Event>> {
-    lines.iter().map(|l| parse_line(l)).collect()
+    Ok(lines
+        .iter()
+        .map(|line| parse_line(line))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 /// Build one versioned request (prompt/command/shutdown/interrupt).
@@ -132,9 +138,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_type() {
-        let err = parse_line(r#"{"v": 1, "type": "hover_widget"}"#).unwrap_err();
-        assert!(err.to_string().contains("unknown v1 event type"));
+    fn ignores_unknown_type() {
+        let event = parse_line(r#"{"v": 1, "type": "hover_widget"}"#).unwrap();
+        assert!(event.is_none());
     }
 
     #[test]
@@ -167,15 +173,20 @@ mod tests {
         let event = parse_line(
             r#"{"v": 1, "type": "command_result", "verb": "/keys", "output": ["{\"a\": true}"]}"#,
         )
+        .unwrap()
         .unwrap();
         assert_eq!(event.kind, "command_result");
     }
 
     #[test]
     fn stage_and_text_accessors() {
-        let event = parse_line(r#"{"v": 1, "type": "stream", "text": "hi"}"#).unwrap();
+        let event = parse_line(r#"{"v": 1, "type": "stream", "text": "hi"}"#)
+            .unwrap()
+            .unwrap();
         assert_eq!(event.text(), Some("hi"));
-        let status = parse_line(r#"{"v": 1, "type": "status", "stage": "ready"}"#).unwrap();
+        let status = parse_line(r#"{"v": 1, "type": "status", "stage": "ready"}"#)
+            .unwrap()
+            .unwrap();
         assert_eq!(status.stage(), Some("ready"));
     }
 }
