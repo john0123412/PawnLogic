@@ -290,3 +290,33 @@ def test_normal_close_still_releases_the_waiter() -> None:
         assert terminal.failed is False
 
     asyncio.run(scenario())
+
+
+def test_unexpected_exit_notice_reaches_the_real_stdout(capsys) -> None:
+    """The death notice must bypass the dead Application's output proxy.
+
+    A crash that raises out of the Application unwinds through asyncio.run,
+    so the CLI's shutdown block never gets to print; the notice is emitted
+    from the controller's task observer instead, after restoring stdout.
+    Printing while the proxy is still installed writes into the dead
+    terminal's sink and the user sees nothing (found under a real PTY).
+    """
+    terminal = PersistentTerminal()
+    proxy = terminal.install_output_proxy()
+
+    terminal.report_unexpected_exit()
+
+    captured = capsys.readouterr()
+    assert "stopped unexpectedly" in captured.out, captured.out
+    # stdout must be restored, not left pointing at the dead sink.
+    import sys
+
+    assert proxy is not None
+    assert sys.stdout is not proxy
+
+
+def test_report_unexpected_exit_never_raises() -> None:
+    """The notice runs from a done-callback: it must be exception-free."""
+    terminal = PersistentTerminal()
+    # No proxy installed and no frames to restore: still must not raise.
+    terminal.report_unexpected_exit()

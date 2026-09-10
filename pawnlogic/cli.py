@@ -1234,6 +1234,7 @@ async def _main_impl():
     _last_input_path = _PAWNLOGIC_DIR / ".last_input"
 
     _live_terminal = None
+    _live_terminal_died = False
     _live_terminal_controller = None
     if prompt_toolkit_enabled:
         # Use PawnCompleter directly. It has built-in fuzzy matching.
@@ -1408,6 +1409,13 @@ async def _main_impl():
                     _live_terminal.set_default(_re_edit_default)
                 accepted = await _live_terminal.next_submission()
                 if accepted is None:
+                    # Distinguish "the user asked to quit" from "the live
+                    # Application died".  The second case used to be a
+                    # silent stall the user could only escape by force-quit.
+                    # Remember it here and report after the output proxy is
+                    # restored below: printing now would write into the dead
+                    # terminal's sink and never reach the user.
+                    _live_terminal_died = _live_terminal.failed
                     break
                 raw = accepted.text.strip()
                 submitted_kind = accepted.kind
@@ -1508,6 +1516,11 @@ async def _main_impl():
     if _live_terminal_controller is not None:
         await _live_terminal_controller.close()
         _publish_live_terminal_controller(None)
+        if _live_terminal_died:
+            logger.error(
+                "Live terminal application ended unexpectedly; "
+                "left the interactive loop"
+            )
         print(c(CYAN, "\n  Goodbye! 👋"))
     pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
     for t in pending:
