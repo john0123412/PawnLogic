@@ -138,15 +138,23 @@ def submit_session_turn(
     *,
     kind: SubmissionKind | None = None,
 ) -> None:
-    """Admit a prompt and resume an idle follow-up lane when necessary."""
+    """Admit a prompt and resume an idle follow-up lane when necessary.
+
+    A recovered draft is handled before the requested kind is considered.
+    The live composer classifies Enter as FOLLOW_UP whenever *any* unfinished
+    work exists, and a parked recovered draft counts toward that: honouring
+    the requested kind first meant the draft was never replaced, so admission
+    fell back to a START against existing recovered work and raised
+    ``InvalidSubmissionError``.  Typing then did nothing at all.
+    """
     if not user_input.strip():
         return
     scheduler = session._turn_scheduler
     view = scheduler.view()
-    selected_kind = _kind_for_view(view) if kind is None else kind
-    if selected_kind is SubmissionKind.START and view.recovered is not None:
+    if view.active is None and view.recovered is not None:
         _replace_recovered_and_resume(scheduler, user_input)
         return
+    selected_kind = _kind_for_view(view) if kind is None else kind
     selected_kind = _reconcile_submission_kind(view, selected_kind)
     submission = Submission(user_input, kind=selected_kind, source="session")
     scheduler.submit(submission)

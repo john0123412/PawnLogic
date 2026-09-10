@@ -116,6 +116,39 @@ def test_prompt_after_failed_turn_is_admitted_and_runs() -> None:
     assert view.total_unfinished_count == 0
 
 
+def test_prompt_after_failed_turn_runs_even_when_binding_says_follow_up() -> None:
+    """The live composer's explicit FOLLOW_UP must not defeat the recovery.
+
+    The Enter binding classifies the key as FOLLOW_UP whenever any unfinished
+    work exists, and a parked recovered draft counts toward that.  Requiring
+    START before replacing the draft meant the recovery was skipped, the
+    reconciled kind became START against existing recovered work, and
+    admission raised InvalidSubmissionError — typing did nothing at all.
+    Caught by tools/acceptance_post429.py under a real PTY.
+    """
+    calls: list[str] = []
+    state = {"fail": True}
+
+    def execute(submission: Submission) -> TurnExecutionResult:
+        calls.append(submission.content)
+        if state["fail"]:
+            return TurnExecutionResult(TurnExecutionStatus.FAILED, "circuit open")
+        return TurnExecutionResult(TurnExecutionStatus.COMPLETED)
+
+    session = SimpleNamespace(_turn_scheduler=TurnScheduler(execute))
+    session._turn_scheduler.submit(Submission("hi"))
+
+    state["fail"] = False
+    # Exactly what pawnlogic/live_repl.py's Enter binding passes while a
+    # recovered draft is parked: queued_work() sees queue_depth > 0.
+    submit_session_turn(
+        session, "typed while parked", kind=SubmissionKind.FOLLOW_UP
+    )
+
+    assert calls == ["hi", "typed while parked"], calls
+    assert session._turn_scheduler.view().session_status == "completed"
+
+
 def test_prompt_after_failed_turn_with_queued_work_uses_explicit_resume() -> None:
     """A parked session with real queued work resumes explicitly on Enter."""
 
