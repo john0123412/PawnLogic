@@ -350,6 +350,7 @@ __all__ = [
     "NO_RESULT",
     "EmbeddedSelector",
     "ModalSpec",
+    "ModelMultiSelect",
     "ModelSelector",
     "PlanGuardSelector",
     "SelectorHost",
@@ -506,5 +507,82 @@ class ModelSelector(SelectorState):
             return True
         if key in {"escape", "c-c"}:
             self.close(result=None)
+            return True
+        return False
+
+
+class ModelMultiSelect(SelectorState):
+    """Multi-select picker for the models returned by ``/provider fetch``.
+
+    Replaces the legacy ``_provider_fetch_selector``, which built and ran a
+    *second* Prompt Toolkit ``Application`` while the live one was still
+    alive.  Two ``Vt100_Output`` instances competing for one PTY is the
+    failure ADR 0010 forbids.  This selector runs inside the host
+    Application like every other modal.
+
+    Space toggles the entry under the cursor, Enter confirms (returning the
+    chosen model ids in list order), Esc cancels.
+    """
+
+    def __init__(self, entries: list[tuple[str, dict[str, Any]]]) -> None:
+        super().__init__(title="Select models to register")
+        self.entries = list(entries)
+        self.cursor_idx = 0
+        self.chosen: set[int] = set(range(len(self.entries)))
+
+    @property
+    def formatted_text(self) -> FormattedText:
+        fragments: list[tuple[str, str]] = []
+        fragments.append(
+            (self.style.title, f"  Select models to register ({len(self.entries)} total)\n")
+        )
+        fragments.append(
+            (
+                self.style.desc,
+                "  Space toggle · Up/Down move · A all · N none · Enter confirm · Esc cancel\n\n",
+            )
+        )
+        for index, (model_id, cfg) in enumerate(self.entries):
+            checked = "●" if index in self.chosen else "○"
+            cursor = "❯ " if index == self.cursor_idx else "  "
+            style = self.style.selected if index == self.cursor_idx else ""
+            vision = " 📷" if cfg.get("vision") else ""
+            fragments.append((style, f"  {cursor}{checked} {model_id}{vision}\n"))
+        fragments.append(("", f"\n  Selected {len(self.chosen)}/{len(self.entries)}\n"))
+        return FormattedText(fragments)
+
+    def handle_key(self, key: str) -> bool:
+        if not self.entries:
+            if key in {"enter", "escape", "c-c"}:
+                self.close(result=[])
+                return True
+            return False
+        if key == "up":
+            self.cursor_idx = (self.cursor_idx - 1) % len(self.entries)
+            return True
+        if key == "down":
+            self.cursor_idx = (self.cursor_idx + 1) % len(self.entries)
+            return True
+        if key == "space":
+            if self.cursor_idx in self.chosen:
+                self.chosen.discard(self.cursor_idx)
+            else:
+                self.chosen.add(self.cursor_idx)
+            return True
+        if key in {"a", "A"}:
+            self.chosen = set(range(len(self.entries)))
+            return True
+        if key in {"n", "N"}:
+            self.chosen.clear()
+            return True
+        if key == "enter":
+            self.close(
+                result=[
+                    self.entries[index][0] for index in sorted(self.chosen)
+                ]
+            )
+            return True
+        if key in {"escape", "c-c"}:
+            self.close(result=[])
             return True
         return False

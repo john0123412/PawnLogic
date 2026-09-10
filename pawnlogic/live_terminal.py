@@ -419,6 +419,9 @@ class PersistentTerminal:
         self._throttle_timer_handle: Any = None
         self._running = False
         self._closed = False
+        # Set when the Application task ends without close().  The CLI loop
+        # is parked in next_submission() and would otherwise wait forever.
+        self._failed = False
         self._modal_active = False
         self._modal_stack: list[Any] = []
         # In-Application selector registry (ADR 0010). The live
@@ -431,6 +434,12 @@ class PersistentTerminal:
     def application(self) -> Application[Any] | None:
         """Return the underlying application after it has been constructed."""
         return self._application
+
+    @property
+    def failed(self) -> bool:
+        """Whether the Application task ended without an explicit close."""
+        with self._lock:
+            return self._failed
 
     @property
     def selector_registry(self) -> SelectorRegistry:
@@ -544,6 +553,37 @@ class PersistentTerminal:
         """Resolve the active selector from the Prompt Toolkit event loop."""
         self.close_selector()
 
+    def abandon_selectors(self) -> bool:
+        """Resolve a pending selector after the Application task has ended.
+
+        Used by the controller's task observer: the Application that hosted
+        the selector is gone, so the awaiting command must be released
+        instead of waiting on a future nobody can ever resolve.  Returns
+        True when a selector was resolved.
+        """
+        with self._lock:
+            self._modal_active = False
+        return self._selector_registry.resolve(None)
+
+    def report_unexpected_exit(self) -> None:
+        """Tell the user the Application died, on the real terminal.
+
+        Best-effort and exception-free: it runs from a task done-callback
+        during teardown, so it must never raise.  stdout is restored first
+        because the output proxy is still installed and its sink belongs to
+        the dead Application.
+        """
+        with contextlib.suppress(Exception):
+            self.restore_output_proxy()
+        with contextlib.suppress(Exception):
+            from config import LOG_DIR
+
+            sys.stdout.write(
+                "\n  \u2717 The live terminal application stopped "
+                "unexpectedly. Details were written to logs: "
+                f"{LOG_DIR}\n"
+            )
+            sys.stdout.flush()
     def _selector_formatted_text(self) -> Any:
         """Return the FormattedText for the active selector Float.
 
@@ -712,13 +752,18 @@ class PersistentTerminal:
         return True
 
     async def next_submission(self) -> TerminalSubmission | None:
-        """Wait for the next accepted event without stopping the application."""
+        """Wait for the next accepted event without stopping the application.
+
+        Returns ``None`` once the terminal is closed *or* its Application
+        task has ended abnormally.  Signalling the latter is what lets the
+        CLI loop shut down instead of waiting forever on a dead renderer.
+        """
         loop = asyncio.get_running_loop()
         while True:
             with self._lock:
                 if self._submissions:
                     return self._submissions.popleft()
-                if self._closed:
+                if self._closed or self._failed:
                     return None
                 if self._loop is None:
                     self._loop = loop
@@ -796,12 +841,24 @@ class PersistentTerminal:
 
         try:
             await application.run_async(pre_run=mark_ready, handle_sigint=False)
+        except BaseException:
+            # The Application task died.  Record it and still run the
+            # teardown below: an abnormally ended Application must not
+            # leave the CLI loop parked in next_submission() forever.
+            with self._lock:
+                self._failed = True
+            raise
         finally:
             self._stop_status_ticker()
             with self._lock:
                 self._running = False
-                if self._closed:
-                    self._wake_submission_waiter_locked()
+                # Wake the consumer on any exit, not only on close().  An
+                # unexpected Application death previously left the loop
+                # awaiting an event nobody would ever set, which the user
+                # could only escape with a force-quit.
+                if not self._closed:
+                    self._failed = True
+                self._wake_submission_waiter_locked()
 
     def run_sync(self) -> None:
         """Run the same application synchronously for non-async adapters."""
@@ -822,12 +879,17 @@ class PersistentTerminal:
                     self._schedule_host_flush_locked()
 
             application.run(pre_run=mark_ready, handle_sigint=False)
+        except BaseException:
+            with self._lock:
+                self._failed = True
+            raise
         finally:
             self._stop_status_ticker()
             with self._lock:
                 self._running = False
-                if self._closed:
-                    self._wake_submission_waiter_locked()
+                if not self._closed:
+                    self._failed = True
+                self._wake_submission_waiter_locked()
 
     def pause(self) -> None:
         """Temporarily leave the alternate screen for one modal command."""
@@ -1325,6 +1387,21 @@ class PersistentTerminal:
             @bindings.add(str(_d), filter=Condition(lambda: self._selector_registry.has_state), eager=True)
             def _sel_digit(event: Any, _digit: int = _d) -> None:
                 self._selector_dispatch_key(str(_digit))
+
+        # Multi-select keys (ModelMultiSelect): toggle, select-all, none.
+        # Registered eagerly like the keys above so the read-only composer
+        # cannot absorb them first.
+        @bindings.add("space", filter=Condition(lambda: self._selector_registry.has_state), eager=True)
+        def _sel_space(event: Any) -> None:
+            self._selector_dispatch_key("space")
+
+        @bindings.add("a", filter=Condition(lambda: self._selector_registry.has_state), eager=True)
+        def _sel_a(event: Any) -> None:
+            self._selector_dispatch_key("a")
+
+        @bindings.add("n", filter=Condition(lambda: self._selector_registry.has_state), eager=True)
+        def _sel_n(event: Any) -> None:
+            self._selector_dispatch_key("n")
 
         # Some terminals and multiplexers expose wheel events without screen
         # coordinates. Prompt Toolkit's stock binding translates those into
@@ -2077,7 +2154,21 @@ class PersistentTerminalController:
             self.terminal.close_selector(future=future)
 
     def _observe_terminal_task(self, task: asyncio.Task[None]) -> None:
-        """Log an unexpected Prompt Toolkit exit instead of hiding its cause."""
+        """Log an unexpected Prompt Toolkit exit instead of hiding its cause.
+
+        Also releases anything the dead Application was hosting.  ``run()``
+        has already woken the submission waiter; an in-Application selector
+        future still needs resolving or the command awaiting it would hang
+        for the rest of the process lifetime.
+
+        The user-visible notice is written here rather than from the CLI
+        loop: when the Application fails with a BaseException (the owner's
+        log shows ``KeyboardInterrupt``), that exception unwinds through
+        ``asyncio.run`` and tears the loop down before the CLI shutdown
+        block can print anything.  Restoring stdout first is required
+        because ordinary writes otherwise land in the dead Application's
+        sink and never reach the terminal.
+        """
         if task.cancelled():
             return
         try:
@@ -2088,6 +2179,10 @@ class PersistentTerminalController:
             logger.error("Persistent terminal application failed: {!r}", error)
         elif not self.terminal.is_closed and self._session._live_terminal_active:
             logger.warning("Persistent terminal application exited unexpectedly")
+        if self.terminal.is_closed:
+            return
+        self.terminal.abandon_selectors()
+        self.terminal.report_unexpected_exit()
 
     async def close(self) -> None:
         # Only ask the terminal to close if its Application is still

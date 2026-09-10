@@ -484,9 +484,34 @@ def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str =
     return ans in ("", "y")
 
 
+async def _select_models_to_register(
+    entries: list[tuple[str, dict]],
+    *,
+    terminal_controller: Any = None,
+) -> list[str]:
+    """Return the model ids the user chose to register.
+
+    The live REPL routes through ``controller.run_selector`` so the modal
+    runs inside the running Application (ADR 0010).  Only the non-live
+    paths (readline, ``--eval``, headless) use the standalone selector.
+    """
+    run_selector = getattr(terminal_controller, "run_selector", None)
+    if callable(run_selector):
+        from pawnlogic.selectors import ModelMultiSelect
+
+        chosen = await run_selector(lambda: ModelMultiSelect(entries))
+        return list(chosen or [])
+    return await _provider_fetch_selector(entries)
+
+
 async def _provider_fetch_selector(entries: list[tuple[str, dict]]) -> list[str]:
     """prompt_toolkit multi-select menu. Space toggles, Enter confirms, Esc cancels.
     Return the selected model IDs.
+
+    Standalone fallback only: it builds its own ``Application``, so it must
+    never be reached while the persistent live Application is running.  Use
+    :func:`_select_models_to_register`, which routes the live case through
+    the controller.
     """
     if not _HAS_PROMPT_TOOLKIT:
         return [mid for mid, _ in entries]
@@ -566,8 +591,17 @@ async def _provider_fetch_selector(entries: list[tuple[str, dict]]) -> list[str]
     return await app.run_async()
 
 
-async def _provider_fetch(alias: str) -> None:
-    """/provider fetch <alias>: fetch /v1/models with pagination and register selections."""
+async def _provider_fetch(
+    alias: str,
+    *,
+    terminal_controller: Any = None,
+) -> None:
+    """/provider fetch <alias>: fetch /v1/models with pagination and register selections.
+
+    ``terminal_controller`` is the live-terminal controller when the command
+    came from the interactive REPL; it lets the model multi-select run inside
+    the running Application instead of building a second one (ADR 0010).
+    """
     _BUILTIN = {"deepseek", "openai", "anthropic"}
     if alias in _BUILTIN:
         _print(c(RED, f"  ✗ Refusing to modify built-in provider '{alias}'."))
@@ -628,7 +662,10 @@ async def _provider_fetch(alias: str) -> None:
             )
         )
     _print(c(GREEN, f"  ✓ Fetched {len(candidates)} models. Select models to register:\n"))
-    chosen_ids = await _provider_fetch_selector(candidates)
+    chosen_ids = await _select_models_to_register(
+        candidates,
+        terminal_controller=terminal_controller,
+    )
 
     if not chosen_ids:
         _print(c(GRAY, "  Cancelled. No models were registered."))
@@ -718,19 +755,19 @@ async def _handle_provider_cmd(
             should_fetch = _provider_add_cli(parts_add[0], parts_add[1], parts_add[2],
                                              parts_add[3] if len(parts_add) > 3 else "openai")
             if should_fetch:
-                await _provider_fetch(parts_add[0])
+                await _provider_fetch(parts_add[0], terminal_controller=terminal_controller)
         else:
             _provider_add()
     elif sub == "fetch":
         if not sub_arg:
             _print(c(RED, "  Usage: /provider fetch <name>"))
         else:
-            await _provider_fetch(sub_arg.strip())
+            await _provider_fetch(sub_arg.strip(), terminal_controller=terminal_controller)
     elif sub == "update":
         if not sub_arg:
             _print(c(RED, "  Usage: /provider update <name>"))
-        else:
-            await _provider_fetch(sub_arg.strip())  # update = re-fetch
+        else:  # update = re-fetch
+            await _provider_fetch(sub_arg.strip(), terminal_controller=terminal_controller)
     elif sub in ("activate", "active"):
         _provider_set_active(sub_arg.strip(), True)
     elif sub == "deactivate":

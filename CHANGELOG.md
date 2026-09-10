@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- Typing a prompt after a failed Turn no longer parks it silently. A failed
+  Turn (rate limit, circuit open, invalid key) leaves a recovered draft that
+  the live composer counted as *queued work*; a freshly typed prompt was
+  therefore classified `FOLLOW_UP`, its implicit RESUME was refused by the
+  anti-cascade gate, and the text was queued while the status line kept
+  reporting `Idle` — the reported "typing does nothing after a 429" freeze
+  that only a force-quit cleared. The recovered draft is now treated as a
+  retry offer rather than a queue entry, so Enter replaces it and resumes
+  explicitly. The same contract now applies to the serial (readline) path.
+- `/provider fetch`, `/provider update`, and `/provider add … <fetch>` no
+  longer build a second Prompt Toolkit `Application` while the persistent
+  live one is running. Two `Vt100_Output` instances competing for one PTY is
+  the corruption ADR 0010 forbids; the model multi-select now runs inside the
+  host Application through the live-terminal controller.
+- An Application task that ends without `close()` now releases the CLI loop
+  instead of leaving it parked forever in `next_submission()`. A pending
+  in-Application selector is resolved at the same time, and the user gets an
+  explicit message rather than a silent stall that needed a force-quit.
+
+---
+
 ## [0.3.10] - 2026-09-08
 
 ### Added

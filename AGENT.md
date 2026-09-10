@@ -585,17 +585,14 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.3.10`. **Status: release candidate — the
-  CHANGELOG, README pointers, SECURITY row, and `.release-ready` marker are
-  finalized on this branch; the `v0.3.10` tag, Trusted Publishing run, and
-  GitHub Release are pending full candidate acceptance (Python matrix +
-  Dynamic E2E on the release branch, build + fresh-install smoke, BAI
-  real-PTY acceptance) and owner terminal sign-off.** Until the tag exists,
-  the publicly released version on PyPI remains `0.3.9`; no published-
-  complete claim is made for `0.3.10` before the tag lands. The `0.3.9`,
-  `0.3.8`, and `0.3.7` releases remain complete. PyPI project page:
-  <https://pypi.org/project/pawnlogic/0.3.9/>. GitHub Release:
-  <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.9>.
+- Current published release: `0.3.10`. The `v0.3.10` tag points at
+  `fffb1d1` (the PR #145 merge commit), the `Publish to PyPI` run
+  [`34327728090`](https://github.com/john0123412/PawnLogic/actions/runs/34327728090)
+  completed its full gate (release-source verification, pre-publish tests,
+  Dynamic E2E, distribution build, ratatui binary build, Trusted Publishing,
+  PyPI install smoke, GitHub Release creation), and the tag is reachable
+  from `main`. The `0.3.9`, `0.3.8`, and `0.3.7` releases remain complete.
+  PyPI project page: <https://pypi.org/project/pawnlogic/>.
 - 0.3.10 recap (merged to `main` ahead of the release branch):
   - **#138** — `PAWNLOGIC_TUI_SERVER` override so packaged ratatui
     binaries stop silently resolving a stale `python -m pawnlogic`
@@ -817,8 +814,7 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   session Adapter must reconcile stale START/STEER/FOLLOW_UP hints against the
   latest scheduler view. Text-only completion must drain unclaimed steer input
   and keep queued content visibly previewed above the composer. Cancellation
-  settlement must stay off the UI thread and mark the automatically prefilled
-  recovered draft as a one-shot replacement rather than a follow-up.
+  settlement must stay off the UI thread and mark the automatically prefilled  recovered draft as a one-shot replacement rather than a follow-up.
 - The 0.3.6 Queue TUI is deliberately main-thread-only and must not claim
   worker stdin. The persistent terminal renders bare `/queue` inline instead
   of pausing for a nested selector; non-TTY and readline paths use text
@@ -826,9 +822,22 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   must keep its bounded sequence-resolution latency covered. Mouse-wheel and
   coordinate-free ScrollUp/ScrollDown events must remain owned by the output
   viewport so composer history cannot consume them.
+- A failed Turn parks the session and mints a recovered draft. That draft is
+  a retry offer, not a queue entry: counting it as queued work classified a
+  newly typed prompt as `FOLLOW_UP`, whose implicit RESUME the anti-cascade
+  gate refuses, so the prompt was queued while the UI still reported `Idle`
+  (the post-429 "typing does nothing" freeze). Admission must resolve a
+  recovered draft to `START` and resume explicitly, on both the live and the
+  serial readline paths.
+- Only one Prompt Toolkit `Application` may own the PTY. Every interactive
+  selector, including the `/provider fetch` model multi-select, must run
+  inside the persistent Application through the controller's `run_selector`;
+  a second `Application.run_async()` corrupts cursor/escape state (ADR 0010).
+- An Application task that ends without `close()` must both wake the parked
+  CLI submission waiter and resolve any pending selector future. A silent
+  exit there previously left the only recovery a force-quit.
 - Safe-point steering can alter Tool Call batch protocol; skipped results,
-  ordering, and plan-guard accounting must remain complete.
-- Tier presets use advisory plan-guard mode (`plan_guard_mode`) so weak models
+  ordering, and plan-guard accounting must remain complete.- Tier presets use advisory plan-guard mode (`plan_guard_mode`) so weak models
   can run side-effect tools without plan blocks; `/planguard strict` remains
   explicit opt-in. Operation Policy remains the actual safety gate, not the
   CoT Guard.

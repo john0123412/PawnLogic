@@ -52,14 +52,22 @@ def _checkpoint_session_view(session: Any, view: Any) -> object:
     return checkpoint_scheduler_view(session, view)
 
 
+#: Session statuses that park the queue.  ``_resume_unlocked`` refuses an
+#: implicit RESUME while parked; only an explicit user retry restarts it.
+PARKED_SESSION_STATUSES = frozenset({"failed", "aborted"})
+
+
 def _kind_for_view(view: Any) -> SubmissionKind:
-    """Infer the default lane for a new prompt from one scheduler view."""
-    has_work = (
-        view.active is not None
-        or view.recovered is not None
-        or view.steer
-        or view.follow_up
-    )
+    """Infer the default lane for a new prompt from one scheduler view.
+
+    A parked ``recovered`` draft is deliberately not treated as queued
+    work.  It must resolve to START so admission takes the
+    replace-and-resume path: routing it to FOLLOW_UP made the implicit
+    RESUME hit the anti-cascade gate, so the typed prompt was queued
+    while the UI still reported Idle (the reported "typing does nothing
+    after a 429" freeze).
+    """
+    has_work = view.active is not None or view.steer or view.follow_up
     return SubmissionKind.FOLLOW_UP if has_work else SubmissionKind.START
 
 
@@ -72,8 +80,12 @@ def _reconcile_submission_kind(
     Prompt Toolkit classifies the keypress before the main loop dispatches it.
     A fast Turn can finish in that gap, so the UI's START/STEER/FOLLOW_UP hint
     must be reconciled rather than rejected as an internal scheduler error.
+
+    ``recovered`` is excluded from the queued-work test for the same reason
+    as in :func:`_kind_for_view`: a recovered draft is a retry offer, not a
+    queue entry, and START is what admits the replacement.
     """
-    has_queued = bool(view.recovered or view.steer or view.follow_up)
+    has_queued = bool(view.steer or view.follow_up)
     if kind is SubmissionKind.START:
         if view.active is not None:
             return SubmissionKind.STEER
@@ -86,32 +98,68 @@ def _reconcile_submission_kind(
     return kind
 
 
+def _resume_idle_follow_up(scheduler: Any, view: Any) -> Any:
+    """Resume an idle follow-up lane after admitting a prompt.
+
+    The resume is explicit while the session is parked (failed/aborted):
+    a newly admitted prompt is the user taking responsibility for retrying
+    a provider that just failed, exactly like ``/queue resume``.  An
+    implicit resume is refused by the anti-cascade gate, which silently
+    stranded the prompt with no user-visible signal.
+    """
+    return scheduler.control(
+        ControlAction(
+            ControlKind.RESUME,
+            explicit=view.session_status in PARKED_SESSION_STATUSES,
+        )
+    )
+
+
+def _replace_recovered_and_resume(scheduler: Any, user_input: str) -> bool:
+    """Replace the recovered draft with ``user_input`` and run it.
+
+    Enter against a recovered draft means "run this instead of the parked
+    prompt".  The resume must be explicit so it also passes the parked
+    (failed/aborted) gate; without that, a session that had just tripped
+    the circuit breaker would accept the text and never run it.
+    """
+    replacement = scheduler.control(
+        ControlAction(ControlKind.REPLACE_RECOVERED, content=user_input)
+    )
+    if not replacement.accepted:
+        return False
+    scheduler.control(ControlAction(ControlKind.RESUME, explicit=True))
+    return True
+
+
 def submit_session_turn(
     session: Any,
     user_input: str,
     *,
     kind: SubmissionKind | None = None,
 ) -> None:
-    """Admit a prompt and resume an idle follow-up lane when necessary."""
+    """Admit a prompt and resume an idle follow-up lane when necessary.
+
+    A recovered draft is handled before the requested kind is considered.
+    The live composer classifies Enter as FOLLOW_UP whenever *any* unfinished
+    work exists, and a parked recovered draft counts toward that: honouring
+    the requested kind first meant the draft was never replaced, so admission
+    fell back to a START against existing recovered work and raised
+    ``InvalidSubmissionError``.  Typing then did nothing at all.
+    """
     if not user_input.strip():
         return
     scheduler = session._turn_scheduler
     view = scheduler.view()
-    selected_kind = _kind_for_view(view) if kind is None else kind
-    if selected_kind is SubmissionKind.START and view.recovered is not None:
-        replacement = scheduler.control(
-            ControlAction(ControlKind.REPLACE_RECOVERED, content=user_input)
-        )
-        if replacement.accepted:
-            # The user typed this Enter to replace the recovered draft:
-            # an explicit resume that may pass the failed-state gate.
-            scheduler.control(ControlAction(ControlKind.RESUME, explicit=True))
+    if view.active is None and view.recovered is not None:
+        _replace_recovered_and_resume(scheduler, user_input)
         return
+    selected_kind = _kind_for_view(view) if kind is None else kind
     selected_kind = _reconcile_submission_kind(view, selected_kind)
     submission = Submission(user_input, kind=selected_kind, source="session")
     scheduler.submit(submission)
     if selected_kind is SubmissionKind.FOLLOW_UP and view.active is None:
-        scheduler.control(ControlAction(ControlKind.RESUME))
+        _resume_idle_follow_up(scheduler, view)
 
 
 def run_session_turn(session: Any, user_input: str) -> Any:
@@ -120,16 +168,21 @@ def run_session_turn(session: Any, user_input: str) -> Any:
         return submit_session_turn(session, user_input)
     scheduler = session._turn_scheduler
     view = scheduler.view()
-    submission = Submission(
-        user_input,
-        kind=_kind_for_view(view),
-        source="session",
-    )
     session._sync_runtime_context()
     with session.runtime_context.activate():
+        if view.recovered is not None:
+            # Same contract as the live path: a typed prompt replaces the
+            # parked draft instead of being rejected as a duplicate START.
+            _replace_recovered_and_resume(scheduler, user_input)
+            return None
+        submission = Submission(
+            user_input,
+            kind=_kind_for_view(view),
+            source="session",
+        )
         scheduler.submit(submission)
         if submission.kind is SubmissionKind.FOLLOW_UP and view.active is None:
-            scheduler.control(ControlAction(ControlKind.RESUME))
+            _resume_idle_follow_up(scheduler, view)
     return None
 
 
