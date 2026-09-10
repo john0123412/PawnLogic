@@ -1299,7 +1299,10 @@ def test_provider_add_cli_fetches_without_nested_event_loop(monkeypatch):
 
     assert saved["name"] == alias
     assert saved["provider_cfg"]["api_key_env"] == env_key
-    fetch.assert_awaited_once_with(alias)
+    # The live-terminal controller is threaded through so the model
+    # multi-select runs inside the running Application (ADR 0010).
+    # None here is the readline/CLI path, which has no live Application.
+    fetch.assert_awaited_once_with(alias, terminal_controller=None)
 
 
 def test_provider_fetch_prints_filter_and_alias_summary(monkeypatch, capsys):

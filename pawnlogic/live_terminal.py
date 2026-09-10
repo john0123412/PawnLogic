@@ -1326,6 +1326,21 @@ class PersistentTerminal:
             def _sel_digit(event: Any, _digit: int = _d) -> None:
                 self._selector_dispatch_key(str(_digit))
 
+        # Multi-select keys (ModelMultiSelect): toggle, select-all, none.
+        # Registered eagerly like the keys above so the read-only composer
+        # cannot absorb them first.
+        @bindings.add("space", filter=Condition(lambda: self._selector_registry.has_state), eager=True)
+        def _sel_space(event: Any) -> None:
+            self._selector_dispatch_key("space")
+
+        @bindings.add("a", filter=Condition(lambda: self._selector_registry.has_state), eager=True)
+        def _sel_a(event: Any) -> None:
+            self._selector_dispatch_key("a")
+
+        @bindings.add("n", filter=Condition(lambda: self._selector_registry.has_state), eager=True)
+        def _sel_n(event: Any) -> None:
+            self._selector_dispatch_key("n")
+
         # Some terminals and multiplexers expose wheel events without screen
         # coordinates. Prompt Toolkit's stock binding translates those into
         # Up/Down, which would navigate the focused composer history. Handle
