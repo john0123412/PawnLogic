@@ -5,9 +5,9 @@
 
 ## Active Plan
 
-[0.3.10-terminal-and-release-hardening.md](0.3.10-terminal-and-release-hardening.md)
-— terminal hardening and release-gate work collected through PRs #138,
-#140, and #141; release preparation is pending.
+None. The 0.3.10 plan is published with open follow-ups (owner terminal
+acceptance on the release binary, tool-stage stall diagnosis); its
+post-release wire-tail repair lives in CHANGELOG `[Unreleased]`.
 
 There is exactly one active plan at a time. When the active plan is completed
 and its release is published, it moves to Completed below.
@@ -16,6 +16,7 @@ and its release is published, it moves to Completed below.
 
 | Version | Plan | Release |
 |---------|------|---------| 
+| 0.3.10 | [0.3.10-terminal-and-release-hardening.md](0.3.10-terminal-and-release-hardening.md) | [v0.3.10](https://github.com/john0123412/PawnLogic/releases/tag/v0.3.10) |
 | 0.3.9 | [p2-steer-and-headless-frontends.md](p2-steer-and-headless-frontends.md) | [v0.3.9](https://github.com/john0123412/PawnLogic/releases/tag/v0.3.9) |
 | 0.3.8 | [p2-steer-and-headless-frontends.md](p2-steer-and-headless-frontends.md) | [v0.3.8](https://github.com/john0123412/PawnLogic/releases/tag/v0.3.8) |
 | 0.3.6 | [0.3.6-live-turn-control.md](0.3.6-live-turn-control.md) | [v0.3.6](https://github.com/john0123412/PawnLogic/releases/tag/v0.3.6) |

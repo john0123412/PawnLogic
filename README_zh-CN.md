@@ -94,13 +94,13 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 
 ## 新特性
 
-0.3.9 在保持现有公共 contract 不变的前提下，发布 Phase 2 的回合控制与前端层：
+0.3.10 发布终端硬化与发布门禁强化：
 
-- **Esc 转向（Codex/Claude Code 语义）：** Esc 是纯中断，排队的追问立即作为新回合执行——无需额外确认，不丢消息。live REPL 与 headless wire 行为一致。
-- **Headless 核心协议（v1）：** 任意 pawn 进程可通过 `pawn serve` 提供 NDJSON-over-stdio 服务，带版本化信封，使 agent 可被任何前端嵌入。契约由 golden fixture 双端（Python/Rust）钉死。
-- **实验性 Rust ratatui 前端（源码 crate）：** 全屏 alternate-screen UI，悬浮顶部状态栏、应用内滚动历史、支持光标的 Unicode 输入编辑、粘贴与鼠标滚轮、slash 命令透传，`PAWNLOGIC_TUI_SERVER` 可让打包二进制指向任意后端。Prompt Toolkit 交互选择器仍只在 Python REPL 中可用；wire 客户端会立即显示文本指引。此为协议验证客户端，不是 Python REPL 的替代品。Release tag 附带 Linux 二进制 tar 包及 sha256 校验（实验性，非默认入口）。
+- **单一所有者实时输出：** 完成的回合在原生 host 滚动区只出现一次，应用视口只渲染尚未交付的行。host flush 防抖并按真实列宽预折行，CJK/emoji 回答在 wcwidth 不匹配的终端上不再重复或交错。
+- **会话草稿目录拆分：** `session_<id>/` 草稿目录移入 `~/.pawnlogic/sessions/`；`workspace/` 只保留自动命名的任务目录及其 `by-name/` 别名。
+- **pre-commit 泄漏扫描绕过修复：** 对扫描器自身文件做仅删除式暂存不再使兄弟文件的扫描集被清空。
+- **可用的实验性 ratatui 客户端：** Rust 前端是协议验证 wire 客户端，不是 Python REPL 的替代品。流式响应不再被最终 `result` 重复追加（部分流式化的回答只补齐缺失的尾部），后端 EOF/协议错误会恢复终端，输入框支持 Unicode 光标编辑、粘贴和鼠标滚轮。`PAWNLOGIC_TUI_SERVER` 让打包二进制指向显式后端命令。Release tag 附带 Linux 二进制 tar 包及 sha256 校验（实验性，非默认入口）。
 - **参考 PT 客户端与延迟测量：** `frontends/ptk_client.py` 实测 prompt→turn-start、中断、chunk 间隔延迟（真实 API 下中位数约 4 ms / 2.4 ms / <100 ms）。
-- **终端硬化：** 实时输出单一所有者——完成的回合在原生滚动区只出现一次；2 秒 flush 防抖、按 wcwidth 预折行、关闭不再被吞吐计时器延迟。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 

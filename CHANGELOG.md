@@ -26,6 +26,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   instead of leaving it parked forever in `next_submission()`. A pending
   in-Application selector is resolved at the same time, and the user gets an
   explicit message rather than a silent stall that needed a force-quit.
+- Answers ending in a `<`-led fragment (for example `a <3` or `1 < 2`)
+  lost their tail on every event-wire consumer. The plan renderer
+  holds back such fragments as a possible unfinished tag and its flush
+  printed them only to stdout, which the headless server drops while a
+  turn runs; the ratatui frontend then skipped the final `result`
+  because it had already seen stream events, so the tail vanished
+  entirely. The flush leftover is now published through the same
+  content-delta seam as the streamed chunks, so `pawn serve` forwards
+  it as one final `stream` event. Pinned by
+  `tests/test_flush_tail_on_wire.py`.
+- The ratatui frontend and the Prompt Toolkit reference client now
+  append only the genuinely missing tail when a final `result` repeats
+  an already-streamed answer (previously the whole answer would have
+  been duplicated; against backends that hold back the tail the prefix
+  guard now completes it instead of dropping it). Both clients fall
+  back to rendering the `result` when no stream arrived. The ratatui
+  suite also gains its first draw-level regression: a multi-line
+  streamed answer must keep its line breaks on the rendered screen
+  (`TestBackend`-driven, not parser-only).
 
 ---
 
