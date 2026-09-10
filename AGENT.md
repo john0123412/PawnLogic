@@ -585,23 +585,32 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.3.10`. The `v0.3.10` tag points at
-  `fffb1d1` (the PR #145 merge commit), the `Publish to PyPI` run
-  [`34327728090`](https://github.com/john0123412/PawnLogic/actions/runs/34327728090)
-  completed its full gate (release-source verification, pre-publish tests,
-  Dynamic E2E, distribution build, ratatui binary build, Trusted Publishing,
-  PyPI install smoke, GitHub Release creation), and the tag is reachable
-  from `main`. The `0.3.9`, `0.3.8`, and `0.3.7` releases remain complete.
-  PyPI project page: <https://pypi.org/project/pawnlogic/>.
-- 0.3.10 recap (merged to `main` ahead of the release branch):
+- Current published release: `0.3.10`. Published 2026-09-09 through
+  Trusted Publishing from the `Publish to PyPI` workflow run
+  [`34327728090`](https://github.com/john0123412/PawnLogic/actions/runs/34327728090),
+  triggered by pushing the annotated `v0.3.10` tag onto the PR #145 merge
+  commit `fffb1d1` (tag object `01678ed`, peeled target verified on
+  `origin/main`). PyPI project page:
+  <https://pypi.org/project/pawnlogic/0.3.10/>. GitHub Release:
+  <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.10>
+  (wheel + sdist + Linux ratatui binary tarball with sha256, non-draft,
+  notes sourced from the CHANGELOG `[0.3.10]` section). The full
+  publish gate passed: verify-release-source, 1,624 non-E2E tests,
+  Dynamic E2E 31/31, ratatui `cargo test` 24/24, twine check, PyPI
+  fresh-install smoke, and GitHub Release creation. Candidate-matrix
+  evidence for the release branch head is workflow run
+  [`34323190852`](https://github.com/john0123412/PawnLogic/actions/runs/34323190852)
+  (Python 3.10/3.11/3.12 full matrix + Dynamic E2E + Rust gates).
+  The `0.3.9`, `0.3.8`, and `0.3.7` releases remain complete.
+- 0.3.10 recap (all merged to `main`):
   - **#138** — `PAWNLOGIC_TUI_SERVER` override so packaged ratatui
     binaries stop silently resolving a stale `python -m pawnlogic`
     off `PATH` (real-use defect from owner-PTY acceptance of 0.3.9).
   - **#140** — pre-commit leak-scan bypass fix: staging a deletion-only
     change to `tools/precommit.sh` collapsed the scan via
     `grep -vF ""` and let a staged key in a sibling file pass. The
-    scanner's own file is excluded by pathspec; every other staged file
-    is always scanned. Scoped fix — it does not claim the scanner is
+    scanner's own file is excluded by pathspec; every other staged
+    file is always scanned. Scoped fix — it does not claim the scanner is
     immune to all future bypass classes.
   - **#141** — live-terminal display ownership: completed output is
     single-owner (native scrollback), the delivery cursor commits inside
@@ -615,18 +624,26 @@ are source-checkout or user-installed assets; pip/curl installations should use
   - **#142** — 0.3.10 plan registration and stale Phase 2 publication
     claims corrected; READMEs' What's New moved from 0.3.2 to shipped
     0.3.9 content.
-  - **Post-candidate repair** — owner acceptance rejected the initial
-    ratatui surface. The repair branch removes stream/result duplication,
-    recognizes `turn_cancelled`, monitors backend EOF and protocol errors,
-    restores raw/alternate-screen/mouse/paste modes through an RAII guard,
-    and replaces the append-only input string with a Unicode-safe cursor
-    composer. Wire v1 still has no modal-selector protocol; bare interactive
-    commands fail fast with text alternatives instead of launching a hidden
-    Prompt Toolkit application.
-  - Gate evidence on the pre-candidate tree: fast suite 1,583 passed /
-    38 deselected, Dynamic E2E 31/31, ruff + mypy + docs guards clean;
-    candidate matrix numbers are recorded at the tag point per the
-    plan (`docs/plans/0.3.10-terminal-and-release-hardening.md`).
+  - **#144/#145** — owner acceptance initially rejected the ratatui
+    surface and the live erase-drift report. Forensics: the spinner
+    pollution fix (a8dc6dc) was a real product fix; the erase drift was
+    a TERM=dumb replay-environment artifact (real-owner terminals with
+    CPR answered pass both acceptance replays). #145 landed the ratatui
+    repair: stream/result deduplication, `turn_cancelled` handling,
+    backend EOF/protocol monitoring, RAII terminal restoration, and the
+    Unicode-safe cursor composer. Wire v1 still has no modal-selector
+    protocol; bare interactive commands fail fast with text
+    alternatives.
+  - Post-release repair (in `[Unreleased]`, ahead of the next patch):
+    answers ending in a `<`-led fragment (for example `a <3`) lost
+    their tail on every event-wire consumer because the plan renderer's
+    flush printed the leftover only to stdout. The leftover now rides
+    the content-delta seam; both wire clients append only the missing
+    tail from a final `result`; the ratatui suite gained its first
+    draw-level regression (TestBackend). Owner terminal acceptance on
+    the release binary and the tool-stage stall diagnosis
+    (owner inputs still needed: tool name, confirmation dialog shown,
+    composer responsiveness) remain open items from the 0.3.10 plan.
 - Phase 2 complete on `main` and shipped in `0.3.9` (recorded in
   `docs/plans/p2-steer-and-headless-frontends.md`): P2-0 Esc-steer
   handoff (0.3.8 carried the fix; 0.3.9 carries the post-acceptance
@@ -638,24 +655,7 @@ are source-checkout or user-installed assets; pip/curl installations should use
   owner decision, release tags now build, test, and attach
   `pawnlogic-tui-<version>-x86_64-unknown-linux-gnu.tar.gz` plus
   `ratatui-binary-sha256.txt` to the GitHub Release as additional
-  assets; the binary never enters the PyPI wheel. The Phase 2 record
-  in `docs/plans/` is now **complete-published**, not pending release.
-- Release finalization: `v0.3.9` was published on 2026-09-07 through Trusted
-  Publishing from the `Publish to PyPI` workflow run
-  [`34104085194`](https://github.com/john0123412/PawnLogic/actions/runs/34104085194),
-  triggered by force-pushing the `v0.3.9` tag onto the PR #137 merge
-  commit `8d7d14b` (the tag ruleset blocks deletion; re-pointing is the
-  standard move). The release workflow completed its full test gate,
-  distribution build, PyPI fresh-install smoke, GitHub Release creation,
-  and the new Rust-binary build + asset attach. PR #137 carried the
-  release-prep changes (VERSION bump, README / README_zh-CN / SECURITY
-  pointers, CHANGELOG `[Unreleased]` → `[0.3.9] - 2026-09-07`, the
-  `.release-ready` marker required by `tools/check_release_consistency.py`,
-  and the new `cargo fmt` + `cargo clippy --all-targets -D warnings`
-  frontend gates); PR #138 followed with a real-use fix surfaced by
-  owner-PTY binary acceptance (`PAWNLOGIC_TUI_SERVER` override so the
-  ratatui client no longer silently resolves a stale `python -m pawnlogic`
-  off `PATH`).
+  assets; the binary never enters the PyPI wheel.
 - Runtime version source of truth: `config/paths.py:VERSION`.
 - Released plan: `0.3.7-inline-terminal-stability.md` is **complete** —
   merged to `main` by PR #124 and shipped in `v0.3.7`. It restored

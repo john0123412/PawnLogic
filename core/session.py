@@ -1601,8 +1601,10 @@ class AgentSession:
                     raw_name, raw_args[:200],
                 )
 
-        # P2: rich Markdown rendering for non-plan text.
+        # P2: rich Markdown rendering for non-plan text. The tail also rides
+        # content_delta; printing only here would lose it for wire consumers.
         if leftover:
+            self._event_emitter().content_delta(leftover)
             try:
                 from pawnlogic.cli import render_agent_output
                 render_agent_output(leftover)

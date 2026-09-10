@@ -105,32 +105,33 @@ use the additive `{"type":"event","data":{...}}` envelope.
 
 ## What's New
 
-Version 0.3.9 ships the Phase 2 turn-control and frontend layer while
-preserving existing public contracts:
+Version 0.3.10 ships terminal hardening and release-gate work:
 
-- **Esc steering (Codex/Claude Code semantics):** Esc is a pure interrupt;
-  the queued follow-up runs immediately as a fresh turn — no extra
-  confirmation, no message loss. Steer works the same in the live REPL and
-  over the headless wire.
-- **Headless core protocol (v1):** every pawn process can serve
-  NDJSON-over-stdio (`pawn serve`) with a versioned envelope, making the
-  agent embeddable by any frontend. Golden-fixture pinned contract tests.
-- **Experimental Rust ratatui frontend (source-checkout crate):**
-  fullscreen alternate-screen UI with a floating top status bar, in-app
-  scrolling history, cursor-aware Unicode composer editing, paste and
-  mouse-wheel handling, slash-command passthrough, and
-  `PAWNLOGIC_TUI_SERVER` to point a packaged binary at any backend.
-  Interactive Prompt Toolkit selectors remain Python-REPL-only; the wire
-  client gives immediate text guidance. This is a protocol-validation
-  client, not a full Python-REPL replacement. Release tags attach a Linux
-  binary tarball with a sha256 checksum (experimental — not the default
-  entry point).
+- **Single-owner live output:** a finished turn appears exactly once —
+  in the native host scrollback — while the application viewport shows
+  only text still awaiting host delivery. Live host flushes are
+  debounced and pre-wrapped with the host's real column count, so
+  CJK/emoji answers no longer duplicate or interleave on
+  wcwidth-mismatched terminals.
+- **Session scratch split:** `session_<id>/` scratch directories live
+  under `~/.pawnlogic/sessions/`; `workspace/` keeps only auto-named
+  task directories and their `by-name/` aliases.
+- **Pre-commit leak-scan bypass fix:** staging a deletion-only change
+  to the scanner's own file no longer empties the scan set for sibling
+  files.
+- **Usable experimental ratatui client:** the Rust frontend is a
+  protocol-validation wire client, not a full Python-REPL replacement.
+  Streamed responses are no longer appended again from the final
+  `result` (a partially streamed answer is completed with only its
+  missing tail), backend EOF/protocol failures restore the terminal,
+  and the composer supports Unicode-safe cursor movement, paste, and
+  mouse-wheel scrolling. `PAWNLOGIC_TUI_SERVER` points a packaged
+  binary at an explicit backend command. Release tags attach a Linux
+  binary tarball with a sha256 checksum (experimental — not the
+  default entry point).
 - **Reference PT client + latency harness:** `frontends/ptk_client.py`
   measures prompt-to-turn-start, interrupt, and chunk-gap latencies
   (median ~4 ms / ~2.4 ms / <100 ms on real API runs).
-- **Terminal hardening:** live output is single-owner — completed turns
-  appear exactly once in the native scrollback; 2 s flush debouncing,
-  wcwidth-aware pre-wrapping, and no close delay from throughput timers.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 

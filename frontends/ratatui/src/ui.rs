@@ -61,6 +61,10 @@ pub struct UiState {
     pub command_received: bool,
     pub last_error: Option<String>,
     streamed_response: bool,
+    /// Concatenation of every `stream` text this turn delivered, so a
+    /// final `result` can append only the missing tail instead of the
+    /// whole answer again.
+    streamed_text: String,
 }
 
 pub const STATUS_BAR_HEIGHT: u16 = 3;
@@ -161,6 +165,22 @@ fn wrapped_row_count(lines: &[String], width: u16) -> usize {
         .sum()
 }
 
+/// Append streamed answer text to the history transcript, opening the
+/// `│ ` marker line on the first fragment and continuing it afterwards.
+fn append_stream_text(state: &mut UiState, text: &str) {
+    if !state
+        .history
+        .lines
+        .last()
+        .is_some_and(|l| l.starts_with('│'))
+    {
+        state.history.push("│ ".into());
+    }
+    state.history.append_to_last(text);
+    state.streamed_text.push_str(text);
+    state.streamed_response = true;
+}
+
 /// Map one wire event into history lines. Returns true when the event was
 /// a `result` (the caller may finish a one-shot run).
 pub fn apply_event(state: &Arc<Mutex<UiState>>, kind: &str, payload: &serde_json::Value) -> bool {
@@ -175,6 +195,7 @@ pub fn apply_event(state: &Arc<Mutex<UiState>>, kind: &str, payload: &serde_json
                     state.result_received = false;
                     state.last_error = None;
                     state.streamed_response = false;
+                    state.streamed_text.clear();
                     state.history.push("── turn started ──".into());
                 }
                 "turn_completed" => {
@@ -206,16 +227,7 @@ pub fn apply_event(state: &Arc<Mutex<UiState>>, kind: &str, payload: &serde_json
         }
         "stream" => {
             if let Some(text) = payload.get("text").and_then(|t| t.as_str()) {
-                if !state
-                    .history
-                    .lines
-                    .last()
-                    .is_some_and(|l| l.starts_with('│'))
-                {
-                    state.history.push("│ ".into());
-                }
-                state.history.append_to_last(text);
-                state.streamed_response = true;
+                append_stream_text(&mut state, text);
             }
             false
         }
@@ -227,8 +239,21 @@ pub fn apply_event(state: &Arc<Mutex<UiState>>, kind: &str, payload: &serde_json
                 .get("response")
                 .and_then(|r| r.as_str())
                 .unwrap_or("");
-            if !state.streamed_response && !response.is_empty() {
-                state.history.push(format!("│ {response}"));
+            // A backend that already streamed the full answer carries the
+            // complete text in `result`; append only a genuinely missing
+            // tail (older backends hold back a trailing `<...` fragment
+            // in the renderer and never stream it). Appending the whole
+            // response again would duplicate every streamed answer.
+            if !response.is_empty() {
+                let streamed_so_far = state.streamed_text.clone();
+                if let Some(tail) = response.strip_prefix(streamed_so_far.as_str()) {
+                    if !tail.is_empty() {
+                        append_stream_text(&mut state, tail);
+                    }
+                } else {
+                    // No stream arrived (or it diverged): show the result.
+                    state.history.push(format!("│ {response}"));
+                }
             }
             state.streamed_response = false;
             true
@@ -418,5 +443,81 @@ mod tests {
         let state = state.lock().unwrap();
         assert!(!state.running);
         assert_eq!(state.last_status, "turn_cancelled");
+    }
+
+    #[test]
+    fn result_appends_only_the_tail_of_a_partially_streamed_answer() {
+        // Wire path observed against the 0.3.10 backend: the renderer
+        // held back a trailing `<3` fragment, so only `a ` streamed and
+        // the final `result` still carried the whole answer. The client
+        // must append the missing tail, not duplicate the prefix.
+        let state = Arc::new(Mutex::new(UiState::default()));
+        apply_event(&state, "status", &json!({"stage": "turn_started"}));
+        apply_event(&state, "stream", &json!({"text": "a "}));
+        apply_event(&state, "result", &json!({"response": "a <3"}));
+
+        let s = state.lock().unwrap();
+        let rendered: Vec<String> = s.history.lines.clone();
+        let joined = rendered.join("\n");
+        assert!(
+            joined.contains("│ a <3"),
+            "streamed answer tail missing: {rendered:?}"
+        );
+        assert!(
+            !joined.matches("a ").count() > 1 || joined.matches("a <3").count() == 1,
+            "streamed prefix duplicated: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn fully_streamed_answer_is_not_duplicated_by_the_result() {
+        let state = Arc::new(Mutex::new(UiState::default()));
+        apply_event(&state, "status", &json!({"stage": "turn_started"}));
+        apply_event(&state, "stream", &json!({"text": "hello world"}));
+        apply_event(&state, "result", &json!({"response": "hello world"}));
+
+        let s = state.lock().unwrap();
+        let joined = s.history.lines.join("\n");
+        assert_eq!(
+            joined.matches("hello world").count(),
+            1,
+            "fully streamed answer duplicated: {joined:?}"
+        );
+    }
+
+    #[test]
+    fn unstreamed_answer_is_rendered_from_the_result() {
+        let state = Arc::new(Mutex::new(UiState::default()));
+        apply_event(&state, "status", &json!({"stage": "turn_started"}));
+        apply_event(&state, "result", &json!({"response": "no stream backend"}));
+
+        let s = state.lock().unwrap();
+        assert!(s.history.lines.join("\n").contains("│ no stream backend"));
+    }
+
+    #[test]
+    fn multiline_stream_draws_each_line() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let state = Arc::new(Mutex::new(UiState::default()));
+        {
+            let mut s = state.lock().unwrap();
+            s.history.push("│ line one".into());
+            s.history.append_to_last("\nline two\nline three");
+        }
+        let composer = Composer::default();
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        terminal.draw(|f| draw(f, &state, &composer)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let flat: String = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol().to_string())
+            .collect::<String>()
+            .replace(' ', "");
+        assert!(
+            flat.contains("lineone") && flat.contains("linetwo") && flat.contains("linethree"),
+            "multi-line stream lost its newlines on screen: {flat:?}"
+        );
     }
 }

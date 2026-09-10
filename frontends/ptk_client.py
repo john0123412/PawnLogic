@@ -38,12 +38,19 @@ class ClientApp:
         self._buffer = Buffer(multiline=False)
         self._app: Application | None = None
         self.wire: ServeWire | None = None
+        self._streamed_text = ""
 
     # ── wire callbacks ──────────────────────────────────
 
     def _append(self, line: str) -> None:
         self._transcript.append(line)
         del self._transcript[:-400]
+
+    def _append_stream_text(self, text: str) -> None:
+        if self._transcript and not self._transcript[-1].startswith("│ "):
+            self._append("│ ")
+        self._transcript[-1] += text
+        self._streamed_text += text
 
     def _on_event(self, event: dict) -> None:
         kind = event.get("type")
@@ -52,6 +59,7 @@ class ClientApp:
             stage = event.get("stage", "")
             if stage == "turn_started":
                 self._running = True
+                self._streamed_text = ""
                 self._append("── turn started ──")
             elif stage in ("turn_completed", "turn_failed", "turn_interrupted"):
                 self._running = False
@@ -59,12 +67,19 @@ class ClientApp:
             elif stage in ("interrupt_requested", "steer_queued"):
                 self._append(f"· {stage}")
         elif kind == "stream":
-            text = event.get("text", "")
-            if self._transcript and not self._transcript[-1].startswith("│ "):
-                self._append("│ ")
-            self._transcript[-1] += text
+            self._append_stream_text(event.get("text", ""))
         elif kind == "result":
-            self._append(f"= {event.get('response', '')!r}")
+            # A backend that streams the whole answer carries the complete
+            # text in `result`; append only a genuinely missing tail so the
+            # streamed answer is neither duplicated nor truncated.
+            response = event.get("response", "")
+            if response.startswith(self._streamed_text):
+                tail = response[len(self._streamed_text):]
+                if tail:
+                    self._append_stream_text(tail)
+            elif response:
+                self._append(f"│ {response}")
+            self._append(f"= {response!r}")
             self._running = False
         elif kind == "error":
             self._append(f"✗ [{event.get('stage')}] {event.get('detail', '')}")
