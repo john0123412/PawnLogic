@@ -28,10 +28,10 @@ SCRIPT_DIR="$(cd "$(dirname "$REAL_PATH")" && pwd)"
 
 # 2. Find a local virtual environment. Keep paths relative for portability.
 _PYTHON_CANDIDATES=(
-    "$SCRIPT_DIR/venv/bin/python3"
-    "$SCRIPT_DIR/venv/bin/python"
     "$SCRIPT_DIR/.venv/bin/python3"
     "$SCRIPT_DIR/.venv/bin/python"
+    "$SCRIPT_DIR/venv/bin/python3"
+    "$SCRIPT_DIR/venv/bin/python"
 )
 
 _PYTHON=""
