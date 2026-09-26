@@ -92,6 +92,107 @@ class TestPwnTimedDebugPolicyEnforcement:
             assert "Requires confirmation" in result or "ERROR" in result
 
 
+class TestAllowPathExecutesExactlyOnce:
+    """ALLOW must execute exactly once.
+
+    Regression: the pre-flight gate used HostProcessRunner.run(), which both
+    classifies AND spawns. ALLOW therefore ran the command a second time on
+    the real execution path.
+    """
+
+    def test_pwn_timed_debug_runs_command_exactly_once(
+        self, tmp_path: Path
+    ) -> None:
+        """An ALLOWed pwn_timed_debug command must have one side effect."""
+        from tools.pwn_chain import tool_pwn_timed_debug
+        import tools.file_ops as file_ops
+
+        file_ops._session_cwd[0] = str(tmp_path)
+        marker = tmp_path / "hit"
+
+        result = tool_pwn_timed_debug(
+            {
+                "command": f"printf x >> {marker}",
+                "inputs": [],
+                "time_limit_sec": 5,
+            }
+        )
+
+        assert marker.exists(), result
+        assert marker.read_text() == "x", (
+            f"command executed {len(marker.read_text())} times; expected once"
+        )
+
+
+class TestRunCodePolicyGateMatchesExecution:
+    """The run_code gate must classify the command that actually executes."""
+
+    def test_gate_classifies_the_real_interpreter_command(
+        self, tmp_path: Path
+    ) -> None:
+        """The gate must see the interpreter command, not a synthetic label."""
+        from tools.sandbox import tool_run_code
+        from core.operation_policy import RiskLevel
+        import tools.file_ops as file_ops
+
+        file_ops._session_cwd[0] = str(tmp_path)
+        seen: list[str] = []
+
+        def _spy(command, **_kwargs):
+            seen.append(command)
+            return OperationDecision(
+                action=OperationAction.ALLOW,
+                risk=RiskLevel.LOW,
+                reason="safe",
+                matched_rule="test",
+                redacted_command=command,
+            )
+
+        with patch(
+            "core.host_process.classify_shell_command", side_effect=_spy
+        ):
+            tool_run_code({"language": "python", "code": "print(1)", "timeout": 20})
+
+        assert seen, "policy gate never ran"
+        assert not any("run_code(" in cmd for cmd in seen), (
+            f"gate still classifies the synthetic label: {seen}"
+        )
+        assert any("code.py" in cmd for cmd in seen), (
+            f"gate never classified the real script path: {seen}"
+        )
+
+    def test_unsupported_language_never_reaches_the_gate(
+        self, tmp_path: Path
+    ) -> None:
+        """Validation must precede any classification or shell spawn."""
+        from tools.sandbox import tool_run_code
+        from core.operation_policy import RiskLevel
+        import tools.file_ops as file_ops
+
+        file_ops._session_cwd[0] = str(tmp_path)
+        seen: list[str] = []
+
+        def _spy(command, **_kwargs):
+            seen.append(command)
+            return OperationDecision(
+                action=OperationAction.ALLOW,
+                risk=RiskLevel.LOW,
+                reason="safe",
+                matched_rule="test",
+                redacted_command=command,
+            )
+
+        with patch(
+            "core.host_process.classify_shell_command", side_effect=_spy
+        ):
+            result = tool_run_code(
+                {"language": "nope; printf injected", "code": "print(1)"}
+            )
+
+        assert "unsupported language" in result
+        assert seen == [], f"unvalidated language reached the gate: {seen}"
+
+
 class TestRunShellPolicyEnforcement:
     """Tests that tool_run_shell checks policy before spawning."""
 

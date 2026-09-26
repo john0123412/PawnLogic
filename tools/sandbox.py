@@ -12,7 +12,8 @@ WSL performance optimizations:
 import os, signal, sys, re, subprocess, tempfile
 from pathlib import Path
 from config import SANDBOX_LANGS
-from core.host_process import HostProcessRunner, HostProcessRequest
+from core.host_process import HostProcessRequest, classify_host_process
+from core.operation_policy import OperationAction
 from core.state import runtime_config
 from utils.ansi import c, YELLOW, RED
 
@@ -194,6 +195,22 @@ def _get_python_exec(use_venv: bool, cwd: str) -> str:
     return sys.executable
 
 
+def _gate(command: str, cwd: str) -> str | None:
+    """Classify a real sandbox command without executing it.
+
+    Returns an error string to surface, or None when the command may run.
+    ``HostProcessRunner.run`` is deliberately not used here: it classifies
+    *and* spawns, which would execute the interpreter command as a pre-flight
+    check before the sandbox actually ran it.
+    """
+    decision = classify_host_process(
+        HostProcessRequest(command=command, cwd=Path(cwd), timeout_seconds=1.0)
+    )
+    if decision.action is OperationAction.ALLOW:
+        return None
+    return f"ERROR: {decision.reason}"
+
+
 def tool_run_code(a: dict) -> str:
     language     = a.get("language", "").lower().strip()
     code         = a.get("code", "")
@@ -203,17 +220,8 @@ def tool_run_code(a: dict) -> str:
     install_deps = a.get("install_deps", "").strip()
     cwd          = a.get("cwd") or _get_cwd()
 
-    # Policy enforcement: check before spawning any subprocess.
-    runner = HostProcessRunner()
-    request = HostProcessRequest(
-        command=f"run_code({language})",
-        cwd=Path(cwd),
-        timeout_seconds=float(timeout),
-    )
-    outcome = runner.run(request)
-    if outcome.returncode == -1 and ("Denied" in outcome.output or "Requires confirmation" in outcome.output):
-        return f"ERROR: {outcome.output}"
-
+    # Validate the language before anything else: it is interpolated into the
+    # command strings classified below, so it must never reach a shell first.
     if language not in SANDBOX_LANGS:
         return (f"ERROR: unsupported language '{language}'.\n"
                 f"Supported: {', '.join(SANDBOX_LANGS.keys())}")
@@ -248,6 +256,9 @@ def tool_run_code(a: dict) -> str:
             with open(src, "w", encoding="utf-8") as f:
                 f.write(code)
             print(c(YELLOW, f"  🐍 python code{ext}"))
+            blocked = _gate(f"{py_exec} {src}", cwd)
+            if blocked:
+                return blocked
             out, rc = _run_limited(
                 [py_exec, src],
                 timeout=timeout, cwd=tmpdir, input_data=stdin_data,
@@ -275,12 +286,18 @@ def tool_run_code(a: dict) -> str:
                 cm = re.search(r'\bclass\s+(\w+)', code)
                 cls_name = cm.group(1) if cm else "Main"
                 run_cmd  = f"java -cp {tmpdir} {cls_name}"
+                blocked = _gate(run_cmd, cwd)
+                if blocked:
+                    return blocked
                 run_out, run_rc = _run_limited(
                     run_cmd, timeout=timeout, cwd=tmpdir,
                     input_data=stdin_data, shell=True,
                 )
             else:
                 print(c(YELLOW, f"  ▶ {bin_}"))
+                blocked = _gate(bin_, cwd)
+                if blocked:
+                    return blocked
                 run_out, run_rc = _run_limited(
                     [bin_], timeout=timeout, cwd=tmpdir, input_data=stdin_data,
                 )
@@ -296,6 +313,9 @@ def tool_run_code(a: dict) -> str:
                 src=src, bin=os.path.join(tmpdir, "a.out")
             )
             print(c(YELLOW, f"  ▶ {run_cmd[:90]}"))
+            blocked = _gate(run_cmd, cwd)
+            if blocked:
+                return blocked
             out, rc = _run_limited(
                 run_cmd, timeout=timeout, cwd=tmpdir,
                 input_data=stdin_data, shell=True,

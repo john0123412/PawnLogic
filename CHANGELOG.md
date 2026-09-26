@@ -45,6 +45,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   suite also gains its first draw-level regression: a multi-line
   streamed answer must keep its line breaks on the rendered screen
   (`TestBackend`-driven, not parser-only).
+- `pwn_timed_debug` executed an allowed command **twice**. Its pre-flight
+  "policy check" called `HostProcessRunner.run()`, which classifies *and*
+  spawns, so the command's side effects happened once inside that call and
+  again on the real execution path. A CTF exploit, `nc` connection, or
+  redirect therefore ran twice, and the first execution burned up to
+  `time_limit_sec` before the timed loop even started. The gate now uses
+  the pure `classify_host_process()` classifier and fails closed on
+  anything but `ALLOW`; the command is spawned exactly once. Pinned by
+  `tests/test_process_trust_routing.py::
+  TestAllowPathExecutesExactlyOnce`.
+- `run_code` had the same defect in a milder form: its gate also called
+  `HostProcessRunner.run()`, but on the synthetic string
+  `run_code(<language>)`. That string is a shell syntax error under both
+  `dash` and `bash` (the `(` is glued to the literal `run_code` word and can
+  never reach command position), so it never executed anything and never
+  gated anything — the policy check was disconnected from the interpreter
+  command that actually ran. `language` is now validated *before* any
+  classification, and the gate classifies the real interpreter command
+  (`<interpreter> <tmp script>`) for the Python, compiled/binary, and
+  interpreted branches. Pinned by `TestRunCodePolicyGateMatchesExecution`.
+
+  Note on scope: a command-string classifier still cannot see the danger in
+  the *contents* of a script written to a temp file, so this gate is a
+  consistency and defence-in-depth fix, not a sandbox boundary for
+  `run_code` payloads.
 
 ---
 

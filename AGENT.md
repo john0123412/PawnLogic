@@ -793,7 +793,16 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 - Stream adapters changing public delta dict keys or ordering.
 - Extension discovery importing or enabling third-party code during startup.
 - Security Tools bypassing shared Tool Registry, Operation Policy, or
-  Network Policy checks.
+  Network Policy checks. Two instances of the first kind were found and
+  fixed in `[Unreleased]`: `pwn_timed_debug` and `run_code` both used
+  `HostProcessRunner.run()` as a pre-flight gate, but that method
+  classifies *and* spawns. A tool that wants a policy decision must call
+  the pure `classify_host_process()` (or `classify_shell_command()`), as
+  `tools/shell_ops.authorize_shell_operation` does; `HostProcessRunner` is
+  only for the single real execution. Residual gap: a command-string
+  classifier cannot see the contents of a script written to a temp file, so
+  the `run_code` gate is consistency/defence-in-depth, not a sandbox
+  boundary for payloads.
 - Delegated-agent requests bypassing Provider visibility, allowlists, budgets,
   or capability filtering.
 - Tool watchdog abandons wedged tool threads instead of blocking the session;
