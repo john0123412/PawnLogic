@@ -640,8 +640,16 @@ are source-checkout or user-installed assets; pip/curl installations should use
     flush printed the leftover only to stdout. The leftover now rides
     the content-delta seam; both wire clients append only the missing
     tail from a final `result`; the ratatui suite gained its first
-    draw-level regression (TestBackend). Owner terminal acceptance on
-    the release binary and the tool-stage stall diagnosis
+    draw-level regression (TestBackend). In the same window, #148
+    stopped duplicate host-tool execution: `pwn_timed_debug` and
+    `run_code` used `HostProcessRunner.run()` as a pre-flight policy
+    gate, but that method classifies *and* spawns, so an allowed
+    command's side effects ran twice; `run_code`'s gate additionally
+    classified a synthetic string that was a shell syntax error and
+    gated nothing. Both gates now call the pure `classify_host_process()`
+    classifier and the command spawns exactly once; the script-payload
+    residual risk remains a Known Risks entry. Owner terminal acceptance
+    on the release binary and the tool-stage stall diagnosis
     (owner inputs still needed: tool name, confirmation dialog shown,
     composer responsiveness) remain open items from the 0.3.10 plan.
 - Phase 2 complete on `main` and shipped in `0.3.9` (recorded in
