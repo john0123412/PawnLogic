@@ -219,7 +219,7 @@ class TestRunCodePayloadContentGate:
             return ("", 0)
 
         with patch(
-            "tools.sandbox.classify_shell_command",
+            "tools.payload_policy.classify_shell_command",
             return_value=self._decision(OperationAction.DENY),
         ), patch(
             "tools.sandbox._run_limited", side_effect=_record_no_spawn
@@ -244,7 +244,7 @@ class TestRunCodePayloadContentGate:
             seen.append(command)
             return self._decision(OperationAction.ALLOW)
 
-        with patch("tools.sandbox.classify_shell_command", side_effect=_spy), patch(
+        with patch("tools.payload_policy.classify_shell_command", side_effect=_spy), patch(
             "tools.sandbox.classify_host_process",
             return_value=self._decision(OperationAction.ALLOW),
         ), patch("tools.sandbox._run_limited", return_value=("", 0)):
@@ -269,7 +269,7 @@ class TestRunCodePayloadContentGate:
             )
             return self._decision(OperationAction.DENY)
 
-        with patch("tools.sandbox.classify_shell_command", side_effect=_spy), patch(
+        with patch("tools.payload_policy.classify_shell_command", side_effect=_spy), patch(
             "tools.sandbox._run_limited", return_value=("", 0)
         ):
             result = tool_run_code({
@@ -292,7 +292,7 @@ class TestRunCodePayloadContentGate:
             seen.append(command)
             return self._decision(OperationAction.ALLOW)
 
-        with patch("tools.sandbox.classify_shell_command", side_effect=_spy), patch(
+        with patch("tools.payload_policy.classify_shell_command", side_effect=_spy), patch(
             "tools.sandbox.classify_host_process",
             return_value=self._decision(OperationAction.ALLOW),
         ), patch("tools.sandbox._run_limited", return_value=("", 0)):
@@ -316,7 +316,7 @@ class TestRunCodePayloadContentGate:
             seen.append(command)
             return self._decision(OperationAction.DENY)
 
-        with patch("tools.sandbox.classify_shell_command", side_effect=_spy), patch(
+        with patch("tools.payload_policy.classify_shell_command", side_effect=_spy), patch(
             "tools.sandbox._run_limited", return_value=("", 0)
         ):
             result = tool_run_code({
@@ -344,7 +344,7 @@ class TestRunCodePayloadContentGate:
             seen.append(command)
             return self._decision(OperationAction.ALLOW)
 
-        with patch("tools.sandbox.classify_shell_command", side_effect=_spy), patch(
+        with patch("tools.payload_policy.classify_shell_command", side_effect=_spy), patch(
             "tools.sandbox.classify_host_process",
             return_value=self._decision(OperationAction.ALLOW),
         ), patch("tools.sandbox._run_limited", return_value=("", 0)):
@@ -368,7 +368,7 @@ class TestRunCodePayloadContentGate:
             seen.append(command)
             return self._decision(OperationAction.ALLOW)
 
-        with patch("tools.sandbox.classify_shell_command", side_effect=_spy), patch(
+        with patch("tools.payload_policy.classify_shell_command", side_effect=_spy), patch(
             "tools.sandbox.classify_host_process",
             return_value=self._decision(OperationAction.ALLOW),
         ), patch("tools.sandbox._run_limited", return_value=("", 0)):
