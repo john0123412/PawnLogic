@@ -9,11 +9,11 @@ WSL performance optimizations:
   5. Compilation artifacts go to /tmp, which is tmpfs and faster than /home on WSL.
 """
 
-import os, signal, sys, re, subprocess, tempfile
+import os, signal, sys, re, subprocess, tempfile, ast
 from pathlib import Path
 from config import SANDBOX_LANGS
 from core.host_process import HostProcessRequest, classify_host_process
-from core.operation_policy import OperationAction
+from core.operation_policy import OperationAction, classify_shell_command
 from core.state import runtime_config
 from utils.ansi import c, YELLOW, RED
 
@@ -211,6 +211,100 @@ def _gate(command: str, cwd: str) -> str | None:
     return f"ERROR: {decision.reason}"
 
 
+# Python call targets whose first literal string argument is always a shell
+# command line, and those that spawn one only when ``shell=True`` is passed.
+_PY_ALWAYS_SHELL_CALLS = {"os.system", "os.popen",
+                          "subprocess.getoutput", "subprocess.getstatusoutput"}
+_PY_OPTIONAL_SHELL_CALLS = {"subprocess.run", "subprocess.call",
+                            "subprocess.check_call", "subprocess.check_output",
+                            "subprocess.Popen"}
+
+
+def _dotted_call_name(func: ast.expr) -> str | None:
+    """Return ``module.func`` for a dotted call target, else None."""
+    parts: list[str] = []
+    node: ast.expr = func
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+    return None
+
+
+def _python_payload_commands(code: str) -> list[str]:
+    """Literal shell commands a Python payload is guaranteed to spawn.
+
+    Only fully literal, statically visible call shapes are extracted;
+    anything dynamic is invisible here and stays a Known Risks residual.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []  # The interpreter rejects it at run time; nothing to judge.
+    commands: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        target = _dotted_call_name(node.func)
+        if target is None:
+            continue
+        shell_invoked = target in _PY_ALWAYS_SHELL_CALLS or (
+            target in _PY_OPTIONAL_SHELL_CALLS
+            and any(
+                kw.arg == "shell"
+                and isinstance(kw.value, ast.Constant)
+                and kw.value.value is True
+                for kw in node.keywords
+            )
+        )
+        if (
+            shell_invoked
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            commands.append(node.args[0].value)
+    return commands
+
+
+def _bash_payload_commands(code: str) -> list[str]:
+    """Non-comment, non-blank lines of a bash payload."""
+    return [
+        stripped
+        for line in code.splitlines()
+        if (stripped := line.strip()) and not stripped.startswith("#")
+    ]
+
+
+def _payload_policy_errors(language: str, code: str, cwd: str) -> list[str]:
+    """Judge shell commands embedded in a run_code payload.
+
+    The run-command gate only sees ``<interpreter> <temp script>``; the
+    payload content is invisible to it. For the two languages whose payloads
+    carry a tractable literal shell surface — bash lines and Python
+    ``os.system`` / ``os.popen`` / ``subprocess(..., shell=True)`` calls —
+    classify each embedded command with the same operation policy as a
+    direct command, failing closed on anything but ALLOW.
+    """
+    if language == "bash":
+        embedded = _bash_payload_commands(code)
+    elif language == "python":
+        embedded = _python_payload_commands(code)
+    else:
+        return []
+    errors: list[str] = []
+    for command in embedded:
+        decision = classify_shell_command(command, cwd=cwd)
+        if decision.action is not OperationAction.ALLOW:
+            errors.append(
+                f"  [{decision.matched_rule}] {decision.redacted_command}: "
+                f"{decision.reason}"
+            )
+    return errors
+
+
 def tool_run_code(a: dict) -> str:
     language     = a.get("language", "").lower().strip()
     code         = a.get("code", "")
@@ -229,6 +323,13 @@ def tool_run_code(a: dict) -> str:
     lang_cfg = SANDBOX_LANGS[language]
     ext      = lang_cfg["ext"]
     output   = []
+
+    # The run-command gate below only sees "<interpreter> <temp script>",
+    # so judge the payload's own embedded shell surface first.
+    payload_errors = _payload_policy_errors(language, code, cwd)
+    if payload_errors:
+        return ("ERROR: run_code payload blocked by operation policy:\n"
+                + "\n".join(payload_errors))
 
     # Use system temp dir. Linux/WSL uses /tmp tmpfs; Windows uses %TEMP%.
     _tmp_root = "/tmp" if _IS_POSIX else None  # None = system default tempdir.

@@ -810,7 +810,13 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   only for the single real execution. Residual gap: a command-string
   classifier cannot see the contents of a script written to a temp file, so
   the `run_code` gate is consistency/defence-in-depth, not a sandbox
-  boundary for payloads.
+  boundary for payloads. Narrowed in `[Unreleased]`: `run_code` now also
+  classifies the payload's own tractable literal shell surface — bash
+  lines and Python `os.system`/`os.popen`/`subprocess(..., shell=True)`
+  commands — with the same policy, failing closed on anything but
+  `ALLOW`. Still invisible to it: dynamic command construction,
+  `from os import system` aliases, and javascript/go/compiled payload
+  contents; the boundary remains defence-in-depth, not an OS sandbox.
 - Delegated-agent requests bypassing Provider visibility, allowlists, budgets,
   or capability filtering.
 - Tool watchdog abandons wedged tool threads instead of blocking the session;

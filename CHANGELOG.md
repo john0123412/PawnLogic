@@ -70,6 +70,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the *contents* of a script written to a temp file, so this gate is a
   consistency and defence-in-depth fix, not a sandbox boundary for
   `run_code` payloads.
+- `run_code` payloads now get a content-aware policy pass that narrows the
+  residual above. For the two languages whose payloads carry a tractable
+  literal shell surface, embedded commands are extracted and classified
+  with the same operation policy as a direct command, failing closed on
+  anything but `ALLOW`: bash payloads are judged line by line (comments
+  and blank lines skipped), and Python payloads are AST-scanned for
+  `os.system` / `os.popen` / `subprocess` calls that spawn a shell
+  (`shell=True`, or the always-shell `getoutput` /
+  `getstatusoutput` family) with a literal string command. Still not a
+  sandbox boundary: dynamic (non-literal) command construction,
+  `from os import system` aliases, and the payload surface of
+  javascript/go/compiled languages stay invisible to the classifier.
+  Pinned by `TestRunCodePayloadContentGate`.
 
 ---
 
