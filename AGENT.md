@@ -648,7 +648,12 @@ are source-checkout or user-installed assets; pip/curl installations should use
     classified a synthetic string that was a shell syntax error and
     gated nothing. Both gates now call the pure `classify_host_process()`
     classifier and the command spawns exactly once; the script-payload
-    residual risk remains a Known Risks entry. Owner terminal acceptance
+    residual risk remains a Known Risks entry. In the same window the
+    `run_code` payload gained a content-aware policy pass (bash lines
+    and Python literal shell calls judged by the same policy), the
+    packaging tests stopped rebuilding `build/`/`egg-info` inside the
+    checkout, and the ratatui frontend upgraded to 0.30.2, clearing
+    every `cargo audit` warning. Owner terminal acceptance
     on the release binary and the tool-stage stall diagnosis
     (owner inputs still needed: tool name, confirmation dialog shown,
     composer responsiveness) remain open items from the 0.3.10 plan.

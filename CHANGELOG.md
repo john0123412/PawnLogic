@@ -90,6 +90,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `install.sh`); they now build from a throwaway copy of the worktree
   (`_worktree_build_copy`), so the real checkout stays clean and
   `git status` stays empty after a full local suite.
+- Dependency audit gate established with `pip-audit` (Python: no known
+  vulnerabilities) and `cargo audit` (Rust). The first Rust scan
+  flagged `lru 0.12.5` unsound (RUSTSEC-2026-0002, RUSTSEC-2026-0253 —
+  both fixed only in `lru >= 0.16.3/0.18.2`, unreachable under
+  ratatui 0.29's `^0.12.0` pin) and the unmaintained `paste` proc-macro
+  (RUSTSEC-2024-0436), all transitive through ratatui. The frontend
+  crate upgraded `ratatui 0.29 -> 0.30.2` (and `crossterm 0.28 -> 0.29`),
+  whose dependency tree resolves `lru 0.18.5` and drops `paste`
+  entirely — zero `cargo audit` warnings remain. The wire protocol is
+  untouched: golden-fixture, draw-level, and parser suites all pass,
+  plus `cargo fmt --check` and `cargo clippy --all-targets -D warnings`.
 
 ---
 
