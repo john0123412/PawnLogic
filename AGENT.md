@@ -648,7 +648,12 @@ are source-checkout or user-installed assets; pip/curl installations should use
     classified a synthetic string that was a shell syntax error and
     gated nothing. Both gates now call the pure `classify_host_process()`
     classifier and the command spawns exactly once; the script-payload
-    residual risk remains a Known Risks entry. Owner terminal acceptance
+    residual risk remains a Known Risks entry. In the same window the
+    `run_code` payload gained a content-aware policy pass (bash lines
+    and Python literal shell calls judged by the same policy), the
+    packaging tests stopped rebuilding `build/`/`egg-info` inside the
+    checkout, and the ratatui frontend upgraded to 0.30.2, clearing
+    every `cargo audit` warning. Owner terminal acceptance
     on the release binary and the tool-stage stall diagnosis
     (owner inputs still needed: tool name, confirmation dialog shown,
     composer responsiveness) remain open items from the 0.3.10 plan.
@@ -810,7 +815,13 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   only for the single real execution. Residual gap: a command-string
   classifier cannot see the contents of a script written to a temp file, so
   the `run_code` gate is consistency/defence-in-depth, not a sandbox
-  boundary for payloads.
+  boundary for payloads. Narrowed in `[Unreleased]`: `run_code` now also
+  classifies the payload's own tractable literal shell surface — bash
+  lines and Python `os.system`/`os.popen`/`subprocess(..., shell=True)`
+  commands — with the same policy, failing closed on anything but
+  `ALLOW`. Still invisible to it: dynamic command construction,
+  `from os import system` aliases, and javascript/go/compiled payload
+  contents; the boundary remains defence-in-depth, not an OS sandbox.
 - Delegated-agent requests bypassing Provider visibility, allowlists, budgets,
   or capability filtering.
 - Tool watchdog abandons wedged tool threads instead of blocking the session;

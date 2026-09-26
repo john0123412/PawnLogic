@@ -70,6 +70,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the *contents* of a script written to a temp file, so this gate is a
   consistency and defence-in-depth fix, not a sandbox boundary for
   `run_code` payloads.
+- `run_code` payloads now get a content-aware policy pass that narrows the
+  residual above. For the two languages whose payloads carry a tractable
+  literal shell surface, embedded commands are extracted and classified
+  with the same operation policy as a direct command, failing closed on
+  anything but `ALLOW`: bash payloads are judged line by line (comments
+  and blank lines skipped), and Python payloads are AST-scanned for
+  `os.system` / `os.popen` / `subprocess` calls that spawn a shell
+  (`shell=True`, or the always-shell `getoutput` /
+  `getstatusoutput` family) with a literal string command. Still not a
+  sandbox boundary: dynamic (non-literal) command construction,
+  `from os import system` aliases, and the payload surface of
+  javascript/go/compiled languages stay invisible to the classifier.
+  Pinned by `TestRunCodePayloadContentGate`.
+- Packaging tests no longer rebuild `build/` and `pawnlogic.egg-info/`
+  in the project root on every full run. Five tests drove setuptools
+  with the checkout itself as the build cwd (two `python -m build`
+  invocations and three `pip install <checkout>` paths, one of them via
+  `install.sh`); they now build from a throwaway copy of the worktree
+  (`_worktree_build_copy`), so the real checkout stays clean and
+  `git status` stays empty after a full local suite.
+- Dependency audit gate established with `pip-audit` (Python: no known
+  vulnerabilities) and `cargo audit` (Rust). The first Rust scan
+  flagged `lru 0.12.5` unsound (RUSTSEC-2026-0002, RUSTSEC-2026-0253 —
+  both fixed only in `lru >= 0.16.3/0.18.2`, unreachable under
+  ratatui 0.29's `^0.12.0` pin) and the unmaintained `paste` proc-macro
+  (RUSTSEC-2024-0436), all transitive through ratatui. The frontend
+  crate upgraded `ratatui 0.29 -> 0.30.2` (and `crossterm 0.28 -> 0.29`),
+  whose dependency tree resolves `lru 0.18.5` and drops `paste`
+  entirely — zero `cargo audit` warnings remain. The wire protocol is
+  untouched: golden-fixture, draw-level, and parser suites all pass,
+  plus `cargo fmt --check` and `cargo clippy --all-targets -D warnings`.
 
 ---
 

@@ -15,6 +15,7 @@ from config import SANDBOX_LANGS
 from core.host_process import HostProcessRequest, classify_host_process
 from core.operation_policy import OperationAction
 from core.state import runtime_config
+from tools.payload_policy import payload_policy_errors
 from utils.ansi import c, YELLOW, RED
 
 # Resource limits are available only on POSIX systems: Linux / WSL2 / macOS.
@@ -229,6 +230,13 @@ def tool_run_code(a: dict) -> str:
     lang_cfg = SANDBOX_LANGS[language]
     ext      = lang_cfg["ext"]
     output   = []
+
+    # The run-command gate below only sees "<interpreter> <temp script>",
+    # so judge the payload's own embedded shell surface first.
+    payload_errors = payload_policy_errors(language, code, cwd)
+    if payload_errors:
+        return ("ERROR: run_code payload blocked by operation policy:\n"
+                + "\n".join(payload_errors))
 
     # Use system temp dir. Linux/WSL uses /tmp tmpfs; Windows uses %TEMP%.
     _tmp_root = "/tmp" if _IS_POSIX else None  # None = system default tempdir.
