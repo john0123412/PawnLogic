@@ -83,6 +83,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `from os import system` aliases, and the payload surface of
   javascript/go/compiled languages stay invisible to the classifier.
   Pinned by `TestRunCodePayloadContentGate`.
+- Packaging tests no longer rebuild `build/` and `pawnlogic.egg-info/`
+  in the project root on every full run. Five tests drove setuptools
+  with the checkout itself as the build cwd (two `python -m build`
+  invocations and three `pip install <checkout>` paths, one of them via
+  `install.sh`); they now build from a throwaway copy of the worktree
+  (`_worktree_build_copy`), so the real checkout stays clean and
+  `git status` stays empty after a full local suite.
 
 ---
 

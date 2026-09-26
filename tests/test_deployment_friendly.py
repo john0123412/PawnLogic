@@ -32,6 +32,30 @@ def _load_pyproject() -> dict:
     return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
 
+_BUILD_COPY_IGNORE = shutil.ignore_patterns(
+    ".git", ".venv", "venv", "build", "dist", "target", "node_modules",
+    "__pycache__", "*.egg-info", ".pytest_cache", ".ruff_cache",
+    ".mypy_cache", ".pawnlogic_index",
+)
+
+
+def _worktree_build_copy(tmp_path: Path) -> Path:
+    """Copy the worktree so packaging builds never dirty the checkout.
+
+    ``python -m build`` and ``pip install <dir>`` drive setuptools with the
+    source directory as cwd, which writes ``build/`` and ``*.egg-info/``
+    into it. Building from a throwaway copy keeps the real checkout clean.
+    """
+    source_copy = tmp_path / "source"
+    shutil.copytree(
+        ROOT,
+        source_copy,
+        ignore=_BUILD_COPY_IGNORE,
+        ignore_dangling_symlinks=True,
+    )
+    return source_copy
+
+
 def _clean_runtime_env(tmp_path: Path) -> dict[str, str]:
     env = os.environ.copy()
     env.update({
@@ -112,7 +136,7 @@ def test_install_sh_installs_package_launcher_with_venv(tmp_path):
     env.update({
         "PAWNLOGIC_INSTALL_DIR": str(install_dir),
         "PAWNLOGIC_BIN_DIR": str(bin_dir),
-        "PAWNLOGIC_PACKAGE_SPEC": str(ROOT),
+        "PAWNLOGIC_PACKAGE_SPEC": str(_worktree_build_copy(tmp_path)),
         "PYTHON": sys.executable,
     })
 
@@ -264,7 +288,8 @@ def test_fresh_venv_pip_install_exposes_pawn_command(tmp_path):
     py = install_venv / "bin" / "python"
     pawn = install_venv / "bin" / "pawn"
     install = subprocess.run(
-        [str(py), "-m", "pip", "install", "--upgrade", str(ROOT)],
+        [str(py), "-m", "pip", "install", "--upgrade",
+         str(_worktree_build_copy(tmp_path))],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -328,7 +353,8 @@ def test_fresh_install_generates_runtime_config_templates(tmp_path):
     py = install_venv / "bin" / "python"
     pawn = install_venv / "bin" / "pawn"
     subprocess.run(
-        [str(py), "-m", "pip", "install", "--upgrade", str(ROOT)],
+        [str(py), "-m", "pip", "install", "--upgrade",
+         str(_worktree_build_copy(tmp_path))],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -411,7 +437,7 @@ def test_packaging_entry_point_uses_package_cli():
 def test_built_wheel_does_not_ship_top_level_main_module(tmp_path):
     subprocess.run(
         [sys.executable, "-m", "build", "--wheel", "--outdir", str(tmp_path)],
-        cwd=ROOT,
+        cwd=_worktree_build_copy(tmp_path),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -450,7 +476,7 @@ def test_built_wheel_does_not_ship_top_level_main_module(tmp_path):
 def test_built_sdist_does_not_ship_top_level_skills(tmp_path):
     subprocess.run(
         [sys.executable, "-m", "build", "--sdist", "--outdir", str(tmp_path)],
-        cwd=ROOT,
+        cwd=_worktree_build_copy(tmp_path),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
