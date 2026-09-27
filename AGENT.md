@@ -585,20 +585,22 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.3.11`. **Status: release candidate — the
-  CHANGELOG, README pointers, SECURITY row, and `.release-ready` marker
-  are finalized on this branch; the `v0.3.11` tag, Trusted Publishing
-  run, and GitHub Release are pending full candidate acceptance (Python
-  matrix + Dynamic E2E on the release branch, build + fresh-install
-  smoke) and owner sign-off.** Until the tag exists, the publicly
-  released version on PyPI remains `0.3.10` (published 2026-09-09 from
-  the annotated `v0.3.10` tag on the PR #145 merge commit `fffb1d1`,
-  workflow run [`34327728090`](https://github.com/john0123412/PawnLogic/actions/runs/34327728090));
-  no published-complete claim is made for `0.3.11` before the tag
-  lands. The `0.3.10`, `0.3.9`, `0.3.8`, and `0.3.7` releases remain
-  complete. PyPI project page:
-  <https://pypi.org/project/pawnlogic/0.3.10/>. GitHub Release:
-  <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.10>.
+- Current published release: `0.3.11`. Published 2026-09-27 through
+  Trusted Publishing from the `Publish to PyPI` workflow run
+  [`36298624589`](https://github.com/john0123412/PawnLogic/actions/runs/36298624589),
+  triggered by pushing the annotated `v0.3.11` tag onto the PR #151 merge
+  commit `14f4932` (peeled target verified on `origin/main`). PyPI
+  project page: <https://pypi.org/project/pawnlogic/0.3.11/>. GitHub
+  Release: <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.11>
+  (wheel + sdist + Linux ratatui binary tarball with sha256, non-draft,
+  notes sourced from the CHANGELOG `[0.3.11]` section). The full
+  publish gate passed: verify-release-source, full Python
+  3.10/3.11/3.12 non-E2E matrix, Dynamic E2E, ratatui `cargo test`,
+  twine check, PyPI install smoke, and GitHub Release creation;
+  candidate-matrix evidence for the release branch head came from the
+  `test/release-0.3.11` push and PR #151 runs (all green, including
+  Dynamic E2E 31/31 on both).
+  The `0.3.10`, `0.3.9`, `0.3.8`, and `0.3.7` releases remain complete.
 - 0.3.11 recap (all merged to `main`):
   - **#146** — a failed Turn (rate limit, circuit open, invalid key)
     leaves a recovered draft instead of silently parking the typed
