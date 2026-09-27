@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.10**。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.11**。
 
 ## 系统要求
 
@@ -94,13 +94,14 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 
 ## 新特性
 
-0.3.10 发布终端硬化与发布门禁强化：
+0.3.11 发布可靠性与供应链强化：
 
-- **单一所有者实时输出：** 完成的回合在原生 host 滚动区只出现一次，应用视口只渲染尚未交付的行。host flush 防抖并按真实列宽预折行，CJK/emoji 回答在 wcwidth 不匹配的终端上不再重复或交错。
-- **会话草稿目录拆分：** `session_<id>/` 草稿目录移入 `~/.pawnlogic/sessions/`；`workspace/` 只保留自动命名的任务目录及其 `by-name/` 别名。
-- **pre-commit 泄漏扫描绕过修复：** 对扫描器自身文件做仅删除式暂存不再使兄弟文件的扫描集被清空。
-- **可用的实验性 ratatui 客户端：** Rust 前端是协议验证 wire 客户端，不是 Python REPL 的替代品。流式响应不再被最终 `result` 重复追加（部分流式化的回答只补齐缺失的尾部），后端 EOF/协议错误会恢复终端，输入框支持 Unicode 光标编辑、粘贴和鼠标滚轮。`PAWNLOGIC_TUI_SERVER` 让打包二进制指向显式后端命令。Release tag 附带 Linux 二进制 tar 包及 sha256 校验（实验性，非默认入口）。
-- **参考 PT 客户端与延迟测量：** `frontends/ptk_client.py` 实测 prompt→turn-start、中断、chunk 间隔延迟（真实 API 下中位数约 4 ms / 2.4 ms / <100 ms）。
+- **允许的命令只执行一次：** `pwn_timed_debug` 和 `run_code` 的预检"策略检查"此前使用"分类并执行"的方法，导致允许的命令副作用发生两次（CTF exploit、`nc` 连接或重定向会跑两次，第一次执行还会在计时循环开始前就烧掉时限）。两处门控现在只分类、不再提前执行。
+- **run_code 内容感知策略门控：** payload 内嵌的 shell 命令——bash 逐行、Python 的 `os.system` / `os.popen` / `subprocess(..., shell=True)` 字面量——都按与直接命令相同的 operation policy 判定，非 `ALLOW` 一律拦截。
+- **wire 尾部不再丢失：** 以 `<` 开头片段结尾的回答（例如 `a <3`）不再在 event-wire 消费端丢尾；残余部分通过 content-delta 接缝送达 `pawn serve` 和两个无头客户端。
+- **失败回合可恢复不再冻结：** 失败的 Turn（限流、熔断、无效 key）会保留可重新提交的草稿，而不是让已输入的提示词静默消失。
+- **Rust 前端升级 ratatui 0.30：** 实验性 TUI 客户端改用 ratatui 0.30.2 / crossterm 0.29 构建，依赖树中的所有 RustSec 告警全部清除（`cargo audit` 零警告）。wire 协议不变。
+- **依赖审计门禁：** Python 依赖在 `pip-audit` 下扫描干净；打包测试不再在源码 checkout 里留下 `build/` / `egg-info/`。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 

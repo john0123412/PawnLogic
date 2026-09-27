@@ -11,7 +11,7 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.3.10**.
+CTF-oriented toolchain. The current public release is **0.3.11**.
 
 ## System Requirements
 
@@ -105,33 +105,33 @@ use the additive `{"type":"event","data":{...}}` envelope.
 
 ## What's New
 
-Version 0.3.10 ships terminal hardening and release-gate work:
+Version 0.3.11 ships reliability and supply-chain hardening:
 
-- **Single-owner live output:** a finished turn appears exactly once —
-  in the native host scrollback — while the application viewport shows
-  only text still awaiting host delivery. Live host flushes are
-  debounced and pre-wrapped with the host's real column count, so
-  CJK/emoji answers no longer duplicate or interleave on
-  wcwidth-mismatched terminals.
-- **Session scratch split:** `session_<id>/` scratch directories live
-  under `~/.pawnlogic/sessions/`; `workspace/` keeps only auto-named
-  task directories and their `by-name/` aliases.
-- **Pre-commit leak-scan bypass fix:** staging a deletion-only change
-  to the scanner's own file no longer empties the scan set for sibling
-  files.
-- **Usable experimental ratatui client:** the Rust frontend is a
-  protocol-validation wire client, not a full Python-REPL replacement.
-  Streamed responses are no longer appended again from the final
-  `result` (a partially streamed answer is completed with only its
-  missing tail), backend EOF/protocol failures restore the terminal,
-  and the composer supports Unicode-safe cursor movement, paste, and
-  mouse-wheel scrolling. `PAWNLOGIC_TUI_SERVER` points a packaged
-  binary at an explicit backend command. Release tags attach a Linux
-  binary tarball with a sha256 checksum (experimental — not the
-  default entry point).
-- **Reference PT client + latency harness:** `frontends/ptk_client.py`
-  measures prompt-to-turn-start, interrupt, and chunk-gap latencies
-  (median ~4 ms / ~2.4 ms / <100 ms on real API runs).
+- **Allowed commands run exactly once:** the `pwn_timed_debug` and
+  `run_code` pre-flight "policy checks" used a method that classifies
+  *and* spawns, so an allowed command's side effects happened twice (a
+  CTF exploit, `nc` connection, or redirect ran twice and the first
+  execution burned the time limit before the timed loop even started).
+  Both gates now classify without spawning.
+- **Content-aware `run_code` policy gate:** shell commands embedded in
+  a payload — bash lines and Python `os.system` / `os.popen` /
+  `subprocess(..., shell=True)` literals — are judged by the same
+  operation policy as a direct command and fail closed on anything but
+  `ALLOW`.
+- **No more lost wire tail:** answers ending in a `<`-led fragment
+  (for example `a <3`) no longer lose their tail on event-wire
+  consumers; the leftover rides the content-delta seam to `pawn serve`
+  and both headless clients.
+- **Failed turns recover instead of freezing:** a failed Turn (rate
+  limit, circuit open, invalid key) leaves a recovered draft you can
+  resubmit instead of parking the typed prompt silently.
+- **Rust frontend on ratatui 0.30:** the experimental TUI client is
+  rebuilt against ratatui 0.30.2 / crossterm 0.29, clearing every
+  RustSec advisory in its dependency tree (`cargo audit`: zero
+  warnings). The wire protocol is unchanged.
+- **Dependency audit gates:** Python dependencies scan clean under
+  `pip-audit`, and packaging tests no longer leave `build/` /
+  `egg-info/` behind in a source checkout.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 

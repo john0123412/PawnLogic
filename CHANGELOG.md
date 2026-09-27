@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [0.3.11] - 2026-09-27
 
 ### Fixed
 - Typing a prompt after a failed Turn no longer parks it silently. A failed
