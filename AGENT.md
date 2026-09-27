@@ -628,10 +628,19 @@ are source-checkout or user-installed assets; pip/curl installations should use
     leaves the checkout clean. ratatui 0.29 → 0.30.2 + crossterm 0.29
     with the wire protocol untouched; dependency audit gates
     established (`pip-audit` clean, `cargo audit` zero warnings).
-  - Owner terminal acceptance on the release binary and the tool-stage
-    stall diagnosis (owner inputs still needed: tool name, confirmation
-    dialog shown, composer responsiveness) remain open items from the
-    0.3.10 plan.
+  - The two items the 0.3.10 plan left open are now addressed on
+    `fix/0.3.12-confirmation-modal-lifecycle`
+    (`docs/plans/0.3.12-confirmation-modal-lifecycle.md`), not yet
+    released. The **tool-stage stall needed no owner input after all**:
+    it was a high-risk confirmation modal that stayed mounted forever
+    when its wait expired, leaving the eager selector bindings holding
+    the keyboard and the composer read-only. The loop that mounted the
+    modal now owns its deadline, the modal denies by default and
+    requires an explicit `y`, the status line shows
+    `⚠ awaiting confirmation`, and the tool watchdog reclaims a
+    confirmation its abandoned worker was blocked on. Owner terminal
+    acceptance on the release binary is still owner-gated, but
+    `tools/owner_acceptance_probe.py` now scripts its automatable half.
 - Phase 2 complete on `main` and shipped in `0.3.9` (recorded in
   `docs/plans/p2-steer-and-headless-frontends.md`): P2-0 Esc-steer
   handoff (0.3.8 carried the fix; 0.3.9 carries the post-acceptance
@@ -767,6 +776,7 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `core/api_retry`, `core/provider_tui_state`, `core/turn_scheduler`,
 `core/live_turn_control`, `core/turn_cancellation`, `core/queue_tui`,
 `pawnlogic/live_repl`, `pawnlogic/live_terminal`, `pawnlogic/terminal_transcript`, `pawnlogic/restart_recovery`,
+`pawnlogic/confirm_selector`,
 `tools/check_doc_structure`,
 `tools/check_release_consistency`, `tools/merge_ctf_skills`, `tools/browser_ops`,
 `tools/lsp_lite`, `tools/text_patch`, `tools/shell_ops`, `tools/docker_plan`,
@@ -836,6 +846,28 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   selector, including the `/provider fetch` model multi-select, must run
   inside the persistent Application through the controller's `run_selector`;
   a second `Application.run_async()` corrupts cursor/escape state (ADR 0010).
+- A tool thread must never leave a selector mounted. Abandoning a worker
+  does not unwind it, and a thread-side `future.result(timeout=...)` that
+  expires does not cancel the coroutine it was waiting on, so the
+  `finally` in `run_selector` never ran and `has_state` pinned the eager
+  selector key bindings on: the composer went read-only and ordinary
+  typing was consumed as selector input for the rest of the session.
+  Every deadline for a modal that a tool thread is waiting on must be
+  owned by the loop that mounted it (`asyncio.wait_for` in
+  `run_confirmation_modal`), and the tool watchdog's abandon path must
+  additionally reclaim a pending confirmation through
+  `cancel_pending_confirmation()`. The thread-side wait is a backstop
+  and must outlast the loop-side deadline. Pinned by
+  `TestConfirmationModalLifecycle`.
+- A mounted selector owns the keyboard through `eager=True` bindings, so
+  a trust-boundary modal must not resolve on an incidental keystroke.
+  The high-risk confirmation defaults to **Deny** and requires an
+  explicit `y`; a bare `Enter` denies. It also swallows every key until
+  the host has read `formatted_text` at least once, because until the
+  Float has painted, the user has not seen the prompt. Do not widen
+  `ConfirmOperationSelector.handle_key` to fall through, and keep the
+  selector's `escape` binding eager while the Turn-interrupt `escape` in
+  `live_repl` stays non-eager so the modal wins the key.
 - An Application task that ends without `close()` must both wake the parked
   CLI submission waiter and resolve any pending selector future. A silent
   exit there previously left the only recovery a force-quit.

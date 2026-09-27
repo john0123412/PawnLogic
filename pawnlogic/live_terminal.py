@@ -1731,6 +1731,18 @@ class PersistentTerminal:
             )
         except Exception:
             pending = 0
+        registry = getattr(self, "_selector_registry", None)
+        if (
+            registry is not None
+            and getattr(registry, "active_kind", "") == "confirmation"
+        ):
+            # 0.3.12 S3: a mounted high-risk modal owns the keyboard, so
+            # the toolbar must say so. Without this the user cannot tell
+            # "a tool is working" from "a tool is blocked on a prompt you
+            # cannot see", and every keystroke they type is being eaten
+            # by the modal. Esc reaches the selector first (its binding
+            # is eager; the Turn-interrupt one is not).
+            return f"{model}  ⚠ awaiting confirmation — Esc to review"
         if pending > 0:
             started = float(getattr(session, "_turn_start_time", 0.0) or 0.0)
             elapsed = int(max(0, now - started)) if started > 0 else 0

@@ -121,6 +121,11 @@ class SelectorState:
       selector's future and unblock the awaiting command.
     """
 
+    #: Free-form discriminator the host can read without importing the
+    #: concrete class. The live status line uses it to show a pending
+    #: high-risk confirmation differently from a convenience picker.
+    kind: str = "generic"
+
     def __init__(
         self, *, title: str, style: SelectorStyle = DEFAULT_SELECTOR_STYLE
     ) -> None:
@@ -203,6 +208,18 @@ class SelectorRegistry:
         return self._active is not None and not bool(
             getattr(self._active, "is_closed", False)
         )
+
+    @property
+    def active_kind(self) -> str:
+        """The active selector's :attr:`SelectorState.kind`, or ``""``.
+
+        Only reports a kind while a selector is genuinely mounted, so a
+        leaked or closed selector can never make the host believe a
+        confirmation is still pending.
+        """
+        if not self.has_active:
+            return ""
+        return str(getattr(self._active, "kind", "generic") or "generic")
 
     def install_active(
         self,

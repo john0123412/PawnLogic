@@ -286,7 +286,11 @@ outside read-only challenge files require explicit `allow_host_read_mount`.
 Host shell execution now passes through an operation policy before subprocess
 startup. Low-risk commands run normally, medium-risk commands are classified
 for audit, high-risk commands require explicit interactive confirmation, and
-critical operations are denied by default. Non-interactive execution, including
+critical operations are denied by default. The confirmation modal opens
+pre-selected on **Deny**: press `y` to approve, `n`/`Esc`/`Ctrl+C` to reject,
+and a bare `Enter` rejects. Approval is never a side effect of a keystroke
+meant for the composer, and while the modal is mounted the status line shows
+`⚠ awaiting confirmation — Esc to review`. Non-interactive execution, including
 `pawn --eval`, fails closed when a high-risk command would require
 confirmation. `DANGEROUS_PATTERNS` remains only one misuse/risk classifier; it
 is not a sandbox boundary and cannot stop a malicious local user.
@@ -297,7 +301,11 @@ child becomes uninterruptible (for example a WSL2 kernel stall). Registered
 tools additionally run under a watchdog (`tool_watchdog_sec`, default 600
 seconds): a tool call that exceeds the limit is abandoned with an ERROR result
 so the session continues instead of freezing. An abandoned background thread
-may keep running until the process exits.
+may keep running until the process exits. A high-risk confirmation waits
+`confirmation_wait_sec` (default 300 seconds, clamped to stay below
+`tool_watchdog_sec`); that deadline belongs to the terminal event loop that
+mounted the modal, and an abandoned tool thread's confirmation is reclaimed when
+the watchdog expires, so a timed-out prompt can never leave the modal mounted.
 
 ## Optional Extensions
 

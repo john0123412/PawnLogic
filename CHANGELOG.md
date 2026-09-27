@@ -5,6 +5,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- A high-risk confirmation modal whose wait expired stayed mounted for the
+  rest of the session. `prompt_for_confirmation` runs on the tool worker
+  thread and marshals the modal onto the terminal's event loop, but it
+  waited with a thread-side `future.result(timeout=600)`. That timeout
+  does not cancel the coroutine: it stayed parked inside
+  `controller.run_selector` on `await future`, so the `finally` that
+  unmounts the selector never ran. `SelectorRegistry.has_state` stayed
+  true, the eager selector key bindings kept capturing input, the composer
+  went read-only, and everything typed was consumed as selector input —
+  the reported tool-stage stall, which needed only a force-quit to clear.
+  The deadline now belongs to the loop that mounted the modal
+  (`asyncio.wait_for` in `run_confirmation_modal`), and the thread-side
+  wait is a strictly longer backstop.
+- The tool watchdog now reclaims a confirmation modal its abandoned
+  worker was blocked on. A wedged tool thread is abandoned, not killed,
+  so it stayed parked on `future.result()`; the modal it was waiting on
+  had to be released explicitly through `cancel_pending_confirmation()`.
+  The confirmation wait is also now a separate, configurable
+  `confirmation_wait_sec`, clamped to stay below `tool_watchdog_sec` so
+  the loop always tears the modal down while its waiter is still alive.
+  Previously both deadlines were the literal `600`.
+- A bare `Enter` could approve a high-risk operation while the user was
+  typing something else. The live terminal routes `enter`/`c-j`/`c-m`,
+  digits, arrows, `space`, `a`, and `n` to the active selector with
+  `eager=True` bindings, and the confirmation modal defaulted to
+  "Approve and run" — so an Enter meant as "submit my next message"
+  silently approved the command. The modal now defaults to **Deny** and
+  requires an explicit `y`; a bare Enter denies. It also swallows every
+  key until the host has painted it at least once, so an unpainted prompt
+  can never resolve a keystroke. Owner decision, recorded in
+  `docs/plans/0.3.12-confirmation-modal-lifecycle.md`.
+- The status line now shows `⚠ awaiting confirmation — Esc to review`
+  while a high-risk modal is mounted. It previously kept reporting the
+  ordinary in-flight state, so a user could not tell a working tool from
+  one blocked on a prompt they could not see.
+
+### Added
+- `tools/owner_acceptance_probe.py` turns the owner terminal acceptance
+  gate into a repeatable probe. It reports the automatable half — the
+  entry point starts and prints help, and the terminal guard restores
+  raw mode, alternate screen, cursor visibility, mouse capture, and
+  bracketed paste on exit — and lists the checks that genuinely need
+  human eyes (scrollback ownership, selection/copy, glyph width, no
+  duplicated output) as `manual` rather than reporting them as passing.
+  Output is JSON so the owner can paste a result back.
+
 ## [0.3.11] - 2026-09-27
 
 ### Fixed
