@@ -585,78 +585,51 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.3.10`. Published 2026-09-09 through
-  Trusted Publishing from the `Publish to PyPI` workflow run
-  [`34327728090`](https://github.com/john0123412/PawnLogic/actions/runs/34327728090),
-  triggered by pushing the annotated `v0.3.10` tag onto the PR #145 merge
-  commit `fffb1d1` (tag object `01678ed`, peeled target verified on
-  `origin/main`). PyPI project page:
+- Current published release: `0.3.11`. **Status: release candidate — the
+  CHANGELOG, README pointers, SECURITY row, and `.release-ready` marker
+  are finalized on this branch; the `v0.3.11` tag, Trusted Publishing
+  run, and GitHub Release are pending full candidate acceptance (Python
+  matrix + Dynamic E2E on the release branch, build + fresh-install
+  smoke) and owner sign-off.** Until the tag exists, the publicly
+  released version on PyPI remains `0.3.10` (published 2026-09-09 from
+  the annotated `v0.3.10` tag on the PR #145 merge commit `fffb1d1`,
+  workflow run [`34327728090`](https://github.com/john0123412/PawnLogic/actions/runs/34327728090));
+  no published-complete claim is made for `0.3.11` before the tag
+  lands. The `0.3.10`, `0.3.9`, `0.3.8`, and `0.3.7` releases remain
+  complete. PyPI project page:
   <https://pypi.org/project/pawnlogic/0.3.10/>. GitHub Release:
-  <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.10>
-  (wheel + sdist + Linux ratatui binary tarball with sha256, non-draft,
-  notes sourced from the CHANGELOG `[0.3.10]` section). The full
-  publish gate passed: verify-release-source, 1,624 non-E2E tests,
-  Dynamic E2E 31/31, ratatui `cargo test` 24/24, twine check, PyPI
-  fresh-install smoke, and GitHub Release creation. Candidate-matrix
-  evidence for the release branch head is workflow run
-  [`34323190852`](https://github.com/john0123412/PawnLogic/actions/runs/34323190852)
-  (Python 3.10/3.11/3.12 full matrix + Dynamic E2E + Rust gates).
-  The `0.3.9`, `0.3.8`, and `0.3.7` releases remain complete.
-- 0.3.10 recap (all merged to `main`):
-  - **#138** — `PAWNLOGIC_TUI_SERVER` override so packaged ratatui
-    binaries stop silently resolving a stale `python -m pawnlogic`
-    off `PATH` (real-use defect from owner-PTY acceptance of 0.3.9).
-  - **#140** — pre-commit leak-scan bypass fix: staging a deletion-only
-    change to `tools/precommit.sh` collapsed the scan via
-    `grep -vF ""` and let a staged key in a sibling file pass. The
-    scanner's own file is excluded by pathspec; every other staged
-    file is always scanned. Scoped fix — it does not claim the scanner is
-    immune to all future bypass classes.
-  - **#141** — live-terminal display ownership: completed output is
-    single-owner (native scrollback), the delivery cursor commits inside
-    the `run_in_terminal` window (first restored frame is already
-    post-delivery), 2 s flush debouncing with wcwidth-aware pre-wrapping
-    (1-column wide-glyph hang fixed, Tab budgeted at 8 columns,
-    byte-identical payload), close no longer waits out the debounce
-    window, and session scratch directories split into
-    `~/.pawnlogic/sessions/`. Three acceptance review rounds; merged at
-    `b8968ff`.
-  - **#142** — 0.3.10 plan registration and stale Phase 2 publication
-    claims corrected; READMEs' What's New moved from 0.3.2 to shipped
-    0.3.9 content.
-  - **#144/#145** — owner acceptance initially rejected the ratatui
-    surface and the live erase-drift report. Forensics: the spinner
-    pollution fix (a8dc6dc) was a real product fix; the erase drift was
-    a TERM=dumb replay-environment artifact (real-owner terminals with
-    CPR answered pass both acceptance replays). #145 landed the ratatui
-    repair: stream/result deduplication, `turn_cancelled` handling,
-    backend EOF/protocol monitoring, RAII terminal restoration, and the
-    Unicode-safe cursor composer. Wire v1 still has no modal-selector
-    protocol; bare interactive commands fail fast with text
-    alternatives.
-  - Post-release repair (in `[Unreleased]`, ahead of the next patch):
-    answers ending in a `<`-led fragment (for example `a <3`) lost
-    their tail on every event-wire consumer because the plan renderer's
-    flush printed the leftover only to stdout. The leftover now rides
-    the content-delta seam; both wire clients append only the missing
-    tail from a final `result`; the ratatui suite gained its first
-    draw-level regression (TestBackend). In the same window, #148
-    stopped duplicate host-tool execution: `pwn_timed_debug` and
+  <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.10>.
+- 0.3.11 recap (all merged to `main`):
+  - **#146** — a failed Turn (rate limit, circuit open, invalid key)
+    leaves a recovered draft instead of silently parking the typed
+    prompt and freezing the live REPL.
+  - **#147** — wire flush tail: answers ending in a `<`-led fragment
+    (for example `a <3`) lost their tail on every event-wire consumer
+    because the plan renderer's flush printed the leftover only to
+    stdout. The leftover now rides the content-delta seam; both wire
+    clients append only the missing tail from a final `result`; the
+    ratatui suite gained its first draw-level regression (TestBackend).
+  - **#148** — duplicate host-tool execution: `pwn_timed_debug` and
     `run_code` used `HostProcessRunner.run()` as a pre-flight policy
     gate, but that method classifies *and* spawns, so an allowed
     command's side effects ran twice; `run_code`'s gate additionally
     classified a synthetic string that was a shell syntax error and
     gated nothing. Both gates now call the pure `classify_host_process()`
     classifier and the command spawns exactly once; the script-payload
-    residual risk remains a Known Risks entry. In the same window the
-    `run_code` payload gained a content-aware policy pass (bash lines
-    and Python literal shell calls judged by the same policy), the
-    packaging tests stopped rebuilding `build/`/`egg-info` inside the
-    checkout, and the ratatui frontend upgraded to 0.30.2, clearing
-    every `cargo audit` warning. Owner terminal acceptance
-    on the release binary and the tool-stage stall diagnosis
-    (owner inputs still needed: tool name, confirmation dialog shown,
-    composer responsiveness) remain open items from the 0.3.10 plan.
+    residual risk remains a Known Risks entry.
+  - **#150** — `run_code` payload content gate: bash lines and Python
+    literal `os.system`/`os.popen`/`subprocess(..., shell=True)` calls
+    are judged by the same operation policy, failing closed on anything
+    but `ALLOW` (`tools/payload_policy.py`; dynamic constructs, aliases,
+    and javascript/go/compiled payloads stay documented residuals).
+    Packaging tests build from a worktree copy, so a full local suite
+    leaves the checkout clean. ratatui 0.29 → 0.30.2 + crossterm 0.29
+    with the wire protocol untouched; dependency audit gates
+    established (`pip-audit` clean, `cargo audit` zero warnings).
+  - Owner terminal acceptance on the release binary and the tool-stage
+    stall diagnosis (owner inputs still needed: tool name, confirmation
+    dialog shown, composer responsiveness) remain open items from the
+    0.3.10 plan.
 - Phase 2 complete on `main` and shipped in `0.3.9` (recorded in
   `docs/plans/p2-steer-and-headless-frontends.md`): P2-0 Esc-steer
   handoff (0.3.8 carried the fix; 0.3.9 carries the post-acceptance
