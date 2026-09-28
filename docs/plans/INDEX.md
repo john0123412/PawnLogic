@@ -5,19 +5,15 @@
 
 ## Active Plan
 
-[0.3.12-confirmation-modal-lifecycle.md](0.3.12-confirmation-modal-lifecycle.md)
-— absorbs the two follow-ups left open by 0.3.10: the tool-stage stall
-(diagnosed in code; a timed-out high-risk confirmation leaks a
-permanently mounted modal) and owner terminal acceptance on the published
-binary.
-
-There is exactly one active plan at a time. When the active plan is completed
-and its release is published, it moves to Completed below.
+There is no active plan at the moment. When release work starts, add its plan
+file here. There is exactly one active plan at a time. When the active plan is
+completed and its release is published, it moves to Completed below.
 
 ## Completed Plans
 
 | Version | Plan | Release |
 |---------|------|---------| 
+| 0.3.12 | [0.3.12-confirmation-modal-lifecycle.md](0.3.12-confirmation-modal-lifecycle.md) | [v0.3.12](https://github.com/john0123412/PawnLogic/releases/tag/v0.3.12) |
 | 0.3.11 | released from `CHANGELOG.md` `[0.3.11]` (no plan file) | [v0.3.11](https://github.com/john0123412/PawnLogic/releases/tag/v0.3.11) |
 | 0.3.10 | [0.3.10-terminal-and-release-hardening.md](0.3.10-terminal-and-release-hardening.md) | [v0.3.10](https://github.com/john0123412/PawnLogic/releases/tag/v0.3.10) |
 | 0.3.9 | [p2-steer-and-headless-frontends.md](p2-steer-and-headless-frontends.md) | [v0.3.9](https://github.com/john0123412/PawnLogic/releases/tag/v0.3.9) |

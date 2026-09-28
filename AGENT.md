@@ -585,22 +585,37 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.3.12`. This section is the *staging*
-  record written by the release-finalization commit, which lands on
-  `main` before the `v0.3.12` tag exists; the publish evidence
-  (workflow run id, PyPI project page, GitHub Release URL) is recorded
-  in the post-release commit once `Publish to PyPI` completes, exactly
-  as PR #139 did for 0.3.9. The tag is cut from a `main` commit because
-  `publish.yml`'s `verify-release-source` requires the tag's target to be
-  an ancestor of `origin/main`. The publish gate is unchanged:
-  verify-release-source, full Python 3.10/3.11/3.12 non-E2E matrix,
-  Dynamic E2E, ratatui `cargo test`, twine check, PyPI install smoke,
-  and GitHub Release creation. Candidate-matrix evidence for the
-  release head came from the `test/release-0.3.12` push and PR #155 runs
-  (all green, including Dynamic E2E 31/31; the push run needed one
+- Current published release: `0.3.12`. Published 2026-09-28 through
+  Trusted Publishing from the `Publish to PyPI` workflow run
+  [`36439179697`](https://github.com/john0123412/PawnLogic/actions/runs/36439179697),
+  triggered by pushing the annotated `v0.3.12` tag (tag object `265abe6`)
+  onto the PR #156 merge commit `613096a` (peeled target verified on
+  `origin/main`). PyPI project page:
+  <https://pypi.org/project/pawnlogic/0.3.12/>. GitHub Release:
+  <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.12>
+  (wheel + sdist + Linux ratatui binary tarball with sha256, non-draft,
+  notes sourced from the CHANGELOG `[0.3.12]` section). The full publish
+  gate passed on the first attempt with no re-run: verify-release-source,
+  Test before publish, Dynamic E2E, Build distributions, Build ratatui
+  binary, Publish to PyPI, PyPI install smoke, and GitHub Release
+  creation; the two TestPyPI jobs are skipped by design on a production
+  release. The published wheel's sha256 (`5f1377c6…`) matches the
+  release asset, so the installed artifact is the artifact this
+  repository built. The PyPI long description is the current 0.3.12
+  README, which clears the "What's New" drift Known Risks recorded for
+  0.3.11 and earlier. PyPI's `docs_url` field is unset and the
+  `Documentation` project URL points at the GitHub `README.md`, the same
+  as every prior release. The tag had to be cut from a `main` commit
+  because `publish.yml`'s `verify-release-source` requires the tag's
+  target to be an ancestor of `origin/main`; that is why the release
+  needed a candidate PR (#155) and a separate finalization PR (#156).
+  Candidate-matrix evidence for the release head came from the
+  `test/release-0.3.12` push and PR #155 runs, and the merged result was
+  re-gated by the `main` push runs on `613096a` (all green, including
+  Dynamic E2E 31/31; the `test/release-0.3.12` push run needed one
   re-run of the known `Status: interrupted` pexpect flake described in
-  Known Risks). **#156** carries the release-finalization commit that
-  this section describes.
+  Known Risks). **#156** carried the release-finalization commit, and
+  this is the post-release record.
   The `0.3.11`, `0.3.10`, `0.3.9`, `0.3.8`, and `0.3.7` releases remain
   complete; 0.3.11 was published 2026-09-27 through Trusted Publishing
   from the `Publish to PyPI` workflow run
@@ -1007,12 +1022,26 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   widening (or the test split into "Esc → banner shows" vs
   "Esc → worker settles within N s" to isolate the failure
   signature).
-- The PyPI project page's rendered "What's New" still shows an
-  older 0.3.2-era summary. PyPI does not refresh the long
-  description of an already-uploaded version when the GitHub
-  `README.md` is updated later, so the project page will only be
-  corrected on the next release (per the release-rule note in this
-  file). This is documentation drift, not a product defect.
+- The PyPI project page's rendered "What's New" showed an older
+  0.3.2-era summary through 0.3.11, because PyPI freezes the long
+  description at upload time and never refreshes it when the GitHub
+  `README.md` changes later. **0.3.12 cleared this**: it was the first
+  release whose upload embedded the then-current README, so the drift
+  is closed. The constraint itself still holds for any future release —
+  fix a README before the tag, not after, or the PyPI page keeps the old
+  text until the next upload. This is documentation drift, not a product
+  defect.
+- A release needs two PRs, not one. `tools/check_release_consistency.py`
+  has two mutually exclusive states — candidate (VERSION bumped, no
+  `.release-ready`, READMEs declare the version an unreleased candidate)
+  and finalization (`.release-ready` = the version, READMEs and
+  `AGENT.md` declare it the current public release) — so a single commit
+  cannot satisfy both. The finalization commit must reach `main` first
+  because `publish.yml`'s `verify-release-source` requires the tag's
+  target to be an ancestor of `origin/main`. Tagging straight from the
+  release branch fails that gate, and a direct push to `main` is blocked
+  by branch protection, so the sequence is: candidate PR → merge →
+  finalization PR → merge → tag the `main` merge commit.
 
 ## Agent Workflow
 
