@@ -12,6 +12,8 @@
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
 CTF-oriented toolchain. The current public release is **0.3.11**.
+Version **0.3.12** is an unreleased release candidate, built from `main` and
+not yet on PyPI.
 
 ## System Requirements
 
@@ -105,33 +107,38 @@ use the additive `{"type":"event","data":{...}}` envelope.
 
 ## What's New
 
-Version 0.3.11 ships reliability and supply-chain hardening:
+Version 0.3.12 fixes a high-risk confirmation prompt that could freeze the
+session:
 
-- **Allowed commands run exactly once:** the `pwn_timed_debug` and
-  `run_code` pre-flight "policy checks" used a method that classifies
-  *and* spawns, so an allowed command's side effects happened twice (a
-  CTF exploit, `nc` connection, or redirect ran twice and the first
-  execution burned the time limit before the timed loop even started).
-  Both gates now classify without spawning.
-- **Content-aware `run_code` policy gate:** shell commands embedded in
-  a payload — bash lines and Python `os.system` / `os.popen` /
-  `subprocess(..., shell=True)` literals — are judged by the same
-  operation policy as a direct command and fail closed on anything but
-  `ALLOW`.
-- **No more lost wire tail:** answers ending in a `<`-led fragment
-  (for example `a <3`) no longer lose their tail on event-wire
-  consumers; the leftover rides the content-delta seam to `pawn serve`
-  and both headless clients.
-- **Failed turns recover instead of freezing:** a failed Turn (rate
-  limit, circuit open, invalid key) leaves a recovered draft you can
-  resubmit instead of parking the typed prompt silently.
-- **Rust frontend on ratatui 0.30:** the experimental TUI client is
-  rebuilt against ratatui 0.30.2 / crossterm 0.29, clearing every
-  RustSec advisory in its dependency tree (`cargo audit`: zero
-  warnings). The wire protocol is unchanged.
-- **Dependency audit gates:** Python dependencies scan clean under
-  `pip-audit`, and packaging tests no longer leave `build/` /
-  `egg-info/` behind in a source checkout.
+- **An expired confirmation no longer leaves the terminal stuck:** a
+  high-risk approval prompt whose wait ran out used to stay mounted for
+  the rest of the session. The live selector kept the keyboard, the
+  composer went read-only, and every keystroke was swallowed as selector
+  input — the reported "tool stage" stall, which only a force-quit
+  cleared. The event loop that mounted the prompt now owns its deadline,
+  and the tool watchdog reclaims a prompt its abandoned worker was
+  blocked on.
+- **High-risk operations deny by default:** the approval prompt opens
+  pre-selected on **Deny**. Press `y` to approve, `n` / `Esc` / `Ctrl+C`
+  to reject; a bare `Enter` rejects. Previously the prompt opened on
+  "Approve and run" and the live terminal routed `Enter` to it, so an
+  Enter meant for the composer could silently approve a high-risk
+  command. The prompt also ignores every key until it has been painted
+  once, so an unseen prompt can never resolve a keystroke.
+- **A waiting tool is now visible:** while an approval prompt is mounted,
+  the status line reads `⚠ awaiting confirmation — Esc to review` instead
+  of the ordinary in-flight indicator, so a blocked tool is
+  distinguishable from a working one.
+- **Bounded, configurable confirmation wait:** the wait is
+  `confirmation_wait_sec` (default 300 seconds), clamped below the active
+  `tool_watchdog_sec` so the prompt always tears down while the tool
+  waiting on it is still alive. Both deadlines used to be the literal
+  `600`.
+- **Scripted owner acceptance:** `tools/owner_acceptance_probe.py`
+  automates the checks that can be scripted (entry point starts; the
+  terminal guard restores raw mode, alternate screen, cursor, mouse
+  capture, and bracketed paste) and reports the four that genuinely need
+  human eyes as `manual` rather than passing.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 

@@ -9,7 +9,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
-PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.11**。
+PawnLogic 是一个终端优先的自主 AI Agent，支持多 Provider 模型路由、持久化记忆、真实本地工具执行、MCP 集成和面向 CTF 的工具链。当前公开发布版本是 **0.3.11**。版本 **0.3.12** 是尚未发布的候选版本，构建自 `main`，尚未上传 PyPI。
 
 ## 系统要求
 
@@ -94,14 +94,13 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 
 ## 新特性
 
-0.3.11 发布可靠性与供应链强化：
+0.3.12 修复了一个可能冻结整个会话的高风险确认弹窗：
 
-- **允许的命令只执行一次：** `pwn_timed_debug` 和 `run_code` 的预检"策略检查"此前使用"分类并执行"的方法，导致允许的命令副作用发生两次（CTF exploit、`nc` 连接或重定向会跑两次，第一次执行还会在计时循环开始前就烧掉时限）。两处门控现在只分类、不再提前执行。
-- **run_code 内容感知策略门控：** payload 内嵌的 shell 命令——bash 逐行、Python 的 `os.system` / `os.popen` / `subprocess(..., shell=True)` 字面量——都按与直接命令相同的 operation policy 判定，非 `ALLOW` 一律拦截。
-- **wire 尾部不再丢失：** 以 `<` 开头片段结尾的回答（例如 `a <3`）不再在 event-wire 消费端丢尾；残余部分通过 content-delta 接缝送达 `pawn serve` 和两个无头客户端。
-- **失败回合可恢复不再冻结：** 失败的 Turn（限流、熔断、无效 key）会保留可重新提交的草稿，而不是让已输入的提示词静默消失。
-- **Rust 前端升级 ratatui 0.30：** 实验性 TUI 客户端改用 ratatui 0.30.2 / crossterm 0.29 构建，依赖树中的所有 RustSec 告警全部清除（`cargo audit` 零警告）。wire 协议不变。
-- **依赖审计门禁：** Python 依赖在 `pip-audit` 下扫描干净；打包测试不再在源码 checkout 里留下 `build/` / `egg-info/`。
+- **确认超时的弹窗不再卡死终端：** 高风险审批弹窗的等待超时后，此前会一直挂在屏幕上直到会话结束。live 选择器持续占用键盘，编辑框变为只读，你敲的每个字都被当成选择器输入吃掉——这就是之前报告的「工具阶段」卡死，只能靠强杀进程恢复。现在超时由挂载弹窗的事件循环持有，工具看门狗也会回收被放弃线程遗留的弹窗。
+- **高风险操作默认拒绝：** 审批弹窗打开时默认选中**拒绝**。按 `y` 批准，按 `n` / `Esc` / `Ctrl+C` 拒绝，直接回车也拒绝。此前弹窗默认停在「Approve and run」，而 live 终端会把 `Enter` 路由给它，本想提交输入的回车可能静默批准一条高风险命令。弹窗在真正绘制出来之前会忽略所有按键，因此看不见的提示无法被按键解决。
+- **等待中的工具现在可见：** 审批弹窗挂载期间，状态行显示 `⚠ awaiting confirmation — Esc to review` 而不是普通的执行中指示，因此卡住的工具与正常工作的工具可以区分。
+- **等待时长有界且可配置：** 等待时长为 `confirmation_wait_sec`（默认 300 秒），并被限制在当前生效的 `tool_watchdog_sec` 之下，确保弹窗总是在等待它的工具还活着时就被拆除。此前两个超时都是字面量 `600`。
+- **owner 验收脚本化：** `tools/owner_acceptance_probe.py` 自动化了可脚本化的检查（入口能否启动；终端守卫是否恢复 raw mode、备用屏、光标、鼠标捕获与括号粘贴），并把真正需要人眼判断的四项如实报为 `manual`，而不是报成通过。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
