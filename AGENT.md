@@ -585,22 +585,59 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.3.11`. Published 2026-09-27 through
-  Trusted Publishing from the `Publish to PyPI` workflow run
+- Current published release: `0.3.12`. This section is the *staging*
+  record written by the release-finalization commit, which lands on
+  `main` before the `v0.3.12` tag exists; the publish evidence
+  (workflow run id, PyPI project page, GitHub Release URL) is recorded
+  in the post-release commit once `Publish to PyPI` completes, exactly
+  as PR #139 did for 0.3.9. The tag is cut from a `main` commit because
+  `publish.yml`'s `verify-release-source` requires the tag's target to be
+  an ancestor of `origin/main`. The publish gate is unchanged:
+  verify-release-source, full Python 3.10/3.11/3.12 non-E2E matrix,
+  Dynamic E2E, ratatui `cargo test`, twine check, PyPI install smoke,
+  and GitHub Release creation. Candidate-matrix evidence for the
+  release head came from the `test/release-0.3.12` push and PR #155 runs
+  (all green, including Dynamic E2E 31/31; the push run needed one
+  re-run of the known `Status: interrupted` pexpect flake described in
+  Known Risks). **#156** carries the release-finalization commit that
+  this section describes.
+  The `0.3.11`, `0.3.10`, `0.3.9`, `0.3.8`, and `0.3.7` releases remain
+  complete; 0.3.11 was published 2026-09-27 through Trusted Publishing
+  from the `Publish to PyPI` workflow run
   [`36298624589`](https://github.com/john0123412/PawnLogic/actions/runs/36298624589),
   triggered by pushing the annotated `v0.3.11` tag onto the PR #151 merge
-  commit `14f4932` (peeled target verified on `origin/main`). PyPI
-  project page: <https://pypi.org/project/pawnlogic/0.3.11/>. GitHub
-  Release: <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.11>
-  (wheel + sdist + Linux ratatui binary tarball with sha256, non-draft,
-  notes sourced from the CHANGELOG `[0.3.11]` section). The full
-  publish gate passed: verify-release-source, full Python
-  3.10/3.11/3.12 non-E2E matrix, Dynamic E2E, ratatui `cargo test`,
-  twine check, PyPI install smoke, and GitHub Release creation;
-  candidate-matrix evidence for the release branch head came from the
-  `test/release-0.3.11` push and PR #151 runs (all green, including
-  Dynamic E2E 31/31 on both).
-  The `0.3.10`, `0.3.9`, `0.3.8`, and `0.3.7` releases remain complete.
+  commit `14f4932`.
+- 0.3.12 recap (all merged to `main`):
+  - **#153** — the confirmation-modal lifecycle fix (plan:
+    `docs/plans/0.3.12-confirmation-modal-lifecycle.md`; merge commit
+    `7fe120b`). D1: a high-risk confirmation whose wait expired left its
+    modal mounted forever, so the eager selector bindings kept the
+    keyboard and the composer went read-only. The **tool-stage stall
+    needed no owner input after all** — it was that leaked modal. The
+    loop that mounted the modal now owns its deadline
+    (`asyncio.wait_for` inside the coroutine) and clamps it below the
+    *active* runtime watchdog, and the tool watchdog reclaims a
+    confirmation its abandoned worker was blocked on. D2: the modal
+    denies by default, approval needs an explicit `y`, and the live
+    Application routes that key, so an Enter meant for the composer can
+    no longer approve a high-risk command. D3: the status line shows
+    `⚠ awaiting confirmation — Esc to review` while the modal is
+    mounted.
+  - `c5de0f0` (in **#153**) — the independent audit's three gaps: the
+    watchdog clamp read the constant instead of the active
+    `tool_watchdog_sec`, the watchdog test mocked the reclaim instead of
+    proving the real modal unmounted, and the probe treated a later
+    disable sequence as a leak. It also closed a test blind spot the
+    provider-free live-Application flow exposed: `handle_key("y")`
+    approved but the persistent Application had no eager `y` binding, so
+    the documented approval key did nothing in the real UI.
+  - **S5** — `tools/owner_acceptance_probe.py`, which automates the
+    scriptable terminal-mode checks and reports the four owner-terminal
+    checks as `manual` rather than as passed. CI coverage stays
+    Provider-key-free by owner decision; the real persistent Application
+    is exercised through isolated synthetic input instead. Owner terminal
+    acceptance on the published binary (scrollback, selection/copy,
+    glyph width, duplicate output) is still an open owner item.
 - 0.3.11 recap (all merged to `main`):
   - **#146** — a failed Turn (rate limit, circuit open, invalid key)
     leaves a recovered draft instead of silently parking the typed
@@ -628,25 +665,8 @@ are source-checkout or user-installed assets; pip/curl installations should use
     leaves the checkout clean. ratatui 0.29 → 0.30.2 + crossterm 0.29
     with the wire protocol untouched; dependency audit gates
     established (`pip-audit` clean, `cargo audit` zero warnings).
-  - The two items the 0.3.10 plan left open are now addressed on `main`
-    by PR #153 (merge commit `7fe120b`; plan:
-    `docs/plans/0.3.12-confirmation-modal-lifecycle.md`) and are the
-    contents of the unreleased `0.3.12` candidate, which is being
-    prepared on `test/release-0.3.12`. The **tool-stage stall needed no
-    owner input after all**: it was a high-risk confirmation modal that
-    stayed mounted forever when its wait expired, leaving the eager
-    selector bindings holding the keyboard and the composer read-only.
-    The loop that mounted the modal now owns its deadline and clamps it
-    below the active runtime watchdog, the modal denies by default and
-    the live Application routes its explicit `y` approval key, the
-    status line shows `⚠ awaiting confirmation`, and the tool watchdog
-    reclaims a confirmation its abandoned worker was blocked on. Owner
-    terminal acceptance on the release binary is still owner-gated, but
-    `tools/owner_acceptance_probe.py` now scripts its automatable half,
-    evaluates final terminal-mode state, and records manual pass/fail
-    observations in its JSON report. CI coverage remains Provider-key-free
-    by owner decision; the real persistent Application is exercised through
-    isolated synthetic input instead.
+  - The two items the 0.3.10 plan left open are resolved by 0.3.12; see
+    the 0.3.12 recap above.
 - Phase 2 complete on `main` and shipped in `0.3.9` (recorded in
   `docs/plans/p2-steer-and-headless-frontends.md`): P2-0 Esc-steer
   handoff (0.3.8 carried the fix; 0.3.9 carries the post-acceptance
