@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [0.3.12] - 2026-09-28
 
 ### Fixed
 - A high-risk confirmation modal whose wait expired stayed mounted for the
