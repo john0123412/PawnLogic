@@ -628,19 +628,24 @@ are source-checkout or user-installed assets; pip/curl installations should use
     leaves the checkout clean. ratatui 0.29 → 0.30.2 + crossterm 0.29
     with the wire protocol untouched; dependency audit gates
     established (`pip-audit` clean, `cargo audit` zero warnings).
-  - The two items the 0.3.10 plan left open are now addressed on
-    `fix/0.3.12-confirmation-modal-lifecycle`
-    (`docs/plans/0.3.12-confirmation-modal-lifecycle.md`), not yet
+  - The two items the 0.3.10 plan left open are now addressed on `main`
+    by PR #153 (merge commit `7fe120b`; plan:
+    `docs/plans/0.3.12-confirmation-modal-lifecycle.md`), but are not yet
     released. The **tool-stage stall needed no owner input after all**:
     it was a high-risk confirmation modal that stayed mounted forever
     when its wait expired, leaving the eager selector bindings holding
     the keyboard and the composer read-only. The loop that mounted the
-    modal now owns its deadline, the modal denies by default and
-    requires an explicit `y`, the status line shows
+    modal now owns its deadline and clamps it below the active runtime
+    watchdog, the modal denies by default and the live Application routes
+    its explicit `y` approval key, the status line shows
     `⚠ awaiting confirmation`, and the tool watchdog reclaims a
     confirmation its abandoned worker was blocked on. Owner terminal
     acceptance on the release binary is still owner-gated, but
-    `tools/owner_acceptance_probe.py` now scripts its automatable half.
+    `tools/owner_acceptance_probe.py` now scripts its automatable half,
+    evaluates final terminal-mode state, and records manual pass/fail
+    observations in its JSON report. CI coverage remains Provider-key-free
+    by owner decision; the real persistent Application is exercised through
+    isolated synthetic input instead.
 - Phase 2 complete on `main` and shipped in `0.3.9` (recorded in
   `docs/plans/p2-steer-and-headless-frontends.md`): P2-0 Esc-steer
   handoff (0.3.8 carried the fix; 0.3.9 carries the post-acceptance
