@@ -684,6 +684,25 @@ class TestConfirmationModalLifecycle:
         # down by the loop, never by the tool thread abandoning it.
         assert confirmation_wait_seconds() < _tool_watchdog_default()
 
+    @pytest.mark.parametrize("watchdog_seconds", [10.0, 0.2])
+    def test_confirmation_wait_uses_the_runtime_watchdog(
+        self, monkeypatch: pytest.MonkeyPatch, watchdog_seconds: float
+    ) -> None:
+        """The modal deadline stays positive and below the active watchdog."""
+        from core.operation_policy import confirmation_wait_seconds
+
+        monkeypatch.setattr(
+            "core.state.runtime_config",
+            lambda: {
+                "confirmation_wait_sec": 300.0,
+                "tool_watchdog_sec": watchdog_seconds,
+            },
+        )
+
+        wait_seconds = confirmation_wait_seconds()
+
+        assert 0 < wait_seconds < watchdog_seconds
+
     # -- D2: a high-risk prompt must not approve on an incidental key --
 
     def test_bare_enter_denies_by_default(self) -> None:
@@ -749,28 +768,84 @@ class TestConfirmationModalLifecycle:
     # -- S4: the watchdog must reclaim a modal its worker was blocked on --
 
     def test_watchdog_expiry_cancels_the_pending_confirmation(self) -> None:
-        """Abandoning a wedged tool must not orphan its modal."""
-        import time
+        """The real watchdog path must unmount the modal it abandons."""
+        pytest.importorskip("prompt_toolkit")
+        from prompt_toolkit.output import DummyOutput
 
         from core import tool_executor
+        from core.operation_policy import (
+            prompt_for_confirmation,
+            register_confirmation_controller,
+            register_confirmation_loop,
+        )
 
-        cancelled: list[bool] = []
+        decision = _confirm_decision("watchdog integration test")
+        seen: dict[str, bool] = {"mounted": False, "left": False}
 
-        def _wedge(_args: dict) -> str:
-            # A tool blocked on a confirmation the user never answers.
-            time.sleep(30)
-            return "never"
+        async def _scenario() -> str:
+            from prompt_toolkit.input.defaults import create_pipe_input
 
-        with patch(
-            "core.operation_policy.cancel_pending_confirmation",
-            side_effect=lambda: cancelled.append(True) or True,
-        ):
-            result = tool_executor._run_handler_with_watchdog(
-                _wedge, {}, "wedged_tool", timeout_seconds=0.2
+            from pawnlogic.live_terminal import (
+                PersistentTerminal,
+                PersistentTerminalController,
             )
 
-        assert cancelled, "the watchdog left the modal unreclaimed"
+            with create_pipe_input() as pipe:
+                session_stub = _StubSession()
+                terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+                controller = PersistentTerminalController(
+                    terminal=terminal,
+                    session=session_stub,
+                    activate_sink=session_stub.activate_sink,
+                    fallback_sink=None,
+                )
+                await controller.start()
+                loop = asyncio.get_running_loop()
+                register_confirmation_loop(loop)
+                register_confirmation_controller(controller)
+                try:
+                    def _request_confirmation(_args: dict) -> bool:
+                        return prompt_for_confirmation(decision)
+
+                    watchdog_task = asyncio.create_task(
+                        asyncio.to_thread(
+                            tool_executor._run_handler_with_watchdog,
+                            _request_confirmation,
+                            {},
+                            "confirmation_tool",
+                            0.5,
+                        )
+                    )
+                    for _ in range(200):
+                        if terminal.selector_registry.has_state:
+                            seen["mounted"] = True
+                            break
+                        await asyncio.sleep(0.005)
+
+                    result = await watchdog_task
+                    for _ in range(100):
+                        if not terminal.selector_registry.has_state:
+                            seen["left"] = True
+                            break
+                        await asyncio.sleep(0.005)
+                    return result
+                finally:
+                    register_confirmation_controller(None)
+                    register_confirmation_loop(None)
+                    await controller.close()
+
+        with patch(
+            "core.state.runtime_config",
+            return_value={
+                "confirmation_wait_sec": 30.0,
+                "tool_watchdog_sec": 60.0,
+            },
+        ):
+            result = asyncio.run(_scenario())
+
+        assert seen["mounted"], "the modal was never mounted"
         assert "abandoned" in result
+        assert seen["left"], "the watchdog left the real modal mounted"
 
 
 class _StubSession:

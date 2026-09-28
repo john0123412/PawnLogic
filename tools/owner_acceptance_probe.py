@@ -9,18 +9,16 @@ back, and states plainly which checks still need human eyes.
 Run it against the *published* artifact, not the source checkout, e.g.
 after unpacking the GitHub Release ratatui tarball::
 
-    ./pawnlogic-tui-v0.3.11-x86_64-unknown-linux-gnu/pawnlogic-tui \\
-        --probe-owner-acceptance
+    python tools/owner_acceptance_probe.py --binary <path>
 
 or, to probe the source checkout instead::
 
-    python tools/owner_acceptance_probe.py --python -m pawnlogic
+    python tools/owner_acceptance_probe.py --python
 
 Checks marked ``automated`` run here. Checks marked ``manual`` cannot be
 decided by a script — clipboard round-trips and mouse selection depend
-on the real terminal emulator — so they are reported as ``manual`` with
-the exact question to answer. The probe never reports a manual check as
-passing.
+on the real terminal emulator — so they stay ``manual`` until the owner
+records them with repeatable ``--manual-pass`` or ``--manual-fail`` options.
 
 The script itself is a source-checkout developer tool, like
 ``tools/code_index.py``; it is not part of the installed ``pawn``
@@ -48,8 +46,17 @@ _EXIT_ALT_SCREEN = "\x1b[?1049l"
 _SHOW_CURSOR = "\x1b[?25h"
 _HIDE_CURSOR = "\x1b[?25l"
 _ENABLE_MOUSE = "\x1b[?1000h"
+_DISABLE_MOUSE = "\x1b[?1000l"
+_ENABLE_MOUSE_BUTTON = "\x1b[?1002h"
+_DISABLE_MOUSE_BUTTON = "\x1b[?1002l"
+_ENABLE_MOUSE_ANY = "\x1b[?1003h"
+_DISABLE_MOUSE_ANY = "\x1b[?1003l"
+_ENABLE_MOUSE_URXVT = "\x1b[?1015h"
+_DISABLE_MOUSE_URXVT = "\x1b[?1015l"
 _ENABLE_MOUSE_SGR = "\x1b[?1006h"
+_DISABLE_MOUSE_SGR = "\x1b[?1006l"
 _ENABLE_BRACKETED_PASTE = "\x1b[?2004h"
+_DISABLE_BRACKETED_PASTE = "\x1b[?2004l"
 
 # A CJK ideograph, an emoji, and an ASCII run: the exact mix that
 # historically desynced the renderer's assumed width from the host's.
@@ -68,6 +75,41 @@ def _clean(text: str) -> str:
 
 def _result(name: str, status: str, detail: str) -> dict[str, Any]:
     return {"check": name, "status": status, "detail": detail}
+
+
+def _left_enabled(transcript: str, enable: str, disable: str) -> bool:
+    return transcript.rfind(enable) > transcript.rfind(disable)
+
+
+def evaluate_terminal_transcript(transcript: str) -> dict[str, Any]:
+    """Report whether the final terminal state represented by *transcript* is safe."""
+    problems: list[str] = []
+    if _left_enabled(transcript, _ENTER_ALT_SCREEN, _EXIT_ALT_SCREEN):
+        problems.append("entered the alternate screen and never left it")
+    if _left_enabled(transcript, _HIDE_CURSOR, _SHOW_CURSOR):
+        problems.append("cursor left hidden at exit")
+    for enable, disable, name in (
+        (_ENABLE_MOUSE, _DISABLE_MOUSE, "mouse reporting"),
+        (_ENABLE_MOUSE_BUTTON, _DISABLE_MOUSE_BUTTON, "button-event mouse"),
+        (_ENABLE_MOUSE_ANY, _DISABLE_MOUSE_ANY, "any-event mouse"),
+        (_ENABLE_MOUSE_URXVT, _DISABLE_MOUSE_URXVT, "URXVT mouse"),
+        (_ENABLE_MOUSE_SGR, _DISABLE_MOUSE_SGR, "SGR mouse"),
+        (
+            _ENABLE_BRACKETED_PASTE,
+            _DISABLE_BRACKETED_PASTE,
+            "bracketed paste",
+        ),
+    ):
+        if _left_enabled(transcript, enable, disable):
+            problems.append(f"{name} left enabled at exit")
+    if "Traceback" in transcript:
+        problems.append("traceback during the session")
+
+    if problems:
+        return _result("terminal_state_restore", "fail", "; ".join(problems))
+    return _result(
+        "terminal_state_restore", "pass", "terminal modes restored on exit"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -187,38 +229,15 @@ def check_pty_session(argv: list[str], env: dict[str, str]) -> dict[str, Any]:
             "--isolated to accept a skip.",
         )
 
-    problems: list[str] = []
-    if _ENTER_ALT_SCREEN in transcript and _EXIT_ALT_SCREEN not in transcript:
-        problems.append("entered the alternate screen and never left it")
-    if _HIDE_CURSOR in transcript and not transcript.rstrip().endswith(_SHOW_CURSOR):
-        problems.append("cursor left hidden at exit")
-    for mode, name in (
-        (_ENABLE_MOUSE, "mouse reporting"),
-        (_ENABLE_MOUSE_SGR, "SGR mouse"),
-        (_ENABLE_BRACKETED_PASTE, "bracketed paste"),
-    ):
-        if mode in transcript:
-            problems.append(f"{name} left enabled at exit")
-    if "Traceback" in transcript:
-        problems.append("traceback during the session")
-
     # The typed probe text is a soft signal only. Prompt Toolkit renders
     # the composer differentially, so the literal string is not
     # guaranteed to appear contiguously in the PTY byte stream even on a
     # healthy run. Reporting it as a hard failure would produce false
     # alarms, so it is reported as its own observation.
     echoed = _GLYPH_PROBE in _clean(transcript)
-    detail = "; ".join(problems)
-    if problems:
-        status = "fail"
-    else:
-        status = "pass"
-        detail = "terminal modes restored on exit"
-    return _result(
-        "terminal_state_restore",
-        status,
-        f"{detail} (glyph probe echoed: {'yes' if echoed else 'no'})",
-    )
+    result = evaluate_terminal_transcript(transcript)
+    result["detail"] += f" (glyph probe echoed: {'yes' if echoed else 'no'})"
+    return result
 
 
 def _read_available(child: Any, budget: float = 2.0) -> str:
@@ -279,18 +298,40 @@ def manual_checks() -> list[dict[str, Any]]:
     ]
 
 
+def apply_manual_results(
+    checks: list[dict[str, Any]],
+    passed: list[str],
+    failed: list[str],
+) -> list[dict[str, Any]]:
+    """Apply owner-recorded outcomes while leaving unanswered checks manual."""
+    passed_names = set(passed)
+    failed_names = set(failed)
+    resolved: list[dict[str, Any]] = []
+    for check in checks:
+        current = dict(check)
+        name = current["check"]
+        if name in passed_names:
+            current["status"] = "pass"
+            current["detail"] = f"Owner recorded pass. {current['detail']}"
+        elif name in failed_names:
+            current["status"] = "fail"
+            current["detail"] = f"Owner recorded fail. {current['detail']}"
+        resolved.append(current)
+    return resolved
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 
-def _build_argv(args: argparse.Namespace) -> list[str]:
+def build_target_command(args: argparse.Namespace) -> list[str]:
     if args.python:
         return [sys.executable, "-m", "pawnlogic"]
     return [args.binary]
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Owner acceptance probe for a PawnLogic release binary."
     )
@@ -318,14 +359,42 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="write the JSON report here instead of stdout",
     )
+    manual_names = [check["check"] for check in manual_checks()]
+    parser.add_argument(
+        "--manual-pass",
+        action="append",
+        default=[],
+        choices=manual_names,
+        metavar="CHECK",
+        help="record a passed manual check; repeat for additional checks",
+    )
+    parser.add_argument(
+        "--manual-fail",
+        action="append",
+        default=[],
+        choices=manual_names,
+        metavar="CHECK",
+        help="record a failed manual check; repeat for additional checks",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
+    conflicting_manual = set(args.manual_pass) & set(args.manual_fail)
+    if conflicting_manual:
+        parser.error(
+            "manual checks cannot be both pass and fail: "
+            + ", ".join(sorted(conflicting_manual))
+        )
 
     child_env = dict(os.environ)
     child_env.setdefault("PAWNLOGIC_TEST_MODE", "true")
     child_env.setdefault("MCP_ENABLED", "false")
 
-    checks: list[dict[str, Any]] = []
-    command = _build_argv(args)
+    automated: list[dict[str, Any]] = []
+    command = build_target_command(args)
     if args.isolated:
         isolated_home = tempfile.mkdtemp(prefix="pawnlogic-probe-home-")
         child_env["PAWNLOGIC_HOME"] = isolated_home
@@ -333,21 +402,33 @@ def main(argv: list[str] | None = None) -> int:
     else:
         isolated_home = ""
     try:
-        checks.append(check_entrypoint(command, child_env))
-        checks.append(check_pty_session(command, child_env))
+        automated.append(check_entrypoint(command, child_env))
+        automated.append(check_pty_session(command, child_env))
     finally:
         if isolated_home:
             shutil.rmtree(isolated_home, ignore_errors=True)
 
-    checks.extend(manual_checks())
-    automated = [c for c in checks if c["status"] in {"pass", "fail"}]
+    manual = apply_manual_results(
+        manual_checks(),
+        passed=args.manual_pass,
+        failed=args.manual_fail,
+    )
+    checks = [*automated, *manual]
+    decided_automated = [
+        check for check in automated if check["status"] in {"pass", "fail"}
+    ]
     report = {
         "probe": "owner-acceptance",
-        "target": " ".join(_build_argv(args)),
-        "automated_passed": sum(1 for c in automated if c["status"] == "pass"),
-        "automated_total": len(automated),
+        "target": " ".join(build_target_command(args)),
+        "automated_passed": sum(
+            1 for check in decided_automated if check["status"] == "pass"
+        ),
+        "automated_total": len(decided_automated),
         "automated_failed": [c["check"] for c in automated if c["status"] == "fail"],
-        "manual_pending": [c["check"] for c in checks if c["status"] == "manual"],
+        "automated_skipped": [c["check"] for c in automated if c["status"] == "skip"],
+        "manual_passed": [c["check"] for c in manual if c["status"] == "pass"],
+        "manual_failed": [c["check"] for c in manual if c["status"] == "fail"],
+        "manual_pending": [c["check"] for c in manual if c["status"] == "manual"],
         "checks": checks,
     }
 
@@ -358,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(text)
 
-    return 1 if report["automated_failed"] else 0
+    return 1 if report["automated_failed"] or report["manual_failed"] else 0
 
 
 if __name__ == "__main__":

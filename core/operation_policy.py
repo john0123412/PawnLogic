@@ -568,7 +568,11 @@ def confirmation_wait_seconds() -> float:
     from core.state import runtime_config
 
     try:
-        configured = float(runtime_config().get("confirmation_wait_sec", 0) or 0)
+        config = runtime_config()
+    except Exception:
+        config = {}
+    try:
+        configured = float(config.get("confirmation_wait_sec", 0) or 0)
     except Exception:
         configured = 0.0
     if configured <= 0:
@@ -580,12 +584,17 @@ def confirmation_wait_seconds() -> float:
     try:
         from core.tool_executor import DEFAULT_TOOL_WATCHDOG_SECONDS
 
-        watchdog = float(DEFAULT_TOOL_WATCHDOG_SECONDS)
+        watchdog_default = float(DEFAULT_TOOL_WATCHDOG_SECONDS)
     except Exception:
-        watchdog = 0.0
+        watchdog_default = 0.0
+    try:
+        watchdog = float(config.get("tool_watchdog_sec", watchdog_default))
+    except Exception:
+        watchdog = watchdog_default
     if watchdog > 0:
-        configured = min(configured, watchdog - 1.0)
-    return max(1.0, configured)
+        margin = min(1.0, watchdog / 2.0)
+        configured = min(configured, watchdog - margin)
+    return configured
 
 
 def is_confirmation_available(*, eval_mode: bool | None = None) -> bool:

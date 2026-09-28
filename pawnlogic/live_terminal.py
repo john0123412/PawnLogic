@@ -1354,7 +1354,7 @@ class PersistentTerminal:
         # Selector key dispatch: when a selector is active the main
         # ``Application`` forwards the key to the active state
         # machine.  We register specific keys (``enter``, ``escape``,
-        # ``c-c``, ``up``, ``down``, ``1``-``9``) rather than
+        # ``c-c``, ``up``, ``down``, ``y``, ``1``-``9``) rather than
         # ``Keys.Any`` because the composer's stock text-insert
         # binding also uses ``Keys.Any`` with ``eager=True``; if two
         # ``Keys.Any`` handlers are registered, the one registered
@@ -1402,6 +1402,10 @@ class PersistentTerminal:
         @bindings.add("n", filter=Condition(lambda: self._selector_registry.has_state), eager=True)
         def _sel_n(event: Any) -> None:
             self._selector_dispatch_key("n")
+
+        @bindings.add("y", filter=Condition(lambda: self._selector_registry.has_state), eager=True)
+        def _sel_y(event: Any) -> None:
+            self._selector_dispatch_key("y")
 
         # Some terminals and multiplexers expose wheel events without screen
         # coordinates. Prompt Toolkit's stock binding translates those into

@@ -37,7 +37,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   silently approved the command. The modal now defaults to **Deny** and
   requires an explicit `y`; a bare Enter denies. It also swallows every
   key until the host has painted it at least once, so an unpainted prompt
-  can never resolve a keystroke. Owner decision, recorded in
+  can never resolve a keystroke. The persistent Application now forwards
+  `y` through its eager selector bindings; previously the selector unit
+  test accepted `y`, but the real live UI never delivered that key. Owner
+  decision, recorded in
   `docs/plans/0.3.12-confirmation-modal-lifecycle.md`.
 - The status line now shows `⚠ awaiting confirmation — Esc to review`
   while a high-risk modal is mounted. It previously kept reporting the
@@ -52,7 +55,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   bracketed paste on exit — and lists the checks that genuinely need
   human eyes (scrollback ownership, selection/copy, glyph width, no
   duplicated output) as `manual` rather than reporting them as passing.
-  Output is JSON so the owner can paste a result back.
+  Terminal restoration is determined by the final enable/disable transition,
+  not by whether a mode was ever enabled. Repeatable `--manual-pass` and
+  `--manual-fail` options record the owner's observations in the JSON report;
+  unanswered checks remain `manual`.
 
 ## [0.3.11] - 2026-09-27
 
