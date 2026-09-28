@@ -490,6 +490,113 @@ def is_eval_mode(argv: list[str] | None = None) -> bool:
     return any(arg == "--eval" or arg == "-e" or arg.startswith("--eval=") for arg in args)
 
 
+DEFAULT_CONFIRMATION_WAIT_SECONDS = 300.0
+
+# How long the tool thread waits *past* the loop-owned deadline before it
+# treats the modal as unreachable. Purely a backstop: the loop's
+# ``asyncio.wait_for`` is what actually unmounts the selector.
+_THREAD_BACKSTOP_GRACE_SECONDS = 5.0
+
+# Module-level marker so the tool watchdog can reclaim a modal whose
+# worker thread it is about to abandon. A single confirmation is pending
+# at a time (one Turn owns the tool loop), so one slot is enough; the
+# GIL makes the read-modify-write below atomic in practice, and the
+# watchdog's reclaim is best-effort by design.
+_PENDING_CONFIRMATION: Any = None
+
+
+def _mark_confirmation_pending() -> None:
+    """Record the loop and task that own the mounted confirmation modal."""
+    global _PENDING_CONFIRMATION
+    import asyncio
+
+    try:
+        _PENDING_CONFIRMATION = (asyncio.get_running_loop(), asyncio.current_task())
+    except RuntimeError:
+        _PENDING_CONFIRMATION = None
+
+
+def _clear_confirmation_pending() -> None:
+    """Forget the pending marker once the modal is resolved or torn down."""
+    global _PENDING_CONFIRMATION
+    _PENDING_CONFIRMATION = None
+
+
+def pending_confirmation_active() -> bool:
+    """Whether a high-risk confirmation modal is currently mounted."""
+    return _PENDING_CONFIRMATION is not None
+
+
+def cancel_pending_confirmation() -> bool:
+    """Tear down a mounted confirmation modal from another thread.
+
+    Called by the tool watchdog when it abandons a wedged worker. A tool
+    blocked on ``future.result()`` is abandoned, not killed, so without
+    this the modal it is waiting on would stay mounted and keep the
+    eager key bindings off the composer.
+
+    Cancelling the owning *task* (rather than a bare future) is what
+    makes the teardown correct: the ``CancelledError`` lands inside
+    ``controller.run_selector``'s ``await``, so its ``finally`` unmounts
+    the selector exactly the way a user-driven close does. The cancel is
+    marshalled onto the owning loop because ``Task.cancel`` is not
+    thread-safe. Returns True when a live modal was reclaimed.
+    """
+    global _PENDING_CONFIRMATION
+    entry = _PENDING_CONFIRMATION
+    _PENDING_CONFIRMATION = None
+    if not entry:
+        return False
+    loop, task = entry
+    if loop is None or task is None or task.done():
+        return False
+    try:
+        loop.call_soon_threadsafe(task.cancel)
+    except RuntimeError:
+        return False
+    return True
+
+
+def confirmation_wait_seconds() -> float:
+    """How long a mounted confirmation modal waits before denying.
+
+    Kept strictly below the tool watchdog so the modal is always torn
+    down by the loop's own deadline while the worker that is waiting on
+    it is still alive. A tool stage that is genuinely slow is the
+    watchdog's business, not the confirmation's.
+    """
+    from core.state import runtime_config
+
+    try:
+        config = runtime_config()
+    except Exception:
+        config = {}
+    try:
+        configured = float(config.get("confirmation_wait_sec", 0) or 0)
+    except Exception:
+        configured = 0.0
+    if configured <= 0:
+        configured = DEFAULT_CONFIRMATION_WAIT_SECONDS
+
+    # Import lazily: core.tool_executor is the module that owns the
+    # watchdog value, and importing it at module scope would create a
+    # configuration cycle.
+    try:
+        from core.tool_executor import DEFAULT_TOOL_WATCHDOG_SECONDS
+
+        watchdog_default = float(DEFAULT_TOOL_WATCHDOG_SECONDS)
+    except Exception:
+        watchdog_default = 0.0
+    try:
+        watchdog = float(config.get("tool_watchdog_sec", watchdog_default))
+    except Exception:
+        watchdog = watchdog_default
+    if watchdog > 0:
+        margin = min(1.0, watchdog / 2.0)
+        configured = min(configured, watchdog - margin)
+    return configured
+
+
 def is_confirmation_available(*, eval_mode: bool | None = None) -> bool:
     """Return whether an interactive high-risk confirmation can be requested."""
     active_eval_mode = eval_mode if eval_mode is not None else is_eval_mode()
@@ -527,62 +634,48 @@ def register_confirmation_loop(loop: Any) -> None:
     is_confirmation_available._live_loop = loop  # type: ignore[attr-defined]
 
 
-async def run_confirmation_modal(decision: OperationDecision) -> bool:
-    """Run the high-risk confirmation as an in-Application yes/no selector."""
-    from pawnlogic.selectors import SelectorState
+async def run_confirmation_modal(
+    decision: OperationDecision, timeout: float | None = None
+) -> bool:
+    """Run the high-risk confirmation as an in-Application yes/no selector.
 
-    class _ConfirmSelector(SelectorState):
-        """Two-entry selector: approve or deny one high-risk operation."""
+    The deadline is owned **here, on the loop**, not by the tool thread
+    waiting for this coroutine. That is the whole point of 0.3.12 D1: a
+    thread-side ``future.result(timeout=...)`` expiring leaves this
+    coroutine parked inside ``controller.run_selector`` on ``await
+    future``, so the ``finally`` that unmounts the modal never runs and
+    the selector stays installed for the rest of the session. Wrapping
+    the await in ``asyncio.wait_for`` guarantees the unmount happens on
+    the loop that owns the selector.
 
-        def __init__(self) -> None:
-            super().__init__(title="Confirm high-risk operation")
-            self.selected_idx = 0
+    Returns ``False`` on timeout, on cancellation, and when no controller
+    is registered — the caller fails closed in every one of those cases.
+    """
+    import asyncio
 
-        @property
-        def formatted_text(self) -> Any:
-            from prompt_toolkit.formatted_text import FormattedText
-
-            fragments: list[tuple[str, str]] = []
-            fragments.append((self.style.title, "\n  High-risk host shell operation\n"))
-            fragments.append((self.style.desc, f"\n  Risk: {decision.risk.value}\n"))
-            fragments.append((self.style.desc, f"  Reason: {decision.reason}\n"))
-            fragments.append((self.style.desc, f"  Rule: {decision.matched_rule}\n"))
-            fragments.append(
-                (self.style.desc, f"  Command: {decision.redacted_command}\n")
-            )
-            fragments.append((self.style.help, "\n  Up/Down or 1/2 select  Enter confirm  Esc cancel\n\n"))
-            for index, (label, _keyword) in enumerate(
-                (("Approve and run", "yes"), ("Deny", "no"))
-            ):
-                cursor = ">" if index == self.selected_idx else " "
-                style = self.style.selected if index == self.selected_idx else ""
-                fragments.append(
-                    (style, f"  {cursor} {index + 1}. {label}\n")
-                )
-            return FormattedText(fragments)
-
-        def handle_key(self, key: str) -> bool:
-            if key == "up":
-                self.selected_idx = (self.selected_idx - 1) % 2
-                return True
-            if key == "down":
-                self.selected_idx = (self.selected_idx + 1) % 2
-                return True
-            if key in {"1", "2"}:
-                self.selected_idx = int(key) - 1
-                return True
-            if key == "enter":
-                self.close(result=self.selected_idx == 0)
-                return True
-            if key in {"escape", "c-c"}:
-                self.close(result=False)
-                return True
-            return False
+    from pawnlogic.confirm_selector import ConfirmOperationSelector
 
     controller = getattr(is_confirmation_available, "_live_controller", None)
     if controller is None:
         return False
-    return bool(await controller.run_selector(lambda: _ConfirmSelector()))
+    wait_seconds = confirmation_wait_seconds() if timeout is None else float(timeout)
+    selector = ConfirmOperationSelector(decision, timeout_seconds=wait_seconds)
+    _mark_confirmation_pending()
+    try:
+        try:
+            return bool(
+                await asyncio.wait_for(
+                    controller.run_selector(lambda: selector), timeout=wait_seconds
+                )
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            # wait_for cancelled the inner await, so run_selector's
+            # finally already unmounted the selector.
+            return False
+        except asyncio.CancelledError:
+            return False
+    finally:
+        _clear_confirmation_pending()
 
 
 def register_confirmation_controller(controller: Any) -> None:
@@ -604,12 +697,22 @@ def prompt_for_confirmation(decision: OperationDecision) -> bool:
     if loop is not None and controller is not None:
         import asyncio
 
+        wait_seconds = confirmation_wait_seconds()
         future = asyncio.run_coroutine_threadsafe(
-            run_confirmation_modal(decision), loop
+            run_confirmation_modal(decision, timeout=wait_seconds), loop
         )
         try:
-            return bool(future.result(timeout=600))
+            # Backstop only, and strictly longer than the loop-side
+            # deadline: the modal must always be torn down by the code
+            # that mounted it, never by this thread walking away.
+            return bool(
+                future.result(timeout=wait_seconds + _THREAD_BACKSTOP_GRACE_SECONDS)
+            )
         except Exception:
+            # The loop did not answer in time. Best-effort cancel so a
+            # still-running coroutine releases the modal; one that has
+            # already run its own wait_for teardown is left alone.
+            future.cancel()
             return False
     print("High-risk host shell operation requires confirmation.")
     print(f"Risk: {decision.risk.value}")

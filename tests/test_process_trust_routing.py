@@ -5,8 +5,12 @@ Proves that production handlers check policy before spawning processes.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
+
+import pytest
 
 from core.host_process import HostProcessRunner, HostProcessRequest
 from core.operation_policy import OperationAction, OperationDecision
@@ -520,3 +524,376 @@ class TestDockerLabelRestrictedCleanup:
 
         source = inspect.getsource(docker_prune_resources)
         assert "pawn=true" in source or "label" in source
+
+
+class TestConfirmationModalLifecycle:
+    """A tool thread must never leave a confirmation selector mounted.
+
+    Regression (0.3.12 D1): ``prompt_for_confirmation`` used to wait on
+    its marshalled coroutine with a thread-side ``future.result(timeout)``
+    and give up silently on expiry. The coroutine stayed parked inside
+    ``controller.run_selector``, so the ``finally`` that unmounts the
+    selector never ran and ``SelectorRegistry.has_state`` pinned the
+    eager key bindings on forever: the composer went read-only and
+    ordinary typing was consumed as selector input.
+
+    Regression (0.3.12 D2): the modal defaulted to "Approve and run",
+    so a bare Enter typed while a tool waited on approval silently
+    approved a high-risk operation.
+    """
+
+    # -- D1: the wait must be owned by the event loop, not the tool thread --
+
+    def test_expired_confirmation_unmounts_the_modal(self) -> None:
+        """When the confirmation wait expires the modal must be gone."""
+        pytest.importorskip("prompt_toolkit")
+        from prompt_toolkit.output import DummyOutput
+
+        from core.operation_policy import (
+            register_confirmation_controller,
+            run_confirmation_modal,
+        )
+
+        decision = _confirm_decision("lifecycle test")
+        seen: dict[str, list[bool]] = {"mounted": [], "left": []}
+
+        async def _scenario() -> None:
+            from prompt_toolkit.input.defaults import create_pipe_input
+
+            from pawnlogic.live_terminal import (
+                PersistentTerminal,
+                PersistentTerminalController,
+            )
+
+            with create_pipe_input() as pipe:
+                session_stub = _StubSession()
+                terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+                controller = PersistentTerminalController(
+                    terminal=terminal,
+                    session=session_stub,
+                    activate_sink=session_stub.activate_sink,
+                    fallback_sink=None,
+                )
+                terminal.prepare_run()
+                await controller.start()
+                assert terminal.application is not None
+
+                # Record the mounted state at the moment the modal is
+                # installed, so this test cannot pass vacuously.
+                real_run = controller.run_selector
+
+                async def _watch(selector_factory: Any) -> Any:
+                    task = asyncio.ensure_future(real_run(selector_factory))
+                    await asyncio.sleep(0)
+                    seen["mounted"].append(terminal.selector_registry.has_state)
+                    try:
+                        return await task
+                    finally:
+                        seen["left"].append(terminal.selector_registry.has_state)
+
+                controller.run_selector = _watch  # type: ignore[method-assign]
+                register_confirmation_controller(controller)
+                try:
+                    # Never answered: the wait itself must tear it down.
+                    result = await run_confirmation_modal(decision, timeout=0.2)
+                finally:
+                    register_confirmation_controller(None)
+                seen["approved"] = [result]
+
+        asyncio.run(_scenario())
+
+        assert seen["mounted"] == [True], (
+            "the modal was never mounted; this test would prove nothing"
+        )
+        assert seen["approved"] == [False], "an unanswered confirmation approved"
+        assert seen["left"] == [False], (
+            "the confirmation selector stayed mounted after its wait expired"
+        )
+
+    def test_reclaimed_confirmation_unmounts_the_modal(self) -> None:
+        """The watchdog's reclaim path must also unmount the modal."""
+        pytest.importorskip("prompt_toolkit")
+        from prompt_toolkit.output import DummyOutput
+
+        from core.operation_policy import (
+            cancel_pending_confirmation,
+            register_confirmation_controller,
+            run_confirmation_modal,
+        )
+
+        decision = _confirm_decision("reclaim test")
+
+        async def _scenario() -> bool:
+            from prompt_toolkit.input.defaults import create_pipe_input
+
+            from pawnlogic.live_terminal import (
+                PersistentTerminal,
+                PersistentTerminalController,
+            )
+
+            with create_pipe_input() as pipe:
+                session_stub = _StubSession()
+                terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+                controller = PersistentTerminalController(
+                    terminal=terminal,
+                    session=session_stub,
+                    activate_sink=session_stub.activate_sink,
+                    fallback_sink=None,
+                )
+                terminal.prepare_run()
+                await controller.start()
+
+                register_confirmation_controller(controller)
+                try:
+                    # A wait far longer than this test: the reclaim from
+                    # the watchdog is what must end it.
+                    task = asyncio.ensure_future(
+                        run_confirmation_modal(decision, timeout=30)
+                    )
+                    for _ in range(50):
+                        await asyncio.sleep(0.01)
+                        if terminal.selector_registry.has_state:
+                            break
+                    assert terminal.selector_registry.has_state, "modal never mounted"
+                    # Called from another thread in production; the
+                    # call_soon_threadsafe hop tolerates a same-thread
+                    # call too, so exercise the real entry point.
+                    reclaimed = cancel_pending_confirmation()
+                    result = await task
+                finally:
+                    register_confirmation_controller(None)
+                return bool(reclaimed) and result is False and not (
+                    terminal.selector_registry.has_state
+                )
+
+        assert asyncio.run(_scenario()) is True, (
+            "cancelling the pending confirmation left the modal mounted"
+        )
+
+    def test_tool_thread_gives_up_only_after_the_loop_owns_the_timeout(self) -> None:
+        """The thread-side wait must outlast the loop-side wait.
+
+        If the thread gives up first the coroutine is orphaned, which is
+        the original defect. The loop deadline must fire first so the
+        ``finally`` unmount runs while the thread is still waiting.
+        """
+        from core.operation_policy import confirmation_wait_seconds
+
+        assert confirmation_wait_seconds() > 0
+        # The invariant that makes S1+S4 hold: the modal is always torn
+        # down by the loop, never by the tool thread abandoning it.
+        assert confirmation_wait_seconds() < _tool_watchdog_default()
+
+    @pytest.mark.parametrize("watchdog_seconds", [10.0, 0.2])
+    def test_confirmation_wait_uses_the_runtime_watchdog(
+        self, monkeypatch: pytest.MonkeyPatch, watchdog_seconds: float
+    ) -> None:
+        """The modal deadline stays positive and below the active watchdog."""
+        from core.operation_policy import confirmation_wait_seconds
+
+        monkeypatch.setattr(
+            "core.state.runtime_config",
+            lambda: {
+                "confirmation_wait_sec": 300.0,
+                "tool_watchdog_sec": watchdog_seconds,
+            },
+        )
+
+        wait_seconds = confirmation_wait_seconds()
+
+        assert 0 < wait_seconds < watchdog_seconds
+
+    # -- D2: a high-risk prompt must not approve on an incidental key --
+
+    def test_bare_enter_denies_by_default(self) -> None:
+        """A fresh confirmation modal must not approve on Enter."""
+        pytest.importorskip("prompt_toolkit")
+
+        selector = _rendered_selector()
+        selector.handle_key("enter")
+
+        assert selector.result is False, (
+            "bare Enter approved a high-risk operation"
+        )
+
+    def test_explicit_approve_key_approves(self) -> None:
+        """An explicit affirmative key must still work."""
+        pytest.importorskip("prompt_toolkit")
+
+        selector = _rendered_selector()
+        selector.handle_key("y")
+
+        assert selector.result is True
+
+    def test_deny_keys_reject(self) -> None:
+
+        for key in ("n", "escape", "c-c"):
+            selector = _rendered_selector()
+            selector.handle_key(key)
+            assert selector.result is False, f"{key} did not reject"
+
+    def test_unrendered_modal_cannot_approve(self) -> None:
+        """A modal that has not painted a frame must swallow its keys.
+
+        Until the Float has actually been read the user has not seen the
+        prompt, so no key may resolve it.
+        """
+        pytest.importorskip("prompt_toolkit")
+        from pawnlogic.confirm_selector import ConfirmOperationSelector
+
+        selector = ConfirmOperationSelector(_deny_decision())
+        for key in ("y", "enter", "1", "2", "n", "escape"):
+            selector.handle_key(key)
+
+        assert not selector.is_closed, (
+            "an unpainted confirmation modal resolved a keystroke"
+        )
+
+    def test_render_marks_the_modal_paintable(self) -> None:
+        pytest.importorskip("prompt_toolkit")
+        from pawnlogic.confirm_selector import ConfirmOperationSelector
+
+        selector = ConfirmOperationSelector(_deny_decision())
+        assert selector.has_rendered is False
+        selector.formatted_text  # noqa: B018 - the Float reads this property
+        assert selector.has_rendered is True
+
+    def test_selector_declares_its_kind(self) -> None:
+        """The status line keys its pending state off this attribute."""
+        pytest.importorskip("prompt_toolkit")
+        from pawnlogic.confirm_selector import ConfirmOperationSelector
+
+        assert ConfirmOperationSelector(_deny_decision()).kind == "confirmation"
+
+    # -- S4: the watchdog must reclaim a modal its worker was blocked on --
+
+    def test_watchdog_expiry_cancels_the_pending_confirmation(self) -> None:
+        """The real watchdog path must unmount the modal it abandons."""
+        pytest.importorskip("prompt_toolkit")
+        from prompt_toolkit.output import DummyOutput
+
+        from core import tool_executor
+        from core.operation_policy import (
+            prompt_for_confirmation,
+            register_confirmation_controller,
+            register_confirmation_loop,
+        )
+
+        decision = _confirm_decision("watchdog integration test")
+        seen: dict[str, bool] = {"mounted": False, "left": False}
+
+        async def _scenario() -> str:
+            from prompt_toolkit.input.defaults import create_pipe_input
+
+            from pawnlogic.live_terminal import (
+                PersistentTerminal,
+                PersistentTerminalController,
+            )
+
+            with create_pipe_input() as pipe:
+                session_stub = _StubSession()
+                terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+                controller = PersistentTerminalController(
+                    terminal=terminal,
+                    session=session_stub,
+                    activate_sink=session_stub.activate_sink,
+                    fallback_sink=None,
+                )
+                await controller.start()
+                loop = asyncio.get_running_loop()
+                register_confirmation_loop(loop)
+                register_confirmation_controller(controller)
+                try:
+                    def _request_confirmation(_args: dict) -> bool:
+                        return prompt_for_confirmation(decision)
+
+                    watchdog_task = asyncio.create_task(
+                        asyncio.to_thread(
+                            tool_executor._run_handler_with_watchdog,
+                            _request_confirmation,
+                            {},
+                            "confirmation_tool",
+                            0.5,
+                        )
+                    )
+                    for _ in range(200):
+                        if terminal.selector_registry.has_state:
+                            seen["mounted"] = True
+                            break
+                        await asyncio.sleep(0.005)
+
+                    result = await watchdog_task
+                    for _ in range(100):
+                        if not terminal.selector_registry.has_state:
+                            seen["left"] = True
+                            break
+                        await asyncio.sleep(0.005)
+                    return result
+                finally:
+                    register_confirmation_controller(None)
+                    register_confirmation_loop(None)
+                    await controller.close()
+
+        with patch(
+            "core.state.runtime_config",
+            return_value={
+                "confirmation_wait_sec": 30.0,
+                "tool_watchdog_sec": 60.0,
+            },
+        ):
+            result = asyncio.run(_scenario())
+
+        assert seen["mounted"], "the modal was never mounted"
+        assert "abandoned" in result
+        assert seen["left"], "the watchdog left the real modal mounted"
+
+
+class _StubSession:
+    """Minimal stand-in for the session the controller drives."""
+
+    def __init__(self) -> None:
+        self._live_terminal_active = False
+        self.sink_history: list[Any] = []
+
+    def activate_sink(self, sink: Any) -> None:
+        self.sink_history.append(sink)
+        self._live_terminal_active = True
+
+
+def _confirm_decision(reason: str) -> OperationDecision:
+    from core.operation_policy import RiskLevel
+
+    return OperationDecision(
+        action=OperationAction.CONFIRM,
+        risk=RiskLevel.HIGH,
+        reason=reason,
+        matched_rule="test",
+        redacted_command="rm -rf /",
+    )
+
+
+def _deny_decision() -> OperationDecision:
+    from core.operation_policy import RiskLevel
+
+    return OperationDecision(
+        action=OperationAction.CONFIRM,
+        risk=RiskLevel.HIGH,
+        reason="lifecycle test",
+        matched_rule="test",
+        redacted_command="rm -rf /",
+    )
+
+
+def _rendered_selector():  # type: ignore[no-untyped-def]
+    """A confirmation selector the host has already painted once."""
+    from pawnlogic.confirm_selector import ConfirmOperationSelector
+
+    selector = ConfirmOperationSelector(_deny_decision())
+    selector.formatted_text  # noqa: B018 - the Float reads this property
+    return selector
+
+
+def _tool_watchdog_default() -> float:
+    from core.tool_executor import DEFAULT_TOOL_WATCHDOG_SECONDS
+
+    return float(DEFAULT_TOOL_WATCHDOG_SECONDS)

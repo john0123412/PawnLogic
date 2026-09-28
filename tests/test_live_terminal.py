@@ -399,6 +399,103 @@ def test_bare_escape_interrupts_active_turn_without_sequence_length_delay() -> N
     asyncio.run(scenario())
 
 
+def test_live_confirmation_routes_y_and_escape_without_a_provider_key() -> None:
+    """The real Application must approve with y and give Esc to the modal."""
+
+    async def scenario() -> None:
+        from core.operation_policy import (
+            OperationAction,
+            OperationDecision,
+            RiskLevel,
+        )
+        from pawnlogic.confirm_selector import ConfirmOperationSelector
+
+        interrupt_active = MagicMock(return_value=True)
+        session = SimpleNamespace(
+            queue_status=lambda: {"pending_count": 1},
+            interrupt_active=interrupt_active,
+            _live_input_buffer=None,
+            model_alias="test-model",
+            _live_terminal_active=False,
+        )
+        bindings, state = build_prompt_toolkit_bindings(
+            KeyBindings,
+            session=session,
+            read_text_cache=lambda _path: "",
+            restore_last_input_buffer=lambda *_args: False,
+            last_input_path=Path(".last_input"),
+        )
+        decision = OperationDecision(
+            action=OperationAction.CONFIRM,
+            risk=RiskLevel.HIGH,
+            reason="provider-free live confirmation test",
+            matched_rule="test",
+            redacted_command="dangerous-command",
+        )
+
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(
+                input=pipe,
+                output=DummyOutput(),
+                key_bindings=bindings,
+                submission_kind=state.consume,
+            )
+            terminal.set_session(session)
+            controller = PersistentTerminalController(
+                terminal=terminal,
+                session=session,
+                activate_sink=lambda _sink: None,
+                fallback_sink=None,
+            )
+            await controller.start()
+            before_app = terminal.application
+            before_task = controller._task
+
+            async def _mount_confirmation() -> asyncio.Task[Any]:
+                selector = ConfirmOperationSelector(decision)
+                task = asyncio.create_task(
+                    controller.run_selector(lambda: selector)
+                )
+                for _ in range(100):
+                    await asyncio.sleep(0.01)
+                    rendered = "\n".join(terminal.rendered_screen_lines())
+                    if selector.has_rendered and "awaiting confirmation" in rendered:
+                        break
+                else:
+                    raise AssertionError("confirmation modal never rendered")
+                assert terminal.selector_registry.active_kind == "confirmation"
+                assert terminal.composer is not None
+                assert terminal.composer.read_only()
+                return task
+
+            try:
+                approve_task = await _mount_confirmation()
+                pipe.send_text("y")
+                assert await asyncio.wait_for(approve_task, timeout=0.5) is True
+
+                deny_task = await _mount_confirmation()
+                pipe.send_text("\x1b")
+                assert await asyncio.wait_for(deny_task, timeout=0.5) is False
+
+                interrupt_active.assert_not_called()
+                assert not terminal.selector_registry.has_state
+                assert terminal.application is before_app
+                assert controller._task is before_task
+                assert terminal.is_running
+                assert terminal.composer is not None
+                assert not terminal.composer.read_only()
+
+                pipe.send_text("composer restored\r")
+                submission = await asyncio.wait_for(
+                    terminal.next_submission(), timeout=0.5
+                )
+                assert submission.text == "composer restored"
+            finally:
+                await controller.close()
+
+    asyncio.run(scenario())
+
+
 def test_mouse_wheel_scrolls_output_without_touching_composer_history() -> None:
     """A wheel event moves the output viewport, not the editable prompt."""
     async def scenario() -> None:

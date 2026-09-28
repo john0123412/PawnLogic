@@ -257,6 +257,25 @@ def _resolve_hard_timeout(explicit: float | None) -> float | None:
     )
 
 
+def _reclaim_pending_confirmation() -> None:
+    """Tear down a confirmation modal the abandoned worker was blocked on.
+
+    Abandoning a thread does not unwind it. A tool waiting on
+    ``prompt_for_confirmation`` stays parked on its ``future.result()``
+    call, so the modal it is blocked on would stay mounted and keep the
+    live terminal's eager selector bindings off the composer for the rest
+    of the session. Cancelling the modal's owning task is what releases
+    it. Best-effort: the confirmation module is not on the tool path's
+    critical import list.
+    """
+    try:
+        from core.operation_policy import cancel_pending_confirmation
+
+        cancel_pending_confirmation()
+    except Exception:
+        return
+
+
 def _run_handler_with_watchdog(
     handler: Callable[[dict], object],
     fn_args: dict,
@@ -268,7 +287,9 @@ def _run_handler_with_watchdog(
     A wedged handler must never freeze the agent loop. Python threads cannot
     be killed, so on expiry the worker thread is abandoned (it may keep
     running in the background until process exit) and a synthetic error
-    result is returned so the model can continue the task.
+    result is returned so the model can continue the task. Expiry also
+    reclaims any confirmation modal that worker was blocked on, because
+    abandoning a thread does not unwind it.
     """
     finished = threading.Event()
     result_holder: list[object] = []
@@ -295,6 +316,7 @@ def _run_handler_with_watchdog(
     )
     worker.start()
     if not finished.wait(timeout_seconds):
+        _reclaim_pending_confirmation()
         return (
             f"ERROR: Tool '{tool_name}' hit its hard timeout "
             f"({timeout_seconds:g}s watchdog limit) and was abandoned. Its "

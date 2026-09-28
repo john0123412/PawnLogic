@@ -221,9 +221,9 @@ Docker `bridge`/`host` 网络和 legacy `uvx mcp-server-fetch` 启动在授权 g
 
 用户友好模式会针对 host shell 执行、Docker container exec、browser/network-capable 工具、private network URL 访问、delegated sub-agent 和 plaintext HTTP Provider 显示明确的 trust-boundary notice。需要更底层的工具参数和诊断信息时，使用 `pawn --debug`。Docker 文件挂载默认限制在 workspace 内，包括 read-only 挂载；挂载外部只读 challenge 文件需要显式设置 `allow_host_read_mount`。
 
-Host shell 执行现在会在启动子进程前经过 operation policy。低风险命令正常执行，中等风险命令会被分类并写入审计，高风险命令需要明确的交互确认，critical 操作默认拒绝。非交互执行，包括 `pawn --eval`，在高风险命令需要确认时会 fail closed。`DANGEROUS_PATTERNS` 只是误操作/风险分类的一部分，不是 sandbox 边界，也不能阻止恶意本地用户。
+Host shell 执行现在会在启动子进程前经过 operation policy。低风险命令正常执行，中等风险命令会被分类并写入审计，高风险命令需要明确的交互确认，critical 操作默认拒绝。确认弹窗打开时默认选中**拒绝**：按 `y` 批准，按 `n`/`Esc`/`Ctrl+C` 拒绝，直接回车也视为拒绝。批准永远不会由本想输入到编辑框的按键误触发；弹窗挂载期间状态行显示 `⚠ awaiting confirmation — Esc to review`。非交互执行，包括 `pawn --eval`，在高风险命令需要确认时会 fail closed。`DANGEROUS_PATTERNS` 只是误操作/风险分类的一部分，不是 sandbox 边界，也不能阻止恶意本地用户。
 
-Host shell 执行是硬性限时的：超时后会先向整个进程组发送 SIGTERM，再发送 SIGKILL；即使子进程进入不可中断状态（例如 WSL2 内核卡死），清理流程也永远不会无限等待。注册工具还受看门狗约束（`tool_watchdog_sec`，默认 600 秒）：超过上限的工具调用会被放弃并返回 ERROR 结果，会话将继续运行而不是永久卡住。被放弃的后台线程可能持续运行到进程退出为止。
+Host shell 执行是硬性限时的：超时后会先向整个进程组发送 SIGTERM，再发送 SIGKILL；即使子进程进入不可中断状态（例如 WSL2 内核卡死），清理流程也永远不会无限等待。注册工具还受看门狗约束（`tool_watchdog_sec`，默认 600 秒）：超过上限的工具调用会被放弃并返回 ERROR 结果，会话将继续运行而不是永久卡住。被放弃的后台线程可能持续运行到进程退出为止。高风险确认的等待时长为 `confirmation_wait_sec`（默认 300 秒，并被限制在 `tool_watchdog_sec` 之下）；该超时由挂载弹窗的终端事件循环持有，看门狗超时时还会回收被放弃线程遗留的确认，因此一次超时的确认不会把弹窗留在屏幕上。
 
 ## 可选 Extension
 

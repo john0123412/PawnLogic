@@ -180,6 +180,7 @@ jobs:
             pawnlogic/live_repl.py \
             pawnlogic/live_terminal.py \
             pawnlogic/selectors.py \
+            pawnlogic/confirm_selector.py \
             pawnlogic/terminal_transcript.py \
             pawnlogic/restart_recovery.py \
             tools/check_doc_structure.py \

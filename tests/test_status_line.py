@@ -38,6 +38,31 @@ def _session(
     )
 
 
+def _Future() -> object:
+    """A stand-in for the registry's selector future.
+
+    The status line never awaits it, and ``install_active`` only touches
+    ``.done()`` when it supersedes an already-mounted selector, so a
+    sentinel keeps these render tests free of a real event loop.
+    """
+    return SimpleNamespace(done=lambda: False, set_result=lambda _r: None)
+
+
+def _MountedConfirmation():
+    """A minimal selector that reports the confirmation kind."""
+    from pawnlogic.confirm_selector import ConfirmOperationSelector
+    from core.operation_policy import OperationAction, OperationDecision, RiskLevel
+
+    decision = OperationDecision(
+        action=OperationAction.CONFIRM,
+        risk=RiskLevel.HIGH,
+        reason="status line test",
+        matched_rule="test",
+        redacted_command="rm -rf /",
+    )
+    return ConfirmOperationSelector(decision)
+
+
 def test_status_line_shows_running_with_elapsed_seconds(monkeypatch):
     """While a Turn is in flight the status line must show
     ``[model]  ⏱ Ns · Esc to interrupt`` and the seconds counter
@@ -204,3 +229,77 @@ def test_toolbar_stays_clean_while_idle(monkeypatch):
 
     assert "Idle" not in rendered
     assert "Esc to interrupt" not in rendered
+
+
+def test_status_line_shows_pending_confirmation(monkeypatch):
+    """A mounted high-risk modal must be visible in the status line.
+
+    0.3.12 S3/D3: while a confirmation modal owns the keyboard, the
+    toolbar used to keep reporting the ordinary in-flight state (or
+    ``Idle``), so a user could not tell that a tool was blocked on a
+    prompt. Every keystroke they typed was being consumed by the modal.
+    """
+    from pawnlogic.live_terminal import PersistentTerminal
+    from pawnlogic.selectors import SelectorRegistry
+
+    session = _session(pending=1, started_at=time.monotonic() - 3.0)
+    registry = SelectorRegistry()
+    registry.install_active(_MountedConfirmation(), _Future())
+
+    terminal = PersistentTerminal.__new__(PersistentTerminal)
+    terminal._session = session  # type: ignore[attr-defined]
+    terminal._selector_registry = registry  # type: ignore[attr-defined]
+    terminal._build_status = PersistentTerminal._build_status  # type: ignore[attr-defined]
+
+    rendered = terminal._build_status(terminal)  # type: ignore[arg-type]
+    plain = rendered.replace("<b>", "").replace("</b>", "")
+
+    assert "awaiting confirmation" in plain, plain
+    assert "Esc to review" in plain, plain
+
+
+def test_status_line_drops_confirmation_state_once_the_modal_closes(
+    monkeypatch,
+):
+    """A resolved or torn-down modal must not leave the banner up."""
+    from pawnlogic.live_terminal import PersistentTerminal
+    from pawnlogic.selectors import SelectorRegistry
+
+    session = _session(pending=0)
+    registry = SelectorRegistry()
+    selector = _MountedConfirmation()
+    selector.close(result=False)
+    registry.install_active(selector, _Future())
+
+    terminal = PersistentTerminal.__new__(PersistentTerminal)
+    terminal._session = session  # type: ignore[attr-defined]
+    terminal._selector_registry = registry  # type: ignore[attr-defined]
+    terminal._build_status = PersistentTerminal._build_status  # type: ignore[attr-defined]
+
+    rendered = terminal._build_status(terminal)  # type: ignore[arg-type]
+    assert "awaiting confirmation" not in rendered
+
+
+def test_selector_escape_binding_outranks_the_turn_interrupt(monkeypatch):
+    """Esc must reach the modal before it escalates to a Turn interrupt.
+
+    The confirmation modal owns the keyboard while it is mounted, so the
+    live terminal registers its selector keys with ``eager=True`` while
+    the Turn-interrupt Esc in ``live_repl`` is a normal binding. Prompt
+    Toolkit runs eager handlers first regardless of registration order;
+    this pins that the split has not been reversed.
+    """
+    import inspect
+
+    from pawnlogic import live_repl, live_terminal
+
+    terminal_src = inspect.getsource(live_terminal)
+    assert 'add("escape", filter=Condition(lambda: self._selector_registry.has_state), eager=True)' in terminal_src, (
+        "the selector escape binding must stay eager"
+    )
+    repl_src = inspect.getsource(live_repl)
+    assert 'bindings.add("escape")' in repl_src
+    interrupt_block = repl_src.split('bindings.add("escape")', 1)[1][:400]
+    assert "eager=True" not in interrupt_block, (
+        "the Turn-interrupt Esc must not become eager and steal the modal"
+    )
