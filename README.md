@@ -206,6 +206,18 @@ API keys are stored in `~/.pawnlogic/.env`. Provider configs, model aliases,
 and descriptions are stored in `~/.pawnlogic/custom_providers.json` without
 secret values. Provider setup does not write keys into shell startup files.
 
+The interactive TUI also edits a provider in place. Open a provider's detail
+view and choose `Edit Provider` to correct its `Base URL` and `Format`; the
+save keeps the provider name, its API key, and its loaded models. Renaming is
+not offered there, because a rename must re-point every model entry and the
+key's environment variable and cannot be written atomically. Replace the key
+with `Update API Key`, which asks for the full value again and never displays
+the stored one.
+
+Confirmation dialogs mark the focused button in text as well as colour, and
+`←` `→` `↑` `↓` and `Tab` all move between them. `Delete Provider` opens a
+dialog that starts on `Cancel`, so `Enter` never deletes by accident.
+
 Plain `http://` provider endpoints are allowed for local relays and lab
 setups, but user-friendly mode prints a trust-boundary warning because requests
 and API keys are not protected by TLS.

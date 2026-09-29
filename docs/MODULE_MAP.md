@@ -53,7 +53,8 @@
 | `core/commands/provider.py` | Provider commands | `cmd_provider()`, `cmd_model()` | `test_provider_commands.py` | `_visible_models()` is the single eligibility helper. Active + configured key = visible. |
 | `core/commands/__init__.py` | Command registry and dispatch | `COMMANDS`, `dispatch()`, `matching_command_words()` | `test_commands_dispatch.py`, `test_provider_commands.py` | Registered verbs are authoritative; fuzzy direct dispatch executes only a unique match and reports ambiguity without executing. |
 | `core/commands/extensions.py` | Extension commands | `cmd_extension()` | `test_extension_commands.py`, `test_cli_transcripts.py` | Reads the manager from RuntimeContext. Commands never construct or bypass the Extension Runtime. |
-| `core/provider_tui.py` | Provider TUI | Rendering + key bindings | `test_provider_commands.py` | Thin rendering over `ProviderTUIState`. All mutations through `ProviderRuntime`. |
+| `core/provider_tui.py` | Provider TUI | Layout + key bindings + actions | `test_provider_commands.py` | Layout, key bindings, and actions over `ProviderTUIState`. Form and dialog drawing live in `core/provider_tui_form.py`. All mutations through `ProviderRuntime`. |
+| `core/provider_tui_form.py` | Form + dialog drawing | `render_wizard()`, `render_dialog()`, `detail_actions()`, `wiz_focus_cycle()` | `test_provider_commands.py` | Pure rendering for the shared Add/Edit form and the confirmation dialogs. Marks the focused row and button in text, not colour alone. |
 | `core/provider_tui_state.py` | TUI state | `ProviderTUIState` class | `test_provider_tui_state.py` | Pure state transitions, no IO. Typed, deterministic methods. |
 
 ## Security And Trust

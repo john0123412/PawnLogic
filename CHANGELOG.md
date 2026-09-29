@@ -5,6 +5,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- A provider's `Base URL` and `Format` can now be corrected from the provider
+  TUI. The detail view gained an `Edit Provider` action that reuses the
+  existing Add Provider form with the current values prefilled, and saves
+  through one atomic write. The provider name, its API key, its active
+  state, and its loaded models are all preserved. Renaming is deliberately
+  not offered: it would have to re-point every model entry and the key's
+  environment variable, which cannot be done in a single write.
+  `core/provider_runtime.update_custom_provider` is the new entry point.
+
+### Fixed
+- The provider TUI's `Delete Provider` confirmation could not be confirmed.
+  Three defects combined: the dialog marked the focused button with
+  background colour only, so the focus was invisible whenever the terminal
+  stripped colour or the output was piped; `↑` and `↓` were unbound, so the
+  keys a user reaches for first did nothing; and the cursor started on
+  `Cancel`, so a bare `Enter` closed the dialog without deleting. The focused
+  button is now marked in text as well as colour, and all four arrow keys
+  plus `Tab` move between the buttons. The deny-by-default cursor position
+  is unchanged.
+- The provider detail panel's action menu and its dispatcher were two
+  independent hardcoded lists, so adding a row to one without shifting every
+  index in the other would have made the highlighted row run a different
+  action than it showed. Both now read one `detail_actions()` list, and the
+  cursor bounds are derived from it rather than hardcoded.
+
+### Changed
+- The provider TUI's form and dialog drawing moved to
+  `core/provider_tui_form.py`. `core/provider_tui.py` was at 195/195 branch
+  complexity — the exact ceiling — so the shared Add/Edit form and the
+  confirmation dialogs were extracted to make room. No behaviour change.
+
 ## [0.3.12] - 2026-09-28
 
 ### Fixed

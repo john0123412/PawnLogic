@@ -519,3 +519,90 @@ def test_filter_supported_chat_models_reports_probe_stats(monkeypatch):
         "kept_unknown": 1,
         "hidden_reasons": {"http_404": 1},
     }
+
+
+def test_update_custom_provider_rewrites_endpoint_and_preserves_identity(monkeypatch):
+    """Editing an endpoint must not disturb the name, key env var, or models.
+
+    Saving with an empty models map and replace_models=False is what keeps the
+    provider's loaded models on disk; a name change would require migrating
+    every model entry plus the env var, which is deliberately out of scope.
+    """
+    existing = {
+        "base_url": "https://old.example.com/v1",
+        "api_key_env": "MYRELAY_API_KEY",
+        "label": "Custom (myrelay)",
+        "api_format": "openai",
+        "active": True,
+    }
+    monkeypatch.setitem(provider_runtime.PROVIDERS, "myrelay", dict(existing))
+    monkeypatch.setattr(provider_runtime.provider_config, "save_custom_provider",
+                        lambda *a, **k: None)
+    registered = []
+    monkeypatch.setattr(provider_runtime.provider_config, "register_provider",
+                        lambda name, cfg: registered.append((name, cfg)))
+    monkeypatch.setattr(provider_runtime, "init_providers", lambda force=False: None)
+
+    ok, err = provider_runtime.update_custom_provider(
+        "myrelay", base_url="https://new.example.com/v1", api_format="anthropic")
+
+    assert (ok, err) == (True, "")
+    assert registered[0][0] == "myrelay"
+    saved = registered[0][1]
+    assert saved["base_url"] == "https://new.example.com/v1"
+    assert saved["api_format"] == "anthropic"
+    assert saved["api_key_env"] == "MYRELAY_API_KEY"
+    assert saved["label"] == "Custom (myrelay)"
+    assert saved["active"] is True
+
+
+def test_update_custom_provider_passes_empty_models_without_replacing(monkeypatch):
+    """The persistence call must not wipe the provider's loaded models."""
+    monkeypatch.setitem(provider_runtime.PROVIDERS, "myrelay", {"api_key_env": "K"})
+    seen = {}
+
+    def fake_save(name, cfg, models_cfg, *, replace_models=False):
+        seen["models_cfg"] = models_cfg
+        seen["replace_models"] = replace_models
+
+    monkeypatch.setattr(provider_runtime.provider_config, "save_custom_provider", fake_save)
+    monkeypatch.setattr(provider_runtime.provider_config, "register_provider",
+                        lambda name, cfg: None)
+    monkeypatch.setattr(provider_runtime, "init_providers", lambda force=False: None)
+
+    ok, _err = provider_runtime.update_custom_provider(
+        "myrelay", base_url="https://x.example.com/v1", api_format="openai")
+
+    assert ok is True
+    assert seen["models_cfg"] == {}
+    assert seen["replace_models"] is False
+
+
+def test_update_custom_provider_rejects_builtin_and_missing(monkeypatch):
+    monkeypatch.setitem(provider_runtime.PROVIDERS, "deepseek", {"api_key_env": "K"})
+
+    ok, err = provider_runtime.update_custom_provider(
+        "deepseek", base_url="https://x.example.com/v1", api_format="openai")
+    assert ok is False and "built-in" in err
+
+    ok, err = provider_runtime.update_custom_provider(
+        "ghost", base_url="https://x.example.com/v1", api_format="openai")
+    assert ok is False and "not found" in err
+
+
+def test_update_custom_provider_reports_persistence_failure(monkeypatch):
+    monkeypatch.setitem(provider_runtime.PROVIDERS, "myrelay", {"api_key_env": "K"})
+
+    def boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(provider_runtime.provider_config, "save_custom_provider", boom)
+    monkeypatch.setattr(provider_runtime.provider_config, "register_provider",
+                        lambda name, cfg: None)
+    monkeypatch.setattr(provider_runtime, "init_providers", lambda force=False: None)
+
+    ok, err = provider_runtime.update_custom_provider(
+        "myrelay", base_url="https://x.example.com/v1", api_format="openai")
+
+    assert ok is False
+    assert "disk full" in err

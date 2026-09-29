@@ -24,6 +24,9 @@ class ProviderTUIState:
     wiz_focus: int = 0
     wiz_fmt_open: bool = False
     wiz_fmt_cursor: int = 0
+    # Provider name while the wizard edits an existing entry; "" means the
+    # wizard is adding a new provider.
+    wiz_edit: str = ""
     wiz_error: str = ""
     wiz_status: str = ""
     wiz_status_style: str = ""
@@ -64,6 +67,7 @@ class ProviderTUIState:
         self.wiz_focus = 0
         self.wiz_fmt_open = False
         self.wiz_fmt_cursor = 0
+        self.wiz_edit = ""
         self.wiz_error = ""
         self.wiz_status = ""
         self.wiz_status_style = ""

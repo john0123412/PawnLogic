@@ -13,6 +13,7 @@ from typing import Any
 from config.paths import PAWNLOGIC_HOME
 from config import providers as provider_config
 from config.providers import (
+    BUILTIN_PROVIDER_NAMES,
     CUSTOM_PROVIDERS_PATH,
     FETCHED_MODEL_DESC,
     MODELS,
@@ -172,6 +173,36 @@ def save_provider_with_rollback(
         return False, f"Failed to save provider config: {exc}"
     # Only update live registries after successful persistence.
     provider_config.register_provider(name, prov_cfg)
+    return True, ""
+
+
+def update_custom_provider(
+    provider_name: str, base_url: str, api_format: str
+) -> tuple[bool, str]:
+    """Replace a custom provider's endpoint fields, keeping its identity.
+
+    The name, API key env var, label, active state, and loaded models all
+    survive: only the base URL and the wire format are replaced, in a single
+    atomic write. Renaming is deliberately out of scope here — it would have
+    to re-point every model entry and rename the env var, which cannot be
+    done in one write without a window where the provider is half-migrated.
+    """
+    if provider_name not in PROVIDERS:
+        return False, f"Provider not found: {provider_name}"
+    if provider_name in BUILTIN_PROVIDER_NAMES:
+        return False, f"Cannot edit built-in provider: {provider_name}"
+    fmt = str(api_format).strip().lower()
+    if fmt not in {"openai", "anthropic"}:
+        return False, f"Unsupported API format: {api_format}"
+    cfg = dict(PROVIDERS[provider_name])
+    cfg["base_url"] = str(base_url).strip()
+    cfg["api_format"] = fmt
+    # An empty models map with replace_models left False is what keeps the
+    # provider's already-loaded models on disk.
+    ok, err = save_provider_with_rollback(provider_name, cfg, {})
+    if not ok:
+        return False, err
+    init_providers(force=True)
     return True, ""
 
 

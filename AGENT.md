@@ -804,6 +804,18 @@ fail; do not list a module here before CI checks it.
   Application. Their live command factories must never return an
   awaitable or start a nested `Application`; tests must execute the real
   command path and preserve the host Application/task identity.
+- The provider Add form and the provider Edit form are one renderer
+  (`core/provider_tui_form.render_wizard`) with two persistence paths, so
+  the invariants that separate them live in different places. Edit locks
+  the Name and API Key rows by **excluding them from the arrow-key focus
+  cycle**, not by validating the field on save: any new row added to the
+  form, or any new binding that sets `_wiz_focus` directly, can make a
+  locked row reachable or writable. Edit also depends on saving with an
+  empty models map and `replace_models=False` to leave loaded models on
+  disk; passing the models map with replacement would silently drop every
+  model the provider had fetched. Both are pinned by tests, and the
+  name/key/delete identity rules belong in `provider_runtime`, not the
+  TUI.
 - Live host scrollback must use Prompt Toolkit's `run_in_terminal`
   handoff. Worker threads must never write directly to the TTY; complete
   lines stream live, partial lines flush once at close, and a failed host

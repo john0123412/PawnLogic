@@ -148,6 +148,81 @@ def test_provider_tui_wizard_marks_exactly_one_row_at_a_time():
     assert "\u2022" in rendered and "\u258c" in rendered
 
 
+def _dialog_key_handlers(tui, key):
+    """Matching handler names for `key`, in prompt_toolkit resolution order."""
+    from prompt_toolkit.keys import Keys as _Keys
+
+    mapping = {"enter": _Keys.ControlM, "up": _Keys.Up, "down": _Keys.Down,
+               "left": _Keys.Left, "right": _Keys.Right, "tab": _Keys.Tab}
+    return [b.handler for b in tui._build_kb().get_bindings_for_keys((mapping[key],))
+            if b.filter()]
+
+
+def _open_delete_modal(tui):
+    tui._panel = "detail"
+    tui._detail_provider = "openrouter"
+    tui._dialog = "delete"
+    tui._dialog_cursor = 0
+    return tui
+
+
+def test_provider_tui_delete_modal_marks_the_focused_button():
+    """The confirm dialog rendered focus with background colour only.
+
+    Colour is the sole indicator, so the focused button is invisible in a
+    stripped or piped terminal \u2014 the user cannot tell where Enter will land.
+    """
+    tui = _open_delete_modal(provider_tui.ProviderTUI())
+
+    tui._dialog_cursor = 0
+    on_cancel = "".join(text for _s, text in tui._render_dialog())
+    tui._dialog_cursor = 1
+    on_delete = "".join(text for _s, text in tui._render_dialog())
+
+    assert "\u25b6 [ Cancel ]" in on_cancel
+    assert "\u25b6 [ Delete ]" in on_delete
+    assert on_cancel.count("\u25b6") == 1
+    assert on_delete.count("\u25b6") == 1
+
+
+def test_provider_tui_delete_modal_navigates_with_every_arrow_key():
+    """Only left/right/tab moved the dialog cursor; up/down were unbound."""
+    tui = _open_delete_modal(provider_tui.ProviderTUI())
+
+    for key in ("up", "down", "left", "right"):
+        handlers = _dialog_key_handlers(tui, key)
+        assert handlers, f"{key} does nothing inside the confirm dialog"
+        tui._dialog_cursor = 0
+        handlers[-1](None)          # _dlg_move ignores the event
+        assert tui._dialog_cursor == 1, f"{key} did not reach [ Delete ]"
+
+
+def test_provider_tui_delete_modal_deletes_after_moving_to_delete():
+    tui = _open_delete_modal(provider_tui.ProviderTUI())
+    calls = []
+    tui._do_delete_provider = lambda: calls.append("deleted")
+
+    _dialog_key_handlers(tui, "right")[-1](None)
+    assert tui._dialog_cursor == 1
+    _dialog_key_handlers(tui, "enter")[-1](None)
+
+    assert calls == ["deleted"]
+    assert tui._dialog is None
+
+
+def test_provider_tui_delete_modal_default_enter_still_declines():
+    """Denying by default is the safety invariant \u2014 Enter on Cancel deletes nothing."""
+    tui = _open_delete_modal(provider_tui.ProviderTUI())
+    calls = []
+    tui._do_delete_provider = lambda: calls.append("deleted")
+
+    assert tui._dialog_cursor == 0
+    _dialog_key_handlers(tui, "enter")[-1](None)
+
+    assert calls == []
+    assert tui._dialog is None
+
+
 def test_provider_tui_model_search_field_accepts_pasted_text():
     tui = provider_tui.ProviderTUI()
     pasted_model_name = "provider-prefix/some-long-model-name-v1"
@@ -1489,3 +1564,127 @@ def test_provider_add_cli_does_not_prompt_for_fetch_on_piped_input(monkeypatch):
 
     assert should_fetch is False
     assert input_called is False
+
+
+def test_provider_tui_detail_offers_edit_for_endpoint_fields():
+    """Editing a provider's Base URL / Format needs its own action.
+
+    Only "Update API Key" existed, so a provider saved with a wrong URL or
+    wire format could not be corrected from the UI at all.
+    """
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "detail"
+    tui._detail_provider = "openrouter"
+
+    actions = tui._detail_actions()
+
+    assert "Edit Provider" in actions
+    assert "Update API Key" in actions          # the key keeps its own flow
+    # The rendered menu and the dispatcher must agree, or the cursor selects
+    # the wrong action; both now read the same list.
+    rendered = "".join(text for _s, text in tui._render_detail())
+    for act in actions:
+        assert f"[ {act} ]" in rendered
+
+
+def test_provider_tui_detail_cursor_wraps_over_every_action():
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "detail"
+    tui._detail_provider = "openrouter"
+    total = len(tui._detail_actions())
+
+    kb = tui._build_kb()
+    from prompt_toolkit.keys import Keys as _Keys
+    down = [b.handler for b in kb.get_bindings_for_keys((_Keys.Down,)) if b.filter()][-1]
+
+    for _ in range(total):
+        down(None)
+    assert tui._detail_cursor == 0, "down did not wrap over the whole action list"
+
+
+def test_provider_tui_edit_prefills_endpoint_and_locks_the_name(monkeypatch):
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "detail"
+    tui._detail_provider = "openrouter"
+    monkeypatch.setitem(provider_tui.PROVIDERS, "openrouter",
+                        {"base_url": "https://api.openrouter.ai/api/v1",
+                         "api_format": "anthropic", "api_key_env": "OPENROUTER_API_KEY"})
+
+    tui._open_edit_provider("openrouter")
+
+    assert tui._wiz_edit == "openrouter"
+    assert tui._panel == "wizard"
+    assert tui._wiz_inputs[1].text == "https://api.openrouter.ai/api/v1"
+    assert tui._wiz_fields[2] == "anthropic"
+    # Focus starts on the first editable row, not the locked name.
+    assert tui._wiz_focus == 1
+    # The key is left to the existing Update API Key action: the form must not
+    # offer to write a key, because the stored one is never displayed.
+    assert tui._wiz_inputs[2].text == ""
+
+
+def test_provider_tui_edit_navigation_skips_the_locked_rows():
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "detail"
+    tui._detail_provider = "openrouter"
+    tui._open_edit_provider("openrouter")
+
+    from prompt_toolkit.keys import Keys as _Keys
+    kb = tui._build_kb()
+    down = [b.handler for b in kb.get_bindings_for_keys((_Keys.Down,)) if b.filter()][-1]
+
+    visited = []
+    for _ in range(3):
+        visited.append(tui._wiz_focus)
+        down(None)
+
+    assert visited == [1, 2, 4]                 # Base URL, Format, Save
+    assert tui._wiz_focus == 1                  # and it wraps back
+
+
+def test_provider_tui_edit_confirm_saves_url_and_format_keeping_name(monkeypatch):
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "detail"
+    tui._detail_provider = "openrouter"
+    tui._open_edit_provider("openrouter")
+    tui._wiz_inputs[1].text = "https://relay.example.com/v1"
+    tui._wiz_fields[2] = "openai"
+
+    saved = {}
+
+    def fake_update(name, base_url, api_format):
+        saved["name"] = name
+        saved["base_url"] = base_url
+        saved["api_format"] = api_format
+        return True, ""
+
+    def fail_key_write(*_a, **_k):
+        raise AssertionError("editing the endpoint must not rewrite the API key")
+
+    monkeypatch.setattr(provider_tui, "_update_custom_provider", fake_update)
+    monkeypatch.setattr(provider_tui, "_save_key_to_env", fail_key_write)
+    monkeypatch.setattr(provider_tui, "init_providers", lambda force=False: None)
+
+    asyncio.run(tui._wizard_confirm())
+
+    assert saved == {"name": "openrouter", "base_url": "https://relay.example.com/v1",
+                     "api_format": "openai"}
+    assert tui._panel == "detail"
+    assert tui._wiz_edit == ""
+
+
+def test_provider_tui_edit_confirm_reports_failure_without_leaving_edit(monkeypatch):
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "detail"
+    tui._detail_provider = "openrouter"
+    tui._open_edit_provider("openrouter")
+    tui._wiz_inputs[1].text = "https://relay.example.com/v1"
+
+    monkeypatch.setattr(provider_tui, "_update_custom_provider",
+                        lambda *_a, **_k: (False, "Failed to save provider config"))
+    monkeypatch.setattr(provider_tui, "init_providers", lambda force=False: None)
+
+    asyncio.run(tui._wizard_confirm())
+
+    assert "Failed to save" in tui._wiz_error
+    assert tui._panel == "wizard"

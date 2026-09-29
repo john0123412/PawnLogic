@@ -156,6 +156,10 @@ caller 生效，绝不会隐式 fan-out。
 
 API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述存储在 `~/.pawnlogic/custom_providers.json`，不包含 secret value。Provider 配置流程不会把 Key 写入 shell 启动文件。
 
+交互式 TUI 也支持原地修改 Provider。进入某个 Provider 的详情页并选择 `Edit Provider`，即可修正它的 `Base URL` 和 `Format`；保存会保留 Provider 名称、API Key 以及已加载的模型。这里不提供重命名：重命名必须同时改写每一个模型条目的 provider 字段和 Key 的环境变量，无法原子完成。需要更换 Key 请使用 `Update API Key`，它会要求重新粘贴完整值，且始终不显示已保存的值。
+
+确认弹窗除颜色外还用文字标记当前按钮，`←` `→` `↑` `↓` 和 `Tab` 都可以在按钮之间移动。`Delete Provider` 打开的弹窗默认停在 `Cancel` 上，因此直接按 `Enter` 不会误删。
+
 本地 relay 和实验环境可以使用明文 `http://` Provider endpoint，但用户友好模式会显示 trust-boundary 提示，因为请求和 API Key 没有 TLS 保护。
 
 不稳定的自定义 Provider 可以通过 `~/.pawnlogic/.env` 中的环境变量调优：`PAWNLOGIC_API_RETRY_MAX` 控制包含首次请求在内的总尝试次数，`PAWNLOGIC_API_RETRY_AFTER_MAX` 限制 Provider `Retry-After` 延迟上限，`PAWNLOGIC_API_CONNECT_TIMEOUT`、`PAWNLOGIC_API_READ_TIMEOUT` 和 `PAWNLOGIC_API_NONSTREAM_TIMEOUT` 分别调节连接和响应等待时间。
