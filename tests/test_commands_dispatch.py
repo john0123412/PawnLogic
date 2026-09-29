@@ -598,8 +598,10 @@ def test_ultra_tier_sets_150_iterations_and_reports_advisory_guard(
         )
         assert DYNAMIC_CONFIG["max_iter"] == 150
         assert DYNAMIC_CONFIG["plan_guard_mode"] == "advisory"
+        assert DYNAMIC_CONFIG["effort_level"] == "max"
         output = capsys.readouterr().out
-        assert "/ultra ultra mode" in output
+        assert "/ultra is now an effort alias" in output
+        assert "Current level: max" in output
         assert "advisory" in output
     finally:
         DYNAMIC_CONFIG.clear()

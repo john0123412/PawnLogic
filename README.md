@@ -193,6 +193,42 @@ children may use only task-isolated file Tools. `delegate_task` remains a
 single-task compatibility Adapter: a policy value of `max-concurrency=2` takes
 effect only for a supported batch caller and never causes implicit fan-out.
 
+## Reasoning Effort
+
+Thinking effort is one control, not two. A single level decides both how hard
+the model thinks and how much room it gets: the `reasoning_effort` value sent
+to the provider, plus the runtime limits for output tokens, tool-call
+iterations, context window, Tool output, and time budget. `/model` asks for the
+level right after you pick a model, so the two choices are made in one place.
+
+| Level | Sent to the provider | Tool-call iterations | Replaces |
+|-------|----------------------|----------------------|----------|
+| `off` | `none` | 10 | — |
+| `low` | `low` | 10 | `/low` |
+| `medium` | `medium` | 30 | `/mid`, `/normal` |
+| `high` | `high` | 50 | `/deep` |
+| `xhigh` | `xhigh` | 100 | `/max` |
+| `max` | `max` | 150 | `/ultra` |
+
+`medium` is the default. The legacy commands still work and now map to the
+matching level, so an existing muscle memory is never wrong — it just prints
+where the setting moved.
+
+The value is only sent for models that declare support for it, so a relay that
+rejects the parameter can never turn an effort change into an error. Every
+DeepSeek alias, the `gpt-5.x` family, and `o3` declare support. For any other
+model the level still moves the local limits and the selector says so
+explicitly, because a silently-ignored setting reads as a broken feature.
+Custom providers can opt in with `/provider effort <name> on` when they accept
+the field.
+
+Anthropic-format models are not wired up: the Messages API expresses extended
+thinking as `thinking.budget_tokens` rather than `reasoning_effort`, so for
+those models the level currently moves local limits only. Effort applies to
+delegated workers too, since a worker resolves the level from its own model
+alias; only the worker's output budget is capped separately so a worker chosen
+for speed does not inherit a 32k ceiling.
+
 ## Provider Management
 
 ```bash
@@ -202,6 +238,7 @@ effect only for a supported batch caller and never causes implicit fan-out.
 /provider update <name>           # re-fetch provider models
 /provider activate <name>         # show selected provider models
 /provider deactivate <name>       # hide provider models
+/provider effort <name> on|off     # let a custom provider receive reasoning_effort
 /provider list                    # show provider and key status
 /provider test <model>            # test connectivity for a model alias
 /setkey                           # run key setup again
@@ -260,6 +297,10 @@ connection and response wait times.
 
 ```bash
 /model <alias>                    # switch model
+/model <alias> <effort>           # switch model and set reasoning effort in one step
+/effort                           # open the reasoning-effort selector
+/effort <level>                   # set reasoning effort directly (off|low|medium|high|xhigh|max)
+/limits                           # show the active effort level and whether it is sent
 /mode                             # toggle user-friendly/debug output
 /chat find <keyword>              # search all sessions
 /think <prompt>                   # run one deeper reasoning turn
@@ -273,9 +314,6 @@ connection and response wait times.
 /queue follow-up <id>             # convert a steer into a follow-up
 /queue recall <id>                # prefill the editor without removing the message
 /abort                            # interrupt the active Turn and clear queued/recovered work
-/deep                             # full-power mode
-/max                              # maximum mode with up to 100 tool-call iterations
-/ultra                            # MAX limits with up to 150 tool-call iterations
 /init_project [desc]              # initialize project state
 /pwnenv                           # check CTF toolchain integrity
 /ctf init <name>                  # start CTF workspace metadata
@@ -287,7 +325,7 @@ connection and response wait times.
 /extension enable <name>          # explicitly enable an Extension
 /extension disable <name>         # disable an Extension
 /worker [alias|auto]              # inspect or set the preferred worker
-/planguard [strict|advisory|status]  # no argument opens the mode selector; tiers default to advisory, strict is opt-in
+/planguard [strict|advisory|status]  # no argument opens the mode selector; effort levels default to advisory, strict is opt-in
 /agent policy show                # inspect delegated-agent policy
 /agent run <role> <objective>     # print a safe delegate_task request template
 ```
@@ -449,6 +487,9 @@ Analyze ./challenge, use pwn_debug to inspect registers at main breakpoint.
 
 **Q: `/model` doesn't show new models after adding a provider?**
 A: Configure its key, run `/provider fetch <name>`, select models, then `/provider activate <name>`.
+
+**Q: How do I set how hard the model thinks?**
+A: Run `/model` and pick a level right after the model, or use `/effort` on its own. `/effort` with no argument opens the selector, `/effort high` sets it directly, and `/model <alias> <effort>` does both in one step. The level moves the provider's `reasoning_effort` and the runtime limits together. It is sent only for models that declare support — every DeepSeek alias, the `gpt-5.x` family, and `o3` do; for a model that does not, the level still changes local limits and both the selector and `/limits` say it is local-only, so nothing looks silently broken. Custom providers can opt in with `/provider effort <name> on`. The old `/deep`, `/max`, and `/ultra` commands still work and map to `high`, `xhigh`, and `max`.
 
 **Q: Can I abbreviate a slash command?**
 A: Yes. Type a unique prefix or subsequence such as `/plg`; Tab completion lists `/planguard`, and pressing Enter normalizes the command. Only a unique match is dispatched; ambiguous input lists its candidates and runs nothing. All registered built-in commands participate in both Prompt Toolkit and readline completion.

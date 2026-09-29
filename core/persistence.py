@@ -14,6 +14,7 @@ import time
 from contextlib import suppress
 from datetime import datetime
 from config import DEFAULT_MODEL, MODELS, PROVIDERS
+from config.tiers import infer_effort_level
 from core.api_client import call_once
 from core.state import dynamic_config_snapshot
 from core.memory import (
@@ -700,6 +701,13 @@ def session_load(session, query: str) -> str:
     try:
         cfg = dict(snapshot.runtime.get("config", {}))
         update_dynamic_config(cfg)
+        # Snapshots taken before the effort ladder carry limits but no
+        # `effort_level`.  Recover it from the limits themselves so loading an
+        # old session keeps the rung the user had actually chosen instead of
+        # snapping to the default and shifting every limit under them.
+        if not cfg.get("effort_level"):
+            cfg["effort_level"] = infer_effort_level(cfg)
+            update_dynamic_config({"effort_level": cfg["effort_level"]})
     except Exception:
         pass
 

@@ -21,6 +21,7 @@ from typing import Any
 
 from core.queue_tui import queue_rows
 from core.turn_scheduler import SubmissionKind
+from config.tiers import infer_effort_level
 from utils.ansi import YELLOW, c
 
 
@@ -566,15 +567,11 @@ def build_bottom_toolbar(
     """Build the live composer toolbar without coupling it to CLI startup."""
     def bottom_toolbar() -> Any:
         model = session.model_alias
-        tier = "MID"
-        if dynamic_config["max_tokens"] <= 4096:
-            tier = "LOW"
-        elif dynamic_config["max_iter"] >= 150:
-            tier = "ULTRA"
-        elif dynamic_config["max_iter"] >= 100:
-            tier = "MAX"
-        elif dynamic_config["max_tokens"] >= 32768:
-            tier = "DEEP"
+        # Prefer the stored effort level.  Reverse-inference from raw limits
+        # stays as the fallback for a session snapshot written before the
+        # effort ladder existed, so an old session does not silently snap to
+        # the default rung when it is loaded.
+        effort = str(dynamic_config.get("effort_level") or "") or infer_effort_level(dynamic_config)
         time_budget = dynamic_config.get("time_budget_sec", 0)
         time_text = f"  ⏱ {time_budget}s" if time_budget > 0 else ""
         token_count = session.total_prompt_tokens + session.total_completion_tokens
@@ -635,7 +632,7 @@ def build_bottom_toolbar(
         segments = [
             ("model", f"<b>Model:</b> {model}"),
             ("ctx", f"<b>Ctx:</b> <{context_color}>{context_pct}%</{context_color}>"),
-            ("tier", f"<b>Tier:</b> {tier}"),
+            ("effort", f"<b>Effort:</b> {effort}"),
             ("tk", f"<b>Tk:</b> {token_count:,}"),
             ("phase", f"<b>Phase:</b> {session.current_phase}"),
             ("dir", f"<b>Dir:</b> {session.cwd}"),

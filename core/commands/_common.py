@@ -28,11 +28,12 @@ EXIT_SENTINEL: str = "__PAWN_EXIT__"
 def fmt_config() -> str:
     """Render the current dynamic runtime config block as a multi-line string.
 
-    Used by /low, /mid, /deep, /max, /ultra, /normal, /limits to display the
-    effective runtime tunables after a tier change.
+    Used by /effort, the legacy tier aliases and /limits to display the
+    effective runtime tunables after an effort change.
     """
     cfg = runtime_config()
     return (
+        f"  effort          : {c(CYAN, str(cfg.get('effort_level', 'medium')))}  (reasoning effort; /effort)\n"
         f"  max_tokens      : {c(CYAN, str(cfg['max_tokens']))}  (per-API output limit)\n"
         f"  ctx_max_chars   : {c(CYAN, str(cfg['ctx_max_chars']))}  (~{cfg['ctx_max_chars']//4:,} tokens)\n"
         f"  max_iter        : {c(CYAN, str(cfg['max_iter']))}  (tool-call iteration limit)\n"

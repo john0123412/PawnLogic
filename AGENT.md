@@ -733,6 +733,57 @@ fail; do not list a module here before CI checks it.
   no billable path left in the provider flow — the only real inference in the
   product is a Turn. `core/provider_discovery.py` is the seam; adding a
   request to it re-opens the billing hole.
+- **`reasoning_effort` is sent only where a model declares it, and the
+  declaration is a per-rung map rather than a flag.** `MODELS[alias]["effort"]`
+  is `{rung: wire_value}`, so a model that accepts `low`/`medium`/`high` but
+  not `xhigh` simply has no `xhigh` key and that rung is not sent. Do not
+  collapse it to a boolean: the rung map is what keeps a partly-supporting
+  model from being sent a value it rejects. An undeclared model gets an empty
+  map and the field is never written, which is what makes the default safe
+  against an OpenAI-compatible relay that 400s on the parameter. A provider
+  may opt its models in wholesale via `reasoning_effort` in
+  `custom_providers.json` (`/provider effort <name> on|off`), which grants the
+  ladder *minus* `off` — opting in is not a claim that the provider has a
+  `none` value. `core/api_payloads.model_effort_map` is the only resolver;
+  `resolve_reasoning_effort` is called from the single
+  `_build_openai_payload`, deliberately not threaded through call sites,
+  because a missed call site fails silently as "the setting does nothing".
+- **DeepSeek returns 400 when a `tool_calls` turn is replayed without that
+  assistant message's `reasoning_content`.** This is why enabling reasoning
+  on the default provider was safe to do at all, and it is a whole-chain
+  invariant, not a local one: `core/turn_api.py:90` buffers it, **both**
+  branches of `AgentSession._append_assistant_or_tool_call_message` store it
+  (the `tool_calls` branch is the one every real agent turn takes, and the
+  no-tool-call branch is the one that is easy to check), and
+  `_sanitize_messages_for_model` preserves it for reasoning models. Pinned by
+  `TestReasoningContentReadBack` in `tests/test_reasoning_effort.py`; a new
+  message-building path must carry the field or reasoning models 400.
+- **Effort is one knob, so a delegated worker inherits the parent's level.**
+  That is deliberate — a worker resolves the level from its *own* model alias,
+  so "set `high` once" means `high` everywhere. The one exception is
+  `SubAgentSession.MAX_TOKENS`: the ladder scales `max_tokens` to 32k, and a
+  worker chosen for speed inheriting a 32k output ceiling contradicts the
+  reason it was chosen. It mirrors the existing `tool_max_chars` clamp. Do not
+  start suppressing effort per call site (`/think`, history summaries,
+  workspace naming, delegation): four private exception switches drift, and
+  the user asked for one control.
+- **An effort change must preserve `preferred_worker`.** Every tier preset
+  pins it to `"auto"`, so the old `/deep`-style writes silently undid an
+  explicit `/worker <alias>` lock — and because `core/commands/tools.py`'s
+  worker menu reads the on-disk policy *first*, the menu then showed the old
+  value while delegation actually used `auto`. `apply_effort` is the single
+  write path and carries the current worker across; a new writer that does a
+  blanket `update_dynamic_config(preset)` reintroduces it. Pinned by
+  `TestWorkerLockPreserved`.
+- **`cmd_model` receives `arg` and `arg2`, not one remainder string.**
+  `handle_slash` splits the line as `split(None, 2)`, so `/model <alias>
+  <effort>` arrives with the alias in `arg` and the level in `arg2`. A
+  two-token `arg` is also accepted, but the `arg2` path is the one the CLI
+  actually takes; a parser that only splits `ctx.arg` makes the documented
+  scriptable form unreachable while its unit test (which passes the whole
+  string as `arg`) still passes. The same split applies to `/provider
+  <sub> <rest>`. When adding a two-token command form, test through the real
+  `arg`/`arg2` split.
 - User-friendly mode accidentally leaking debug internals.
 - Stream adapters changing public delta dict keys or ordering.
 - Extension discovery importing or enabling third-party code during startup.
@@ -1104,6 +1155,23 @@ fail; do not list a module here before CI checks it.
   green, because the pexpect PTY delivers `\x03` to the `c-c` binding
   instead. The suite as a whole was correct; only running the mutations
   separately showed which gate covers which source.
+- **A test that binds `from config import DYNAMIC_CONFIG` (or `MODELS`,
+  `PROVIDERS`) at module import time will pass alone and fail in the full
+  suite.** Several test modules — `test_security.py`, `test_config.py`,
+  `test_providers.py`, `test_naming.py` and others — evict `config` from
+  `sys.modules` at import time to defeat a stale mock, which re-imports the
+  package and mints a *new* `DYNAMIC_CONFIG` dict. Any module imported
+  earlier holds the old object, so the write lands somewhere the product
+  never reads and the test fails with a value that looks like the feature is
+  broken. It is not order-dependent in the usual sense: the culprit is simply
+  the alphabetically-later file, so a targeted two-file run does not
+  reproduce it. In new tests, go through `core.state.runtime_config()` /
+  `update_dynamic_config()` rather than a module-level binding, and patch
+  `core.api_payloads.MODELS` / `.PROVIDERS` — the maps the resolver actually
+  reads, which are themselves import-time bindings. `runtime_config()`
+  prefers an active `RuntimeContext` and only falls back to the legacy global,
+  so it is the correct accessor in both worlds.
+>>>>>>> f5adada (feat(providers): unify reasoning effort into one knob)
 
 ## Agent Workflow
 

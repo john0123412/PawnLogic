@@ -146,6 +146,9 @@ fn interactive_command_guidance(line: &str) -> Option<&'static str> {
         (Some("/model"), None) => Some(
             "The model selector is not available over wire v1. Use /model <alias> or the Python REPL.",
         ),
+        (Some("/effort"), None) => Some(
+            "The effort selector is not available over wire v1. Use /effort <level> or the Python REPL.",
+        ),
         (Some("/provider"), None) => Some(
             "The provider panel is not available over wire v1. Use /provider list or the Python REPL.",
         ),
@@ -572,12 +575,16 @@ mod tests {
         assert!(interactive_command_guidance("/model")
             .unwrap()
             .contains("/model <alias>"));
+        assert!(interactive_command_guidance("/effort")
+            .unwrap()
+            .contains("/effort <level>"));
         assert!(interactive_command_guidance("/provider")
             .unwrap()
             .contains("/provider list"));
         assert!(interactive_command_guidance("/skills").is_some());
         assert!(interactive_command_guidance("/setkey").is_some());
         assert!(interactive_command_guidance("/model ds-v4-flash").is_none());
+        assert!(interactive_command_guidance("/effort high").is_none());
         assert!(interactive_command_guidance("/provider list").is_none());
     }
 }

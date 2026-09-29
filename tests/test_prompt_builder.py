@@ -23,6 +23,7 @@ class FakeSkillScanner:
 def _build_prompt(**overrides):
     kwargs = {
         "cfg": {
+            "effort_level": "high",
             "max_tokens": 2048,
             "max_iter": 9,
             "ctx_max_chars": 128_000,
@@ -72,7 +73,10 @@ def test_build_session_prompt_injects_retrieved_context():
     assert "Other available phases: EXPLOIT" in prompt
     assert "Working dir : /tmp/pawnlogic-project" in prompt
     assert "Model       : test-model (provider/model-id)" in prompt
-    assert "Limits      : max_tokens=2048  max_iter=9  ctx=128k  tool_out=16000" in prompt
+    assert (
+        "Limits      : effort=high  max_tokens=2048  max_iter=9  "
+        "ctx=128k  tool_out=16000"
+    ) in prompt
     assert "=== Current GSA Categories (from global_skills.md) ===\n# Pwn\n# Python" in prompt
     assert "=== GSA Relevant Skills (ranked by recency" in prompt
     assert "GSA SKILL" in prompt

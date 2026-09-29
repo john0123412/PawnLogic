@@ -34,6 +34,29 @@ PROVIDERS: dict[str, dict] = {
     },
 }
 
+# Per-model reasoning-effort capability, as a rung -> wire value map.
+#
+# A model that declares nothing here is NEVER sent `reasoning_effort`.  That
+# is the whole point of declaring per model rather than per provider: an
+# OpenAI-compatible relay that rejects the parameter must not be able to turn
+# a level change into a 400.  A rung missing from a model's map still works —
+# it applies the local runtime limits for that rung and simply sends nothing.
+#
+# DeepSeek documents that the API accepts the OpenAI-style level names and
+# maps them onto its own low/high/max efforts, so the names go out verbatim
+# rather than being compressed client-side into a guess.
+_EFFORT_DEEPSEEK = {
+    "off": "none", "low": "low", "medium": "medium",
+    "high": "high", "xhigh": "xhigh", "max": "max",
+}
+# The GPT-5 family stops at `high`; it has no `xhigh` or `max` rung.
+_EFFORT_GPT5 = {
+    "off": "none", "low": "low", "medium": "medium", "high": "high",
+}
+# The o-series takes low/medium/high but has no `none`.
+_EFFORT_O_SERIES = {"low": "low", "medium": "medium", "high": "high"}
+
+
 MODELS: dict[str, dict] = {
     "ds-v4-flash": {
         "id":        "deepseek-v4-flash",
@@ -42,6 +65,7 @@ MODELS: dict[str, dict] = {
         "color":     "\033[32m",
         "vision":    False,
         "reasoning": True,   # Returns reasoning_content and must be echoed back.
+        "effort":    _EFFORT_DEEPSEEK,
     },
     "ds-v4-pro": {
         "id":        "deepseek-v4-pro",
@@ -50,6 +74,7 @@ MODELS: dict[str, dict] = {
         "color":     "\033[92m",
         "vision":    False,
         "reasoning": True,
+        "effort":    _EFFORT_DEEPSEEK,
     },
     "gpt-5.5": {
         "id":        "gpt-5.5",
@@ -58,6 +83,7 @@ MODELS: dict[str, dict] = {
         "color":     "\033[97m",
         "vision":    True,
         "reasoning": False,
+        "effort":    _EFFORT_GPT5,
     },
     "gpt-5.4": {
         "id":        "gpt-5.4",
@@ -66,6 +92,7 @@ MODELS: dict[str, dict] = {
         "color":     "\033[37m",
         "vision":    True,
         "reasoning": False,
+        "effort":    _EFFORT_GPT5,
     },
     "gpt-5.4-mini": {
         "id":        "gpt-5.4-mini",
@@ -74,6 +101,7 @@ MODELS: dict[str, dict] = {
         "color":     "\033[36m",
         "vision":    True,
         "reasoning": False,
+        "effort":    _EFFORT_GPT5,
     },
     "gpt-5.4-nano": {
         "id":        "gpt-5.4-nano",
@@ -82,6 +110,7 @@ MODELS: dict[str, dict] = {
         "color":     "\033[90m",
         "vision":    True,
         "reasoning": False,
+        "effort":    _EFFORT_GPT5,
     },
     "gpt-4o": {
         "id":        "gpt-4o",
@@ -106,6 +135,7 @@ MODELS: dict[str, dict] = {
         "color":     "\033[96m",
         "vision":    False,
         "reasoning": False,  # OpenAI o-series reasoning is internalized.
+        "effort":    _EFFORT_O_SERIES,
     },
     "claude-opus": {
         "id":        "claude-opus-4-6",
@@ -290,6 +320,43 @@ def set_provider_active(name: str, active: bool) -> bool:
     with _PROVIDER_STORE_LOCK:
         PROVIDERS[name]["active"] = bool(active) or name in ALWAYS_ACTIVE_PROVIDERS
     return True
+
+
+def set_provider_reasoning_effort(name: str, enabled: bool) -> bool:
+    """Persist whether a provider's models accept ``reasoning_effort``.
+
+    Off by default for every custom provider.  The field is only sent when a
+    model declares it or the user turns it on here, so a relay that rejects
+    the parameter cannot turn an effort change into a 400 the user did not
+    ask for.  Built-in models declare their own capability and are unaffected.
+    """
+    with _PROVIDER_STORE_LOCK:
+        if name not in PROVIDERS:
+            return False
+
+    CUSTOM_PROVIDERS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    data: dict = {"providers": {}, "models": {}, "provider_states": {}}
+    loaded = _read_custom_provider_json(
+        data,
+        action="update reasoning-effort support in",
+        allow_replacement=False,
+    )
+    if loaded is None:
+        return False
+    data = loaded
+    data.setdefault("providers", {})
+    data.setdefault("models", {})
+    data.setdefault("provider_states", {})
+    data["providers"].setdefault(name, {})["reasoning_effort"] = bool(enabled)
+    atomic_write_text(CUSTOM_PROVIDERS_PATH, json.dumps(data, ensure_ascii=False, indent=2))
+    with _PROVIDER_STORE_LOCK:
+        PROVIDERS[name]["reasoning_effort"] = bool(enabled)
+    return True
+
+
+def provider_supports_reasoning_effort(name: str) -> bool:
+    """Return whether a provider opted into sending ``reasoning_effort``."""
+    return bool((PROVIDERS.get(name) or {}).get("reasoning_effort"))
 
 
 # ════════════════════════════════════════════════════════════════════

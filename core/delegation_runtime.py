@@ -193,6 +193,13 @@ class SubAgentSession:
 
     MAX_ITER = 15
 
+    # A worker is selected for speed, so it must not inherit the parent turn's
+    # output budget.  The reasoning-effort ladder scales max_tokens up to 32k,
+    # which would hand a deliberately fast worker a slow, expensive ceiling.
+    # Mirrors the tool_max_chars clamp further down, which uses the same
+    # "cap the parent's tuning" shape with a literal ceiling.
+    MAX_TOKENS = 8_192
+
     def __init__(
         self,
         task: str,
@@ -523,6 +530,7 @@ class SubAgentSession:
         max_tokens = min(
             int(runtime_config()["max_tokens"]),
             remaining_tokens,
+            self.MAX_TOKENS,
         )
         try:
             return stream_request(

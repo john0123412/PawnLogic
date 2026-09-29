@@ -237,7 +237,8 @@ def build_session_prompt(
         f"Working dir : {cwd}\n"
         f"Time        : {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
         f"Model       : {model_alias} ({model['id']})\n"
-        f"Limits      : max_tokens={cfg['max_tokens']}  max_iter={cfg['max_iter']}  "
+        f"Limits      : effort={cfg.get('effort_level', 'medium')}  "
+        f"max_tokens={cfg['max_tokens']}  max_iter={cfg['max_iter']}  "
         f"ctx={cfg['ctx_max_chars']//1000}k  tool_out={cfg['tool_max_chars']}\n\n"
 
         "=== Execution Protocol (MANDATORY) ===\n"

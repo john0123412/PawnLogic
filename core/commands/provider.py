@@ -49,6 +49,7 @@ from config import (
     validate_api_key,
 )
 from config.paths import VERSION
+from config.tiers import EFFORT_LEVELS, is_effort_level
 from core.logger import logger
 from core.provider_runtime import (
     ENV_PATH,
@@ -767,18 +768,44 @@ async def _handle_provider_cmd(
         _provider_set_active(sub_arg.strip(), False)
     elif sub == "remove":
         _provider_remove(sub_arg)
+    elif sub == "effort":
+        _provider_set_effort_support(sub_arg.strip())
     elif sub == "test":
         maybe_result = _provider_test(session, sub_arg)
         if inspect.isawaitable(maybe_result):
             await maybe_result
     else:
-        _print(c(RED, f"  ✗ Unknown sub-command '{sub}'. Available: list · add · fetch · update · activate · deactivate · remove · test"))
+        _print(c(RED, f"  ✗ Unknown sub-command '{sub}'. Available: list · add · fetch · update · activate · deactivate · effort · remove · test"))
+
+
+def _provider_set_effort_support(arg: str) -> None:
+    """Toggle whether a custom provider receives ``reasoning_effort``."""
+    parts = arg.split()
+    if not parts:
+        _print(c(RED, "  Usage: /provider effort <name> on|off"))
+        return
+    name = parts[0]
+    if len(parts) < 2 or parts[1].lower() not in ("on", "off"):
+        _print(c(RED, "  Usage: /provider effort <name> on|off"))
+        return
+    enabled = parts[1].lower() == "on"
+    if name not in provider_config.PROVIDERS:
+        _print(c(RED, f"  ✗ Unknown provider '{name}'"))
+        return
+    if not provider_config.set_provider_reasoning_effort(name, enabled):
+        _print(c(RED, f"  ✗ Could not update reasoning-effort support for '{name}'"))
+        return
+    state = "enabled" if enabled else "disabled"
+    _print(c(GREEN, f"  ✓ reasoning_effort {state} for provider '{name}'"))
+    if enabled:
+        _print(c(GRAY, "    Its models will now receive reasoning_effort for /effort levels."))
+    else:
+        _print(c(GRAY, "    Effort levels still apply local runtime limits only."))
 
 
 # ════════════════════════════════════════════════════════
 # Claude-Code-style inline model picker
 # ════════════════════════════════════════════════════════
-
 async def cc_style_model_selector(
     models: dict, current_alias: str,
 ) -> str | None:
@@ -937,10 +964,104 @@ async def cmd_provider(ctx: CommandContext) -> None:
     )
 
 
+async def _apply_model(ctx: CommandContext, alias: str, *, offer_effort: bool = True) -> None:
+    """Switch the session model, then offer its reasoning-effort level.
+
+    The effort step is chained into the model picker because that is where the
+    user is already choosing how the model behaves.  It is skipped when the
+    model declares no ``reasoning_effort`` support: the level would still move
+    the runtime limits, but there is nothing to negotiate with the provider, so
+    prompting would be noise.  ``/effort`` still reaches those models.
+
+    ``offer_effort=False`` suppresses the chained picker for the scripted
+    ``/model <alias> <effort>`` form, where the level was already given.
+    """
+    from core.api_payloads import model_effort_map
+    from core.commands.system import _effort_delivery, _effort_tui_available, _select_effort_level
+    from core.state import runtime_config
+    from config import DEFAULT_EFFORT_LEVEL
+
+    session = ctx.session
+    models = provider_config.model_snapshot()
+    session.model_alias = alias
+    ok, env = validate_api_key(alias)
+    if not ok:
+        _print(c(YELLOW, f"  ⚠ Switched to {alias}, but {env} is not set. Configure it with /setkey."))
+        return
+    _print(c(GREEN, f"  ✓ Switched to {c(models.get(alias, {}).get('color', ''), alias)}"))
+
+    if not offer_effort:
+        level = str(runtime_config().get("effort_level") or DEFAULT_EFFORT_LEVEL)
+        _print(c(GRAY, f"    {_effort_delivery(alias, level)}"))
+        return
+
+    if not model_effort_map(alias):
+        level = str(runtime_config().get("effort_level") or DEFAULT_EFFORT_LEVEL)
+        _print(c(GRAY, f"    effort={level}  ({_effort_delivery(alias, level)})"))
+        return
+
+    controller = getattr(ctx, "terminal_controller", None)
+    use_controller = controller is not None and getattr(controller, "run_selector", None) is not None
+    if not use_controller and not _effort_tui_available():
+        _print(c(GRAY, "  Pick a reasoning effort with /effort, or /model <alias> <effort>."))
+        return
+
+    current = str(runtime_config().get("effort_level") or DEFAULT_EFFORT_LEVEL)
+    try:
+        if use_controller:
+            from pawnlogic.selectors import EffortSelector
+
+            selected = await controller.run_selector(
+                lambda: EffortSelector(current, alias)
+            )
+        else:
+            selected = await _select_effort_level(current, alias)
+    except (EOFError, KeyboardInterrupt):
+        selected = None
+    except Exception:
+        _print(c(YELLOW, "  Effort selector unavailable; use /effort <level>."))
+        return
+    if selected is None:
+        _print(c(GRAY, f"  Effort unchanged ({current})."))
+        return
+    from core.commands.system import apply_effort
+
+    apply_effort(ctx, selected)
+
+
 @register("/model")
 async def cmd_model(ctx: CommandContext) -> None:
     session = ctx.session
     arg = ctx.arg
+    # The CLI splits the line as ``verb arg arg2`` (see ``handle_slash``), so
+    # ``/model <alias> <effort>`` arrives with the alias in ``arg`` and the
+    # level in ``arg2``.  Accept a two-token ``arg`` too, so a direct call
+    # that hands the whole remainder to ``arg`` still works.
+    _parts = (arg or "").split()
+    if len(_parts) == 1 and (ctx.arg2 or "").strip():
+        _parts.append(ctx.arg2.strip())
+    if len(_parts) == 2:
+        # Scriptable form: /model <alias> <effort>.
+        _alias_arg, _effort_arg = _parts
+        if _alias_arg in provider_config.model_snapshot():
+            _provider_name = provider_config.model_snapshot()[_alias_arg].get("provider", "")
+            if not is_provider_active(_provider_name):
+                _print(c(YELLOW, f"  ⚠ Provider '{_provider_name}' is not active. Run /provider activate {_provider_name} first."))
+                return
+            from core.commands.system import apply_effort
+
+            if not is_effort_level(_effort_arg.lower()):
+                _print(c(RED, f"  ✗ Unknown effort level: {_effort_arg}"))
+                _print(c(GRAY, f"  Levels: {' / '.join(EFFORT_LEVELS)}"))
+                return
+            # Apply the level before switching models, and suppress the
+            # chained picker: the caller already scripted the level, so
+            # re-opening the selector would ignore what they asked for.
+            apply_effort(ctx, _effort_arg.lower())
+            await _apply_model(ctx, _alias_arg, offer_effort=False)
+            return
+        _print(c(RED, f"  ✗ Unknown model '{_alias_arg}'"))
+        return
     if not arg:
         # Claude Code style inline selector.
         _vm = _visible_models()
@@ -969,12 +1090,7 @@ async def cmd_model(ctx: CommandContext) -> None:
             else:
                 result = await cc_style_model_selector(_vm, session.model_alias)
             if result:
-                session.model_alias = result
-                ok, env = validate_api_key(result)
-                if not ok:
-                    _print(c(YELLOW, f"  ⚠ Switched to {result}, but {env} is not set. Configure it with /setkey."))
-                else:
-                    _print(c(GREEN, f"  ✓ Switched to {c(MODELS[result]['color'], result)}"))
+                await _apply_model(ctx, result)
             else:
                 _print(c(GRAY, "  Cancelled"))
         else:
@@ -998,17 +1114,13 @@ async def cmd_model(ctx: CommandContext) -> None:
                     ftag = c(MAGENTA, " [A]") if get_api_format(_alias) == "anthropic" else ""
                     _print(f"    {c(_cfg_m['color'], f'{_alias:14}')}{_cfg_m['desc']:30} {ktag}{vtag}{ftag}{tick}")
             _print(c(GRAY, "\n  Usage: /model <alias>  📷=vision capable  [A]=Anthropic format"))
+            _print(c(GRAY, "         /model <alias> <effort>  to set both at once"))
     elif arg in provider_config.model_snapshot():
         models = provider_config.model_snapshot()
         provider_name = models[arg].get("provider", "")
         if not is_provider_active(provider_name):
             _print(c(YELLOW, f"  ⚠ Provider '{provider_name}' is not active. Run /provider activate {provider_name} first."))
             return
-        session.model_alias = arg
-        ok, env = validate_api_key(arg)
-        if not ok:
-            _print(c(YELLOW, f"  ⚠ Switched to {arg}, but {env} is not set. Configure it with /setkey."))
-        else:
-            _print(c(GREEN, f"  ✓ Switched to {c(models[arg]['color'], arg)}"))
+        await _apply_model(ctx, arg)
     else:
         _print(c(RED, f"  ✗ Unknown model '{arg}'"))

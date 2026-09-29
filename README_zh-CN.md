@@ -143,6 +143,36 @@ collector 和 task-local cancellation token。并发 child 只允许使用已做
 工具。`delegate_task` 仍是单任务兼容 Adapter：`max-concurrency=2` 只对支持的 batch
 caller 生效，绝不会隐式 fan-out。
 
+## 思考强度
+
+思考强度是一个旋钮，不是两个。同一个档位同时决定模型思考多少、以及它有多少可用空间：
+发给 Provider 的 `reasoning_effort`，以及输出 token、工具调用迭代次数、上下文窗口、
+工具输出上限和时间预算这一整套运行时限制。`/model` 在你选完模型后会接着询问档位，
+两个选择在同一个交互里完成。
+
+| 档位 | 发给 Provider | 工具调用迭代 | 替代 |
+|------|---------------|--------------|------|
+| `off` | `none` | 10 | — |
+| `low` | `low` | 10 | `/low` |
+| `medium` | `medium` | 30 | `/mid`、`/normal` |
+| `high` | `high` | 50 | `/deep` |
+| `xhigh` | `xhigh` | 100 | `/max` |
+| `max` | `max` | 150 | `/ultra` |
+
+默认是 `medium`。旧命令仍然可用，并映射到对应档位——既有的肌肉记忆不会出错，
+只是会提示设置搬到了哪里。
+
+只有声明支持该参数的模型才会收到这个字段，因此不识别该参数的中转服务绝不会因为
+你调整强度而报错。全部 DeepSeek 别名、`gpt-5.x` 系列和 `o3` 都声明了支持。
+其他模型上该档位依然会改变本地限制，并且选择器会明确说明——一个被静默忽略的
+设置看起来就像功能坏了。自定义 Provider 接受该字段时，可执行
+`/provider effort <name> on` 显式启用。
+
+Anthropic 格式的模型暂未接入：Messages API 用 `thinking.budget_tokens` 表达扩展
+思考，而不是 `reasoning_effort`，所以这些模型目前只改变本地限制。委派 worker 同样
+继承思考强度，因为 worker 按自己的模型别名解析档位；只有 worker 的输出预算会单独
+封顶，这样为速度挑选的 worker 不会继承 32k 的上限。
+
 ## Provider 管理
 
 ```bash
@@ -152,6 +182,7 @@ caller 生效，绝不会隐式 fan-out。
 /provider update <name>           # 重新拉取 Provider 模型
 /provider activate <name>         # 显示已选择的 Provider 模型
 /provider deactivate <name>       # 隐藏 Provider 模型
+/provider effort <name> on|off     # 让自定义 Provider 接收 reasoning_effort
 /provider list                    # 显示 Provider 和 Key 状态
 /provider test <model>            # 测试某个模型别名的连通性
 /setkey                           # 重新运行 Key 配置
@@ -176,6 +207,10 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 
 ```bash
 /model <alias>                    # 切换模型
+/model <alias> <effort>           # 一步切换模型并设置思考强度
+/effort                           # 打开思考强度选择器
+/effort <level>                   # 直接设置思考强度（off|low|medium|high|xhigh|max）
+/limits                           # 查看当前档位以及是否会发送给 Provider
 /mode                             # 切换用户友好/debug 输出
 /chat find <keyword>              # 搜索所有会话
 /think <prompt>                   # 执行一次更深推理
@@ -189,9 +224,6 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 /queue follow-up <id>             # 将 steer 转换为 follow-up
 /queue recall <id>                # 预填编辑器但不移除消息
 /abort                            # 中断当前 Turn，并清除排队/恢复工作
-/deep                             # full-power 模式
-/max                              # maximum 模式，最多 100 次工具调用迭代
-/ultra                            # 保持 MAX 其余限制，最多 150 次工具调用迭代
 /init_project [desc]              # 初始化项目状态
 /pwnenv                           # 检查 CTF 工具链完整性
 /ctf init <name>                  # 创建 CTF workspace metadata
@@ -203,7 +235,7 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 /extension enable <name>          # 显式启用 Extension
 /extension disable <name>         # 禁用 Extension
 /worker [alias|auto]              # 查看或设置首选 worker
-/planguard [strict|advisory|status]  # 无参数打开模式选择器；各档位默认 advisory，strict 需显式启用
+/planguard [strict|advisory|status]  # 无参数打开模式选择器；各思考强度档默认 advisory，strict 需显式启用
 /agent policy show                # 查看委派 Agent 策略
 /agent run <role> <objective>     # 输出安全的 delegate_task 请求模板
 ```
@@ -323,6 +355,9 @@ MCP 子进程 stderr 默认写入 `~/.pawnlogic/logs/mcp/<server>.stderr.log`。
 
 **Q: 添加了 Provider 但 `/model` 看不到新模型？**
 A: 配置 Key，运行 `/provider fetch <name>`，选择模型，再 `/provider activate <name>`。
+
+**Q: 如何设置模型的思考强度？**
+A: 运行 `/model`，在选完模型后接着选择档位；也可以单独使用 `/effort`。不带参数的 `/effort` 会打开选择器，`/effort high` 直接设置，`/model <alias> <effort>` 则一步完成。该档位同时决定发给 Provider 的 `reasoning_effort` 和一整套运行时限制。只有声明支持的模型才会收到这个字段——全部 DeepSeek 别名、`gpt-5.x` 系列和 `o3` 都声明了；未声明的模型上该档位仍会改变本地限制，并且选择器和 `/limits` 都会说明仅本地生效，不会显得像是功能坏了。自定义 Provider 可执行 `/provider effort <name> on` 显式启用。旧的 `/deep`、`/max`、`/ultra` 仍然可用，分别映射到 `high`、`xhigh`、`max`。
 
 **Q: 可以缩写斜杠命令吗？**
 A: 可以。输入唯一前缀或子序列，例如 `/plg`；按 Tab 会列出 `/planguard`，直接按 Enter 也会规范化该命令。只有唯一匹配才会被执行；如果存在歧义，Pawn 会列出候选项且不执行任何命令。所有已注册的内置命令都会参与 Prompt Toolkit 和 readline 补全。

@@ -14,7 +14,12 @@ from .providers import (
     custom_model_alias, is_chat_model_candidate,
     is_provider_active, set_provider_active,
 )
-from .tiers import TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX, TIER_ULTRA
+from .tiers import (
+    TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX, TIER_ULTRA,
+    EFFORT_LEVELS, DEFAULT_EFFORT_LEVEL, EFFORT_PRESETS, EFFORT_WIRE_VALUES,
+    is_effort_level, effort_preset, effort_options, effort_delivery,
+    infer_effort_level,
+)
 from .security import (
     READ_BLACKLIST, WRITE_BLACKLIST, DANGEROUS_PATTERNS,
     smart_truncate, user_friendly_error, scrub_sensitive_env,
@@ -37,6 +42,9 @@ __all__ = [
     "custom_model_alias", "is_chat_model_candidate",
     "is_provider_active", "set_provider_active",
     "TIER_LOW", "TIER_MID", "TIER_DEEP", "TIER_MAX", "TIER_ULTRA",
+    "EFFORT_LEVELS", "DEFAULT_EFFORT_LEVEL", "EFFORT_PRESETS", "EFFORT_WIRE_VALUES",
+    "is_effort_level", "effort_preset", "effort_options", "effort_delivery",
+    "infer_effort_level",
     "READ_BLACKLIST", "WRITE_BLACKLIST", "DANGEROUS_PATTERNS",
     "smart_truncate", "user_friendly_error", "scrub_sensitive_env",
     "SANDBOX_LANGS", "DOCKER_IMAGES", "BROWSER_CONFIG", "USER_AGENTS",
@@ -47,10 +55,12 @@ __all__ = [
 ]
 
 # Backward compatibility: DYNAMIC_CONFIG / NORMAL_CONFIG.
-# These mutable dicts are changed at runtime by tier commands such as /mid.
-# Keep them here for existing `from config import DYNAMIC_CONFIG` imports.
-DYNAMIC_CONFIG: dict = dict(TIER_MID)
-NORMAL_CONFIG:  dict = dict(TIER_MID)
+# These mutable dicts are changed at runtime by effort commands such as /mid
+# and /effort. Keep them here for existing `from config import DYNAMIC_CONFIG`
+# imports. The seed is the default effort preset, so a fresh session starts on
+# a rung that carries its own `effort_level` instead of an unlabelled tier.
+DYNAMIC_CONFIG: dict = effort_preset(DEFAULT_EFFORT_LEVEL)
+NORMAL_CONFIG:  dict = effort_preset(DEFAULT_EFFORT_LEVEL)
 try:
     from core.state import bind_dynamic_config
     bind_dynamic_config(DYNAMIC_CONFIG)

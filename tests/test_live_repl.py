@@ -341,7 +341,7 @@ def test_bottom_toolbar_reports_immutable_queue_snapshot():
         # status-line's job (see tests/test_status_line.py).
         plain = toolbar.replace("<b>", "").replace("</b>", "")
         assert "Model: model" in plain
-        assert "Tier: MAX" in plain
+        assert "Effort: xhigh" in plain
         assert "steer:" not in plain
         assert "follow-up:" not in plain
         assert "Failed" not in plain

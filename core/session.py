@@ -2315,7 +2315,7 @@ class AgentSession:
             except KeyboardInterrupt:
                 raise TurnInterrupted()
 
-        print(c(RED, f"\n[Reached max_iter={turn_state.max_iter}; change it with /max, /ultra, or /iter <n>]"))
+        print(c(RED, f"\n[Reached max_iter={turn_state.max_iter}; raise it with /effort, or /iter <n>]"))
         logger.warning(
             "max_iter reached | model={} session={} max_iter={}",
             self.model_alias, self.session_id[:8], turn_state.max_iter,
