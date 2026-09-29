@@ -47,8 +47,6 @@ from prompt_toolkit.layout import Dimension, Layout
 from prompt_toolkit.layout.containers import (
     ConditionalContainer,
     DynamicContainer,
-    Float,
-    FloatContainer,
     HSplit,
     Window,
 )
@@ -1509,8 +1507,27 @@ class PersistentTerminal:
         # one output region is ever visible at a time, which avoids
         # the "two output panes stacked" scramble on small terminals
         # and guarantees the selector sees the full body height.
+        #
+        # The completion menu is a real HSplit child, not a Float.  A Float
+        # never participates in layout: it is painted over rows that already
+        # exist, and ``FloatContainer`` anchors a cursor float *below* the
+        # cursor whenever the space below is at least the space above, then
+        # clips it to whatever is left.  This Application is inline
+        # (``full_screen=False``), so its block is only as tall as the rows
+        # below the cursor -- about three.  "Below the cursor" was therefore
+        # the toolbar row, and the model field and the candidates were drawn
+        # on top of each other with the menu clipped to one line.  As an
+        # HSplit child it reserves its own rows between the output viewport
+        # and the composer, so it can never cover the toolbar.
+        completion_menu = CompletionsMenu(max_height=6, scroll_offset=1)
         body = HSplit(
-            [output_window, queue_preview, self._composer.window, toolbar_window]
+            [
+                output_window,
+                queue_preview,
+                completion_menu,
+                self._composer.window,
+                toolbar_window,
+            ]
         )
         def root_content() -> Any:
             """Select the body that determines the inline app's height.
@@ -1529,16 +1546,7 @@ class PersistentTerminal:
                 return modal.container
             return body
 
-        root = FloatContainer(
-            content=DynamicContainer(root_content),
-            floats=[
-                Float(
-                    xcursor=True,
-                    ycursor=True,
-                    content=CompletionsMenu(max_height=6, scroll_offset=1),
-                ),
-            ],
-        )
+        root = DynamicContainer(root_content)
         self._application = Application(
             layout=Layout(root, focused_element=self._composer),
             key_bindings=bindings,

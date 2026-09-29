@@ -1635,3 +1635,106 @@ def test_model_list_loads_with_one_key_in_the_live_application() -> None:
                 await asyncio.wait_for(run_task, timeout=5)
 
     asyncio.run(scenario())
+
+
+class _InlineSizedOutput(DummyOutput):
+    """A terminal output with the inline geometry a real host reports.
+
+    ``DummyOutput.get_rows_below_cursor_position`` returns a hardcoded ``40``
+    (``prompt_toolkit/output/base.py``), which makes the inline application
+    block 40 rows tall.  On a real terminal the value comes from a cursor
+    position report and is small, so the block is only as tall as its own
+    layout.  Completion-menu placement is decided from that height, so tests
+    that use a bare ``DummyOutput`` never see the production geometry.
+    """
+
+    def __init__(self, rows_below: int = 3) -> None:
+        super().__init__()
+        self._rows_below = rows_below
+
+    def get_rows_below_cursor_position(self) -> int:
+        return self._rows_below
+
+
+def test_completion_menu_gets_its_own_rows_instead_of_covering_the_toolbar() -> None:
+    """The slash/model completion menu must never share a row with the toolbar.
+
+    The menu was mounted as a Prompt Toolkit ``Float``.  A ``Float`` does not
+    participate in layout: it is drawn on top of whatever rows already exist.
+    ``FloatContainer`` places a cursor-anchored float *below* the cursor
+    whenever the space below is at least the space above, and then clips it to
+    the space that is left.  The live terminal is an inline
+    (``full_screen=False``) Application whose block is only as tall as the rows
+    below the cursor, so "below the cursor" is the toolbar row: the model
+    field and the completion candidates were drawn on top of each other and
+    the menu was clipped to a single row.
+    """
+    from prompt_toolkit.completion import Completer, Completion
+
+    candidates = (
+        ("/model", "Switch the active model alias"),
+        ("/model list", "List visible models"),
+        ("/agent policy model allow", "Allow a visible worker model"),
+    )
+
+    class _SlashCompleter(Completer):
+        def get_completions(self, document, complete_event):
+            text = document.text_before_cursor
+            if not text.startswith("/"):
+                return
+            for word, meta in candidates:
+                yield Completion(
+                    word,
+                    start_position=-len(text),
+                    display=word,
+                    display_meta=meta,
+                )
+
+    async def scenario() -> None:
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(
+                input=pipe,
+                output=_InlineSizedOutput(),
+                completer=_SlashCompleter(),
+            )
+            run_task = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+            try:
+                idle = terminal.rendered_screen_lines()
+                assert idle[-1].startswith("Ready"), (
+                    f"toolbar row is not the last row: {idle[-1]!r}"
+                )
+
+                pipe.send_text("/mo")
+                await asyncio.sleep(1.0)
+
+                open_lines = terminal.rendered_screen_lines()
+                assert open_lines[-1].startswith("Ready"), (
+                    "the completion menu was drawn over the toolbar row: "
+                    f"{open_lines[-1]!r}"
+                )
+                # Match on the meta column: the commands themselves are
+                # multi-word and nested ("/model" is a prefix of
+                # "/model list"), so only the descriptions identify a row.
+                for word, meta in candidates:
+                    rows = [line for line in open_lines if meta in line]
+                    assert len(rows) == 1, (
+                        f"{meta!r} must be on exactly one row, found "
+                        f"{len(rows)}: {open_lines!r}"
+                    )
+                    assert word in rows[0], f"{word!r} missing from {rows[0]!r}"
+                # Each candidate owns its row, so the composer and the toolbar
+                # carry none of them.
+                for tail in (open_lines[-2], open_lines[-1]):
+                    for _word, meta in candidates:
+                        assert meta not in tail, f"{meta!r} collides with {tail!r}"
+                assert len(open_lines) == len(idle) + len(candidates), (
+                    "the menu must reserve one layout row per candidate "
+                    f"instead of overlaying them: idle={len(idle)} "
+                    f"open={len(open_lines)}"
+                )
+            finally:
+                terminal.close()
+                await asyncio.wait_for(run_task, timeout=5)
+
+    asyncio.run(scenario())

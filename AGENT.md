@@ -787,6 +787,27 @@ fail; do not list a module here before CI checks it.
   selector, including the `/provider fetch` model multi-select, must run
   inside the persistent Application through the controller's `run_selector`;
   a second `Application.run_async()` corrupts cursor/escape state (ADR 0010).
+- A Prompt Toolkit `Float` never participates in layout: it is painted over
+  rows that already exist. The live terminal is an inline
+  (`full_screen=False`) Application, so its block is only as tall as the rows
+  below the cursor — about three — and `FloatContainer` anchors a
+  cursor-float *below* the cursor whenever the space below is at least the
+  space above, then clips it to what is left. The completion menu was mounted
+  that way, so "below the cursor" was the toolbar row: the model field and
+  the fuzzy-match candidates were drawn on top of each other and the menu was
+  clipped to one line. It is now an `HSplit` child between the output window
+  and the composer, so it reserves its own rows. **Keep any new menu,
+  dropdown, or overlay that a user can type into as real layout, not a
+  Float.** Two traps make this easy to reintroduce unnoticed:
+  `DummyOutput.get_rows_below_cursor_position()` returns a hardcoded `40`
+  (a real host reports the true value via CPR), so every test that renders
+  through a bare `DummyOutput` gets a 40-row block where the float happens to
+  flip above the cursor and looks correct — use an output double that reports
+  production geometry, as `_InlineSizedOutput` does. And `FloatContainer`
+  was doing nothing else here, so the root is a bare `DynamicContainer`;
+  reintroducing it for a new float also reintroduces the clipping.
+  Pinned by
+  `test_completion_menu_gets_its_own_rows_instead_of_covering_the_toolbar`.
 - A tool thread must never leave a selector mounted. Abandoning a worker
   does not unwind it, and a thread-side `future.result(timeout=...)` that
   expires does not cancel the coroutine it was waiting on, so the
