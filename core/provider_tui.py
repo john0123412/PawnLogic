@@ -610,12 +610,12 @@ class ProviderTUI:
         @kb.add("left",  filter=_dlg)
         @kb.add("up",    filter=_dlg)
         @kb.add("s-tab", filter=_dlg)
-        def _dlg_prev(e): self._dialog_cursor = (self._dialog_cursor - 1) % 2; inv()
+        def _dlg_prev(e: Any) -> None: self._dialog_cursor = (self._dialog_cursor - 1) % 2; inv()
 
         @kb.add("right", filter=_dlg)
         @kb.add("down",  filter=_dlg)
         @kb.add("tab",   filter=_dlg)
-        def _dlg_next(e): self._dialog_cursor = (self._dialog_cursor + 1) % 2; inv()
+        def _dlg_next(e: Any) -> None: self._dialog_cursor = (self._dialog_cursor + 1) % 2; inv()
 
         @kb.add("enter", filter=_dlg)
         def _dlg_enter(e):
@@ -708,10 +708,10 @@ class ProviderTUI:
         _det = Condition(lambda: self._panel == "detail" and not self._dialog and not self._detail_key_active)
 
         @kb.add("up",    filter=_det)
-        def _d_up(e): self._detail_cursor = (self._detail_cursor - 1) % len(self._detail_actions()); inv()
+        def _d_up(e: Any) -> None: self._detail_cursor = (self._detail_cursor - 1) % len(self._detail_actions()); inv()
 
         @kb.add("down",  filter=_det)
-        def _d_dn(e): self._detail_cursor = (self._detail_cursor + 1) % len(self._detail_actions()); inv()
+        def _d_dn(e: Any) -> None: self._detail_cursor = (self._detail_cursor + 1) % len(self._detail_actions()); inv()
 
         @kb.add("enter", filter=_det)
         def _d_enter(e): e.app.create_background_task(self._detail_action())
@@ -854,7 +854,7 @@ class ProviderTUI:
 
         @kb.add("l", filter=_ms_list)
         @kb.add("L", filter=_ms_list)
-        def _ms_to_actions(e):
+        def _ms_to_actions(e: Any) -> None:
             # The action row is always painted at the bottom of the panel, but
             # it sits at cursor index N, so reaching it cost one Down press
             # per model. With a full openrouter list that was 200 presses.
@@ -1078,7 +1078,7 @@ class ProviderTUI:
         if self._app:
             self._app.invalidate()
 
-    def _begin_model_selection(self, **kwargs) -> None:
+    def _begin_model_selection(self, **kwargs: Any) -> None:
         """Start a selection session with the search box genuinely empty.
 
         ``ProviderTUIState.begin_model_selection`` resets the mirrored
