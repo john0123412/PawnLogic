@@ -5,6 +5,94 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- A provider's `Base URL` and `Format` can now be corrected from the provider
+  TUI. The detail view gained an `Edit Provider` action that reuses the
+  existing Add Provider form with the current values prefilled, and saves
+  through one atomic write. The provider name, its API key, its active
+  state, and its loaded models are all preserved. Renaming is deliberately
+  not offered: it would have to re-point every model entry and the key's
+  environment variable, which cannot be done in a single write.
+  `core/provider_runtime.update_custom_provider` is the new entry point.
+
+### Fixed
+- `Fetch` and `Sync` spent real money. Every candidate model was verified with
+  a `POST /chat/completions` — a billable inference, not a metadata lookup.
+  openrouter returns hundreds of models, so a single fetch issued hundreds of
+  charged requests, took minutes at concurrency 4, and could double that on
+  any model that rate-limited and was retried. Filtering now reads
+  `architecture.output_modalities` from the free `/v1/models` response the
+  fetch already has, so no chat request is made and the whole fetch costs one
+  listing call (measured: 200 models in 0.68s, zero billable requests). The
+  inference probe and its response classifier are deleted.
+- `/provider test <model>` also spent real money, and worse, it spent it
+  silently — the command's own output said "Connected" with no indication that
+  a paid inference had just run. It POSTed `max_tokens=1` to the chat
+  endpoint, which is a real billable request, not a metadata lookup. It now
+  issues a single `GET` against the same free `models_url_from_base_url()`
+  listing that fetch uses, which answers the two things a user actually asks
+  ("is the base URL reachable", "does this key work") at no cost, and says so
+  in its result: `Connected (195ms; free model listing, no inference sent)`.
+  The `connection_result_from_response()` helper, which existed only to
+  interpret a chat response, is deleted along with the `POST`-specific
+  tolerance for a 400 that actually meant "connected, but this model is
+  unusable". The honest cost: a model the key cannot use is no longer
+  detected up front. It is filtered out of the list in neither case now, and
+  surfaces as a normal API error on first use.
+- Loading ticked models still cost a walk to the bottom of the list. The `L`
+  jump fixed reach, but the common flow — tick, tick, save — still ended in
+  `L` then `Enter`. The selector now takes `s` to load and stay in the list,
+  and `S` to load and close, from wherever the cursor is, matching the
+  existing `a`/`A` and `l`/`L` pairs. Both share one
+  `_ms_load_selected()` helper with the action row, so the
+  "select at least one model" guard cannot drift between the two paths. The
+  panel's key hint now also says that `Enter` ticks, which it always did.
+- The model list behind `Fetch` and `Sync` was effectively unusable on a real
+  provider. Ticking worked, but the three actions sat at cursor index N —
+  after the last model — so loading a ticked model needed one `↓` press per
+  model in the list. openrouter returns hundreds of models, which made that
+  200 presses with no shortcut, and the panel never printed its own key
+  hints. `L` now jumps straight to the action row from anywhere, and the
+  panel advertises its keys.
+- Model checkboxes in the provider TUI's `Fetch` and `Sync` list could not be
+  ticked after the list had been used once. The search `TextArea` is a widget
+  owned by `ProviderTUI` and outlives a selection session, but
+  `ProviderTUIState.begin_model_selection` only reset the mirrored
+  `model_search` field. Every render re-imports the widget text over that
+  reset, so the next list opened already filtered by a query from the
+  previous one — and when the leftover query matched nothing, the list came
+  up empty with no checkbox left to tick. The widget is now cleared alongside
+  the state, so every `Fetch` and `Sync` starts from the full list.
+  `ProviderTUI._begin_model_selection` is the new entry point.
+- The model selector's three actions (`Load Selected`, `Load & Close`,
+  `Cancel`) marked the focused one with colour only, the same defect already
+  fixed for the Add Provider form and the delete dialog: with colour stripped
+  or the output piped, the user could not see where `Enter` would land. They
+  now mark the focused action in text as well, through a shared
+  `focus_buttons()` helper used by both the dialogs and the selector.
+- The provider TUI's `Delete Provider` confirmation could not be confirmed.
+  Three defects combined: the dialog marked the focused button with
+  background colour only, so the focus was invisible whenever the terminal
+  stripped colour or the output was piped; `↑` and `↓` were unbound, so the
+  keys a user reaches for first did nothing; and the cursor started on
+  `Cancel`, so a bare `Enter` closed the dialog without deleting. The focused
+  button is now marked in text as well as colour, and all four arrow keys
+  plus `Tab` move between the buttons. The deny-by-default cursor position
+  is unchanged.
+- The provider detail panel's action menu and its dispatcher were two
+  independent hardcoded lists, so adding a row to one without shifting every
+  index in the other would have made the highlighted row run a different
+  action than it showed. Both now read one `detail_actions()` list, and the
+  cursor bounds are derived from it rather than hardcoded.
+
+### Changed
+- The provider TUI's form and dialog drawing moved to
+  `core/provider_tui_form.py`. `core/provider_tui.py` was at 195/195 branch
+  complexity — the exact ceiling — so the shared Add/Edit form and the
+  confirmation dialogs were extracted to make room. No behaviour change.
+
 ## [0.3.12] - 2026-09-28
 
 ### Fixed

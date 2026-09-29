@@ -25,10 +25,11 @@ from config.providers import (
     remove_model,
 )
 from core.provider_tui_state import ProviderTUIState
+from core import provider_tui_form as _form
 from pawnlogic.selectors import ModalSpec
 from core.provider_runtime import (
     candidate_save_alias as _candidate_save_alias,
-    connection_result_from_response as _connection_result_from_response,
+    connection_result_from_listing as _connection_result_from_listing,
     fetch_models as _fetch_models,
     filter_supported_chat_models as _filter_supported_chat_models,
     first_provider_chat_model as _first_provider_chat_model,
@@ -37,8 +38,6 @@ from core.provider_runtime import (
     model_alias_changes as _model_alias_changes,
     model_is_chat_candidate as _model_is_chat_candidate,
     model_rejection_reason as _model_rejection_reason,
-    normalize_base_url as _normalize_base_url,
-    probe_openai_chat_model as _probe_openai_chat_model,
     REASONING_KEYWORDS as _REASONING_KEYWORDS,
     record_sync_time as _record_sync_time,
     save_key as _save_key_to_env,
@@ -46,6 +45,7 @@ from core.provider_runtime import (
     sync_models_to_runtime as _sync_models_to_runtime,
     test_connection as _test_connection,
     delete_custom_provider as _delete_custom_provider,
+    update_custom_provider as _update_custom_provider,
 )
 from core.file_store import atomic_write_text
 from core.logger import logger
@@ -55,7 +55,7 @@ __all__ = [
     "run_provider_tui",
     "TUI_STYLE",
     "_candidate_save_alias",
-    "_connection_result_from_response",
+    "_connection_result_from_listing",
     "_fetch_models",
     "_filter_supported_chat_models",
     "_first_provider_chat_model",
@@ -64,8 +64,6 @@ __all__ = [
     "_model_alias_changes",
     "_model_is_chat_candidate",
     "_model_rejection_reason",
-    "_normalize_base_url",
-    "_probe_openai_chat_model",
     "_save_key_to_env",
     "_test_connection",
 ]
@@ -145,6 +143,7 @@ class ProviderTUI:
         "_dialog_cursor": "dialog_cursor", "_wiz_fields_pending": "wiz_fields_pending",
         "_wiz_fields": "wiz_fields", "_wiz_focus": "wiz_focus",
         "_wiz_fmt_open": "wiz_fmt_open", "_wiz_fmt_cursor": "wiz_fmt_cursor",
+        "_wiz_edit": "wiz_edit",
         "_wiz_error": "wiz_error", "_wiz_status": "wiz_status",
         "_wiz_status_style": "wiz_status_style", "_ms_all": "model_all",
         "_ms_selected": "model_selected", "_ms_manual": "model_manual",
@@ -204,6 +203,7 @@ class ProviderTUI:
         self._wiz_focus: int = 0
         self._wiz_fmt_open: bool = False
         self._wiz_fmt_cursor: int = 0
+        self._wiz_edit: str = ""
         self._wiz_error: str = ""
         self._wiz_status: str = ""
         self._wiz_status_style: str = ""
@@ -364,6 +364,9 @@ class ProviderTUI:
 
     # ── render: detail ────────────────────────────────────────────────────────
 
+    def _detail_actions(self) -> list[str]:
+        return _form.detail_actions(self._state)
+
     def _render_detail(self) -> StyleAndTextTuples:
         pname = self._detail_provider
         pinfo = _provider_snapshot().get(pname, {})
@@ -394,9 +397,7 @@ class ProviderTUI:
         f.append(("", "\n"))
         if self._detail_key_active:
             f.append(("class:warning", "  New API Key (input hidden, Enter to save, Esc to cancel):\n"))
-        active_action = "Deactivate Provider" if active else "Activate Provider"
-        actions = ["Update API Key", "Fetch / Sync Models", "Test Connection",
-                   "Manage Models", active_action, "Delete Provider"]
+        actions = self._detail_actions()
         for i, act in enumerate(actions):
             if i == self._detail_cursor and not self._detail_key_active:
                 f.append(("class:cursor", f"  ▶ [ {act} ]\n"))
@@ -414,40 +415,14 @@ class ProviderTUI:
 
     # ── render: wizard ────────────────────────────────────────────────────────
 
+    def _wiz_focus_cycle(self) -> list[int]:
+        return _form.wiz_focus_cycle(self._state)
+
     def _render_wizard(self) -> StyleAndTextTuples:
-        labels = ["Name", "Base URL", "Format", "API Key"]
-        f: StyleAndTextTuples = [("class:title", "\n  ✚ Add Provider\n\n")]
-        self._sync_wizard_fields_from_inputs()
-        for i, label in enumerate(labels):
-            focused = (i == self._wiz_focus)
-            s = "class:field-focus" if focused else "class:field-normal"
-            val = self._wiz_fields[i]
-            if i == 3:
-                display = "•" * len(val) if val else ""
-            elif i == 2:
-                display = "Anthropic Compatible" if val == "anthropic" else "OpenAI Compatible"
-            else:
-                display = val
-            f.append((s, f"  {'①②③④'[i]} {label:<10} [ {display:<40} ]\n"))
-            if i == 2 and focused and self._wiz_fmt_open:
-                for j, opt in enumerate(["OpenAI Compatible", "Anthropic Compatible"]):
-                    cur = "▶ " if j == self._wiz_fmt_cursor else "  "
-                    fs = "class:cursor" if j == self._wiz_fmt_cursor else "class:subtitle"
-                    f.append((fs, f"       {cur}{opt}\n"))
-        f.append(("", "\n"))
-        bs = "class:btn-focus" if self._wiz_focus == 4 else "class:btn-normal"
-        f.append((bs, "  [ Save Provider ]\n\n"))
-        if self._wiz_error:
-            f.append(("class:error", f"  ✗ {self._wiz_error}\n"))
-        if self._wiz_status:
-            f.append((self._wiz_status_style, f"  {self._wiz_status}\n"))
-        return f
+        return _form.render_wizard(self)
 
     def _render_status_wizard(self) -> StyleAndTextTuples:
-        return [("class:status-key", " Tab "), ("class:status", "Next Field  "),
-                ("class:status-key", "↑↓ "), ("class:status", "Move/Select  "),
-                ("class:status-key", "Enter "), ("class:status", "Save  "),
-                ("class:status-key", "Esc "), ("class:status", "Cancel ")]
+        return _form.render_status_wizard()
 
     # ── render: model selector ────────────────────────────────────────────────
 
@@ -465,6 +440,13 @@ class ProviderTUI:
             f.append(("", "\n"))
         sb_s = "class:field-focus" if self._ms_search_focus else "class:field-normal"
         f.append((sb_s, f"  🔍 Search: {self._ms_search}{'▌' if self._ms_search_focus else ''}\n\n"))
+        f.append(
+            (
+                "class:subtitle",
+                "  Space/Enter toggle · ↑↓ move · s save · S save+close"
+                " · a all · c none · L actions · Esc cancel\n\n",
+            )
+        )
         # Only render the visible viewport window — never all rows
         start = self._ms_viewport
         end = min(start + _PAGE, total)
@@ -481,12 +463,14 @@ class ProviderTUI:
         if total > _PAGE:
             f.append(("class:subtitle", f"\n  Showing {start+1}–{end} of {total}\n"))
         f.append(("", f"\n  {len(self._ms_selected)} selected\n\n"))
-        load_style = "class:btn-focus" if self._ms_cursor == total and not self._ms_search_focus else "class:btn-normal"
-        close_style = "class:btn-focus" if self._ms_cursor == total + 1 and not self._ms_search_focus else "class:btn-normal"
-        cancel_style = "class:btn-focus" if self._ms_cursor == total + 2 and not self._ms_search_focus else "class:btn-normal"
-        f.append((load_style, "  [ Load Selected ]  "))
-        f.append((close_style, "[ Load & Close ]  "))
-        f.append((cancel_style, "[ Cancel ]\n"))
+        # -1 focuses nothing, matching the old behaviour while the search box
+        # has focus: the actions stay visible but unselected.
+        btn_focus = -1 if self._ms_search_focus else self._ms_cursor - total
+        f += _form.focus_buttons(
+            ["Load Selected", "Load & Close", "Cancel"],
+            btn_focus,
+            trailing_newline=True,
+        )
         if self._ms_error:
             f.append(("class:error", f"\n  ⚠ {self._ms_error}\n"))
         return f
@@ -504,33 +488,7 @@ class ProviderTUI:
     # ── render: dialogs ───────────────────────────────────────────────────────
 
     def _render_dialog(self) -> StyleAndTextTuples:
-        if self._dialog == "security":
-            f: StyleAndTextTuples = [
-                ("class:dialog-title", "  ⚠  Security Notice\n\n"),
-                ("class:dialog-body", "  Updating the API Key will clear the existing key.\n"),
-                ("class:dialog-body", "  You must paste the full key again.\n"),
-                ("class:dialog-body", "  The key will never be displayed in plain text.\n\n"),
-            ]
-            for i, btn in enumerate(["Continue", "Cancel"]):
-                f.append(("class:btn-focus" if i == self._dialog_cursor else "class:btn-normal",
-                           f"  [ {btn} ]  "))
-        elif self._dialog == "delete":
-            pname = self._detail_provider
-            f = [("class:dialog-title", "  🗑  Confirm Delete\n\n"),
-                 ("class:dialog-body", f"  Delete provider '{pname}'? This cannot be undone.\n\n")]
-            for i, btn in enumerate(["Cancel", "Delete"]):
-                f.append(("class:btn-focus" if i == self._dialog_cursor else "class:btn-normal",
-                           f"  [ {btn} ]  "))
-        elif self._dialog == "save_anyway":
-            f = [("class:dialog-title", "  ⚠  Connection Failed\n\n"),
-                 ("class:dialog-body", "  Save provider anyway without testing?\n\n")]
-            for i, btn in enumerate(["No — Edit", "Yes — Save"]):
-                f.append(("class:btn-focus" if i == self._dialog_cursor else "class:btn-normal",
-                           f"  [ {btn} ]  "))
-        else:
-            return []
-        f.append(("", "\n"))
-        return f
+        return _form.render_dialog(self)
 
     def _render_manage_models(self) -> StyleAndTextTuples:
         pname = self._mm_provider
@@ -643,10 +601,17 @@ class ProviderTUI:
         # ── dialogs ───────────────────────────────────────────────────────────
         _dlg = Condition(lambda: self._dialog is not None)
 
-        @kb.add("left",   filter=_dlg)
-        @kb.add("right",  filter=_dlg)
-        @kb.add("tab",    filter=_dlg)
-        def _dlg_move(e): self._dialog_cursor ^= 1; inv()
+        # Arrows as well as tab: up/down were previously unbound, so the keys a
+        # user reaches for first did nothing at all.
+        @kb.add("left",  filter=_dlg)
+        @kb.add("up",    filter=_dlg)
+        @kb.add("s-tab", filter=_dlg)
+        def _dlg_prev(e: Any) -> None: self._dialog_cursor = (self._dialog_cursor - 1) % 2; inv()
+
+        @kb.add("right", filter=_dlg)
+        @kb.add("down",  filter=_dlg)
+        @kb.add("tab",   filter=_dlg)
+        def _dlg_next(e: Any) -> None: self._dialog_cursor = (self._dialog_cursor + 1) % 2; inv()
 
         @kb.add("enter", filter=_dlg)
         def _dlg_enter(e):
@@ -739,10 +704,10 @@ class ProviderTUI:
         _det = Condition(lambda: self._panel == "detail" and not self._dialog and not self._detail_key_active)
 
         @kb.add("up",    filter=_det)
-        def _d_up(e): self._detail_cursor = (self._detail_cursor - 1) % 6; inv()
+        def _d_up(e: Any) -> None: self._detail_cursor = (self._detail_cursor - 1) % len(self._detail_actions()); inv()
 
         @kb.add("down",  filter=_det)
-        def _d_dn(e): self._detail_cursor = (self._detail_cursor + 1) % 6; inv()
+        def _d_dn(e: Any) -> None: self._detail_cursor = (self._detail_cursor + 1) % len(self._detail_actions()); inv()
 
         @kb.add("enter", filter=_det)
         def _d_enter(e): e.app.create_background_task(self._detail_action())
@@ -809,14 +774,18 @@ class ProviderTUI:
         @kb.add("down",  filter=_wiz_nav)
         def _w_next(e):
             self._wiz_fmt_open = False
-            self._wiz_focus = (self._wiz_focus + 1) % 5
+            rows = self._wiz_focus_cycle()
+            at = rows.index(self._wiz_focus) if self._wiz_focus in rows else -1
+            self._wiz_focus = rows[(at + 1) % len(rows)]
             self._focus_active_input()
 
         @kb.add("s-tab", filter=_wiz_nav)
         @kb.add("up",    filter=_wiz_nav)
         def _w_prev(e):
             self._wiz_fmt_open = False
-            self._wiz_focus = (self._wiz_focus - 1) % 5
+            rows = self._wiz_focus_cycle()
+            at = rows.index(self._wiz_focus) if self._wiz_focus in rows else 0
+            self._wiz_focus = rows[(at - 1) % len(rows)]
             self._focus_active_input()
 
         _fmt_closed = Condition(lambda: self._panel == "wizard" and self._wiz_focus == 2
@@ -879,6 +848,34 @@ class ProviderTUI:
                 self._ms_viewport = self._ms_cursor - _PAGE + 1
             inv()
 
+        @kb.add("l", filter=_ms_list)
+        @kb.add("L", filter=_ms_list)
+        def _ms_to_actions(e: Any) -> None:
+            # The action row is always painted at the bottom of the panel, but
+            # it sits at cursor index N, so reaching it cost one Down press
+            # per model. With a full openrouter list that was 200 presses.
+            self._ms_cursor = len(self._ms_filtered())
+            inv()
+
+        def _ms_load_selected(save_exit: bool) -> None:
+            # Shared by the action row and the s/S shortcuts so the
+            # "at least one model" guard cannot drift between the two paths.
+            if not self._ms_selected:
+                self._ms_error = "Select at least one model."; inv(); return
+            self._ms_error = ""
+            self._ms_save_exit = save_exit
+            self._do_save_models()
+
+        @kb.add("s", filter=_ms_list)
+        def _ms_save(e: Any) -> None:
+            # Load from wherever the cursor is, without walking to the
+            # buttons first: the common case is tick, tick, save.
+            _ms_load_selected(False)
+
+        @kb.add("S", filter=_ms_list)
+        def _ms_save_close(e: Any) -> None:
+            _ms_load_selected(True)
+
         @kb.add("pageup",   filter=_ms_list)
         def _ms_pgup(e):
             self._ms_cursor = max(0, self._ms_cursor - _PAGE)
@@ -933,11 +930,7 @@ class ProviderTUI:
             if self._ms_cursor == total + 2:
                 self._cancel_model_selector()
                 return
-            if not self._ms_selected:
-                self._ms_error = "Select at least one model."; inv(); return
-            self._ms_error = ""
-            self._ms_save_exit = self._ms_cursor == total + 1
-            self._do_save_models()
+            _ms_load_selected(self._ms_cursor == total + 1)
 
         @kb.add("escape", filter=_ms)
         def _ms_esc(e):
@@ -1035,7 +1028,11 @@ class ProviderTUI:
                 alias = _candidate_save_alias(pname, mid, cfg)
                 if alias != mid:
                     alias_changes.append((mid, alias))
-                models_cfg[alias] = {**cfg, "provider": pname}
+                # `source_item` is the raw `/v1/models` entry, carried only so
+                # filtering can read free capability metadata. It must not be
+                # written to custom_providers.json.
+                saved_cfg = {k: v for k, v in cfg.items() if k != "source_item"}
+                models_cfg[alias] = {**saved_cfg, "provider": pname}
         prov_cfg = PROVIDERS.get(pname, {})
         from core.provider_runtime import save_provider_with_rollback
         ok, save_err = save_provider_with_rollback(pname, prov_cfg, models_cfg, replace_models=True)
@@ -1096,6 +1093,20 @@ class ProviderTUI:
         if self._app:
             self._app.invalidate()
 
+    def _begin_model_selection(self, **kwargs: Any) -> None:
+        """Start a selection session with the search box genuinely empty.
+
+        ``ProviderTUIState.begin_model_selection`` resets the mirrored
+        ``model_search`` field, but the search ``TextArea`` is a widget owned by
+        this class and outlives the session. Every render re-imports the widget
+        text over the reset state, so a leftover query silently filtered the
+        next list — down to an empty one, with no checkbox left to tick. The
+        widget has to be cleared here, where it is reachable.
+        """
+        self._state.begin_model_selection(**kwargs)
+        self._ms_search_ta.text = ""
+        self._state.model_search = ""
+
     async def _open_model_selector(self, pname: str, caller: str):
         pinfo = _provider_snapshot().get(pname, {})
         key = _provider_key(pname)
@@ -1122,7 +1133,7 @@ class ProviderTUI:
             for a, m in _model_items_snapshot()
             if m.get("provider") == pname
         }
-        self._state.begin_model_selection(
+        self._begin_model_selection(
             provider=pname,
             caller=caller,
             candidates=candidates,
@@ -1140,9 +1151,11 @@ class ProviderTUI:
         if cur == 0:
             self._dialog = "security"; self._dialog_cursor = 0
             self._refresh_layout()
-        elif cur == 1:
-            await self._open_model_selector(pname, "detail")
+        elif cur == 1:  # Edit Provider
+            self._open_edit_provider(pname)
         elif cur == 2:
+            await self._open_model_selector(pname, "detail")
+        elif cur == 3:
             self._detail_status = "⟳ Testing..."
             self._detail_status_style = "class:spinner"
             if self._app: self._app.invalidate()
@@ -1150,7 +1163,7 @@ class ProviderTUI:
             await asyncio.sleep(3)
             self._detail_status = ""
             if self._app: self._app.invalidate()
-        elif cur == 3:  # Manage Models
+        elif cur == 4:  # Manage Models
             self._mm_provider = pname
             self._mm_models = [
                 a for a, m in _model_items_snapshot() if m.get("provider") == pname
@@ -1160,9 +1173,9 @@ class ProviderTUI:
             self._mm_status_style = ""
             self._panel = "manage"
             self._refresh_layout()
-        elif cur == 4:
+        elif cur == 5:
             self._toggle_provider_active(pname)
-        elif cur == 5:  # Delete Provider
+        elif cur == 6:  # Delete Provider
             if pname in _BUILTIN:
                 self._detail_status = "Cannot delete built-in providers."
                 self._detail_status_style = "class:warning"
@@ -1171,8 +1184,48 @@ class ProviderTUI:
                 self._dialog = "delete"; self._dialog_cursor = 0
                 self._refresh_layout()
 
+    def _open_edit_provider(self, pname: str) -> None:
+        """Reuse the wizard form to correct an existing provider's endpoint.
+
+        Only the Base URL and Format rows are live; the name and the key are
+        shown read-only so the user can see what is being edited without
+        offering a rename or a blind key overwrite.
+        """
+        pinfo = _provider_snapshot().get(pname, {})
+        self._reset_wizard()
+        self._wiz_edit = pname
+        self._wiz_inputs[0].text = pname
+        self._wiz_inputs[1].text = str(pinfo.get("base_url", ""))
+        self._wiz_fields[2] = str(pinfo.get("api_format", "openai"))
+        self._wiz_focus = 1
+        self._panel = "wizard"
+        self._refresh_layout()
+
+    async def _confirm_edit(self) -> None:
+        pname = self._wiz_edit
+        url, fmt = self._wiz_fields[1], self._wiz_fields[2]
+        if not url:
+            self._wiz_error = "Base URL is required."
+            if self._app:
+                self._app.invalidate()
+            return
+        ok, err = _update_custom_provider(pname, base_url=url, api_format=fmt)
+        if not ok:
+            self._wiz_error = f"Save failed: {err}"
+            if self._app:
+                self._app.invalidate()
+            return
+        self._wiz_edit = ""
+        self._panel = "detail"
+        self._detail_status = f"✅ Updated {pname}."
+        self._detail_status_style = "class:success"
+        self._refresh_layout()
+
     async def _wizard_confirm(self):
         self._sync_wizard_fields_from_inputs()
+        if self._wiz_edit:
+            await self._confirm_edit()
+            return
         name, url, fmt, key = self._wiz_fields
         if not name:
             self._wiz_error = "Name is required."; self._app and self._app.invalidate(); return

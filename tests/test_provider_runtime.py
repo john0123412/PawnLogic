@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+
+import pytest
 from types import SimpleNamespace
 import stat
 
@@ -11,39 +13,49 @@ from core import provider_runtime
 
 def test_provider_runtime_connection_result_formats_http_status():
     response = SimpleNamespace(
-        status_code=403,
-        text='{"error":{"message":"missing entitlement"}}',
-        json=lambda: {"error": {"message": "missing entitlement"}},
+        status_code=500,
+        text='{"error":{"message":"upstream unavailable"}}',
+        json=lambda: {"error": {"message": "upstream unavailable"}},
     )
 
-    ok, message, ms = provider_runtime.connection_result_from_response(response, 23)
+    ok, message = provider_runtime.connection_result_from_listing(response, 23)
 
     assert ok is False
-    assert ms == 23
-    assert "HTTP 403" in message
-    assert "missing entitlement" in message
+    assert "HTTP 500" in message
+    assert "upstream unavailable" in message
 
 
-def test_provider_runtime_filter_supported_chat_models_uses_probe(monkeypatch):
-    async def fake_probe(_client, _endpoint, _api_key, model_id):
-        return model_id != "old-model", "unsupported" if model_id == "old-model" else ""
+def test_filter_supported_chat_models_uses_free_metadata_only():
+    """Filtering reads the listing metadata; it never calls the provider.
 
-    monkeypatch.setattr(provider_runtime, "probe_openai_chat_model", fake_probe)
-
-    supported, removed, probe_stats = asyncio.run(
+    The candidates here carry `source_item`, the raw `/v1/models` entry. A
+    model that declares a non-text output modality is hidden; one that
+    declares text, and one that declares nothing at all, are both kept.
+    """
+    supported, removed, filter_stats = asyncio.run(
         provider_runtime.filter_supported_chat_models(
             "https://api.example.com/v1",
             "test-key",
             [
-                ("new-model", {"id": "new-model"}),
-                ("old-model", {"id": "old-model"}),
+                ("text-model", {"id": "text-model", "source_item": {
+                    "architecture": {"output_modalities": ["text"]}}}),
+                ("vision-model", {"id": "vision-model", "source_item": {
+                    "architecture": {"output_modalities": ["text", "image"]}}}),
+                ("audio-out", {"id": "audio-out", "source_item": {
+                    "architecture": {"output_modalities": ["audio"]}}}),
+                ("bare", {"id": "bare"}),
             ],
         )
     )
 
-    assert [model_id for model_id, _cfg in supported] == ["new-model"]
+    assert [model_id for model_id, _cfg in supported] == [
+        "text-model", "vision-model", "bare",
+    ]
     assert removed == 1
-    assert probe_stats == {"kept_unknown": 0, "hidden_reasons": {"unsupported": 1}}
+    assert filter_stats == {
+        "kept_unknown": 0,
+        "hidden_reasons": {"non_chat_output": 1},
+    }
 
 
 def test_provider_runtime_fetch_models_builds_candidates_and_stats(monkeypatch):
@@ -81,7 +93,7 @@ def test_provider_runtime_fetch_models_builds_candidates_and_stats(monkeypatch):
     async def fake_filter(_base_url, _api_key, candidates, _api_format="openai"):
         return [(mid, cfg) for mid, cfg in candidates if mid != "relay-chat"], 1, {
             "kept_unknown": 0,
-            "hidden_reasons": {"model_rejected": 1},
+            "hidden_reasons": {"non_chat_output": 1},
         }
 
     import httpx
@@ -98,9 +110,8 @@ def test_provider_runtime_fetch_models_builds_candidates_and_stats(monkeypatch):
     assert stats == {
         "returned": 3,
         "hidden_by_name": 1,
-        "hidden_by_probe": 1,
-        "probe_kept_unknown": 0,
-        "probe_hidden_reasons": {"model_rejected": 1},
+        "hidden_by_metadata": 1,
+        "hidden_reasons": {"non_chat_output": 1},
         "selectable": 1,
     }
     assert candidates[0][1]["desc"] == "Dynamically fetched model; 1 unsupported hidden"
@@ -339,155 +350,221 @@ def test_fetch_models_skips_entries_with_missing_id(monkeypatch):
     assert len(model_ids) == 2
 
 
-def test_probe_openai_chat_model_treats_5xx_as_pass():
-    """5xx responses indicate transient server unavailability, not an unsupported
-    model.  The probe must treat all 5xx status codes as PASS so that temporarily
-    unavailable models are not permanently excluded from the selection list.
+def test_filter_supported_chat_models_counts_hidden_reasons():
+    """Every non-text output modality is counted by its own reason."""
+    supported, removed, filter_stats = asyncio.run(
+        provider_runtime.filter_supported_chat_models(
+            "https://api.example.com/v1",
+            "key",
+            [
+                ("a", {"id": "a", "source_item": {
+                    "architecture": {"output_modalities": ["audio"]}}}),
+                ("b", {"id": "b", "source_item": {
+                    "architecture": {"output_modalities": ["audio"]}}}),
+                ("c", {"id": "c", "source_item": {
+                    "architecture": {"output_modalities": ["embedding"]}}}),
+            ],
+        )
+    )
+
+    assert supported == []
+    assert removed == 3
+    assert filter_stats == {
+        "kept_unknown": 0,
+        "hidden_reasons": {"non_chat_output": 3},
+    }
+
+
+def test_update_custom_provider_rewrites_endpoint_and_preserves_identity(monkeypatch):
+    """Editing an endpoint must not disturb the name, key env var, or models.
+
+    Saving with an empty models map and replace_models=False is what keeps the
+    provider's loaded models on disk; a name change would require migrating
+    every model entry plus the env var, which is deliberately out of scope.
     """
-    import asyncio
-    from types import SimpleNamespace
-    from core import provider_runtime
+    existing = {
+        "base_url": "https://old.example.com/v1",
+        "api_key_env": "MYRELAY_API_KEY",
+        "label": "Custom (myrelay)",
+        "api_format": "openai",
+        "active": True,
+    }
+    monkeypatch.setitem(provider_runtime.PROVIDERS, "myrelay", dict(existing))
+    monkeypatch.setattr(provider_runtime.provider_config, "save_custom_provider",
+                        lambda *a, **k: None)
+    registered = []
+    monkeypatch.setattr(provider_runtime.provider_config, "register_provider",
+                        lambda name, cfg: registered.append((name, cfg)))
+    monkeypatch.setattr(provider_runtime, "init_providers", lambda force=False: None)
 
-    for status in (500, 502, 503, 504):
-        fixed_resp = SimpleNamespace(
-            status_code=status,
-            text="Service Unavailable",
-        )
+    ok, err = provider_runtime.update_custom_provider(
+        "myrelay", base_url="https://new.example.com/v1", api_format="anthropic")
 
-        class FakeClient:
-            async def post(self, *_a, _resp=fixed_resp, **_kw):
-                return _resp
-
-        ok, reason = asyncio.run(
-            provider_runtime.probe_openai_chat_model(
-                FakeClient(), "https://api.example.com/v1/chat/completions", "test-key", "some-model"
-            )
-        )
-        assert ok is True, f"Expected PASS for HTTP {status}, got FAIL with reason={reason!r}"
-        assert reason == ""
-
-
-class _StaticResp:
-    def __init__(self, status_code, text="", headers=None):
-        self.status_code = status_code
-        self.text = text
-        self.headers = headers or {}
+    assert (ok, err) == (True, "")
+    assert registered[0][0] == "myrelay"
+    saved = registered[0][1]
+    assert saved["base_url"] == "https://new.example.com/v1"
+    assert saved["api_format"] == "anthropic"
+    assert saved["api_key_env"] == "MYRELAY_API_KEY"
+    assert saved["label"] == "Custom (myrelay)"
+    assert saved["active"] is True
 
 
-def test_classify_probe_response_alive_paths():
-    alive = provider_runtime.classify_probe_response
-    assert alive(200, "") == ("alive", "")
-    # Parameter complaints prove the model exists; only the payload was wrong.
-    assert alive(400, '{"error":"max_tokens must be greater than 2"}') == ("alive", "param_error")
-    assert alive(
-        400, "Unsupported parameter: 'max_tokens' is not supported with this model"
-    ) == ("alive", "param_error")
-    # Entitlement failures (e.g. deposit required) are not evidence that the
-    # model id is invalid; the real chat call will surface the error later.
-    assert alive(403, '{"error":{"message":"Deposit required to unlock premium models."}}') == ("alive", "")
-    assert alive(500, "upstream exploded") == ("alive", "")
+def test_update_custom_provider_passes_empty_models_without_replacing(monkeypatch):
+    """The persistence call must not wipe the provider's loaded models."""
+    monkeypatch.setitem(provider_runtime.PROVIDERS, "myrelay", {"api_key_env": "K"})
+    seen = {}
 
+    def fake_save(name, cfg, models_cfg, *, replace_models=False):
+        seen["models_cfg"] = models_cfg
+        seen["replace_models"] = replace_models
 
-def test_classify_probe_response_hidden_paths():
-    hidden = provider_runtime.classify_probe_response
-    assert hidden(404, "") == ("hidden", "http_404")
-    assert hidden(
-        400, '{"error":{"message":"The model gpt-x does not exist"}}'
-    ) == ("hidden", "model_rejected")
-    # Marker text must not outrank a 404-independent transient code that also
-    # carries it only as part of the model identity rejection.
-    assert hidden(422, "model_not_found") == ("hidden", "model_rejected")
+    monkeypatch.setattr(provider_runtime.provider_config, "save_custom_provider", fake_save)
+    monkeypatch.setattr(provider_runtime.provider_config, "register_provider",
+                        lambda name, cfg: None)
+    monkeypatch.setattr(provider_runtime, "init_providers", lambda force=False: None)
 
+    ok, _err = provider_runtime.update_custom_provider(
+        "myrelay", base_url="https://x.example.com/v1", api_format="openai")
 
-def test_classify_probe_response_rate_limited_is_unknown():
-    assert provider_runtime.classify_probe_response(429, "") == ("unknown", "rate_limited")
-
-
-def test_probe_retries_rate_limit_and_passes(monkeypatch):
-    monkeypatch.setattr(provider_runtime, "_retry_delay", lambda *a, **k: 0)
-    calls = []
-
-    class FlakyClient:
-        async def post(self, _url, json=None, headers=None):
-            calls.append(json["model"])
-            if len(calls) == 1:
-                return _StaticResp(429, "")
-            return _StaticResp(200, "")
-
-    ok, reason = asyncio.run(
-        provider_runtime.probe_openai_chat_model(
-            FlakyClient(), "https://api.example.com/v1/chat/completions", "key", "m"
-        )
-    )
     assert ok is True
-    assert reason == ""
-    assert len(calls) == 2
+    assert seen["models_cfg"] == {}
+    assert seen["replace_models"] is False
 
 
-def test_probe_keeps_model_alive_when_rate_limit_persists(monkeypatch):
-    monkeypatch.setattr(provider_runtime, "_retry_delay", lambda *a, **k: 0)
+def test_update_custom_provider_rejects_builtin_and_missing(monkeypatch):
+    monkeypatch.setitem(provider_runtime.PROVIDERS, "deepseek", {"api_key_env": "K"})
 
-    class Always429Client:
-        async def post(self, _url, json=None, headers=None):
-            return _StaticResp(429, "", headers={"Retry-After": "30"})
+    ok, err = provider_runtime.update_custom_provider(
+        "deepseek", base_url="https://x.example.com/v1", api_format="openai")
+    assert ok is False and "built-in" in err
 
-    ok, reason = asyncio.run(
-        provider_runtime.probe_openai_chat_model(
-            Always429Client(), "https://api.example.com/v1/chat/completions", "key", "m"
-        )
-    )
-    # Persistent rate limits stay "unknown": the model must remain selectable.
-    assert ok is True
-    assert reason == "rate_limited"
+    ok, err = provider_runtime.update_custom_provider(
+        "ghost", base_url="https://x.example.com/v1", api_format="openai")
+    assert ok is False and "not found" in err
 
 
-def test_probe_hides_on_definitive_404_without_retry(monkeypatch):
-    calls = []
+def test_update_custom_provider_reports_persistence_failure(monkeypatch):
+    monkeypatch.setitem(provider_runtime.PROVIDERS, "myrelay", {"api_key_env": "K"})
 
-    class NotFoundClient:
-        async def post(self, _url, json=None, headers=None):
-            calls.append(1)
-            return _StaticResp(404, "")
+    def boom(*_a, **_k):
+        raise OSError("disk full")
 
-    ok, reason = asyncio.run(
-        provider_runtime.probe_openai_chat_model(
-            NotFoundClient(), "https://api.example.com/v1/chat/completions", "key", "m"
-        )
-    )
+    monkeypatch.setattr(provider_runtime.provider_config, "save_custom_provider", boom)
+    monkeypatch.setattr(provider_runtime.provider_config, "register_provider",
+                        lambda name, cfg: None)
+    monkeypatch.setattr(provider_runtime, "init_providers", lambda force=False: None)
+
+    ok, err = provider_runtime.update_custom_provider(
+        "myrelay", base_url="https://x.example.com/v1", api_format="openai")
+
     assert ok is False
-    assert reason == "http_404"
-    assert len(calls) == 1
+    assert "disk full" in err
 
 
-def test_probe_retries_transport_failure_then_reports_unreachable(monkeypatch):
-    monkeypatch.setattr(provider_runtime, "_retry_delay", lambda *a, **k: 0)
-    calls = []
+def test_fetch_models_never_issues_an_inference_request():
+    """`/provider fetch` must not spend money.
 
-    class BrokenClient:
-        async def post(self, _url, json=None, headers=None):
-            calls.append(1)
-            raise ConnectionError("boom")
-
-    ok, reason = asyncio.run(
-        provider_runtime.probe_openai_chat_model(
-            BrokenClient(), "https://api.example.com/v1/chat/completions", "key", "m"
-        )
-    )
-    assert ok is True
-    assert reason == "probe_unreachable"
-    assert len(calls) == 2
-
-
-def test_filter_supported_chat_models_reports_probe_stats(monkeypatch):
+    Every candidate used to be probed with a real
+    `POST /chat/completions {"model": id, "max_tokens": 8, ...}`. openrouter
+    returns hundreds of models, so one fetch produced hundreds of billable
+    inferences and took minutes. Filtering now reads only the free metadata
+    that `/v1/models` already returned, so no chat request is ever made.
+    """
     import httpx
 
-    monkeypatch.setattr(provider_runtime, "_retry_delay", lambda *a, **k: 0)
+    posted: list[str] = []
 
-    responses = {
-        "ok-model": _StaticResp(200, ""),
-        "gone-model": _StaticResp(404, ""),
-        "limited-model": _StaticResp(429, ""),
-    }
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": [
+                    {
+                        "id": "vendor/chat-model",
+                        "architecture": {"output_modalities": ["text"]},
+                        "pricing": {"prompt": "0.000002", "completion": "0.00001"},
+                        "top_provider": {"context_length": 128000},
+                    },
+                    {
+                        # Named so that no name-based keyword filter can catch
+                        # it: only the free modality metadata reveals that it
+                        # cannot emit text.
+                        "id": "vendor/omni-router",
+                        "architecture": {"output_modalities": ["audio"]},
+                        "pricing": {"prompt": "0.0000001", "completion": "0"},
+                    },
+                    {"id": "vendor/plain-llm"},
+                ],
+                "has_more": False,
+            }
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, _exc_type, _exc, _tb):
+            return False
+
+        async def get(self, _url, headers):
+            return FakeResponse()
+
+        async def post(self, *args, **kwargs):  # pragma: no cover - must not run
+            posted.append(str(args))
+            raise AssertionError("fetch_models must not POST to a chat endpoint")
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(httpx, "AsyncClient", lambda *a, **kw: FakeClient())
+    try:
+        candidates, err, stats = asyncio.run(
+            provider_runtime.fetch_models(
+                "https://api.example.com/v1", "test-key", "openai"
+            )
+        )
+    finally:
+        monkey.undo()
+
+    assert err == ""
+    assert posted == []
+    ids = [model_id for model_id, _cfg in candidates]
+    # The non-chat entry is hidden from free metadata alone; the entry with
+    # no metadata is kept, because absence of evidence is not evidence of
+    # absence and it may simply be a provider that omits the fields.
+    assert "vendor/omni-router" not in ids
+    assert "vendor/chat-model" in ids
+    assert "vendor/plain-llm" in ids
+    assert stats["hidden_by_metadata"] == 1
+    assert stats["hidden_reasons"] == {"non_chat_output": 1}
+
+
+def test_test_connection_never_sends_an_inference():
+    """Test Connection must be free too.
+
+    It used to POST `max_tokens=1` to the chat endpoint, which is a real
+    billable inference. It now checks the same things a user actually cares
+    about — is the configured base URL reachable, and does the provider
+    accept this API key — against the free `/v1/models` listing derived from
+    that base URL. No chat request is made.
+    """
+    import httpx
+
+    posts: list[str] = []
+    requested: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"data": []}'
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": []}
 
     class FakeClient:
         async def __aenter__(self):
@@ -496,26 +573,71 @@ def test_filter_supported_chat_models_reports_probe_stats(monkeypatch):
         async def __aexit__(self, *_):
             return False
 
-        async def post(self, _url, json=None, headers=None):
-            return responses[json["model"]]
+        async def get(self, url, headers=None):
+            requested.append(str(url))
+            return FakeResponse()
 
-    monkeypatch.setattr(httpx, "AsyncClient", lambda timeout: FakeClient())
+        async def post(self, *a, **k):  # pragma: no cover - must not run
+            posts.append(str(a))
+            raise AssertionError("Test Connection must not POST")
 
-    supported, removed, probe_stats = asyncio.run(
-        provider_runtime.filter_supported_chat_models(
-            "https://api.example.com/v1",
-            "key",
-            [
-                ("ok-model", {"id": "ok-model"}),
-                ("gone-model", {"id": "gone-model"}),
-                ("limited-model", {"id": "limited-model"}),
-            ],
+    mp = pytest.MonkeyPatch()
+    mp.setattr(httpx, "AsyncClient", lambda *a, **kw: FakeClient())
+    try:
+        ok, msg, _ms = asyncio.run(
+            provider_runtime.test_connection(
+                "https://api.example.com/v1", "test-key", "openai", "some-model"
+            )
         )
-    )
+    finally:
+        mp.undo()
 
-    assert [mid for mid, _cfg in supported] == ["ok-model", "limited-model"]
-    assert removed == 1
-    assert probe_stats == {
-        "kept_unknown": 1,
-        "hidden_reasons": {"http_404": 1},
-    }
+    assert ok is True
+    assert posts == []
+    # The free listing under the configured root, not the chat endpoint.
+    assert requested and all("/v1/models" in u for u in requested)
+    # The user-visible result must not imply the model was exercised.
+    assert "no inference sent" in msg
+
+
+def test_test_connection_reports_a_rejected_key_without_inferring():
+    """A bad key must still fail the check, from the free listing's status."""
+    import httpx
+
+    class FakeResponse:
+        status_code = 401
+        text = '{"error": {"message": "Invalid API key"}}'
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"error": {"message": "Invalid API key"}}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def get(self, _url, headers=None):
+            return FakeResponse()
+
+        async def post(self, *a, **k):  # pragma: no cover - must not run
+            raise AssertionError("Test Connection must not POST")
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(httpx, "AsyncClient", lambda *a, **kw: FakeClient())
+    try:
+        ok, msg, _ms = asyncio.run(
+            provider_runtime.test_connection(
+                "https://api.example.com/v1", "test-key", "openai", "some-model"
+            )
+        )
+    finally:
+        mp.undo()
+
+    assert ok is False
+    # A rejected key must be named as such, not reported as a bare status.
+    assert "/setkey" in msg

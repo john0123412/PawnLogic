@@ -20,36 +20,20 @@ UNSUPPORTED_MODEL_MARKERS = (
 REASONING_KEYWORDS = ("mimo", "deepseek", "qwq")
 
 
-def normalize_base_url(raw: str, api_format: str = "openai") -> str:
-    """Build the actual chat endpoint from a stored provider URL."""
-    raw = raw.rstrip("/")
-    if raw.endswith("/chat/completions") or raw.endswith("/messages"):
-        return raw
-    suffix = "/messages" if api_format == "anthropic" else "/chat/completions"
-    if raw.endswith("/v1"):
-        return raw + suffix
-    return raw + "/v1" + suffix
+def connection_result_from_listing(resp: Any, ms: int) -> tuple[bool, str]:
+    """Interpret a response from the free model-listing endpoint.
 
+    Used by Test Connection, which must never infer. A 2xx means the base
+    URL resolved and the provider accepted the key. Anything else is a
+    failure, formatted by the shared error helper — which already names the
+    likely cause for 401/403 rather than a generic status line.
 
-def connection_result_from_response(resp: Any, ms: int) -> tuple[bool, str, int]:
+    A listing response says nothing about whether a specific model can serve
+    chat, so this deliberately does not take a model id.
+    """
     if 200 <= resp.status_code < 300:
-        try:
-            resp.json()
-        except ValueError:
-            return True, f"Connected ({ms}ms; non-standard response)", ms
-        return True, f"Connected ({ms}ms)", ms
-
-    if resp.status_code == 400:
-        if model_rejection_reason(resp.text):
-            return False, format_http_error(400, resp.text), ms
-        try:
-            body = resp.json()
-        except ValueError:
-            return False, format_http_error(400, resp.text), ms
-        if isinstance(body, dict) and "error" in body:
-            return True, f"Connected ({ms}ms; API returned validation error)", ms
-
-    return False, format_http_error(resp.status_code, resp.text), ms
+        return True, f"Connected ({ms}ms; free model listing, no inference sent)"
+    return False, format_http_error(resp.status_code, resp.text)
 
 
 def model_is_chat_candidate(model_id: str) -> bool:
@@ -83,18 +67,12 @@ def format_model_sync_notice(
 ) -> list[str]:
     returned = int(stats.get("returned", 0))
     hidden_name = int(stats.get("hidden_by_name", 0))
-    hidden_probe = int(stats.get("hidden_by_probe", 0))
-    kept_unknown = int(stats.get("probe_kept_unknown", 0) or 0)
+    hidden_meta = int(stats.get("hidden_by_metadata", 0))
     selectable = int(stats.get("selectable", 0))
-    kept_part = (
-        f"{kept_unknown} kept despite probe issues (rate limit/unreachable); "
-        if kept_unknown
-        else ""
-    )
     lines = [
         (
             f"Sync summary: {returned} returned; {hidden_name} hidden by type/name; "
-            f"{hidden_probe} hidden by chat probe; {kept_part}"
+            f"{hidden_meta} hidden by capability metadata; "
             f"{selectable} selectable."
         )
     ]

@@ -156,6 +156,14 @@ caller 生效，绝不会隐式 fan-out。
 
 API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述存储在 `~/.pawnlogic/custom_providers.json`，不包含 secret value。Provider 配置流程不会把 Key 写入 shell 启动文件。
 
+交互式 TUI 也支持原地修改 Provider。进入某个 Provider 的详情页并选择 `Edit Provider`，即可修正它的 `Base URL` 和 `Format`；保存会保留 Provider 名称、API Key 以及已加载的模型。这里不提供重命名：重命名必须同时改写每一个模型条目的 provider 字段和 Key 的环境变量，无法原子完成。需要更换 Key 请使用 `Update API Key`，它会要求重新粘贴完整值，且始终不显示已保存的值。
+
+确认弹窗除颜色外还用文字标记当前按钮，`←` `→` `↑` `↓` 和 `Tab` 都可以在按钮之间移动。`Delete Provider` 打开的弹窗默认停在 `Cancel` 上，因此直接按 `Enter` 不会误删。
+
+`Fetch` 和 `Sync` 打开的模型列表每次都从空搜索框开始，上一次列表里输入的查询不会被套用到这一次。用 `↑` `↓` `PageUp` 和 `PageDown` 移动；`Space` 或 `Enter` 勾选光标所在的模型，`a` 全选，`c` 清空选择。按 `s` 保存已勾选的模型并留在列表里，按 `S` 保存并关闭列表——两者都不需要先把光标移到操作行。列表是分页显示的，`Load Selected`、`Load & Close` 和 `Cancel` 三个操作排在最后一个模型之后，按 `L` 可直接跳到它们，不必逐行往下走；这三个操作同样除颜色外还用文字标记当前项。
+
+`Fetch` 和 `Sync` 不会发送任何 chat 请求，因此列出模型不产生费用。它们只读取 Provider 免费返回的 `/v1/models` 列表，并隐藏声明了非文本输出模态的条目；不返回能力元数据的 Provider 会保留全部条目。`/provider test <model>` 同样是免费的：它检查同一份列表，因此可以在不发起任何推理的前提下回答「base URL 通不通、Key 认不认」。不再有任何计费探测所带来的代价是，你的 Key 实际无权使用的模型不再被提前过滤掉，它会在你第一次使用时以普通 API 错误的形式出现。
+
 本地 relay 和实验环境可以使用明文 `http://` Provider endpoint，但用户友好模式会显示 trust-boundary 提示，因为请求和 API Key 没有 TLS 保护。
 
 不稳定的自定义 Provider 可以通过 `~/.pawnlogic/.env` 中的环境变量调优：`PAWNLOGIC_API_RETRY_MAX` 控制包含首次请求在内的总尝试次数，`PAWNLOGIC_API_RETRY_AFTER_MAX` 限制 Provider `Retry-After` 延迟上限，`PAWNLOGIC_API_CONNECT_TIMEOUT`、`PAWNLOGIC_API_READ_TIMEOUT` 和 `PAWNLOGIC_API_NONSTREAM_TIMEOUT` 分别调节连接和响应等待时间。
@@ -325,7 +333,7 @@ A: 在 Prompt Toolkit 模式下，一个持久终端界面会把模型和工具�
 A: Pawn 会等待协作式取消完成。如果已有排队工作，Esc 会把它作为新的 steer 继续执行，不会额外创建重复的 recovered 行。如果队列为空，被中断的 prompt 会预填为可编辑的 recovered draft，但不会自动重跑；按 Enter 只重试一次，编辑后按 Enter 只执行替换后的内容一次（包括以 `/` 开头的编辑）。`/queue remove <id>`、`/queue clear`、`/queue steer <id>`、`/queue follow-up <id>` 和 `/queue recall <id>` 仍可用于高级队列管理。`/abort` 会中断当前 Turn 并清除全部排队/恢复工作，不再有单独的 `--all` 形式。重启后，`pawn --continue` 会加载最近的 interrupted、running 或 failed 会话，`pawn resume <session>` 会加载指定会话。两个命令都会显示历史并预填草稿，但不会自动执行。
 
 **Q: Test Connection 失败但 fetch 成功？**
-A: Fetch 只读 `/v1/models`；Test Connection 发送聊天请求。先加载聊天模型。
+A: 现在两者读的是同一份免费的 `/v1/models` 列表。Fetch 会翻完所有分页，可能因为某一页出错或列表格式异常而失败；Test Connection 只发一次请求。两者结果不一致通常意味着遇到了可重试的错误——再执行一次即可。
 
 **Q: API Key 在哪里？**
 A: `~/.pawnlogic/.env`，不在项目目录，不被 git 追踪。

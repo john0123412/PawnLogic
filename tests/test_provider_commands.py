@@ -112,6 +112,117 @@ def test_provider_tui_add_wizard_navigation_moves_real_input_focus():
     assert app.layout.current_control is tui._wiz_inputs[2].control
 
 
+def test_provider_tui_wizard_shows_caret_at_the_real_buffer_position():
+    """The Add Provider form is drawn by hand, so nothing else marks the caret."""
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "wizard"
+    tui._wiz_inputs[0].text = "openrouter"
+    tui._wiz_inputs[0].buffer.cursor_position = 4
+    tui._wiz_focus = 0
+
+    rendered = "".join(text for _style, text in tui._render_wizard())
+
+    assert "open\u258cro" in rendered          # caret sits mid-word, not at the end
+    assert rendered.count("\u258c") == 1       # only the focused field shows one
+    assert "\u25b6\u2460 Name" in rendered     # the focused row is marked
+
+
+def test_provider_tui_wizard_marks_exactly_one_row_at_a_time():
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "wizard"
+    tui._wiz_inputs[0].text = "relay"
+    tui._wiz_inputs[1].text = "https://api.example.com/v1"
+    tui._wiz_inputs[2].text = "sk-secret-1234567890"
+
+    for focus, marked in ((0, "\u25b6\u2460"), (1, "\u25b6\u2461"), (2, "\u25b6\u2462"),
+                          (3, "\u25b6\u2463"), (4, "\u25b6 [ Save Provider ]")):
+        tui._wiz_focus = focus
+        rendered = "".join(text for _style, text in tui._render_wizard())
+        assert rendered.count("\u25b6") >= 1, f"no marker at focus {focus}"
+        assert marked in rendered, f"focus {focus} did not mark {marked!r}"
+
+    # The API key stays masked, and the caret rides the masked string.
+    tui._wiz_focus = 3
+    rendered = "".join(text for _style, text in tui._render_wizard())
+    assert "sk-secret" not in rendered
+    assert "\u2022" in rendered and "\u258c" in rendered
+
+
+def _dialog_key_handlers(tui, key):
+    """Matching handler names for `key`, in prompt_toolkit resolution order."""
+    from prompt_toolkit.keys import Keys as _Keys
+
+    mapping = {"enter": _Keys.ControlM, "up": _Keys.Up, "down": _Keys.Down,
+               "left": _Keys.Left, "right": _Keys.Right, "tab": _Keys.Tab}
+    return [b.handler for b in tui._build_kb().get_bindings_for_keys((mapping[key],))
+            if b.filter()]
+
+
+def _open_delete_modal(tui):
+    tui._panel = "detail"
+    tui._detail_provider = "openrouter"
+    tui._dialog = "delete"
+    tui._dialog_cursor = 0
+    return tui
+
+
+def test_provider_tui_delete_modal_marks_the_focused_button():
+    """The confirm dialog rendered focus with background colour only.
+
+    Colour is the sole indicator, so the focused button is invisible in a
+    stripped or piped terminal \u2014 the user cannot tell where Enter will land.
+    """
+    tui = _open_delete_modal(provider_tui.ProviderTUI())
+
+    tui._dialog_cursor = 0
+    on_cancel = "".join(text for _s, text in tui._render_dialog())
+    tui._dialog_cursor = 1
+    on_delete = "".join(text for _s, text in tui._render_dialog())
+
+    assert "\u25b6 [ Cancel ]" in on_cancel
+    assert "\u25b6 [ Delete ]" in on_delete
+    assert on_cancel.count("\u25b6") == 1
+    assert on_delete.count("\u25b6") == 1
+
+
+def test_provider_tui_delete_modal_navigates_with_every_arrow_key():
+    """Only left/right/tab moved the dialog cursor; up/down were unbound."""
+    tui = _open_delete_modal(provider_tui.ProviderTUI())
+
+    for key in ("up", "down", "left", "right"):
+        handlers = _dialog_key_handlers(tui, key)
+        assert handlers, f"{key} does nothing inside the confirm dialog"
+        tui._dialog_cursor = 0
+        handlers[-1](None)          # _dlg_move ignores the event
+        assert tui._dialog_cursor == 1, f"{key} did not reach [ Delete ]"
+
+
+def test_provider_tui_delete_modal_deletes_after_moving_to_delete():
+    tui = _open_delete_modal(provider_tui.ProviderTUI())
+    calls = []
+    tui._do_delete_provider = lambda: calls.append("deleted")
+
+    _dialog_key_handlers(tui, "right")[-1](None)
+    assert tui._dialog_cursor == 1
+    _dialog_key_handlers(tui, "enter")[-1](None)
+
+    assert calls == ["deleted"]
+    assert tui._dialog is None
+
+
+def test_provider_tui_delete_modal_default_enter_still_declines():
+    """Denying by default is the safety invariant \u2014 Enter on Cancel deletes nothing."""
+    tui = _open_delete_modal(provider_tui.ProviderTUI())
+    calls = []
+    tui._do_delete_provider = lambda: calls.append("deleted")
+
+    assert tui._dialog_cursor == 0
+    _dialog_key_handlers(tui, "enter")[-1](None)
+
+    assert calls == []
+    assert tui._dialog is None
+
+
 def test_provider_tui_model_search_field_accepts_pasted_text():
     tui = provider_tui.ProviderTUI()
     pasted_model_name = "provider-prefix/some-long-model-name-v1"
@@ -119,8 +230,181 @@ def test_provider_tui_model_search_field_accepts_pasted_text():
     tui._ms_search_ta.text = pasted_model_name
 
     tui._sync_model_search_from_input()
-
     assert tui._ms_search == pasted_model_name
+
+
+def test_provider_tui_model_selector_reopens_without_the_previous_search_query():
+    """A second Fetch/Sync must not inherit the previous selector's query.
+
+    The search TextArea outlives a selection session, and
+    ``begin_model_selection`` only resets the mirrored state field, so the
+    selector reopened already filtered by a query the user had forgotten. When
+    that leftover query matched nothing the list came up empty, leaving no
+    checkbox to tick at all.
+    """
+    candidates = [
+        ("model-a", {"id": "model-a", "provider": "relay"}),
+        ("model-b", {"id": "model-b", "provider": "relay"}),
+    ]
+
+    def open_session(tui):
+        tui._begin_model_selection(
+            provider="relay",
+            caller="detail",
+            candidates=candidates,
+            existing_ids=set(),
+            notices=[],
+        )
+
+    tui = provider_tui.ProviderTUI()
+    open_session(tui)
+
+    # Session one: the user searches, then cancels with the box still filled.
+    tui._ms_search_ta.text = "model-b"
+    tui._ms_search_focus = True
+    tui._sync_model_search_from_input()
+    tui._ms_search_focus = False
+    tui._cancel_model_selector()
+
+    # Session two: a fresh fetch of the same provider.
+    open_session(tui)
+    rendered = "".join(text for _style, text in tui._render_model_select())
+
+    assert tui._ms_search_ta.text == ""
+    assert tui._ms_search == ""
+    assert rendered.count("[ ]") == len(candidates)
+    assert "🔍 Search: \n" in rendered
+
+
+def test_provider_tui_model_selector_marks_the_focused_action_button_in_text():
+    """Focus must survive a terminal that strips colour.
+
+    The three selector actions are colour-only, unlike the provider detail
+    menu and the delete dialog, so the user could not see where Enter would
+    land.
+    """
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "models"
+    tui._ms_all = [("model-a", {"id": "model-a", "provider": "relay"})]
+    total = len(tui._ms_all)
+
+    for offset, label in ((0, "Load Selected"), (1, "Load & Close"), (2, "Cancel")):
+        tui._ms_cursor = total + offset
+        rendered = "".join(text for _style, text in tui._render_model_select())
+        assert f"▶ [ {label} ]" in rendered, label
+        for other, other_label in (
+            (0, "Load Selected"),
+            (1, "Load & Close"),
+            (2, "Cancel"),
+        ):
+            if other != offset:
+                assert f"▶ [ {other_label} ]" not in rendered
+
+
+def test_provider_tui_model_selector_reaches_the_action_row_without_walking_every_model():
+    """Saving must not cost one Down press per model in the list.
+
+    openrouter returns hundreds of models, and the action row sat at cursor
+    index N, so loading a ticked model needed 200 presses of Down (or ten of
+    PageDown) with no shortcut offered. The buttons are always painted at the
+    bottom of the panel, so they have to stay reachable from anywhere in the
+    list.
+    """
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "models"
+    tui._ms_all = [
+        (f"vendor{i // 10}/model-{i}", {"id": f"vendor{i // 10}/model-{i}"})
+        for i in range(200)
+    ]
+    kb = tui._build_kb()
+    handlers = {b.handler.__name__: b.handler for b in kb.bindings}
+    total = len(tui._ms_all)
+
+    # One key lands on Load Selected from deep inside the list.
+    tui._ms_cursor = 137
+    handlers["_ms_to_actions"](None)
+    assert tui._ms_cursor == total
+
+    # The three actions remain distinct and reachable from there.
+    handlers["_ms_dn"](None)
+    assert tui._ms_cursor == total + 1
+    handlers["_ms_dn"](None)
+    assert tui._ms_cursor == total + 2
+    handlers["_ms_dn"](None)
+    assert tui._ms_cursor == total + 2
+
+    # ...and Up walks back out through them into the list.
+    handlers["_ms_up"](None)
+    assert tui._ms_cursor == total + 1
+    handlers["_ms_up"](None)
+    assert tui._ms_cursor == total
+    handlers["_ms_up"](None)
+    assert tui._ms_cursor == total - 1
+
+    # The jump is available from anywhere, not only from the last page.
+    tui._ms_cursor = 0
+    handlers["_ms_to_actions"](None)
+    assert tui._ms_cursor == total
+
+
+def test_provider_tui_model_selector_saves_without_reaching_the_action_row():
+    """``L`` then ``Enter`` was the only way to load a ticked model.
+
+    The action row still has to exist, but a selection made in the middle of a
+    long list should not require walking to it first. ``s`` loads and stays,
+    ``S`` loads and closes, matching the existing ``a``/``A`` and ``l``/``L``
+    pairs.
+    """
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "models"
+    tui._ms_all = [
+        (f"vendor{i // 10}/model-{i}", {"id": f"vendor{i // 10}/model-{i}"})
+        for i in range(200)
+    ]
+    kb = tui._build_kb()
+    handlers = {b.handler.__name__: b.handler for b in kb.bindings}
+
+    saved: list[bool] = []
+    tui._do_save_models = lambda: saved.append(tui._ms_save_exit)
+
+    # Ticking works with Enter alone; Space is not required to select.
+    handlers["_ms_enter"](None)
+    assert tui._ms_selected == {"vendor0/model-0"}
+    handlers["_ms_enter"](None)
+    assert tui._ms_selected == set()
+
+    handlers["_ms_dn"](None)
+    handlers["_ms_space"](None)
+    assert tui._ms_selected == {"vendor0/model-1"}
+
+    # Mid-list, with the cursor nowhere near the buttons: save directly.
+    assert tui._ms_cursor == 1
+    handlers["_ms_save"](None)
+    assert saved == [False]
+    assert tui._ms_selected == {"vendor0/model-1"}
+
+    # S is the close-after-load variant.
+    handlers["_ms_save_close"](None)
+    assert saved == [False, True]
+
+    # An empty selection is refused exactly as it is on the action row, so
+    # the shortcut cannot silently load nothing.
+    tui._ms_selected.clear()
+    handlers["_ms_save"](None)
+    assert saved == [False, True]
+    assert tui._ms_error
+
+
+def test_provider_tui_model_selector_advertises_its_keys_including_the_jump():
+    """The panel never told the user how to reach the buttons."""
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "models"
+    tui._ms_all = [("model-a", {"id": "model-a", "provider": "relay"})]
+    rendered = "".join(text for _style, text in tui._render_model_select())
+    assert "Space/Enter toggle" in rendered
+    assert "Load Selected" in rendered
+    # Saving without walking to the action row.
+    assert "s save" in rendered
 
 
 def test_pawn_completer_includes_live_visible_models_without_rebuild():
@@ -556,19 +840,17 @@ def test_provider_model_probe_accepts_non_model_specific_400():
     assert provider_tui._model_rejection_reason('{"error":{"message":"missing field"}}') == ""
 
 
-def test_provider_filter_supported_chat_models_removes_unsupported(monkeypatch):
-    async def fake_probe(_client, _endpoint, _api_key, model_id):
-        return (model_id != "old-model", "unsupported" if model_id == "old-model" else "")
-
-    monkeypatch.setattr(provider_runtime, "probe_openai_chat_model", fake_probe)
-
-    supported, removed, _probe_stats = asyncio.run(
+def test_provider_filter_supported_chat_models_hides_non_chat_output():
+    """Filtering is metadata-only: no provider call, no inference."""
+    supported, removed, _stats = asyncio.run(
         provider_runtime.filter_supported_chat_models(
             "https://api.example.com/v1",
             "test-key",
             [
-                ("new-model", {"id": "new-model"}),
-                ("old-model", {"id": "old-model"}),
+                ("new-model", {"id": "new-model", "source_item": {
+                    "architecture": {"output_modalities": ["text"]}}}),
+                ("old-model", {"id": "old-model", "source_item": {
+                    "architecture": {"output_modalities": ["video"]}}}),
             ],
         )
     )
@@ -579,13 +861,13 @@ def test_provider_filter_supported_chat_models_removes_unsupported(monkeypatch):
 
 def test_provider_sync_notice_reports_hidden_and_alias_changes():
     lines = provider_tui._format_model_sync_notice(
-        {"returned": 5, "hidden_by_name": 2, "hidden_by_probe": 1, "selectable": 2},
+        {"returned": 5, "hidden_by_name": 2, "hidden_by_metadata": 1, "selectable": 2},
         [("gpt-5.4-mini", "relay:gpt-5.4-mini")],
     )
 
     assert lines[0] == (
         "Sync summary: 5 returned; 2 hidden by type/name; "
-        "1 hidden by chat probe; 2 selectable."
+        "1 hidden by capability metadata; 2 selectable."
     )
     assert "gpt-5.4-mini -> relay:gpt-5.4-mini" in lines[1]
 
@@ -993,18 +1275,33 @@ def test_provider_tui_toggle_active_updates_provider_state(monkeypatch):
     assert tui._detail_status == "✅ Provider is now active."
 
 
-def test_provider_tui_connection_accepts_nonstandard_success_response():
+def test_provider_tui_connection_reports_success_from_the_free_listing():
     response = SimpleNamespace(
         status_code=200,
-        text='{"id":"one"}{"id":"two"}',
-        json=lambda: json.loads('{"id":"one"}{"id":"two"}'),
+        text='{"data":[{"id":"one"}]}',
+        json=lambda: {"data": [{"id": "one"}]},
     )
 
-    ok, message, ms = provider_tui._connection_result_from_response(response, 12)
+    ok, message = provider_tui._connection_result_from_listing(response, 12)
 
     assert ok is True
-    assert ms == 12
-    assert message == "Connected (12ms; non-standard response)"
+    # The message must say nothing was inferred, so a user reading the panel
+    # does not assume Test Connection exercised the model.
+    assert message == "Connected (12ms; free model listing, no inference sent)"
+
+
+def test_provider_tui_connection_reports_a_rejected_key():
+    response = SimpleNamespace(
+        status_code=401,
+        text='{"error":{"message":"Invalid API key"}}',
+        json=lambda: {"error": {"message": "Invalid API key"}},
+    )
+
+    ok, message = provider_tui._connection_result_from_listing(response, 34)
+
+    assert ok is False
+    # A rejected key must be named as such, not reported as a bare status.
+    assert message == format_http_error(401, response.text)
 
 
 def test_provider_tui_connection_reports_http_400_body_when_json_invalid():
@@ -1014,10 +1311,9 @@ def test_provider_tui_connection_reports_http_400_body_when_json_invalid():
         json=lambda: json.loads('{"error":"bad request"}{"extra":"chunk"}'),
     )
 
-    ok, message, ms = provider_tui._connection_result_from_response(response, 34)
+    ok, message = provider_tui._connection_result_from_listing(response, 34)
 
     assert ok is False
-    assert ms == 34
     assert "HTTP 400" in message
     assert "bad request" in message
     assert "Extra data" not in message
@@ -1025,17 +1321,16 @@ def test_provider_tui_connection_reports_http_400_body_when_json_invalid():
 
 def test_provider_tui_and_cli_share_http_error_message(monkeypatch, capsys):
     body = '{"error":{"message":"missing entitlement","type":"auth","code":"forbidden"}}'
-    expected = format_http_error(403, body)
+    expected = format_http_error(500, body)
     response = SimpleNamespace(
-        status_code=403,
+        status_code=500,
         text=body,
         json=lambda: {"error": {"message": "missing entitlement"}},
     )
 
-    ok, tui_message, ms = provider_tui._connection_result_from_response(response, 41)
+    ok, tui_message = provider_tui._connection_result_from_listing(response, 41)
 
     assert ok is False
-    assert ms == 41
     assert tui_message == expected
 
     alias = "pytest_http_error"
@@ -1049,7 +1344,7 @@ def test_provider_tui_and_cli_share_http_error_message(monkeypatch, capsys):
     monkeypatch.setenv(env_key, "test-key")
 
     async def fake_fetch_models(_base_url, _api_key, _api_format):
-        return [], expected, {"returned": 0, "hidden_by_name": 0, "hidden_by_probe": 0, "selectable": 0}
+        return [], expected, {"returned": 0, "hidden_by_name": 0, "hidden_by_metadata": 0, "selectable": 0}
 
     monkeypatch.setattr(provider_cmd, "fetch_models", fake_fetch_models)
 
@@ -1347,7 +1642,7 @@ def test_provider_fetch_prints_filter_and_alias_summary(monkeypatch, capsys):
                 ),
             ],
             "",
-            {"returned": 4, "hidden_by_name": 1, "hidden_by_probe": 1, "selectable": 2},
+            {"returned": 4, "hidden_by_name": 1, "hidden_by_metadata": 1, "selectable": 2},
         )
 
     monkeypatch.setattr(provider_cmd, "fetch_models", fake_fetch_models)
@@ -1363,7 +1658,7 @@ def test_provider_fetch_prints_filter_and_alias_summary(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Sync summary: 4 returned" in out
     assert "1 hidden by type/name" in out
-    assert "1 hidden by chat probe" in out
+    assert "1 hidden by capability metadata" in out
     assert "gpt-5.4-mini -> pytest_fetch_summary:gpt-5.4-mini" in out
     assert saved["name"] == alias
     assert sorted(saved["models_cfg"]) == [
@@ -1454,3 +1749,127 @@ def test_provider_add_cli_does_not_prompt_for_fetch_on_piped_input(monkeypatch):
 
     assert should_fetch is False
     assert input_called is False
+
+
+def test_provider_tui_detail_offers_edit_for_endpoint_fields():
+    """Editing a provider's Base URL / Format needs its own action.
+
+    Only "Update API Key" existed, so a provider saved with a wrong URL or
+    wire format could not be corrected from the UI at all.
+    """
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "detail"
+    tui._detail_provider = "openrouter"
+
+    actions = tui._detail_actions()
+
+    assert "Edit Provider" in actions
+    assert "Update API Key" in actions          # the key keeps its own flow
+    # The rendered menu and the dispatcher must agree, or the cursor selects
+    # the wrong action; both now read the same list.
+    rendered = "".join(text for _s, text in tui._render_detail())
+    for act in actions:
+        assert f"[ {act} ]" in rendered
+
+
+def test_provider_tui_detail_cursor_wraps_over_every_action():
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "detail"
+    tui._detail_provider = "openrouter"
+    total = len(tui._detail_actions())
+
+    kb = tui._build_kb()
+    from prompt_toolkit.keys import Keys as _Keys
+    down = [b.handler for b in kb.get_bindings_for_keys((_Keys.Down,)) if b.filter()][-1]
+
+    for _ in range(total):
+        down(None)
+    assert tui._detail_cursor == 0, "down did not wrap over the whole action list"
+
+
+def test_provider_tui_edit_prefills_endpoint_and_locks_the_name(monkeypatch):
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "detail"
+    tui._detail_provider = "openrouter"
+    monkeypatch.setitem(provider_tui.PROVIDERS, "openrouter",
+                        {"base_url": "https://api.openrouter.ai/api/v1",
+                         "api_format": "anthropic", "api_key_env": "OPENROUTER_API_KEY"})
+
+    tui._open_edit_provider("openrouter")
+
+    assert tui._wiz_edit == "openrouter"
+    assert tui._panel == "wizard"
+    assert tui._wiz_inputs[1].text == "https://api.openrouter.ai/api/v1"
+    assert tui._wiz_fields[2] == "anthropic"
+    # Focus starts on the first editable row, not the locked name.
+    assert tui._wiz_focus == 1
+    # The key is left to the existing Update API Key action: the form must not
+    # offer to write a key, because the stored one is never displayed.
+    assert tui._wiz_inputs[2].text == ""
+
+
+def test_provider_tui_edit_navigation_skips_the_locked_rows():
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "detail"
+    tui._detail_provider = "openrouter"
+    tui._open_edit_provider("openrouter")
+
+    from prompt_toolkit.keys import Keys as _Keys
+    kb = tui._build_kb()
+    down = [b.handler for b in kb.get_bindings_for_keys((_Keys.Down,)) if b.filter()][-1]
+
+    visited = []
+    for _ in range(3):
+        visited.append(tui._wiz_focus)
+        down(None)
+
+    assert visited == [1, 2, 4]                 # Base URL, Format, Save
+    assert tui._wiz_focus == 1                  # and it wraps back
+
+
+def test_provider_tui_edit_confirm_saves_url_and_format_keeping_name(monkeypatch):
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "detail"
+    tui._detail_provider = "openrouter"
+    tui._open_edit_provider("openrouter")
+    tui._wiz_inputs[1].text = "https://relay.example.com/v1"
+    tui._wiz_fields[2] = "openai"
+
+    saved = {}
+
+    def fake_update(name, base_url, api_format):
+        saved["name"] = name
+        saved["base_url"] = base_url
+        saved["api_format"] = api_format
+        return True, ""
+
+    def fail_key_write(*_a, **_k):
+        raise AssertionError("editing the endpoint must not rewrite the API key")
+
+    monkeypatch.setattr(provider_tui, "_update_custom_provider", fake_update)
+    monkeypatch.setattr(provider_tui, "_save_key_to_env", fail_key_write)
+    monkeypatch.setattr(provider_tui, "init_providers", lambda force=False: None)
+
+    asyncio.run(tui._wizard_confirm())
+
+    assert saved == {"name": "openrouter", "base_url": "https://relay.example.com/v1",
+                     "api_format": "openai"}
+    assert tui._panel == "detail"
+    assert tui._wiz_edit == ""
+
+
+def test_provider_tui_edit_confirm_reports_failure_without_leaving_edit(monkeypatch):
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "detail"
+    tui._detail_provider = "openrouter"
+    tui._open_edit_provider("openrouter")
+    tui._wiz_inputs[1].text = "https://relay.example.com/v1"
+
+    monkeypatch.setattr(provider_tui, "_update_custom_provider",
+                        lambda *_a, **_k: (False, "Failed to save provider config"))
+    monkeypatch.setattr(provider_tui, "init_providers", lambda force=False: None)
+
+    asyncio.run(tui._wizard_confirm())
+
+    assert "Failed to save" in tui._wiz_error
+    assert tui._panel == "wizard"

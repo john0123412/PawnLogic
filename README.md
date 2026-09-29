@@ -206,6 +206,39 @@ API keys are stored in `~/.pawnlogic/.env`. Provider configs, model aliases,
 and descriptions are stored in `~/.pawnlogic/custom_providers.json` without
 secret values. Provider setup does not write keys into shell startup files.
 
+The interactive TUI also edits a provider in place. Open a provider's detail
+view and choose `Edit Provider` to correct its `Base URL` and `Format`; the
+save keeps the provider name, its API key, and its loaded models. Renaming is
+not offered there, because a rename must re-point every model entry and the
+key's environment variable and cannot be written atomically. Replace the key
+with `Update API Key`, which asks for the full value again and never displays
+the stored one.
+
+Confirmation dialogs mark the focused button in text as well as colour, and
+`←` `→` `↑` `↓` and `Tab` all move between them. `Delete Provider` opens a
+dialog that starts on `Cancel`, so `Enter` never deletes by accident.
+
+The model list behind `Fetch` and `Sync` opens with an empty search box every
+time, so a query typed into an earlier list is never re-applied to the next
+one. Move with `↑` `↓` `PageUp` and `PageDown`; `Space` or `Enter` ticks the
+model under the cursor, `a` selects all, and `c` clears the selection. Press
+`s` to load the ticked models and stay in the list, or `S` to load them and
+close it — neither requires moving to the buttons first. The list is paged,
+and its three actions — `Load Selected`, `Load & Close`, and `Cancel` — sit
+after the last model, so press `L` to jump straight to them instead of
+walking down once per model. They mark the focused one in text rather than
+colour alone.
+
+`Fetch` and `Sync` never send a chat request, so listing models costs
+nothing. They read the provider's free `/v1/models` listing and hide entries
+that report a non-text output modality; a provider that does not report
+capability metadata keeps all of its entries. `/provider test <model>` is
+also free: it checks the same listing, so it answers "is the base URL
+reachable and does this key work" without ever inferring. The trade-off of
+having no billable probe anywhere in the provider flow is that a model your
+key cannot actually use is no longer filtered out in advance — it fails as a
+normal API error the first time you use it.
+
 Plain `http://` provider endpoints are allowed for local relays and lab
 setups, but user-friendly mode prints a trust-boundary warning because requests
 and API keys are not protected by TLS.
@@ -424,7 +457,7 @@ A: In Prompt Toolkit mode, one persistent terminal keeps model and Tool output a
 A: Pawn waits for cooperative cancellation to settle. If queued work exists, Esc treats it as the new steer and continues with that direction without creating a duplicate recovered row. If the queue is empty, the interrupted prompt is prefilled as an editable recovered draft without rerunning it; press Enter to retry it once, or edit it then press Enter to replace it exactly once (including an edit beginning with `/`). `/queue remove <id>`, `/queue clear`, `/queue steer <id>`, `/queue follow-up <id>`, and `/queue recall <id>` remain available for advanced queue management. `/abort` interrupts the active Turn and clears all queued/recovered work; there is no separate `--all` form. After a restart, `pawn --continue` loads the newest interrupted, running, or failed session, and `pawn resume <session>` loads a chosen session. Both commands show the history and prefill the draft without running it automatically.
 
 **Q: Test Connection fails but fetch succeeds?**
-A: Fetch reads `/v1/models`; Test Connection sends a chat request. Load a chat model first.
+A: They now read the same free `/v1/models` listing. Fetch walks every page and can fail on a page error or a bad listing body; Test Connection checks one request. A failure from one and not the other usually means a retryable error — run it again.
 
 **Q: Where are API keys stored?**
 A: `~/.pawnlogic/.env` — outside the project, never tracked by git.

@@ -8,7 +8,8 @@
 
 | Module | Role | Interface | Tests | Invariants |
 |--------|------|-----------|-------|------------|
-| `core/session.py` | State Adapter | `AgentSession` class | `test_session_utils.py`, `test_turn_guards.py` | Session owns message history, tool map, and model selection. One session per REPL. |
+| `core/session.py` | State Adapter | `AgentSession` class | `test_session_utils.py`, `test_turn_guards.py` | Session owns message history, tool map, and model selection. One session per REPL. Re-exports `_PlanRenderer` from `core/plan_renderer.py`. |
+| `core/plan_renderer.py` | Plan tag renderer | `_PlanRenderer.feed()` / `.flush()` | `test_session_utils.py`, `test_flush_tail_on_wire.py` | Strips the XML `<plan>` block from the stream. Any content outside `<plan>` is returned to the caller; a fragment left mid-tag must ride the content-delta seam, not stdout. |
 | `core/runtime_context.py` | Authoritative context | `RuntimeContext` dataclass | `test_runtime_context.py` | Owns cwd, workspace, sink, mode flags. Legacy globals are one-way mirrors. |
 | `core/session_tool_loop.py` | Turn tool loop | `TurnToolLoop.execute_batch()` | `test_tool_executor.py`, `test_turn_guards.py` | Batch execution, Plan guard, audit, metrics. Single Interface for all tool dispatch. |
 | `core/session_snapshot.py` | Persistence snapshot contract | `SessionSnapshot`, `SESSION_SNAPSHOT_SCHEMA` | `test_session_snapshot.py`, `test_core_coverage.py` | Manual, autosave, and scheduler checkpoints share one versioned immutable snapshot shape. |
@@ -42,7 +43,8 @@
 | Module | Role | Interface | Tests | Invariants |
 |--------|------|-----------|-------|------------|
 | `core/provider_transport.py` | Format-specific headers | `provider_headers()` | `test_providers.py` | OpenAI and Anthropic header shapes are format-specific. Never share bearer tokens across formats. |
-| `core/provider_runtime.py` | Mutation Interface | `ProviderRuntime` class | `test_provider_runtime.py` | Persist config before mutating live registries. Rollback on write failure. |
+| `core/provider_runtime.py` | Mutation Interface | `ProviderRuntime` class | `test_provider_runtime.py` | Persist config before mutating live registries. Rollback on write failure. Re-exports the probe API from `core/provider_discovery.py` so existing call sites keep resolving. |
+| `core/provider_discovery.py` | Model probe policy | `classify_probe_response()`, `probe_openai_chat_model()`, `filter_supported_chat_models()` | `test_provider_runtime.py` | Hide a model only on positive evidence. Rate limits and transport failures are `unknown`, retried once, then kept visible. |
 | `core/provider_models.py` | Model Policy | Provider model helpers | `test_provider_runtime.py` | Keep model classification, aliases, and response formatting independent from provider persistence. |
 | `core/provider_streams.py` | SSE readers | `read_openai_sse_lines()`, `read_anthropic_sse_lines()` | `test_api_stream_helpers.py` | Provider-specific SSE parsing. Contract-tested delta shapes. |
 | `core/api_retry.py` | Retry policy | `RetryPolicy` dataclass | `test_api_retry.py`, `test_api_errors.py` | Policy loaded at request time, not import time. Classification shared across paths. |
@@ -51,7 +53,8 @@
 | `core/commands/provider.py` | Provider commands | `cmd_provider()`, `cmd_model()` | `test_provider_commands.py` | `_visible_models()` is the single eligibility helper. Active + configured key = visible. |
 | `core/commands/__init__.py` | Command registry and dispatch | `COMMANDS`, `dispatch()`, `matching_command_words()` | `test_commands_dispatch.py`, `test_provider_commands.py` | Registered verbs are authoritative; fuzzy direct dispatch executes only a unique match and reports ambiguity without executing. |
 | `core/commands/extensions.py` | Extension commands | `cmd_extension()` | `test_extension_commands.py`, `test_cli_transcripts.py` | Reads the manager from RuntimeContext. Commands never construct or bypass the Extension Runtime. |
-| `core/provider_tui.py` | Provider TUI | Rendering + key bindings | `test_provider_commands.py` | Thin rendering over `ProviderTUIState`. All mutations through `ProviderRuntime`. |
+| `core/provider_tui.py` | Provider TUI | Layout + key bindings + actions | `test_provider_commands.py` | Layout, key bindings, and actions over `ProviderTUIState`. Form and dialog drawing live in `core/provider_tui_form.py`. All mutations through `ProviderRuntime`. |
+| `core/provider_tui_form.py` | Form + dialog drawing | `render_wizard()`, `render_dialog()`, `detail_actions()`, `wiz_focus_cycle()`, `focus_buttons()` | `test_provider_commands.py` | Pure rendering for the shared Add/Edit form and the confirmation dialogs. `focus_buttons()` is shared with the model selector so both mark the focused button in text, not colour alone. |
 | `core/provider_tui_state.py` | TUI state | `ProviderTUIState` class | `test_provider_tui_state.py` | Pure state transitions, no IO. Typed, deterministic methods. |
 
 ## Security And Trust
