@@ -26,10 +26,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `architecture.output_modalities` from the free `/v1/models` response the
   fetch already has, so no chat request is made and the whole fetch costs one
   listing call (measured: 200 models in 0.68s, zero billable requests). The
-  inference probe and its response classifier are deleted. A provider that
-  omits the field keeps all its entries, so a model your key cannot use is no
-  longer hidden in advance and fails as a normal API error on first use —
-  `/provider test <model>` remains the explicit single-request check.
+  inference probe and its response classifier are deleted.
+- `/provider test <model>` also spent real money, and worse, it spent it
+  silently — the command's own output said "Connected" with no indication that
+  a paid inference had just run. It POSTed `max_tokens=1` to the chat
+  endpoint, which is a real billable request, not a metadata lookup. It now
+  issues a single `GET` against the same free `models_url_from_base_url()`
+  listing that fetch uses, which answers the two things a user actually asks
+  ("is the base URL reachable", "does this key work") at no cost, and says so
+  in its result: `Connected (195ms; free model listing, no inference sent)`.
+  The `connection_result_from_response()` helper, which existed only to
+  interpret a chat response, is deleted along with the `POST`-specific
+  tolerance for a 400 that actually meant "connected, but this model is
+  unusable". The honest cost: a model the key cannot use is no longer
+  detected up front. It is filtered out of the list in neither case now, and
+  surfaces as a normal API error on first use.
 - Loading ticked models still cost a walk to the bottom of the list. The `L`
   jump fixed reach, but the common flow — tick, tick, save — still ended in
   `L` then `Enter`. The selector now takes `s` to load and stay in the list,

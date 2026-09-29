@@ -13,17 +13,16 @@ from core import provider_runtime
 
 def test_provider_runtime_connection_result_formats_http_status():
     response = SimpleNamespace(
-        status_code=403,
-        text='{"error":{"message":"missing entitlement"}}',
-        json=lambda: {"error": {"message": "missing entitlement"}},
+        status_code=500,
+        text='{"error":{"message":"upstream unavailable"}}',
+        json=lambda: {"error": {"message": "upstream unavailable"}},
     )
 
-    ok, message, ms = provider_runtime.connection_result_from_response(response, 23)
+    ok, message = provider_runtime.connection_result_from_listing(response, 23)
 
     assert ok is False
-    assert ms == 23
-    assert "HTTP 403" in message
-    assert "missing entitlement" in message
+    assert "HTTP 500" in message
+    assert "upstream unavailable" in message
 
 
 def test_filter_supported_chat_models_uses_free_metadata_only():
@@ -541,3 +540,104 @@ def test_fetch_models_never_issues_an_inference_request():
     assert "vendor/plain-llm" in ids
     assert stats["hidden_by_metadata"] == 1
     assert stats["hidden_reasons"] == {"non_chat_output": 1}
+
+
+def test_test_connection_never_sends_an_inference():
+    """Test Connection must be free too.
+
+    It used to POST `max_tokens=1` to the chat endpoint, which is a real
+    billable inference. It now checks the same things a user actually cares
+    about — is the configured base URL reachable, and does the provider
+    accept this API key — against the free `/v1/models` listing derived from
+    that base URL. No chat request is made.
+    """
+    import httpx
+
+    posts: list[str] = []
+    requested: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"data": []}'
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": []}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def get(self, url, headers=None):
+            requested.append(str(url))
+            return FakeResponse()
+
+        async def post(self, *a, **k):  # pragma: no cover - must not run
+            posts.append(str(a))
+            raise AssertionError("Test Connection must not POST")
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(httpx, "AsyncClient", lambda *a, **kw: FakeClient())
+    try:
+        ok, msg, _ms = asyncio.run(
+            provider_runtime.test_connection(
+                "https://api.example.com/v1", "test-key", "openai", "some-model"
+            )
+        )
+    finally:
+        mp.undo()
+
+    assert ok is True
+    assert posts == []
+    # The free listing under the configured root, not the chat endpoint.
+    assert requested and all("/v1/models" in u for u in requested)
+    # The user-visible result must not imply the model was exercised.
+    assert "no inference sent" in msg
+
+
+def test_test_connection_reports_a_rejected_key_without_inferring():
+    """A bad key must still fail the check, from the free listing's status."""
+    import httpx
+
+    class FakeResponse:
+        status_code = 401
+        text = '{"error": {"message": "Invalid API key"}}'
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"error": {"message": "Invalid API key"}}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def get(self, _url, headers=None):
+            return FakeResponse()
+
+        async def post(self, *a, **k):  # pragma: no cover - must not run
+            raise AssertionError("Test Connection must not POST")
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(httpx, "AsyncClient", lambda *a, **kw: FakeClient())
+    try:
+        ok, msg, _ms = asyncio.run(
+            provider_runtime.test_connection(
+                "https://api.example.com/v1", "test-key", "openai", "some-model"
+            )
+        )
+    finally:
+        mp.undo()
+
+    assert ok is False
+    # A rejected key must be named as such, not reported as a bare status.
+    assert "/setkey" in msg

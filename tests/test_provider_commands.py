@@ -1275,18 +1275,33 @@ def test_provider_tui_toggle_active_updates_provider_state(monkeypatch):
     assert tui._detail_status == "✅ Provider is now active."
 
 
-def test_provider_tui_connection_accepts_nonstandard_success_response():
+def test_provider_tui_connection_reports_success_from_the_free_listing():
     response = SimpleNamespace(
         status_code=200,
-        text='{"id":"one"}{"id":"two"}',
-        json=lambda: json.loads('{"id":"one"}{"id":"two"}'),
+        text='{"data":[{"id":"one"}]}',
+        json=lambda: {"data": [{"id": "one"}]},
     )
 
-    ok, message, ms = provider_tui._connection_result_from_response(response, 12)
+    ok, message = provider_tui._connection_result_from_listing(response, 12)
 
     assert ok is True
-    assert ms == 12
-    assert message == "Connected (12ms; non-standard response)"
+    # The message must say nothing was inferred, so a user reading the panel
+    # does not assume Test Connection exercised the model.
+    assert message == "Connected (12ms; free model listing, no inference sent)"
+
+
+def test_provider_tui_connection_reports_a_rejected_key():
+    response = SimpleNamespace(
+        status_code=401,
+        text='{"error":{"message":"Invalid API key"}}',
+        json=lambda: {"error": {"message": "Invalid API key"}},
+    )
+
+    ok, message = provider_tui._connection_result_from_listing(response, 34)
+
+    assert ok is False
+    # A rejected key must be named as such, not reported as a bare status.
+    assert message == format_http_error(401, response.text)
 
 
 def test_provider_tui_connection_reports_http_400_body_when_json_invalid():
@@ -1296,10 +1311,9 @@ def test_provider_tui_connection_reports_http_400_body_when_json_invalid():
         json=lambda: json.loads('{"error":"bad request"}{"extra":"chunk"}'),
     )
 
-    ok, message, ms = provider_tui._connection_result_from_response(response, 34)
+    ok, message = provider_tui._connection_result_from_listing(response, 34)
 
     assert ok is False
-    assert ms == 34
     assert "HTTP 400" in message
     assert "bad request" in message
     assert "Extra data" not in message
@@ -1307,17 +1321,16 @@ def test_provider_tui_connection_reports_http_400_body_when_json_invalid():
 
 def test_provider_tui_and_cli_share_http_error_message(monkeypatch, capsys):
     body = '{"error":{"message":"missing entitlement","type":"auth","code":"forbidden"}}'
-    expected = format_http_error(403, body)
+    expected = format_http_error(500, body)
     response = SimpleNamespace(
-        status_code=403,
+        status_code=500,
         text=body,
         json=lambda: {"error": {"message": "missing entitlement"}},
     )
 
-    ok, tui_message, ms = provider_tui._connection_result_from_response(response, 41)
+    ok, tui_message = provider_tui._connection_result_from_listing(response, 41)
 
     assert ok is False
-    assert ms == 41
     assert tui_message == expected
 
     alias = "pytest_http_error"

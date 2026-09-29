@@ -232,10 +232,12 @@ colour alone.
 `Fetch` and `Sync` never send a chat request, so listing models costs
 nothing. They read the provider's free `/v1/models` listing and hide entries
 that report a non-text output modality; a provider that does not report
-capability metadata keeps all of its entries. The trade-off is that a model
-your key cannot actually use is no longer filtered out in advance — it fails
-as a normal API error the first time you use it. `/provider test <model>` is
-the explicit command that does send a request, and it only ever sends one.
+capability metadata keeps all of its entries. `/provider test <model>` is
+also free: it checks the same listing, so it answers "is the base URL
+reachable and does this key work" without ever inferring. The trade-off of
+having no billable probe anywhere in the provider flow is that a model your
+key cannot actually use is no longer filtered out in advance — it fails as a
+normal API error the first time you use it.
 
 Plain `http://` provider endpoints are allowed for local relays and lab
 setups, but user-friendly mode prints a trust-boundary warning because requests
@@ -455,7 +457,7 @@ A: In Prompt Toolkit mode, one persistent terminal keeps model and Tool output a
 A: Pawn waits for cooperative cancellation to settle. If queued work exists, Esc treats it as the new steer and continues with that direction without creating a duplicate recovered row. If the queue is empty, the interrupted prompt is prefilled as an editable recovered draft without rerunning it; press Enter to retry it once, or edit it then press Enter to replace it exactly once (including an edit beginning with `/`). `/queue remove <id>`, `/queue clear`, `/queue steer <id>`, `/queue follow-up <id>`, and `/queue recall <id>` remain available for advanced queue management. `/abort` interrupts the active Turn and clears all queued/recovered work; there is no separate `--all` form. After a restart, `pawn --continue` loads the newest interrupted, running, or failed session, and `pawn resume <session>` loads a chosen session. Both commands show the history and prefill the draft without running it automatically.
 
 **Q: Test Connection fails but fetch succeeds?**
-A: Fetch reads `/v1/models`; Test Connection sends a chat request. Load a chat model first.
+A: They now read the same free `/v1/models` listing. Fetch walks every page and can fail on a page error or a bad listing body; Test Connection checks one request. A failure from one and not the other usually means a retryable error — run it again.
 
 **Q: Where are API keys stored?**
 A: `~/.pawnlogic/.env` — outside the project, never tracked by git.

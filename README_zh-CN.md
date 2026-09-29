@@ -162,7 +162,7 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 
 `Fetch` 和 `Sync` 打开的模型列表每次都从空搜索框开始，上一次列表里输入的查询不会被套用到这一次。用 `↑` `↓` `PageUp` 和 `PageDown` 移动；`Space` 或 `Enter` 勾选光标所在的模型，`a` 全选，`c` 清空选择。按 `s` 保存已勾选的模型并留在列表里，按 `S` 保存并关闭列表——两者都不需要先把光标移到操作行。列表是分页显示的，`Load Selected`、`Load & Close` 和 `Cancel` 三个操作排在最后一个模型之后，按 `L` 可直接跳到它们，不必逐行往下走；这三个操作同样除颜色外还用文字标记当前项。
 
-`Fetch` 和 `Sync` 不会发送任何 chat 请求，因此列出模型不产生费用。它们只读取 Provider 免费返回的 `/v1/models` 列表，并隐藏声明了非文本输出模态的条目；不返回能力元数据的 Provider 会保留全部条目。代价是你的 Key 实际无权使用的模型不再被提前过滤掉，它会在你第一次使用时以普通 API 错误的形式出现。`/provider test <model>` 是唯一会真正发起请求的命令，并且只发一次。
+`Fetch` 和 `Sync` 不会发送任何 chat 请求，因此列出模型不产生费用。它们只读取 Provider 免费返回的 `/v1/models` 列表，并隐藏声明了非文本输出模态的条目；不返回能力元数据的 Provider 会保留全部条目。`/provider test <model>` 同样是免费的：它检查同一份列表，因此可以在不发起任何推理的前提下回答「base URL 通不通、Key 认不认」。不再有任何计费探测所带来的代价是，你的 Key 实际无权使用的模型不再被提前过滤掉，它会在你第一次使用时以普通 API 错误的形式出现。
 
 本地 relay 和实验环境可以使用明文 `http://` Provider endpoint，但用户友好模式会显示 trust-boundary 提示，因为请求和 API Key 没有 TLS 保护。
 
@@ -333,7 +333,7 @@ A: 在 Prompt Toolkit 模式下，一个持久终端界面会把模型和工具�
 A: Pawn 会等待协作式取消完成。如果已有排队工作，Esc 会把它作为新的 steer 继续执行，不会额外创建重复的 recovered 行。如果队列为空，被中断的 prompt 会预填为可编辑的 recovered draft，但不会自动重跑；按 Enter 只重试一次，编辑后按 Enter 只执行替换后的内容一次（包括以 `/` 开头的编辑）。`/queue remove <id>`、`/queue clear`、`/queue steer <id>`、`/queue follow-up <id>` 和 `/queue recall <id>` 仍可用于高级队列管理。`/abort` 会中断当前 Turn 并清除全部排队/恢复工作，不再有单独的 `--all` 形式。重启后，`pawn --continue` 会加载最近的 interrupted、running 或 failed 会话，`pawn resume <session>` 会加载指定会话。两个命令都会显示历史并预填草稿，但不会自动执行。
 
 **Q: Test Connection 失败但 fetch 成功？**
-A: Fetch 只读 `/v1/models`；Test Connection 发送聊天请求。先加载聊天模型。
+A: 现在两者读的是同一份免费的 `/v1/models` 列表。Fetch 会翻完所有分页，可能因为某一页出错或列表格式异常而失败；Test Connection 只发一次请求。两者结果不一致通常意味着遇到了可重试的错误——再执行一次即可。
 
 **Q: API Key 在哪里？**
 A: `~/.pawnlogic/.env`，不在项目目录，不被 git 追踪。

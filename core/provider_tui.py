@@ -29,7 +29,7 @@ from core import provider_tui_form as _form
 from pawnlogic.selectors import ModalSpec
 from core.provider_runtime import (
     candidate_save_alias as _candidate_save_alias,
-    connection_result_from_response as _connection_result_from_response,
+    connection_result_from_listing as _connection_result_from_listing,
     fetch_models as _fetch_models,
     filter_supported_chat_models as _filter_supported_chat_models,
     first_provider_chat_model as _first_provider_chat_model,
@@ -38,7 +38,6 @@ from core.provider_runtime import (
     model_alias_changes as _model_alias_changes,
     model_is_chat_candidate as _model_is_chat_candidate,
     model_rejection_reason as _model_rejection_reason,
-    normalize_base_url as _normalize_base_url,
     REASONING_KEYWORDS as _REASONING_KEYWORDS,
     record_sync_time as _record_sync_time,
     save_key as _save_key_to_env,
@@ -56,7 +55,7 @@ __all__ = [
     "run_provider_tui",
     "TUI_STYLE",
     "_candidate_save_alias",
-    "_connection_result_from_response",
+    "_connection_result_from_listing",
     "_fetch_models",
     "_filter_supported_chat_models",
     "_first_provider_chat_model",
@@ -65,7 +64,6 @@ __all__ = [
     "_model_alias_changes",
     "_model_is_chat_candidate",
     "_model_rejection_reason",
-    "_normalize_base_url",
     "_save_key_to_env",
     "_test_connection",
 ]

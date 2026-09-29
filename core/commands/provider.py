@@ -432,7 +432,7 @@ async def _provider_test(session, model_alias: str = "") -> None:
     model_id = str(model_cfg.get("id") or model_alias)
 
     _print(c(GRAY, f"  Testing {model_alias} ({api_format}) -> {base_url} ..."))
-    _print(c(GRAY, "  Sending a max_tokens=1 test request..."))
+    _print(c(GRAY, "  Checking the free model listing (no inference, no charge)..."))
 
     ok, msg, _ms = await test_connection(base_url, api_key, api_format, model_id)
     if ok:

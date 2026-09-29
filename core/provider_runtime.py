@@ -33,14 +33,13 @@ from core.logger import logger
 from core.provider_models import (
     REASONING_KEYWORDS,
     candidate_save_alias,
-    connection_result_from_response,
+    connection_result_from_listing,
     first_provider_chat_model as _first_provider_chat_model,
     format_alias_preview,
     format_model_sync_notice,
     model_alias_changes,
     model_is_chat_candidate,
     model_rejection_reason,
-    normalize_base_url,
 )
 from core.provider_transport import provider_headers
 from core.state import state as _runtime_state
@@ -59,7 +58,7 @@ load_custom_providers = init_providers
 
 __all__ = [
     "candidate_save_alias",
-    "connection_result_from_response",
+    "connection_result_from_listing",
     "fetch_models",
     "filter_supported_chat_models",
     "first_provider_chat_model",
@@ -68,7 +67,6 @@ __all__ = [
     "model_alias_changes",
     "model_is_chat_candidate",
     "model_rejection_reason",
-    "normalize_base_url",
 ]
 
 
@@ -248,21 +246,26 @@ async def test_connection(
     api_format: str,
     model_id: str,
 ) -> tuple[bool, str, int]:
+    """Check reachability and credentials for free.
+
+    This used to POST ``max_tokens=1`` to the chat endpoint, which is a real
+    billable inference. It now checks the same two things a user actually
+    needs answered — is the configured base URL reachable, and does the
+    provider accept this API key — against the free model-listing endpoint
+    derived from that base URL. No chat request is made, so this command
+    never costs anything.
+
+    The trade-off: it no longer proves that ``model_id`` can serve chat. A
+    model the key cannot use is reported by the provider on first real use.
+    """
     import httpx
 
     t0 = time.monotonic()
     policy = retry_policy_from_env()
     if not api_key:
         return False, "API key is not configured.", 0
-    if not model_id:
-        return False, "No chat models loaded. Use Fetch / Sync Models first.", 0
-    endpoint = normalize_base_url(base_url, api_format)
-    maybe_warn_insecure_provider(endpoint)
-    payload = {
-        "model": model_id,
-        "max_tokens": 1,
-        "messages": [{"role": "user", "content": "hi"}],
-    }
+    listing = models_url_from_base_url(base_url)
+    maybe_warn_insecure_provider(listing)
     if api_format == "anthropic":
         headers = {
             "x-api-key": api_key,
@@ -274,11 +277,12 @@ async def test_connection(
     try:
         async with httpx.AsyncClient(timeout=policy.nonstream_timeout_seconds) as client:
             resp = await _request_with_retry(
-                lambda: client.post(endpoint, json=payload, headers=headers),
+                lambda: client.get(listing, headers=headers),
                 policy=policy,
             )
         ms = int((time.monotonic() - t0) * 1000)
-        return connection_result_from_response(resp, ms)
+        ok, msg = connection_result_from_listing(resp, ms)
+        return ok, msg, ms
     except httpx.TimeoutException:
         return (
             False,
