@@ -18,7 +18,7 @@ import main as pawn_main
 import pawnlogic.cli as pawn_cli
 from config import providers as provider_config
 from core.api_errors import format_http_error
-from core import provider_runtime, provider_tui
+from core import provider_discovery, provider_runtime, provider_tui
 from core.commands import provider as provider_cmd
 
 
@@ -560,7 +560,7 @@ def test_provider_filter_supported_chat_models_removes_unsupported(monkeypatch):
     async def fake_probe(_client, _endpoint, _api_key, model_id):
         return (model_id != "old-model", "unsupported" if model_id == "old-model" else "")
 
-    monkeypatch.setattr(provider_runtime, "probe_openai_chat_model", fake_probe)
+    monkeypatch.setattr(provider_discovery, "probe_openai_chat_model", fake_probe)
 
     supported, removed, _probe_stats = asyncio.run(
         provider_runtime.filter_supported_chat_models(

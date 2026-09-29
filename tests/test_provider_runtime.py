@@ -6,7 +6,7 @@ import asyncio
 from types import SimpleNamespace
 import stat
 
-from core import provider_runtime
+from core import provider_discovery, provider_runtime
 
 
 def test_provider_runtime_connection_result_formats_http_status():
@@ -28,7 +28,7 @@ def test_provider_runtime_filter_supported_chat_models_uses_probe(monkeypatch):
     async def fake_probe(_client, _endpoint, _api_key, model_id):
         return model_id != "old-model", "unsupported" if model_id == "old-model" else ""
 
-    monkeypatch.setattr(provider_runtime, "probe_openai_chat_model", fake_probe)
+    monkeypatch.setattr(provider_discovery, "probe_openai_chat_model", fake_probe)
 
     supported, removed, probe_stats = asyncio.run(
         provider_runtime.filter_supported_chat_models(
@@ -404,7 +404,7 @@ def test_classify_probe_response_rate_limited_is_unknown():
 
 
 def test_probe_retries_rate_limit_and_passes(monkeypatch):
-    monkeypatch.setattr(provider_runtime, "_retry_delay", lambda *a, **k: 0)
+    monkeypatch.setattr(provider_discovery, "_retry_delay", lambda *a, **k: 0)
     calls = []
 
     class FlakyClient:
@@ -425,7 +425,7 @@ def test_probe_retries_rate_limit_and_passes(monkeypatch):
 
 
 def test_probe_keeps_model_alive_when_rate_limit_persists(monkeypatch):
-    monkeypatch.setattr(provider_runtime, "_retry_delay", lambda *a, **k: 0)
+    monkeypatch.setattr(provider_discovery, "_retry_delay", lambda *a, **k: 0)
 
     class Always429Client:
         async def post(self, _url, json=None, headers=None):
@@ -460,7 +460,7 @@ def test_probe_hides_on_definitive_404_without_retry(monkeypatch):
 
 
 def test_probe_retries_transport_failure_then_reports_unreachable(monkeypatch):
-    monkeypatch.setattr(provider_runtime, "_retry_delay", lambda *a, **k: 0)
+    monkeypatch.setattr(provider_discovery, "_retry_delay", lambda *a, **k: 0)
     calls = []
 
     class BrokenClient:
@@ -481,7 +481,7 @@ def test_probe_retries_transport_failure_then_reports_unreachable(monkeypatch):
 def test_filter_supported_chat_models_reports_probe_stats(monkeypatch):
     import httpx
 
-    monkeypatch.setattr(provider_runtime, "_retry_delay", lambda *a, **k: 0)
+    monkeypatch.setattr(provider_discovery, "_retry_delay", lambda *a, **k: 0)
 
     responses = {
         "ok-model": _StaticResp(200, ""),
