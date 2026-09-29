@@ -912,8 +912,23 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 - An Application task that ends without `close()` must both wake the parked
   CLI submission waiter and resolve any pending selector future. A silent
   exit there previously left the only recovery a force-quit.
+- An idle Ctrl+C is still a `BaseException` exit, not a graceful one. Both
+  the `c-c` binding (`event.app.exit(exception=KeyboardInterrupt())`) and
+  `install_live_interrupt_handler`'s idle raise put a `KeyboardInterrupt`
+  into the Application task, which `run_async` does not catch; it unwinds
+  through `asyncio.run`, so the CLI shutdown block never runs. The visible
+  consequences are the `stopped unexpectedly` notice and a skipped
+  `session.shutdown()` / pending-task cancel. The `c-c`-on-idle path is
+  unreachable as a clean exit, so the double-press confirm in
+  `cli.py` only ever runs on the readline path. The half of this that is
+  fixed: the live SIGINT handler is now disarmed to `SIG_IGN` from
+  `_observe_terminal_task`, so the handler cannot outlive the REPL and
+  re-raise inside `threading._shutdown`. Do not restore that guard to
+  depend on `restore()` — the shutdown block is exactly the code the
+  exception skips, so `closing` never became true.
 - Safe-point steering can alter Tool Call batch protocol; skipped results,
-  ordering, and plan-guard accounting must remain complete.- Tier presets use advisory plan-guard mode (`plan_guard_mode`) so weak models
+  ordering, and plan-guard accounting must remain complete.
+- Tier presets use advisory plan-guard mode (`plan_guard_mode`) so weak models
   can run side-effect tools without plan blocks; `/planguard strict` remains
   explicit opt-in. Operation Policy remains the actual safety gate, not the
   CoT Guard.
