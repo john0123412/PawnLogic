@@ -447,8 +447,8 @@ class ProviderTUI:
         f.append(
             (
                 "class:subtitle",
-                "  Space toggle · ↑↓ move · L jump to actions · a all · c none"
-                " · Enter confirm · Esc cancel\n\n",
+                "  Space/Enter toggle · ↑↓ move · s save · S save+close"
+                " · a all · c none · L actions · Esc cancel\n\n",
             )
         )
         # Only render the visible viewport window — never all rows
@@ -861,6 +861,25 @@ class ProviderTUI:
             self._ms_cursor = len(self._ms_filtered())
             inv()
 
+        def _ms_load_selected(save_exit: bool) -> None:
+            # Shared by the action row and the s/S shortcuts so the
+            # "at least one model" guard cannot drift between the two paths.
+            if not self._ms_selected:
+                self._ms_error = "Select at least one model."; inv(); return
+            self._ms_error = ""
+            self._ms_save_exit = save_exit
+            self._do_save_models()
+
+        @kb.add("s", filter=_ms_list)
+        def _ms_save(e: Any) -> None:
+            # Load from wherever the cursor is, without walking to the
+            # buttons first: the common case is tick, tick, save.
+            _ms_load_selected(False)
+
+        @kb.add("S", filter=_ms_list)
+        def _ms_save_close(e: Any) -> None:
+            _ms_load_selected(True)
+
         @kb.add("pageup",   filter=_ms_list)
         def _ms_pgup(e):
             self._ms_cursor = max(0, self._ms_cursor - _PAGE)
@@ -915,11 +934,7 @@ class ProviderTUI:
             if self._ms_cursor == total + 2:
                 self._cancel_model_selector()
                 return
-            if not self._ms_selected:
-                self._ms_error = "Select at least one model."; inv(); return
-            self._ms_error = ""
-            self._ms_save_exit = self._ms_cursor == total + 1
-            self._do_save_models()
+            _ms_load_selected(self._ms_cursor == total + 1)
 
         @kb.add("escape", filter=_ms)
         def _ms_esc(e):

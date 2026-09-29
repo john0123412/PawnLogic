@@ -18,6 +18,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `core/provider_runtime.update_custom_provider` is the new entry point.
 
 ### Fixed
+- Loading ticked models still cost a walk to the bottom of the list. The `L`
+  jump fixed reach, but the common flow — tick, tick, save — still ended in
+  `L` then `Enter`. The selector now takes `s` to load and stay in the list,
+  and `S` to load and close, from wherever the cursor is, matching the
+  existing `a`/`A` and `l`/`L` pairs. Both share one
+  `_ms_load_selected()` helper with the action row, so the
+  "select at least one model" guard cannot drift between the two paths. The
+  panel's key hint now also says that `Enter` ticks, which it always did.
 - The model list behind `Fetch` and `Sync` was effectively unusable on a real
   provider. Ticking worked, but the three actions sat at cursor index N —
   after the last model — so loading a ticked model needed one `↓` press per

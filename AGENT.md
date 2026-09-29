@@ -832,8 +832,12 @@ fail; do not list a module here before CI checks it.
   a real openrouter sync returned hundreds of models, so loading a ticked one
   cost one `↓` per model. This is invisible in tests that use a 3-model list
   and invisible in the panel's own rendering, because the buttons are always
-  painted at the bottom. The `L` binding jumps to the action row; keep it, and
-  keep at least one test at realistic list length.
+  painted at the bottom. Two shortcuts must therefore stay: `L` reaches the
+  action row, and `s`/`S` load from the current position without going there
+  at all. They share `_ms_load_selected()` with the action row, so the
+  "select at least one model" guard has a single home — a shortcut added
+  beside `_do_save_models()` instead of through that helper would bypass it.
+  Keep at least one test at realistic list length.
 - Live host scrollback must use Prompt Toolkit's `run_in_terminal`
   handoff. Worker threads must never write directly to the TTY; complete
   lines stream live, partial lines flush once at close, and a failed host

@@ -347,14 +347,64 @@ def test_provider_tui_model_selector_reaches_the_action_row_without_walking_ever
     assert tui._ms_cursor == total
 
 
+def test_provider_tui_model_selector_saves_without_reaching_the_action_row():
+    """``L`` then ``Enter`` was the only way to load a ticked model.
+
+    The action row still has to exist, but a selection made in the middle of a
+    long list should not require walking to it first. ``s`` loads and stays,
+    ``S`` loads and closes, matching the existing ``a``/``A`` and ``l``/``L``
+    pairs.
+    """
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "models"
+    tui._ms_all = [
+        (f"vendor{i // 10}/model-{i}", {"id": f"vendor{i // 10}/model-{i}"})
+        for i in range(200)
+    ]
+    kb = tui._build_kb()
+    handlers = {b.handler.__name__: b.handler for b in kb.bindings}
+
+    saved: list[bool] = []
+    tui._do_save_models = lambda: saved.append(tui._ms_save_exit)
+
+    # Ticking works with Enter alone; Space is not required to select.
+    handlers["_ms_enter"](None)
+    assert tui._ms_selected == {"vendor0/model-0"}
+    handlers["_ms_enter"](None)
+    assert tui._ms_selected == set()
+
+    handlers["_ms_dn"](None)
+    handlers["_ms_space"](None)
+    assert tui._ms_selected == {"vendor0/model-1"}
+
+    # Mid-list, with the cursor nowhere near the buttons: save directly.
+    assert tui._ms_cursor == 1
+    handlers["_ms_save"](None)
+    assert saved == [False]
+    assert tui._ms_selected == {"vendor0/model-1"}
+
+    # S is the close-after-load variant.
+    handlers["_ms_save_close"](None)
+    assert saved == [False, True]
+
+    # An empty selection is refused exactly as it is on the action row, so
+    # the shortcut cannot silently load nothing.
+    tui._ms_selected.clear()
+    handlers["_ms_save"](None)
+    assert saved == [False, True]
+    assert tui._ms_error
+
+
 def test_provider_tui_model_selector_advertises_its_keys_including_the_jump():
     """The panel never told the user how to reach the buttons."""
     tui = provider_tui.ProviderTUI()
     tui._panel = "models"
     tui._ms_all = [("model-a", {"id": "model-a", "provider": "relay"})]
     rendered = "".join(text for _style, text in tui._render_model_select())
-    assert "Space toggle" in rendered
+    assert "Space/Enter toggle" in rendered
     assert "Load Selected" in rendered
+    # Saving without walking to the action row.
+    assert "s save" in rendered
 
 
 def test_pawn_completer_includes_live_visible_models_without_rebuild():
