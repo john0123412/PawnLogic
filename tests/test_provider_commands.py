@@ -112,6 +112,42 @@ def test_provider_tui_add_wizard_navigation_moves_real_input_focus():
     assert app.layout.current_control is tui._wiz_inputs[2].control
 
 
+def test_provider_tui_wizard_shows_caret_at_the_real_buffer_position():
+    """The Add Provider form is drawn by hand, so nothing else marks the caret."""
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "wizard"
+    tui._wiz_inputs[0].text = "openrouter"
+    tui._wiz_inputs[0].buffer.cursor_position = 4
+    tui._wiz_focus = 0
+
+    rendered = "".join(text for _style, text in tui._render_wizard())
+
+    assert "open\u258cro" in rendered          # caret sits mid-word, not at the end
+    assert rendered.count("\u258c") == 1       # only the focused field shows one
+    assert "\u25b6\u2460 Name" in rendered     # the focused row is marked
+
+
+def test_provider_tui_wizard_marks_exactly_one_row_at_a_time():
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "wizard"
+    tui._wiz_inputs[0].text = "relay"
+    tui._wiz_inputs[1].text = "https://api.example.com/v1"
+    tui._wiz_inputs[2].text = "sk-secret-1234567890"
+
+    for focus, marked in ((0, "\u25b6\u2460"), (1, "\u25b6\u2461"), (2, "\u25b6\u2462"),
+                          (3, "\u25b6\u2463"), (4, "\u25b6 [ Save Provider ]")):
+        tui._wiz_focus = focus
+        rendered = "".join(text for _style, text in tui._render_wizard())
+        assert rendered.count("\u25b6") >= 1, f"no marker at focus {focus}"
+        assert marked in rendered, f"focus {focus} did not mark {marked!r}"
+
+    # The API key stays masked, and the caret rides the masked string.
+    tui._wiz_focus = 3
+    rendered = "".join(text for _style, text in tui._render_wizard())
+    assert "sk-secret" not in rendered
+    assert "\u2022" in rendered and "\u258c" in rendered
+
+
 def test_provider_tui_model_search_field_accepts_pasted_text():
     tui = provider_tui.ProviderTUI()
     pasted_model_name = "provider-prefix/some-long-model-name-v1"
@@ -119,7 +155,6 @@ def test_provider_tui_model_search_field_accepts_pasted_text():
     tui._ms_search_ta.text = pasted_model_name
 
     tui._sync_model_search_from_input()
-
     assert tui._ms_search == pasted_model_name
 
 

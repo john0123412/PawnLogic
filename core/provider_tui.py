@@ -428,7 +428,15 @@ class ProviderTUI:
                 display = "Anthropic Compatible" if val == "anthropic" else "OpenAI Compatible"
             else:
                 display = val
-            f.append((s, f"  {'①②③④'[i]} {label:<10} [ {display:<40} ]\n"))
+            # The form is drawn by hand, so nothing else marks the caret. Show it
+            # at the real buffer position, or the user cannot tell where the
+            # next keystroke lands. Format is a dropdown, not a text field, so
+            # it gets the row marker only.
+            if focused and i in (0, 1, 3) and not self._wiz_fmt_open:
+                pos = self._wiz_inputs[{0: 0, 1: 1, 3: 2}[i]].buffer.cursor_position
+                pos = max(0, min(pos, len(display)))
+                display = f"{display[:pos]}▌{display[pos:]}"
+            f.append((s, f"  {'▶' if focused else ' '}{'①②③④'[i]} {label:<10} [ {display:<39} ]\n"))
             if i == 2 and focused and self._wiz_fmt_open:
                 for j, opt in enumerate(["OpenAI Compatible", "Anthropic Compatible"]):
                     cur = "▶ " if j == self._wiz_fmt_cursor else "  "
@@ -436,7 +444,7 @@ class ProviderTUI:
                     f.append((fs, f"       {cur}{opt}\n"))
         f.append(("", "\n"))
         bs = "class:btn-focus" if self._wiz_focus == 4 else "class:btn-normal"
-        f.append((bs, "  [ Save Provider ]\n\n"))
+        f.append((bs, "  " + ("▶" if self._wiz_focus == 4 else " ") + " [ Save Provider ]\n\n"))
         if self._wiz_error:
             f.append(("class:error", f"  ✗ {self._wiz_error}\n"))
         if self._wiz_status:
