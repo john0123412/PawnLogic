@@ -70,8 +70,16 @@ across code, tests, and documentation.
 - Fetching models must register only user-selected, supported chat models.
 - Fetch must hide legacy, image, audio, embedding, realtime, and other non-chat
   models before registration.
-- Fetch must perform provider compatibility probing when possible so unsupported
-  chat models are hidden before the user selects them.
+- Fetch must hide non-chat models before registration, using only metadata the
+  free `/v1/models` listing already returned. **Fetch must never send a chat
+  or completion request to decide whether a model exists.** Probing each
+  candidate with a real `POST /chat/completions` is a billable inference:
+  openrouter returns hundreds of models, so one fetch produced hundreds of
+  charged requests and took minutes. Filter on
+  `architecture.output_modalities`; a provider that omits the field is kept,
+  because absence of evidence is not evidence of absence. The trade-off is
+  accepted deliberately — a model your key cannot actually use is no longer
+  hidden up front, and surfaces as a normal API error on first use.
 - Test Connection must use a loaded chat model for that provider. Do not
   hardcode obsolete models such as `gpt-3.5-turbo`, `ds-chat`, or `ds-r1`.
 - If a provider has no loaded chat model, Test Connection should tell the user
@@ -682,6 +690,15 @@ fail; do not list a module here before CI checks it.
 - Trust/Operation/Network Policy drift across host, Docker, browser, MCP, CTF
   execution paths. URL adapters must re-evaluate DNS and redirects.
 - Provider visibility drift between CLI, TUI, completions, and runtime fetch.
+- **Never validate a model by inferring with it.** "Check the model works"
+  implemented as a real `POST /chat/completions` is a billable request, and
+  doing it per candidate turned one `/provider fetch` into hundreds of charged
+  inferences. The rule now binds in "Provider And Model Rules": discovery
+  reads only the free `/v1/models` metadata. If a check genuinely needs a live
+  response, it must be a single user-initiated request (`/provider test
+  <model>`), never a per-model sweep, and it must be free of inference.
+  `core/provider_discovery.py` is the seam; adding a request to it re-opens
+  the billing hole.
 - User-friendly mode accidentally leaking debug internals.
 - Stream adapters changing public delta dict keys or ordering.
 - Extension discovery importing or enabling third-party code during startup.

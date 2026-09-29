@@ -83,18 +83,12 @@ def format_model_sync_notice(
 ) -> list[str]:
     returned = int(stats.get("returned", 0))
     hidden_name = int(stats.get("hidden_by_name", 0))
-    hidden_probe = int(stats.get("hidden_by_probe", 0))
-    kept_unknown = int(stats.get("probe_kept_unknown", 0) or 0)
+    hidden_meta = int(stats.get("hidden_by_metadata", 0))
     selectable = int(stats.get("selectable", 0))
-    kept_part = (
-        f"{kept_unknown} kept despite probe issues (rate limit/unreachable); "
-        if kept_unknown
-        else ""
-    )
     lines = [
         (
             f"Sync summary: {returned} returned; {hidden_name} hidden by type/name; "
-            f"{hidden_probe} hidden by chat probe; {kept_part}"
+            f"{hidden_meta} hidden by capability metadata; "
             f"{selectable} selectable."
         )
     ]

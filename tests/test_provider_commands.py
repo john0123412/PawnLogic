@@ -18,7 +18,7 @@ import main as pawn_main
 import pawnlogic.cli as pawn_cli
 from config import providers as provider_config
 from core.api_errors import format_http_error
-from core import provider_discovery, provider_runtime, provider_tui
+from core import provider_runtime, provider_tui
 from core.commands import provider as provider_cmd
 
 
@@ -840,19 +840,17 @@ def test_provider_model_probe_accepts_non_model_specific_400():
     assert provider_tui._model_rejection_reason('{"error":{"message":"missing field"}}') == ""
 
 
-def test_provider_filter_supported_chat_models_removes_unsupported(monkeypatch):
-    async def fake_probe(_client, _endpoint, _api_key, model_id):
-        return (model_id != "old-model", "unsupported" if model_id == "old-model" else "")
-
-    monkeypatch.setattr(provider_discovery, "probe_openai_chat_model", fake_probe)
-
-    supported, removed, _probe_stats = asyncio.run(
+def test_provider_filter_supported_chat_models_hides_non_chat_output():
+    """Filtering is metadata-only: no provider call, no inference."""
+    supported, removed, _stats = asyncio.run(
         provider_runtime.filter_supported_chat_models(
             "https://api.example.com/v1",
             "test-key",
             [
-                ("new-model", {"id": "new-model"}),
-                ("old-model", {"id": "old-model"}),
+                ("new-model", {"id": "new-model", "source_item": {
+                    "architecture": {"output_modalities": ["text"]}}}),
+                ("old-model", {"id": "old-model", "source_item": {
+                    "architecture": {"output_modalities": ["video"]}}}),
             ],
         )
     )
@@ -863,13 +861,13 @@ def test_provider_filter_supported_chat_models_removes_unsupported(monkeypatch):
 
 def test_provider_sync_notice_reports_hidden_and_alias_changes():
     lines = provider_tui._format_model_sync_notice(
-        {"returned": 5, "hidden_by_name": 2, "hidden_by_probe": 1, "selectable": 2},
+        {"returned": 5, "hidden_by_name": 2, "hidden_by_metadata": 1, "selectable": 2},
         [("gpt-5.4-mini", "relay:gpt-5.4-mini")],
     )
 
     assert lines[0] == (
         "Sync summary: 5 returned; 2 hidden by type/name; "
-        "1 hidden by chat probe; 2 selectable."
+        "1 hidden by capability metadata; 2 selectable."
     )
     assert "gpt-5.4-mini -> relay:gpt-5.4-mini" in lines[1]
 
@@ -1333,7 +1331,7 @@ def test_provider_tui_and_cli_share_http_error_message(monkeypatch, capsys):
     monkeypatch.setenv(env_key, "test-key")
 
     async def fake_fetch_models(_base_url, _api_key, _api_format):
-        return [], expected, {"returned": 0, "hidden_by_name": 0, "hidden_by_probe": 0, "selectable": 0}
+        return [], expected, {"returned": 0, "hidden_by_name": 0, "hidden_by_metadata": 0, "selectable": 0}
 
     monkeypatch.setattr(provider_cmd, "fetch_models", fake_fetch_models)
 
@@ -1631,7 +1629,7 @@ def test_provider_fetch_prints_filter_and_alias_summary(monkeypatch, capsys):
                 ),
             ],
             "",
-            {"returned": 4, "hidden_by_name": 1, "hidden_by_probe": 1, "selectable": 2},
+            {"returned": 4, "hidden_by_name": 1, "hidden_by_metadata": 1, "selectable": 2},
         )
 
     monkeypatch.setattr(provider_cmd, "fetch_models", fake_fetch_models)
@@ -1647,7 +1645,7 @@ def test_provider_fetch_prints_filter_and_alias_summary(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Sync summary: 4 returned" in out
     assert "1 hidden by type/name" in out
-    assert "1 hidden by chat probe" in out
+    assert "1 hidden by capability metadata" in out
     assert "gpt-5.4-mini -> pytest_fetch_summary:gpt-5.4-mini" in out
     assert saved["name"] == alias
     assert sorted(saved["models_cfg"]) == [

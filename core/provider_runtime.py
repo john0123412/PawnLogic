@@ -48,9 +48,7 @@ from core.trust import TrustBoundaryKind, trust_notice_for_boundary
 # Model probing lives in core.provider_discovery; re-exported here so existing
 # `provider_runtime.<name>` call sites keep resolving.
 from core.provider_discovery import (
-    classify_probe_response,
     filter_supported_chat_models,
-    probe_openai_chat_model,
 )
 
 PAWNLOGIC_DIR = PAWNLOGIC_HOME
@@ -61,7 +59,6 @@ load_custom_providers = init_providers
 
 __all__ = [
     "candidate_save_alias",
-    "classify_probe_response",
     "connection_result_from_response",
     "fetch_models",
     "filter_supported_chat_models",
@@ -72,7 +69,6 @@ __all__ = [
     "model_is_chat_candidate",
     "model_rejection_reason",
     "normalize_base_url",
-    "probe_openai_chat_model",
 ]
 
 
@@ -167,6 +163,14 @@ def save_provider_with_rollback(
     If disk persistence fails, live PROVIDERS/MODELS remain unchanged.
     Returns (ok, error_message).
     """
+    # `source_item` is the raw `/v1/models` entry that fetch carries so
+    # filtering can read free capability metadata without another request. It
+    # is a transient field and must never reach custom_providers.json, so it
+    # is stripped here as well as at the TUI save site.
+    models_cfg = {
+        alias: {k: v for k, v in cfg.items() if k != "source_item"}
+        for alias, cfg in models_cfg.items()
+    }
     try:
         provider_config.save_custom_provider(name, prov_cfg, models_cfg, replace_models=replace_models)
     except Exception as exc:
@@ -301,7 +305,7 @@ async def fetch_models(
     stats: dict[str, Any] = {
         "returned": 0,
         "hidden_by_name": 0,
-        "hidden_by_probe": 0,
+        "hidden_by_metadata": 0,
         "selectable": 0,
     }
     headers = provider_headers(api_format, api_key)
@@ -368,13 +372,16 @@ async def fetch_models(
                 "color": "\033[37m",
                 "vision": vision,
                 "reasoning": reasoning,
+                # Raw listing entry, kept so filtering can read the free
+                # capability metadata without another request. It is dropped
+                # before anything is persisted.
+                "source_item": item,
             },
         ))
 
-    filtered, removed, probe_stats = await filter_supported_chat_models(base_url, api_key, candidates, api_format)
-    stats["hidden_by_probe"] = removed
-    stats["probe_kept_unknown"] = int(probe_stats.get("kept_unknown", 0))
-    stats["probe_hidden_reasons"] = dict(probe_stats.get("hidden_reasons", {}))
+    filtered, removed, filter_stats = await filter_supported_chat_models(base_url, api_key, candidates, api_format)
+    stats["hidden_by_metadata"] = removed
+    stats["hidden_reasons"] = dict(filter_stats.get("hidden_reasons", {}))
     stats["selectable"] = len(filtered)
     if removed:
         for _model_id, cfg in filtered:

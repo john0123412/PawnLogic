@@ -18,6 +18,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `core/provider_runtime.update_custom_provider` is the new entry point.
 
 ### Fixed
+- `Fetch` and `Sync` spent real money. Every candidate model was verified with
+  a `POST /chat/completions` — a billable inference, not a metadata lookup.
+  openrouter returns hundreds of models, so a single fetch issued hundreds of
+  charged requests, took minutes at concurrency 4, and could double that on
+  any model that rate-limited and was retried. Filtering now reads
+  `architecture.output_modalities` from the free `/v1/models` response the
+  fetch already has, so no chat request is made and the whole fetch costs one
+  listing call (measured: 200 models in 0.68s, zero billable requests). The
+  inference probe and its response classifier are deleted. A provider that
+  omits the field keeps all its entries, so a model your key cannot use is no
+  longer hidden in advance and fails as a normal API error on first use —
+  `/provider test <model>` remains the explicit single-request check.
 - Loading ticked models still cost a walk to the bottom of the list. The `L`
   jump fixed reach, but the common flow — tick, tick, save — still ended in
   `L` then `Enter`. The selector now takes `s` to load and stay in the list,

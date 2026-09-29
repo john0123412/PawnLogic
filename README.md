@@ -229,6 +229,14 @@ after the last model, so press `L` to jump straight to them instead of
 walking down once per model. They mark the focused one in text rather than
 colour alone.
 
+`Fetch` and `Sync` never send a chat request, so listing models costs
+nothing. They read the provider's free `/v1/models` listing and hide entries
+that report a non-text output modality; a provider that does not report
+capability metadata keeps all of its entries. The trade-off is that a model
+your key cannot actually use is no longer filtered out in advance — it fails
+as a normal API error the first time you use it. `/provider test <model>` is
+the explicit command that does send a request, and it only ever sends one.
+
 Plain `http://` provider endpoints are allowed for local relays and lab
 setups, but user-friendly mode prints a trust-boundary warning because requests
 and API keys are not protected by TLS.

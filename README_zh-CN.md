@@ -162,6 +162,8 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 
 `Fetch` 和 `Sync` 打开的模型列表每次都从空搜索框开始，上一次列表里输入的查询不会被套用到这一次。用 `↑` `↓` `PageUp` 和 `PageDown` 移动；`Space` 或 `Enter` 勾选光标所在的模型，`a` 全选，`c` 清空选择。按 `s` 保存已勾选的模型并留在列表里，按 `S` 保存并关闭列表——两者都不需要先把光标移到操作行。列表是分页显示的，`Load Selected`、`Load & Close` 和 `Cancel` 三个操作排在最后一个模型之后，按 `L` 可直接跳到它们，不必逐行往下走；这三个操作同样除颜色外还用文字标记当前项。
 
+`Fetch` 和 `Sync` 不会发送任何 chat 请求，因此列出模型不产生费用。它们只读取 Provider 免费返回的 `/v1/models` 列表，并隐藏声明了非文本输出模态的条目；不返回能力元数据的 Provider 会保留全部条目。代价是你的 Key 实际无权使用的模型不再被提前过滤掉，它会在你第一次使用时以普通 API 错误的形式出现。`/provider test <model>` 是唯一会真正发起请求的命令，并且只发一次。
+
 本地 relay 和实验环境可以使用明文 `http://` Provider endpoint，但用户友好模式会显示 trust-boundary 提示，因为请求和 API Key 没有 TLS 保护。
 
 不稳定的自定义 Provider 可以通过 `~/.pawnlogic/.env` 中的环境变量调优：`PAWNLOGIC_API_RETRY_MAX` 控制包含首次请求在内的总尝试次数，`PAWNLOGIC_API_RETRY_AFTER_MAX` 限制 Provider `Retry-After` 延迟上限，`PAWNLOGIC_API_CONNECT_TIMEOUT`、`PAWNLOGIC_API_READ_TIMEOUT` 和 `PAWNLOGIC_API_NONSTREAM_TIMEOUT` 分别调节连接和响应等待时间。

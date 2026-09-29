@@ -39,7 +39,6 @@ from core.provider_runtime import (
     model_is_chat_candidate as _model_is_chat_candidate,
     model_rejection_reason as _model_rejection_reason,
     normalize_base_url as _normalize_base_url,
-    probe_openai_chat_model as _probe_openai_chat_model,
     REASONING_KEYWORDS as _REASONING_KEYWORDS,
     record_sync_time as _record_sync_time,
     save_key as _save_key_to_env,
@@ -67,7 +66,6 @@ __all__ = [
     "_model_is_chat_candidate",
     "_model_rejection_reason",
     "_normalize_base_url",
-    "_probe_openai_chat_model",
     "_save_key_to_env",
     "_test_connection",
 ]
@@ -1032,7 +1030,11 @@ class ProviderTUI:
                 alias = _candidate_save_alias(pname, mid, cfg)
                 if alias != mid:
                     alias_changes.append((mid, alias))
-                models_cfg[alias] = {**cfg, "provider": pname}
+                # `source_item` is the raw `/v1/models` entry, carried only so
+                # filtering can read free capability metadata. It must not be
+                # written to custom_providers.json.
+                saved_cfg = {k: v for k, v in cfg.items() if k != "source_item"}
+                models_cfg[alias] = {**saved_cfg, "provider": pname}
         prov_cfg = PROVIDERS.get(pname, {})
         from core.provider_runtime import save_provider_with_rollback
         ok, save_err = save_provider_with_rollback(pname, prov_cfg, models_cfg, replace_models=True)
