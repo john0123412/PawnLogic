@@ -1536,3 +1536,102 @@ def test_model_list_action_row_is_reachable_with_one_key_in_the_live_application
                 await asyncio.wait_for(run_task, timeout=5)
 
     asyncio.run(scenario())
+
+
+def test_model_list_loads_with_one_key_in_the_live_application() -> None:
+    """``s``/``S`` must reach the panel through the real KeyProcessor.
+
+    The direct-handler test in ``test_provider_commands.py`` cannot see a host
+    binding winning the key, a filter evaluating False, or the composer eating
+    it — which is exactly how the original reachability defect survived every
+    handler-level test. This drives the same 200-model list through the
+    mounted Application and covers the two paths the shortcut must not break:
+    saving from mid-list, and typing a literal ``s`` into the search box.
+    """
+    from core import provider_tui
+
+    async def wait_until(predicate, timeout: float = 5.0) -> None:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while not predicate():
+            assert asyncio.get_running_loop().time() < deadline, "timed out"
+            await asyncio.sleep(0.02)
+
+    async def scenario() -> None:
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+            controller = PersistentTerminalController(
+                terminal, SimpleNamespace(), lambda sink: None
+            )
+            run_task = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+
+            tui = provider_tui.ProviderTUI()
+            selector_task = asyncio.create_task(controller.run_selector(lambda: tui))
+            try:
+                await wait_until(
+                    lambda: terminal._selector_registry.has_embedded
+                )
+                candidates = [
+                    (
+                        f"vendor{index // 10}/model-{index}",
+                        {"id": f"vendor{index // 10}/model-{index}"},
+                    )
+                    for index in range(200)
+                ]
+                tui._ms_all = candidates
+                tui._begin_model_selection(
+                    provider="openrouter",
+                    caller="detail",
+                    candidates=candidates,
+                    existing_ids=set(),
+                    notices=[],
+                )
+                saved: list[bool] = []
+                tui._do_save_models = lambda: saved.append(
+                    tui._ms_save_exit if isinstance(tui._ms_save_exit, bool) else "LEAKED"
+                )
+
+                # An empty selection is refused through the real key path too,
+                # not only when the action row is walked to by hand.
+                pipe.send_text("s")
+                await wait_until(lambda: bool(tui._ms_error))
+                assert saved == []
+                pipe.send_text("S")
+                await asyncio.sleep(0.1)
+                assert saved == []
+
+                # Deep in the list, tick with Space and save with one key.
+                tui._ms_cursor = 137
+                pipe.send_text(" ")
+                await wait_until(lambda: tui._ms_selected == {"vendor13/model-137"})
+                pipe.send_text("s")
+                await wait_until(lambda: saved == [False])
+
+                # A second model, then S: the close-after-load variant.
+                tui._ms_cursor = 4
+                pipe.send_text(" ")
+                await wait_until(
+                    lambda: tui._ms_selected
+                    == {"vendor13/model-137", "vendor0/model-4"}
+                )
+                pipe.send_text("S")
+                await wait_until(lambda: saved == [False, True])
+
+                # With the search box focused, "s" is ordinary text. Saving
+                # here would discard the query mid-typing and exit the panel.
+                tui._ms_selected.clear()
+                tui._do_save_models = lambda: saved.append("SEARCH-BOX-LEAKED")
+                pipe.send_text("/")
+                await wait_until(lambda: tui._ms_search_focus)
+                pipe.send_text("s")
+                await wait_until(lambda: tui._ms_search_ta.text == "s")
+                assert saved == [False, True]
+                assert terminal._composer.text == ""
+            finally:
+                pipe.send_text("q")
+                await asyncio.sleep(0.2)
+                await asyncio.wait_for(selector_task, timeout=5)
+                terminal.close()
+                await asyncio.wait_for(run_task, timeout=5)
+
+    asyncio.run(scenario())
