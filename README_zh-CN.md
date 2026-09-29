@@ -160,7 +160,7 @@ API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述�
 
 确认弹窗除颜色外还用文字标记当前按钮，`←` `→` `↑` `↓` 和 `Tab` 都可以在按钮之间移动。`Delete Provider` 打开的弹窗默认停在 `Cancel` 上，因此直接按 `Enter` 不会误删。
 
-`Fetch` 和 `Sync` 打开的模型列表每次都从空搜索框开始，上一次列表里输入的查询不会被套用到这一次。用 `↑` `↓` `PageUp` 和 `PageDown` 移动；`Space` 或 `Enter` 勾选光标所在的模型，`a` 全选，`c` 清空选择。列表下方的 `Load Selected`、`Load & Close` 和 `Cancel` 三个操作同样除颜色外还用文字标记当前项。
+`Fetch` 和 `Sync` 打开的模型列表每次都从空搜索框开始，上一次列表里输入的查询不会被套用到这一次。用 `↑` `↓` `PageUp` 和 `PageDown` 移动；`Space` 或 `Enter` 勾选光标所在的模型，`a` 全选，`c` 清空选择。列表是分页显示的，`Load Selected`、`Load & Close` 和 `Cancel` 三个操作排在最后一个模型之后，按 `L` 可直接跳到它们，不必逐行往下走；这三个操作同样除颜色外还用文字标记当前项。
 
 本地 relay 和实验环境可以使用明文 `http://` Provider endpoint，但用户友好模式会显示 trust-boundary 提示，因为请求和 API Key 没有 TLS 保护。
 

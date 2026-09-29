@@ -221,9 +221,11 @@ dialog that starts on `Cancel`, so `Enter` never deletes by accident.
 The model list behind `Fetch` and `Sync` opens with an empty search box every
 time, so a query typed into an earlier list is never re-applied to the next
 one. Move with `↑` `↓` `PageUp` and `PageDown`; `Space` or `Enter` ticks the
-model under the cursor, `a` selects all, and `c` clears the selection. Its
-three actions — `Load Selected`, `Load & Close`, and `Cancel` — also mark the
-focused one in text rather than colour alone.
+model under the cursor, `a` selects all, and `c` clears the selection. The
+list is paged, and its three actions — `Load Selected`, `Load & Close`, and
+`Cancel` — sit after the last model, so press `L` to jump straight to them
+instead of walking down once per model. They mark the focused one in text
+rather than colour alone.
 
 Plain `http://` provider endpoints are allowed for local relays and lab
 setups, but user-friendly mode prints a trust-boundary warning because requests

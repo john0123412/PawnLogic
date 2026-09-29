@@ -18,6 +18,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `core/provider_runtime.update_custom_provider` is the new entry point.
 
 ### Fixed
+- The model list behind `Fetch` and `Sync` was effectively unusable on a real
+  provider. Ticking worked, but the three actions sat at cursor index N —
+  after the last model — so loading a ticked model needed one `↓` press per
+  model in the list. openrouter returns hundreds of models, which made that
+  200 presses with no shortcut, and the panel never printed its own key
+  hints. `L` now jumps straight to the action row from anywhere, and the
+  panel advertises its keys.
 - Model checkboxes in the provider TUI's `Fetch` and `Sync` list could not be
   ticked after the list had been used once. The search `TextArea` is a widget
   owned by `ProviderTUI` and outlives a selection session, but

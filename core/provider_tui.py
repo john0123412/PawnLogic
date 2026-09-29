@@ -444,6 +444,13 @@ class ProviderTUI:
             f.append(("", "\n"))
         sb_s = "class:field-focus" if self._ms_search_focus else "class:field-normal"
         f.append((sb_s, f"  🔍 Search: {self._ms_search}{'▌' if self._ms_search_focus else ''}\n\n"))
+        f.append(
+            (
+                "class:subtitle",
+                "  Space toggle · ↑↓ move · L jump to actions · a all · c none"
+                " · Enter confirm · Esc cancel\n\n",
+            )
+        )
         # Only render the visible viewport window — never all rows
         start = self._ms_viewport
         end = min(start + _PAGE, total)
@@ -843,6 +850,15 @@ class ProviderTUI:
             self._ms_cursor = min(total + 2, self._ms_cursor + 1)
             if self._ms_cursor >= self._ms_viewport + _PAGE:
                 self._ms_viewport = self._ms_cursor - _PAGE + 1
+            inv()
+
+        @kb.add("l", filter=_ms_list)
+        @kb.add("L", filter=_ms_list)
+        def _ms_to_actions(e):
+            # The action row is always painted at the bottom of the panel, but
+            # it sits at cursor index N, so reaching it cost one Down press
+            # per model. With a full openrouter list that was 200 presses.
+            self._ms_cursor = len(self._ms_filtered())
             inv()
 
         @kb.add("pageup",   filter=_ms_list)

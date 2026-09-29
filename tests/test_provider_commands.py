@@ -301,6 +301,62 @@ def test_provider_tui_model_selector_marks_the_focused_action_button_in_text():
                 assert f"▶ [ {other_label} ]" not in rendered
 
 
+def test_provider_tui_model_selector_reaches_the_action_row_without_walking_every_model():
+    """Saving must not cost one Down press per model in the list.
+
+    openrouter returns hundreds of models, and the action row sat at cursor
+    index N, so loading a ticked model needed 200 presses of Down (or ten of
+    PageDown) with no shortcut offered. The buttons are always painted at the
+    bottom of the panel, so they have to stay reachable from anywhere in the
+    list.
+    """
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "models"
+    tui._ms_all = [
+        (f"vendor{i // 10}/model-{i}", {"id": f"vendor{i // 10}/model-{i}"})
+        for i in range(200)
+    ]
+    kb = tui._build_kb()
+    handlers = {b.handler.__name__: b.handler for b in kb.bindings}
+    total = len(tui._ms_all)
+
+    # One key lands on Load Selected from deep inside the list.
+    tui._ms_cursor = 137
+    handlers["_ms_to_actions"](None)
+    assert tui._ms_cursor == total
+
+    # The three actions remain distinct and reachable from there.
+    handlers["_ms_dn"](None)
+    assert tui._ms_cursor == total + 1
+    handlers["_ms_dn"](None)
+    assert tui._ms_cursor == total + 2
+    handlers["_ms_dn"](None)
+    assert tui._ms_cursor == total + 2
+
+    # ...and Up walks back out through them into the list.
+    handlers["_ms_up"](None)
+    assert tui._ms_cursor == total + 1
+    handlers["_ms_up"](None)
+    assert tui._ms_cursor == total
+    handlers["_ms_up"](None)
+    assert tui._ms_cursor == total - 1
+
+    # The jump is available from anywhere, not only from the last page.
+    tui._ms_cursor = 0
+    handlers["_ms_to_actions"](None)
+    assert tui._ms_cursor == total
+
+
+def test_provider_tui_model_selector_advertises_its_keys_including_the_jump():
+    """The panel never told the user how to reach the buttons."""
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "models"
+    tui._ms_all = [("model-a", {"id": "model-a", "provider": "relay"})]
+    rendered = "".join(text for _style, text in tui._render_model_select())
+    assert "Space toggle" in rendered
+    assert "Load Selected" in rendered
+
+
 def test_pawn_completer_includes_live_visible_models_without_rebuild():
     completer = pawn_main.PawnCompleter(
         ["/model", "/model ds-v4-flash"],

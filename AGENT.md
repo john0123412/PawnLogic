@@ -826,6 +826,14 @@ fail; do not list a module here before CI checks it.
   list with nothing to tick. Session teardown must go through
   `ProviderTUI._begin_model_selection`, which clears widget and state
   together; the state method cannot reach the widget.
+- The model selector shares one cursor between the model rows and the three
+  action buttons, which live at indices `total`, `total + 1`, `total + 2`.
+  Any list longer than a handful of models therefore buries its own actions:
+  a real openrouter sync returned hundreds of models, so loading a ticked one
+  cost one `↓` per model. This is invisible in tests that use a 3-model list
+  and invisible in the panel's own rendering, because the buttons are always
+  painted at the bottom. The `L` binding jumps to the action row; keep it, and
+  keep at least one test at realistic list length.
 - Live host scrollback must use Prompt Toolkit's `run_in_terminal`
   handoff. Worker threads must never write directly to the TTY; complete
   lines stream live, partial lines flush once at close, and a failed host
