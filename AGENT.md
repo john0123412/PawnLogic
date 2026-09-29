@@ -422,6 +422,16 @@ Git operations require separate explicit flags. See
 
 - Version release work must start on a new remote test branch such as
   `test/release-<version>` or `fix/<issue>-<version>`.
+- **A release needs two PRs, not one.** `tools/check_release_consistency.py`
+  has two mutually exclusive states — candidate (`VERSION` bumped, no
+  `.release-ready`, READMEs declare the version an unreleased candidate) and
+  finalization (`.release-ready` = the version, READMEs and this file declare
+  it the current public release) — so a single commit cannot satisfy both.
+  The finalization commit must reach `main` first, because `publish.yml`'s
+  `verify-release-source` requires the tag's target to be an ancestor of
+  `origin/main`. Tagging straight from the release branch fails that gate, and
+  a direct push to `main` is blocked by branch protection. Sequence: candidate
+  PR → merge → finalization PR → merge → tag the `main` merge commit.
 - Before tagging or publishing a version, verify that `README.md`,
   `README_zh-CN.md`, `CHANGELOG.md`, `SECURITY.md`,
   and package metadata all describe the release consistently.
@@ -590,211 +600,41 @@ are source-checkout or user-installed assets; pip/curl installations should use
   [`36439179697`](https://github.com/john0123412/PawnLogic/actions/runs/36439179697),
   triggered by pushing the annotated `v0.3.12` tag (tag object `265abe6`)
   onto the PR #156 merge commit `613096a` (peeled target verified on
-  `origin/main`). PyPI project page:
-  <https://pypi.org/project/pawnlogic/0.3.12/>. GitHub Release:
-  <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.12>
+  `origin/main`). The full publish gate passed on the first attempt with
+  no re-run; the two TestPyPI jobs are skipped by design on a production
+  release. PyPI: <https://pypi.org/project/pawnlogic/0.3.12/>. GitHub
+  Release: <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.12>
   (wheel + sdist + Linux ratatui binary tarball with sha256, non-draft,
-  notes sourced from the CHANGELOG `[0.3.12]` section). The full publish
-  gate passed on the first attempt with no re-run: verify-release-source,
-  Test before publish, Dynamic E2E, Build distributions, Build ratatui
-  binary, Publish to PyPI, PyPI install smoke, and GitHub Release
-  creation; the two TestPyPI jobs are skipped by design on a production
-  release. The published wheel's sha256 (`5f1377c6…`) matches the
-  release asset, so the installed artifact is the artifact this
-  repository built. The PyPI long description is the current 0.3.12
-  README, which clears the "What's New" drift Known Risks recorded for
-  0.3.11 and earlier. PyPI's `docs_url` field is unset and the
-  `Documentation` project URL points at the GitHub `README.md`, the same
-  as every prior release. The tag had to be cut from a `main` commit
-  because `publish.yml`'s `verify-release-source` requires the tag's
-  target to be an ancestor of `origin/main`; that is why the release
-  needed a candidate PR (#155) and a separate finalization PR (#156).
-  Candidate-matrix evidence for the release head came from the
-  `test/release-0.3.12` push and PR #155 runs, and the merged result was
-  re-gated by the `main` push runs on `613096a` (all green, including
-  Dynamic E2E 31/31; the `test/release-0.3.12` push run needed one
-  re-run of the known `Status: interrupted` pexpect flake described in
-  Known Risks). **#156** carried the release-finalization commit, and
-  this is the post-release record.
-  The `0.3.11`, `0.3.10`, `0.3.9`, `0.3.8`, and `0.3.7` releases remain
-  complete; 0.3.11 was published 2026-09-27 through Trusted Publishing
-  from the `Publish to PyPI` workflow run
-  [`36298624589`](https://github.com/john0123412/PawnLogic/actions/runs/36298624589),
-  triggered by pushing the annotated `v0.3.11` tag onto the PR #151 merge
-  commit `14f4932`.
-- 0.3.12 recap (all merged to `main`):
-  - **#153** — the confirmation-modal lifecycle fix (plan:
-    `docs/plans/0.3.12-confirmation-modal-lifecycle.md`; merge commit
-    `7fe120b`). D1: a high-risk confirmation whose wait expired left its
-    modal mounted forever, so the eager selector bindings kept the
-    keyboard and the composer went read-only. The **tool-stage stall
-    needed no owner input after all** — it was that leaked modal. The
-    loop that mounted the modal now owns its deadline
-    (`asyncio.wait_for` inside the coroutine) and clamps it below the
-    *active* runtime watchdog, and the tool watchdog reclaims a
-    confirmation its abandoned worker was blocked on. D2: the modal
-    denies by default, approval needs an explicit `y`, and the live
-    Application routes that key, so an Enter meant for the composer can
-    no longer approve a high-risk command. D3: the status line shows
-    `⚠ awaiting confirmation — Esc to review` while the modal is
-    mounted.
-  - `c5de0f0` (in **#153**) — the independent audit's three gaps: the
-    watchdog clamp read the constant instead of the active
-    `tool_watchdog_sec`, the watchdog test mocked the reclaim instead of
-    proving the real modal unmounted, and the probe treated a later
-    disable sequence as a leak. It also closed a test blind spot the
-    provider-free live-Application flow exposed: `handle_key("y")`
-    approved but the persistent Application had no eager `y` binding, so
-    the documented approval key did nothing in the real UI.
-  - **S5** — `tools/owner_acceptance_probe.py`, which automates the
-    scriptable terminal-mode checks and reports the four owner-terminal
-    checks as `manual` rather than as passed. CI coverage stays
-    Provider-key-free by owner decision; the real persistent Application
-    is exercised through isolated synthetic input instead. Owner terminal
-    acceptance on the published binary (scrollback, selection/copy,
-    glyph width, duplicate output) is still an open owner item.
-- 0.3.11 recap (all merged to `main`):
-  - **#146** — a failed Turn (rate limit, circuit open, invalid key)
-    leaves a recovered draft instead of silently parking the typed
-    prompt and freezing the live REPL.
-  - **#147** — wire flush tail: answers ending in a `<`-led fragment
-    (for example `a <3`) lost their tail on every event-wire consumer
-    because the plan renderer's flush printed the leftover only to
-    stdout. The leftover now rides the content-delta seam; both wire
-    clients append only the missing tail from a final `result`; the
-    ratatui suite gained its first draw-level regression (TestBackend).
-  - **#148** — duplicate host-tool execution: `pwn_timed_debug` and
-    `run_code` used `HostProcessRunner.run()` as a pre-flight policy
-    gate, but that method classifies *and* spawns, so an allowed
-    command's side effects ran twice; `run_code`'s gate additionally
-    classified a synthetic string that was a shell syntax error and
-    gated nothing. Both gates now call the pure `classify_host_process()`
-    classifier and the command spawns exactly once; the script-payload
-    residual risk remains a Known Risks entry.
-  - **#150** — `run_code` payload content gate: bash lines and Python
-    literal `os.system`/`os.popen`/`subprocess(..., shell=True)` calls
-    are judged by the same operation policy, failing closed on anything
-    but `ALLOW` (`tools/payload_policy.py`; dynamic constructs, aliases,
-    and javascript/go/compiled payloads stay documented residuals).
-    Packaging tests build from a worktree copy, so a full local suite
-    leaves the checkout clean. ratatui 0.29 → 0.30.2 + crossterm 0.29
-    with the wire protocol untouched; dependency audit gates
-    established (`pip-audit` clean, `cargo audit` zero warnings).
-  - The two items the 0.3.10 plan left open are resolved by 0.3.12; see
-    the 0.3.12 recap above.
-- Phase 2 complete on `main` and shipped in `0.3.9` (recorded in
-  `docs/plans/p2-steer-and-headless-frontends.md`): P2-0 Esc-steer
-  handoff (0.3.8 carried the fix; 0.3.9 carries the post-acceptance
-  sharpenings); 2a Python reference client + latency report; 2b
-  ratatui crate (golden-fixture protocol freeze, command passthrough,
-  cargo CI gate). 0.3.9 added `cargo fmt --check` and
-  `cargo clippy --all-targets -D warnings` to the Rust Frontend CI
-  job per the ADR 0011 M3 protocol-freeze discipline. Per the same
-  owner decision, release tags now build, test, and attach
-  `pawnlogic-tui-<version>-x86_64-unknown-linux-gnu.tar.gz` plus
-  `ratatui-binary-sha256.txt` to the GitHub Release as additional
-  assets; the binary never enters the PyPI wheel.
+  notes sourced from the `CHANGELOG.md` `[0.3.12]` section).
+  The published wheel's sha256 matches the release asset, so the installed
+  artifact is the artifact this repository built.
 - Runtime version source of truth: `config/paths.py:VERSION`.
-- Released plan: `0.3.7-inline-terminal-stability.md` is **complete** —
-  merged to `main` by PR #124 and shipped in `v0.3.7`. It restored
-  native terminal scrollback / mouse selection / copy by removing the
-  alternate-screen application mode and unifies interactive selectors
-  under a single Prompt Toolkit Application dialog state. The plan is
-  moved to Completed Plans in `docs/plans/INDEX.md`; the architecture
-  is captured by [ADR 0010](docs/adr/0010-inline-terminal-modal.md)
-  which is now **Accepted** (implementation merged, owner PTY smoke
-  passed, PyPI published, tag ruleset force-updated per AGENT.md).
-  The earlier rebuild history remains available for diff and
-  forensics. Independent `pawnlogic-security` 0.1.0 published from
-  `john0123412/pawnlogic-security` on 2026-07-28.
-- 0.3.7 fix recap (per the user-supplied release acceptance note):
-  - **Terminal scrollback** uses the host terminal rather than the
-    alternate-screen application mode, so wheel / mouse / copy / paste
-    work natively.
-  - **Single-Application selectors** — `/model`, `/planguard`,
-    `/provider`, and `/skills` all mount into the same persistent
-    `Application` (state-machine `SelectorRegistry` for `/model` /
-    `/planguard`; `ModalSpec` containers + dynamic key bindings for
-    `/provider` / `/skills`). Their standalone Applications are only
-    used by the serial/readline fallback. `controller.run_selector`
-    rejects awaitable live factories so a nested
-    `Application.run_async()` cannot silently return.
-  - **Transcript handoff** — completed transcript lines reach the host
-    stdout through Prompt Toolkit's `run_in_terminal` handoff while the
-    Application remains alive; partial lines flush once at close, worker
-    bursts are serialized, and transient host-write failures retry
-    without advancing the flush cursor (bounded retry + backoff +
-    circuit breaker, so the legacy "retry storm" no longer happens).
-  - **Continuous input** — the 1-line persistent status indicator
-    above the composer shows `[model]  Idle`,
-    `[model]  ⏱ Ns · Esc to interrupt` while a Turn is in flight,
-    `[model]  ⏸ interrupted by user` for 1.5 s after a user-initiated
-    Esc / Ctrl+C interrupt, and `[model]  Idle — edit the draft and
-    press Enter` for 1.5 s after a recovery prefill. The Turn runs in
-    a worker thread so key dispatch and the 250 ms ticker keep the
-    event loop free; mid-turn typing echoes into the composer
-    instead of being swallowed.
-  - **Esc behavior** — bare Esc routes the queue-first-item conversion
-    through `ControlAction(kind=CLAIM_STEER)` + `session.queue_control`
-    so the queued entry is a steer, not a fresh turn. Esc during a
-    non-empty queue interrupts the active Turn and lets the queue
-    take over; Esc on an empty queue prefills a recovered draft the
-    user can edit and resubmit. `_recover_active_unlocked` does **not**
-    mint a recovered draft when the queue is non-empty
-    (the recovered-draft edit flow applies only to empty-queue
-    interrupts).
-  - **`/q` mid-Turn exit** — `/q` is in `LIVE_SLASH_COMMANDS` so it is
-    accepted while a Turn is running; the exit path is wrapped so
-    `asyncio.to_thread` + `loop.call_later` cannot escape onto a
-    closed loop and trigger the "Event loop is closed / lost
-    sys.stderr" traceback.
-  - **Queue UI is hidden** — toolbar's `Queue:` segment is dropped,
-    `core/queue_tui.toolbar_queue_status` returns a label-only string,
-    and `/queue` is gone from the help block, the cmdhelp dictionary,
-    the top-of-file command summary, and the live composer's
-    "controls allowed while running" notice. `/queue resume` and
-    `/queue clear` survive as internal aliases reachable through
-    `ControlAction(kind=RESUME, explicit=True)` and the existing
-    command registration, so scripts that type them keep working.
-  - **`/abort` is merged** — the previous `--all` form is removed and
-    plain `/abort` interrupts the active Turn and clears the queue in
-    one call. Failure is silent on the user UI — a failed Turn parks
-    the queue internally but the persistent status line simply
-    returns to `Idle` with no `Failed · +N parked` label; the only
-    outward sign of a failure is a 1.5 s `interrupted by user`
-    banner when the user pressed Esc. The internal anti-cascade
-    gate (`ControlAction(explicit=True)`) is preserved exactly as
-    it was.
-  - **Selector cleanup** — replacing a selector or closing the
-    terminal no longer leaves a dangling `Application.run_async()`
-    task behind; the live factory contract is awaited synchronously
-    and the host Application/task identity is preserved.
-  - **Multiline composer** keeps `Dimension(min=1, max=5)` +
-    `wrap_lines=True`; the legacy `c-j` binding (which intercepted
-    the PTY e2e suite's `\n`) and the `eager=True` flag on the
-    enter binding were reverted; literal-newline insertion is
-    intentionally removed until a `/draft`-style command is added.
-- 0.3.7 release gates all closed: 1,509 non-E2E tests, 29/29 Dynamic
-  E2E, Ruff, typed-island mypy
-  (`pawnlogic/terminal_transcript.py`,
-  `pawnlogic/live_terminal.py`, `pawnlogic/selectors.py`,
-  `pawnlogic/restart_recovery.py`, and the
-  `tools/` + `core/` typed-island modules), documentation and
-  language guards, release consistency, architecture budget,
-  package build, twine metadata, isolated fresh-install smoke on
-  PyPI, Python 3.10/3.11/3.12 matrix, and remote Dynamic E2E all
-  green. PR #124 (inline terminal repair, `7a40374`),
-  PR #125 (post-merge owner-acceptance record, `58ae1e8`), and
-  PR #126 (release-prep README + `.release-ready`, `530d8df`) all
-  merged into `main`. The first two attempts at the tag-driven
-  publish workflow hit a transient Dynamic E2E flake on
-  `test_live_bare_escape_interrupts_one_turn_without_another_keypress`
-  (CI-runner `pexpect` timed out waiting for the post-Esc
-  "Status: interrupted" banner); the rerun
-  `33974631898` cleared it, the test passes locally and on the
-  owner PTY, and the underlying PTY esc behavior is intact. See
-  "Known Risks" for the retained note about this environment-
-  sensitive flake.
+- **Do not edit this section as a release log.** Per-release narrative
+  belongs in `CHANGELOG.md`; design narrative belongs in `docs/plans/` and
+  `docs/adr/`. Keep only: the current version, the open owner items, and
+  the invariants below. Before rewriting, verify the release state
+  against PyPI, the GitHub Release, and the remote tag — never a local
+  `git tag` alone.
+- 0.3.7's inline-terminal rebuild is complete and shipped: merged by PR
+  #124, released in `v0.3.7`, plan moved to Completed Plans in
+  `docs/plans/INDEX.md`, architecture captured by
+  [ADR 0010](docs/adr/0010-inline-terminal-modal.md) (**Accepted**). Its
+  fixes are the live-terminal, selector, queue, and Esc-semantics
+  invariants recorded under Known Risks.
+- Phase 2 shipped in `0.3.9` (plan: `docs/plans/p2-steer-and-headless-frontends.md`):
+  the Esc-steer handoff, the Python reference client, and the ratatui
+  crate with a golden-fixture protocol freeze. Release tags now also
+  attach `pawnlogic-tui-<version>-x86_64-unknown-linux-gnu.tar.gz` plus
+  `ratatui-binary-sha256.txt` to the GitHub Release; the binary never
+  enters the PyPI wheel. Independent `pawnlogic-security` 0.1.0 published
+  from `john0123412/pawnlogic-security` on 2026-07-28.
+- **Open owner item (carried since 0.3.12):** `tools/owner_acceptance_probe.py`
+  automates the scriptable terminal-mode checks but deliberately reports
+  four owner-terminal checks as `manual` rather than as passed — native
+  scrollback, selection/copy, glyph width, and duplicate output on the
+  published binary. CI coverage stays Provider-key-free by owner decision;
+  the real persistent Application is exercised through isolated synthetic
+  input instead. These four remain unverified.
 - `main` protected by branch rule requiring PR, up-to-date branches, and four
   checks: ruff, docs guard, mypy, fast tests. Tag ruleset protects `v*.*.*`.
 - Publishing uses Trusted Publishing / OIDC. GitHub Release waits on
@@ -806,22 +646,36 @@ The typed-island mypy check is intentionally selective. Grow through stable
 modules and narrow fixes only. Avoid broad `# type: ignore` or global strict
 mode.
 
+**The `mypy typed island` step in `.github/workflows/main_ci.yml` is the
+authoritative list.** A module is in the island only when CI passes its file
+to mypy; the matching `[[tool.mypy.overrides]]` entry in `pyproject.toml` is
+what actually turns on `disallow_untyped_defs` / `check_untyped_defs` for it.
+Both files, plus the list below, must name the same 43 modules;
+`tests/test_typed_island_sync.py` fails the build when they diverge.
+
+To add a module: annotate it until it passes
+`python -m mypy --disallow-untyped-defs <file>`, add it to **both** the CI step
+and the pyproject override, and add it to the list below.
+
 Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `core/tool_executor`, `core/runtime_context`, `core/provider_runtime`,
-`core/provider_models`,
-`core/api_errors`, `core/tool_calls`, `core/tool_registry`, `core/context_window`,
-`core/workspace_cleanup`, `core/turn_state`, `core/session_tool_loop`,
-`core/session_snapshot`, `core/delegation`, `core/agent_orchestrator`,
+`core/provider_models`, `core/api_errors`, `core/tool_calls`,
+`core/tool_registry`, `core/context_window`, `core/workspace_cleanup`,
+`core/turn_state`, `core/session_tool_loop`, `core/session_snapshot`,
 `core/message_history`, `core/provider_streams`, `core/runtime_metrics`,
 `core/mcp_client_manager`, `core/path_policy`, `core/provider_transport`,
 `core/api_retry`, `core/provider_tui_state`, `core/turn_scheduler`,
 `core/live_turn_control`, `core/turn_cancellation`, `core/queue_tui`,
-`pawnlogic/live_repl`, `pawnlogic/live_terminal`, `pawnlogic/terminal_transcript`, `pawnlogic/restart_recovery`,
-`pawnlogic/confirm_selector`,
-`tools/check_doc_structure`,
+`pawnlogic/live_repl`, `pawnlogic/live_terminal`, `pawnlogic/selectors`,
+`pawnlogic/confirm_selector`, `pawnlogic/terminal_transcript`,
+`pawnlogic/restart_recovery`, `tools/check_doc_structure`,
 `tools/check_release_consistency`, `tools/merge_ctf_skills`, `tools/browser_ops`,
 `tools/lsp_lite`, `tools/text_patch`, `tools/shell_ops`, `tools/docker_plan`,
 `tools/pwn_binary`, `tools/pwn_debugger`.
+
+`core/delegation` and `core/agent_orchestrator` are **not** in the island.
+`core/agent_orchestrator` has an unannotated parameter at line 402 and would
+fail; do not list a module here before CI checks it.
 
 ## Known Risks
 
@@ -832,22 +686,17 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 - Stream adapters changing public delta dict keys or ordering.
 - Extension discovery importing or enabling third-party code during startup.
 - Security Tools bypassing shared Tool Registry, Operation Policy, or
-  Network Policy checks. Two instances of the first kind were found and
-  fixed in `[Unreleased]`: `pwn_timed_debug` and `run_code` both used
-  `HostProcessRunner.run()` as a pre-flight gate, but that method
-  classifies *and* spawns. A tool that wants a policy decision must call
-  the pure `classify_host_process()` (or `classify_shell_command()`), as
-  `tools/shell_ops.authorize_shell_operation` does; `HostProcessRunner` is
-  only for the single real execution. Residual gap: a command-string
-  classifier cannot see the contents of a script written to a temp file, so
-  the `run_code` gate is consistency/defence-in-depth, not a sandbox
-  boundary for payloads. Narrowed in `[Unreleased]`: `run_code` now also
-  classifies the payload's own tractable literal shell surface — bash
-  lines and Python `os.system`/`os.popen`/`subprocess(..., shell=True)`
-  commands — with the same policy, failing closed on anything but
-  `ALLOW`. Still invisible to it: dynamic command construction,
-  `from os import system` aliases, and javascript/go/compiled payload
-  contents; the boundary remains defence-in-depth, not an OS sandbox.
+  Network Policy checks. A tool that wants a policy decision must call the
+  pure `classify_host_process()` (or `classify_shell_command()`), as
+  `tools/shell_ops.authorize_shell_operation` does; `HostProcessRunner.run()`
+  classifies *and* spawns, so it is only for the single real execution.
+  `run_code` additionally classifies the payload's own tractable literal
+  shell surface (bash lines; Python `os.system`/`os.popen`/
+  `subprocess(..., shell=True)`) with the same policy, failing closed on
+  anything but `ALLOW`. Still invisible to it: a script's temp-file
+  contents, dynamic command construction, `from os import system` aliases,
+  and javascript/go/compiled payloads. The boundary is defence-in-depth
+  and consistency, not an OS sandbox.
 - Delegated-agent requests bypassing Provider visibility, allowlists, budgets,
   or capability filtering.
 - Tool watchdog abandons wedged tool threads instead of blocking the session;
@@ -1024,39 +873,22 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
   regression.
 - The Dynamic E2E case
   `test_live_bare_escape_interrupts_one_turn_without_another_keypress`
-  has shown a transient environment-sensitive flake in CI: the
-  `pexpect` expectation `Status: interrupted` (the 1.5 s
-  `⏸ interrupted by user` post-Esc banner) sometimes times out at
-  10 s on GitHub-hosted runners while passing locally and on the
+  has shown a transient environment-sensitive flake in CI: the `pexpect`
+  expectations for `Status: interrupted` (the 1.5 s
+  `⏸ interrupted by user` post-Esc banner) and for the queued
+  `Queued: 1 message(s)` row both use a 10 s window that sometimes
+  times out on GitHub-hosted runners while passing locally and on the
   owner PTY. The publish workflow for `v0.3.7` saw this on
-  `33973977545`; a re-run (`33974631898`) cleared it and the
-  underlying PTY esc behavior is intact (C1 / C2 / C3 owner smoke
-  in `/tmp/smoke_0_3_7_v4/pty_smoke_v4.py` all green). This is a
-  flake, not a product regression, but it should be re-checked
-  before the next PyPI publish and the `pexpect` window may need
-  widening (or the test split into "Esc → banner shows" vs
-  "Esc → worker settles within N s" to isolate the failure
-  signature).
-- The PyPI project page's rendered "What's New" showed an older
-  0.3.2-era summary through 0.3.11, because PyPI freezes the long
-  description at upload time and never refreshes it when the GitHub
-  `README.md` changes later. **0.3.12 cleared this**: it was the first
-  release whose upload embedded the then-current README, so the drift
-  is closed. The constraint itself still holds for any future release —
-  fix a README before the tag, not after, or the PyPI page keeps the old
-  text until the next upload. This is documentation drift, not a product
-  defect.
-- A release needs two PRs, not one. `tools/check_release_consistency.py`
-  has two mutually exclusive states — candidate (VERSION bumped, no
-  `.release-ready`, READMEs declare the version an unreleased candidate)
-  and finalization (`.release-ready` = the version, READMEs and
-  `AGENT.md` declare it the current public release) — so a single commit
-  cannot satisfy both. The finalization commit must reach `main` first
-  because `publish.yml`'s `verify-release-source` requires the tag's
-  target to be an ancestor of `origin/main`. Tagging straight from the
-  release branch fails that gate, and a direct push to `main` is blocked
-  by branch protection, so the sequence is: candidate PR → merge →
-  finalization PR → merge → tag the `main` merge commit.
+  `33973977545`; a re-run (`33974631898`) cleared it, and the same
+  signature recurred on the `test/release-0.3.12` push run. The
+  underlying PTY esc behavior is intact — this is a flake, not a
+  product regression. Re-check before the next PyPI publish; the fix
+  is to widen the window or split the test into "Esc → banner shows"
+  vs "Esc → worker settles within N s" to isolate the signature.
+- The typed-island module list is stated in three places (the CI mypy
+  step, the pyproject overrides, and the Typed Island section).
+  `tests/test_typed_island_sync.py` fails the build when they diverge;
+  treat that failure as the gate, not as a test to relax.
 
 ## Agent Workflow
 
