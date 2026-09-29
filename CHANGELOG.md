@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.3.13] - 2026-09-29
+
 ### Added
 - A provider's `Base URL` and `Format` can now be corrected from the provider
   TUI. The detail view gained an `Edit Provider` action that reuses the
