@@ -88,6 +88,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   index in the other would have made the highlighted row run a different
   action than it showed. Both now read one `detail_actions()` list, and the
   cursor bounds are derived from it rather than hardcoded.
+- Exiting the live terminal with an idle `Ctrl+C` printed a traceback on the
+  way out: `Exception ignored in: <module 'threading'>` pointing into
+  `live_repl.py`. An idle `Ctrl+C` raises `KeyboardInterrupt` inside the
+  Prompt Toolkit Application task, `run_async` does not catch
+  `BaseException`, and the unwind skips the CLI shutdown block — the only
+  caller of `restore()`. The live SIGINT handler therefore outlived the REPL
+  and re-raised a stray `Ctrl+C` from inside `threading._shutdown`. The
+  0.3.7 `if closing: return` guard could not help: `closing` is set by
+  `restore()`, which is exactly the code the exception skips. Six of seven
+  recorded sessions on 2026-09-29 ended this way. `install_live_interrupt_handler`
+  now publishes a `disarm` on the session and the controller calls it from
+  `_observe_terminal_task`, the one seam that runs on every Application exit;
+  `disarm` installs `SIG_IGN` rather than reinstating the previous handler,
+  because at interpreter shutdown neither that handler nor
+  `signal.default_int_handler` is safe. A normal `/exit` is unaffected —
+  `restore()` still reinstates the previous handler afterwards. This removes
+  the traceback only; the "stopped unexpectedly" notice and the skipped
+  `session.shutdown()` remain, because an idle `Ctrl+C` is still a
+  `BaseException` exit. That is recorded under Known Risks as the follow-up.
 
 ### Changed
 - The provider TUI's form and dialog drawing moved to

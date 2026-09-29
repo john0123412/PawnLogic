@@ -608,8 +608,22 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.3.12`. Published 2026-09-28 through
-  Trusted Publishing from the `Publish to PyPI` workflow run
+- Current published release: `0.3.13`. This section is the *staging*
+  record written by the release-finalization commit, which lands on `main`
+  before the `v0.3.13` tag exists; the publish evidence (workflow run id,
+  PyPI project page, GitHub Release URL) is recorded in the post-release
+  commit once `Publish to PyPI` completes, exactly as PR #157 did for
+  0.3.12. The tag is cut from a `main` commit because `publish.yml`'s
+  `verify-release-source` requires the tag's target to be an ancestor of
+  `origin/main`. The publish gate is unchanged: verify-release-source, full
+  Python 3.10/3.11/3.12 non-E2E matrix, Dynamic E2E, ratatui `cargo test`,
+  twine check, PyPI install smoke, and GitHub Release creation. This cycle
+  is a billing-fix release: `Fetch`/`Sync` and `/provider test` were both
+  charging real inferences, and both now read the free `/v1/models` listing
+  only. PRs #158 (live SIGINT teardown), #159 (provider TUI + no-billing),
+  and #160 (candidate) are in it. `0.3.12` remains complete; it was
+  published 2026-09-28 through Trusted Publishing from the
+  `Publish to PyPI` workflow run
   [`36439179697`](https://github.com/john0123412/PawnLogic/actions/runs/36439179697),
   triggered by pushing the annotated `v0.3.12` tag (tag object `265abe6`)
   onto the PR #156 merge commit `613096a` (peeled target verified on
