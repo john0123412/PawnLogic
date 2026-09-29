@@ -816,6 +816,16 @@ fail; do not list a module here before CI checks it.
   model the provider had fetched. Both are pinned by tests, and the
   name/key/delete identity rules belong in `provider_runtime`, not the
   TUI.
+- `ProviderTUI` mirrors widget state onto `ProviderTUIState` through
+  `_STATE_ATTRS`, but the mirroring is **one-way at render time**: a render
+  that calls a `_sync_*_from_input()` helper copies the widget's text back
+  over the state field. A state-only reset is therefore not a reset — the
+  next paint undoes it. The model search `TextArea` outlives a selection
+  session, so `begin_model_selection` clearing `model_search` left the
+  selector reopening pre-filtered by the previous query, down to an empty
+  list with nothing to tick. Session teardown must go through
+  `ProviderTUI._begin_model_selection`, which clears widget and state
+  together; the state method cannot reach the widget.
 - Live host scrollback must use Prompt Toolkit's `run_in_terminal`
   handoff. Worker threads must never write directly to the TTY; complete
   lines stream live, partial lines flush once at close, and a failed host

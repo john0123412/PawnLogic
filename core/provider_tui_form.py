@@ -147,19 +147,28 @@ def render_status_wizard() -> StyleAndTextTuples:
     ]
 
 
-def _dialog_buttons(state: Any, labels: list[str]) -> StyleAndTextTuples:
-    """Dialog buttons, marking the focused one in text as well as colour.
+def focus_buttons(
+    labels: list[str], focused_index: int, *, trailing_newline: bool = False
+) -> StyleAndTextTuples:
+    """Buttons, marking the focused one in text as well as colour.
 
     Colour was the only signal before, so the focused button disappeared
     whenever the terminal stripped colour or the output was piped — Enter then
-    landed on whichever button the user could not see was selected.
+    landed on whichever button the user could not see was selected. The model
+    selector's three actions were still colour-only for the same reason.
     """
     out: StyleAndTextTuples = []
+    last = len(labels) - 1
     for i, btn in enumerate(labels):
-        focused = i == state.dialog_cursor
+        focused = i == focused_index
         style = "class:btn-focus" if focused else "class:btn-normal"
-        out.append((style, f"  {'▶' if focused else ' '} [ {btn} ]  "))
+        tail = "\n" if (trailing_newline and i == last) else "  "
+        out.append((style, f"  {'▶' if focused else ' '} [ {btn} ]{tail}"))
     return out
+
+
+def _dialog_buttons(state: Any, labels: list[str]) -> StyleAndTextTuples:
+    return focus_buttons(labels, state.dialog_cursor)
 
 
 def render_dialog(tui: Any) -> StyleAndTextTuples:

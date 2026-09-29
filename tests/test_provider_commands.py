@@ -233,6 +233,74 @@ def test_provider_tui_model_search_field_accepts_pasted_text():
     assert tui._ms_search == pasted_model_name
 
 
+def test_provider_tui_model_selector_reopens_without_the_previous_search_query():
+    """A second Fetch/Sync must not inherit the previous selector's query.
+
+    The search TextArea outlives a selection session, and
+    ``begin_model_selection`` only resets the mirrored state field, so the
+    selector reopened already filtered by a query the user had forgotten. When
+    that leftover query matched nothing the list came up empty, leaving no
+    checkbox to tick at all.
+    """
+    candidates = [
+        ("model-a", {"id": "model-a", "provider": "relay"}),
+        ("model-b", {"id": "model-b", "provider": "relay"}),
+    ]
+
+    def open_session(tui):
+        tui._begin_model_selection(
+            provider="relay",
+            caller="detail",
+            candidates=candidates,
+            existing_ids=set(),
+            notices=[],
+        )
+
+    tui = provider_tui.ProviderTUI()
+    open_session(tui)
+
+    # Session one: the user searches, then cancels with the box still filled.
+    tui._ms_search_ta.text = "model-b"
+    tui._ms_search_focus = True
+    tui._sync_model_search_from_input()
+    tui._ms_search_focus = False
+    tui._cancel_model_selector()
+
+    # Session two: a fresh fetch of the same provider.
+    open_session(tui)
+    rendered = "".join(text for _style, text in tui._render_model_select())
+
+    assert tui._ms_search_ta.text == ""
+    assert tui._ms_search == ""
+    assert rendered.count("[ ]") == len(candidates)
+    assert "🔍 Search: \n" in rendered
+
+
+def test_provider_tui_model_selector_marks_the_focused_action_button_in_text():
+    """Focus must survive a terminal that strips colour.
+
+    The three selector actions are colour-only, unlike the provider detail
+    menu and the delete dialog, so the user could not see where Enter would
+    land.
+    """
+    tui = provider_tui.ProviderTUI()
+    tui._panel = "models"
+    tui._ms_all = [("model-a", {"id": "model-a", "provider": "relay"})]
+    total = len(tui._ms_all)
+
+    for offset, label in ((0, "Load Selected"), (1, "Load & Close"), (2, "Cancel")):
+        tui._ms_cursor = total + offset
+        rendered = "".join(text for _style, text in tui._render_model_select())
+        assert f"▶ [ {label} ]" in rendered, label
+        for other, other_label in (
+            (0, "Load Selected"),
+            (1, "Load & Close"),
+            (2, "Cancel"),
+        ):
+            if other != offset:
+                assert f"▶ [ {other_label} ]" not in rendered
+
+
 def test_pawn_completer_includes_live_visible_models_without_rebuild():
     completer = pawn_main.PawnCompleter(
         ["/model", "/model ds-v4-flash"],

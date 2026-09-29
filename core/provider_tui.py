@@ -460,12 +460,14 @@ class ProviderTUI:
         if total > _PAGE:
             f.append(("class:subtitle", f"\n  Showing {start+1}–{end} of {total}\n"))
         f.append(("", f"\n  {len(self._ms_selected)} selected\n\n"))
-        load_style = "class:btn-focus" if self._ms_cursor == total and not self._ms_search_focus else "class:btn-normal"
-        close_style = "class:btn-focus" if self._ms_cursor == total + 1 and not self._ms_search_focus else "class:btn-normal"
-        cancel_style = "class:btn-focus" if self._ms_cursor == total + 2 and not self._ms_search_focus else "class:btn-normal"
-        f.append((load_style, "  [ Load Selected ]  "))
-        f.append((close_style, "[ Load & Close ]  "))
-        f.append((cancel_style, "[ Cancel ]\n"))
+        # -1 focuses nothing, matching the old behaviour while the search box
+        # has focus: the actions stay visible but unselected.
+        btn_focus = -1 if self._ms_search_focus else self._ms_cursor - total
+        f += _form.focus_buttons(
+            ["Load Selected", "Load & Close", "Cancel"],
+            btn_focus,
+            trailing_newline=True,
+        )
         if self._ms_error:
             f.append(("class:error", f"\n  ⚠ {self._ms_error}\n"))
         return f
@@ -1060,6 +1062,20 @@ class ProviderTUI:
         if self._app:
             self._app.invalidate()
 
+    def _begin_model_selection(self, **kwargs) -> None:
+        """Start a selection session with the search box genuinely empty.
+
+        ``ProviderTUIState.begin_model_selection`` resets the mirrored
+        ``model_search`` field, but the search ``TextArea`` is a widget owned by
+        this class and outlives the session. Every render re-imports the widget
+        text over the reset state, so a leftover query silently filtered the
+        next list — down to an empty one, with no checkbox left to tick. The
+        widget has to be cleared here, where it is reachable.
+        """
+        self._state.begin_model_selection(**kwargs)
+        self._ms_search_ta.text = ""
+        self._state.model_search = ""
+
     async def _open_model_selector(self, pname: str, caller: str):
         pinfo = _provider_snapshot().get(pname, {})
         key = _provider_key(pname)
@@ -1086,7 +1102,7 @@ class ProviderTUI:
             for a, m in _model_items_snapshot()
             if m.get("provider") == pname
         }
-        self._state.begin_model_selection(
+        self._begin_model_selection(
             provider=pname,
             caller=caller,
             candidates=candidates,

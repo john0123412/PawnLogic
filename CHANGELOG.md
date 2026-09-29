@@ -18,6 +18,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `core/provider_runtime.update_custom_provider` is the new entry point.
 
 ### Fixed
+- Model checkboxes in the provider TUI's `Fetch` and `Sync` list could not be
+  ticked after the list had been used once. The search `TextArea` is a widget
+  owned by `ProviderTUI` and outlives a selection session, but
+  `ProviderTUIState.begin_model_selection` only reset the mirrored
+  `model_search` field. Every render re-imports the widget text over that
+  reset, so the next list opened already filtered by a query from the
+  previous one — and when the leftover query matched nothing, the list came
+  up empty with no checkbox left to tick. The widget is now cleared alongside
+  the state, so every `Fetch` and `Sync` starts from the full list.
+  `ProviderTUI._begin_model_selection` is the new entry point.
+- The model selector's three actions (`Load Selected`, `Load & Close`,
+  `Cancel`) marked the focused one with colour only, the same defect already
+  fixed for the Add Provider form and the delete dialog: with colour stripped
+  or the output piped, the user could not see where `Enter` would land. They
+  now mark the focused action in text as well, through a shared
+  `focus_buttons()` helper used by both the dialogs and the selector.
 - The provider TUI's `Delete Provider` confirmation could not be confirmed.
   Three defects combined: the dialog marked the focused button with
   background colour only, so the focus was invisible whenever the terminal
