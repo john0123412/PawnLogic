@@ -9,6 +9,7 @@ facade below its architecture budget.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -382,8 +383,13 @@ def install_live_interrupt_handler(
     A PTY delivers Ctrl+C as SIGINT before Prompt Toolkit can dispatch its
     ``c-c`` binding.  The handler only schedules the potentially-waiting
     scheduler cancellation; the worker still stops cooperatively at its Turn
-    token.  An idle SIGINT raises ``KeyboardInterrupt`` so the existing
-    double-press exit behavior remains unchanged.
+    token.  An idle SIGINT raises ``KeyboardInterrupt``.
+
+    The idle raise is not a clean exit path and must not be treated as one:
+    ``KeyboardInterrupt`` is a ``BaseException``, so it unwinds through
+    ``asyncio.run`` and skips the CLI shutdown block entirely.  Callers must
+    therefore call the ``disarm`` published on the session as soon as the
+    live Application dies -- see ``live_terminal._observe_terminal_task``.
     """
     previous = signal.getsignal(signal.SIGINT)
     restored = False
@@ -454,6 +460,33 @@ def install_live_interrupt_handler(
         restored = True
         closing = True
         signal.signal(signal.SIGINT, previous)
+
+    def disarm() -> None:
+        """Neutralize SIGINT without reinstating the previous handler chain.
+
+        Called once the live Application is gone.  From that point the REPL
+        is unwinding and the process will reach interpreter shutdown, where a
+        stray Ctrl+C has to be *ignored*.  Neither ``previous`` nor
+        ``signal.default_int_handler`` is safe there: both raise
+        ``KeyboardInterrupt`` from inside ``threading._shutdown`` and
+        surface as "Exception ignored in: <module 'threading'>", which is
+        the traceback this replaces.  ``SIG_IGN`` is the only teardown-safe
+        state, and it is also what the ``closing`` guard in ``_handler``
+        already pretended to provide.
+        """
+        nonlocal closing
+        if closing:
+            return
+        closing = True
+        with contextlib.suppress(ValueError, OSError):
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    # The controller owns the Application, so it is the only component that
+    # observes its death; it has no other seam to reach a handler installed
+    # here.  Keep the published name private-by-convention and additive so
+    # callers that never install a live handler are unaffected.
+    with contextlib.suppress(AttributeError):
+        session._live_sigint_disarm = disarm
 
     return restore
 

@@ -2008,6 +2008,21 @@ class PersistentTerminal:
             return
 
 
+def _disarm_live_sigint(session: Any) -> None:
+    """Neutralize the live SIGINT handler once its Application is gone.
+
+    Every exit from ``run_async`` -- graceful ``Application.exit()`` and the
+    ``BaseException`` an idle Ctrl+C produces alike -- lands here, so this is
+    the one seam that runs on all of them.  Without it the handler installed
+    by ``install_live_interrupt_handler`` outlives the REPL and re-raises a
+    stray Ctrl+C inside ``threading._shutdown`` during interpreter exit.
+    """
+    disarm = getattr(session, "_live_sigint_disarm", None)
+    if callable(disarm):
+        with contextlib.suppress(Exception):
+            disarm()
+
+
 class PersistentTerminalController:
     """Own the application task, the stdout proxy, and the modal lifecycle.
 
@@ -2185,6 +2200,10 @@ class PersistentTerminalController:
         because ordinary writes otherwise land in the dead Application's
         sink and never reach the terminal.
         """
+        # Runs on every Application exit, including the cancelled and
+        # InvalidStateError ones below, so the SIGINT handler is disarmed
+        # before any of them can return to an unwinding interpreter.
+        _disarm_live_sigint(self._session)
         if task.cancelled():
             return
         try:
