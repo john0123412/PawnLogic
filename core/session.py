@@ -756,6 +756,16 @@ class AgentSession:
         self._turn_start_time        = 0.0
         self._time_budget_sec        = 0   # 0 = unlimited
         self._urgent_mode            = False
+        # Live-turn feedback signals. ``_turn_submitted_at`` is stamped at
+        # admission (before ``_prepare_turn`` runs system-prompt resets and a
+        # possible blocking summary call), so the toolbar's "Sent" state is
+        # immediate and the elapsed counter never sits pinned at 0s.
+        # ``_turn_first_delta`` flips on the first reasoning OR content delta,
+        # which is what separates "request is out" from "model is working".
+        # Neither is a proxy for token usage: ``total_completion_tokens`` is
+        # only accumulated after the stream fully drains.
+        self._turn_submitted_at      = 0.0
+        self._turn_first_delta       = False
         self._save_lock = threading.Lock()
         # Scheduler checkpoints may arrive from the live worker while a
         # regular autosave is finishing.  Keep this narrow lock separate so
@@ -1384,8 +1394,17 @@ class AgentSession:
 
         def on_reasoning_chunk(r_chunk: str) -> None:
             nonlocal reasoning_printed
-            if not _debug_mode():
-                return
+            # Reasoning is shown in user-friendly mode too, not just under
+            # --debug: it is the user's only evidence that the request reached
+            # the provider and the model is working, and it is what makes a
+            # long time-to-first-token readable instead of a frozen screen.
+            # This is a side channel only — the text is never accumulated into
+            # the answer and never satisfies the plan guard.
+            #
+            # Never emit "\r"/"\b" here: the live transcript gives those
+            # destructive erase semantics, which is precisely why the
+            # \r-framed _ThinkingSpinner is disabled in live mode.
+            self._turn_first_delta = True
             spinner.stop()
             if not reasoning_printed:
                 sys.stdout.write(c(GRAY + DIM, "\n  🧠 [thinking] "))
@@ -1395,9 +1414,14 @@ class AgentSession:
 
         def on_content_chunk(chunk: str) -> None:
             nonlocal reasoning_printed
+            # Raw delta, before renderer.feed() filters it: the plan renderer
+            # buffers partial XML tags and suppresses text entirely while
+            # in_plan is set, so the TEXT_DELTA event is lossy as a
+            # first-token signal. This hook is not.
+            self._turn_first_delta = True
             spinner.stop()
             # Add a newline when switching from thinking to normal output.
-            if reasoning_printed and _debug_mode():
+            if reasoning_printed:
                 sys.stdout.write("\n")
                 sys.stdout.flush()
                 reasoning_printed = False

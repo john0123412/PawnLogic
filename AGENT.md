@@ -136,8 +136,16 @@ The repository has one CLI runtime implementation.
   tests, fixtures, config files, commit-facing templates, or agent
   instructions.
 - Default `pawn` startup is user-friendly mode. It must hide raw tool-call
-  internals, parser diagnostics, detailed reasoning streams, and low-level API
-  errors unless the user explicitly enables debug output.
+  internals, parser diagnostics, and low-level API errors unless the user
+  explicitly enables debug output.
+- Model reasoning text IS shown in user-friendly mode, as a dim
+  `🧠 [thinking]` stream in the transcript. This reverses the earlier rule
+  that hid reasoning behind debug mode: with it hidden, a slow
+  time-to-first-token was indistinguishable from a dead connection, because
+  the transcript showed nothing and the toolbar only carried a timer.
+  Reasoning is a side channel — it never counts as the answer and never
+  satisfies the plan guard. Raw tool-call arguments and parser diagnostics
+  remain debug-only. See Known Risks for the provider-format limit.
 - Default user-friendly mode must not print internal loguru WARNING diagnostics
   to the terminal. Non-fatal internal diagnostics belong in debug/file logs; use
   concise user-facing print messages for issues the user must act on.
@@ -922,7 +930,10 @@ fail; do not list a module here before CI checks it.
   and the INTERRUPTED ``should_return`` computation in ``_drive``).
   The recovered-draft edit flow applies ONLY to empty-queue
   interrupts. Tests pin both halves; the preview never renders
-  recovered rows (status line + prefilled composer carry them).
+  recovered rows (status line + prefilled composer carry them). The
+  status-line half of that contract was dead until the idle
+  substring-suppression bug was fixed — see the `_build_status` entry
+  below.
 - ``/q`` is a registered alias of ``/exit`` and must stay in
   ``LIVE_SLASH_COMMANDS`` so the running-Turn whitelist keeps
   accepting it.
@@ -935,9 +946,49 @@ fail; do not list a module here before CI checks it.
   ``/queue`` stays hidden from the command surface with its
   resume/clear aliases intact.
 - The bottom toolbar renders fields within a width budget (see
-  ``_TOOLBAR_HARD_MAX`` / ``_TOOLBAR_WIDE_MIN`` in
-  ``pawnlogic/live_repl.py``); adding a toolbar field must keep the
-  80-column rendering free of mid-field clipping.
+  ``_TOOLBAR_HARD_MAX`` / ``_TOOLBAR_COL_MARGIN`` in
+  ``pawnlogic/live_repl.py``; there is no ``_TOOLBAR_WIDE_MIN``, an
+  earlier version of this entry named a constant that never existed).
+  ``_render_toolbar`` then negotiates that budget against the transient
+  turn status, and the status is reserved FIRST: the row is composed as
+  ``fields + "  ·  " + status`` and the whole thing is clipped, so the
+  status — the only part that changes per render — used to be the first
+  thing a narrow terminal threw away, exactly while a waiting user
+  needed it. Two invariants follow, both pinned by
+  `tests/test_status_line.py`: fields are cut only on the double-space
+  boundary ``build_bottom_toolbar`` joins them with, so no row ever shows
+  a half-label like ``Model: bai:``; and when not even one whole field
+  fits beside the status, the fields are dropped and the status takes the
+  row. The status must therefore stay short — do not re-add a model
+  prefix, which duplicated the never-dropped ``Model:`` field and cost
+  enough width to force mid-value clipping at 80 columns. Note the field
+  budget in `build_bottom_toolbar` deliberately over-counts the `ctx`
+  segment (~21 columns) and `tests/test_live_repl.py` pins the resulting
+  80-column field set; changing that accounting changes those tests.
+- The Turn status machine (`_build_status`) must return `""` for idle
+  rather than a string the toolbar filters. It used to return
+  `"[model]  Idle"` and `_render_toolbar` suppressed it with
+  `"Idle" not in status` — a substring test that also silently swallowed
+  the recovered-draft state, whose own text contains the word "Idle".
+  That state had therefore never been displayed, despite three places in
+  the docs claiming it was. Any new state containing "Idle" would have
+  been eaten by the same mechanism; returning `""` removes the class of
+  bug. Do not reintroduce substring matching on status text.
+- The `Sent` state exists because nothing else is true between admission
+  and the first delta, and its clock is stamped at admission
+  (`_turn_submitted_at`, set in `core/live_turn_control.py`) rather than
+  at `session._turn_start_time`, which `_prepare_turn` reaches only after
+  system-prompt resets and a possible blocking summary provider call —
+  counting from there left the counter pinned at `0s` through the whole
+  pre-request window. `_turn_first_delta` must be reset at admission, not
+  in `_prepare_turn`, or the row shows the previous Turn's `Thinking`
+  during the window `Sent` exists to cover. Reasoning is **not** a
+  universal first-delta signal: `core/provider_streams.py` has no
+  `thinking_delta` branch, so Anthropic-format extended thinking is
+  dropped at the adapter and never reaches `core/turn_api.py`. The status
+  words still appear for those models; only the reasoning text is absent.
+  Adding a `Sent`/`Thinking` state must not start a `\r`-framed spinner
+  for the same reason `_ThinkingSpinner` is disabled in live mode.
 - English and zh-CN docs drifting in structure or command examples.
 - Release prep editing version literals outside fixed locations.
 - Packaging accidentally including `skills/` content.
