@@ -328,11 +328,26 @@ def set_provider_reasoning_effort(name: str, enabled: bool) -> bool:
     Off by default for every custom provider.  The field is only sent when a
     model declares it or the user turns it on here, so a relay that rejects
     the parameter cannot turn an effort change into a 400 the user did not
-    ask for.  Built-in models declare their own capability and are unaffected.
+    ask for.  Built-in models declare their own capability and are unaffected,
+    which is why a built-in name is refused below.
+
+    Only a custom provider that already exists on disk can be opted in.  This
+    writes ``custom_providers.json``, where ``_validated_custom_provider_data``
+    requires *every* entry to carry a valid ``base_url`` and an
+    ``api_key_env``, and ``load_custom_providers`` abandons the whole file on
+    the first failure — so one incomplete entry discards every other custom
+    provider, every custom model, and all persisted activation state on the
+    next start.  ``setdefault`` used to build exactly such a bare
+    ``{"reasoning_effort": true}`` entry for a built-in name and reported
+    success, which silently destroyed the user's configuration.  A shadowing
+    custom entry is not an escape hatch either: the loader skips any provider
+    whose name is a built-in, so the write could never have taken effect.
     """
     with _PROVIDER_STORE_LOCK:
         if name not in PROVIDERS:
             return False
+    if name in BUILTIN_PROVIDER_NAMES:
+        return False
 
     CUSTOM_PROVIDERS_PATH.parent.mkdir(parents=True, exist_ok=True)
     data: dict = {"providers": {}, "models": {}, "provider_states": {}}
@@ -344,10 +359,14 @@ def set_provider_reasoning_effort(name: str, enabled: bool) -> bool:
     if loaded is None:
         return False
     data = loaded
-    data.setdefault("providers", {})
+    providers = data.setdefault("providers", {})
     data.setdefault("models", {})
     data.setdefault("provider_states", {})
-    data["providers"].setdefault(name, {})["reasoning_effort"] = bool(enabled)
+    entry = providers.get(name) if isinstance(providers, dict) else None
+    if not isinstance(entry, dict) or not entry.get("base_url") or not entry.get("api_key_env"):
+        # Never mint a partial entry: the whole file would be rejected next load.
+        return False
+    entry["reasoning_effort"] = bool(enabled)
     atomic_write_text(CUSTOM_PROVIDERS_PATH, json.dumps(data, ensure_ascii=False, indent=2))
     with _PROVIDER_STORE_LOCK:
         PROVIDERS[name]["reasoning_effort"] = bool(enabled)
