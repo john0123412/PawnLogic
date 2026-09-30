@@ -338,6 +338,13 @@ Lint:
 python -m ruff check .
 ```
 
+Architecture budget (a separate CI step from `ruff check .`, so a clean
+local lint run says nothing about it):
+
+```bash
+python tools/check_architecture_budget.py
+```
+
 CLI smoke checks:
 
 ```bash
@@ -1155,6 +1162,22 @@ fail; do not list a module here before CI checks it.
   green, because the pexpect PTY delivers `\x03` to the `c-c` binding
   instead. The suite as a whole was correct; only running the mutations
   separately showed which gate covers which source.
+- **`/model` has two front ends and the selector name resolves in one
+  module's globals.** With a terminal controller it renders a
+  `ModelSelector` through `controller.run_selector` inside the one
+  persistent Application; without one it calls `cc_style_model_selector`,
+  a standalone `Application` that may only run where no controller owns
+  the PTY (ADR 0010). That function now lives in
+  `core/commands/_model_picker.py` and is **re-exported** into
+  `core/commands/provider.py` — the call site resolves the name in
+  `provider.py`'s globals, which is what keeps both the real picker and
+  the tests that replace `provider_commands.cc_style_model_selector`
+  working. Do not import it lazily at the call site: that is exactly what
+  a later refactor would do to "clean up" the re-export, and it silently
+  disconnects the tests. Both branches need a positive test — the original
+  only asserted the standalone picker is *not* called when a controller is
+  present, so a dead call site stayed green. Pinned by
+  `test_model_dispatch_reaches_standalone_picker_when_no_controller`.
 - **A test that binds `from config import DYNAMIC_CONFIG` (or `MODELS`,
   `PROVIDERS`) at module import time will pass alone and fail in the full
   suite.** Several test modules — `test_security.py`, `test_config.py`,
@@ -1171,7 +1194,6 @@ fail; do not list a module here before CI checks it.
   reads, which are themselves import-time bindings. `runtime_config()`
   prefers an active `RuntimeContext` and only falls back to the legacy global,
   so it is the correct accessor in both worlds.
->>>>>>> f5adada (feat(providers): unify reasoning effort into one knob)
 
 ## Agent Workflow
 

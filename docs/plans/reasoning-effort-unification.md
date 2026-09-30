@@ -89,6 +89,40 @@ for this change and each is now pinned.
    from the `high` rung, contradicting the reason a fast worker was
    chosen. Clamped by `SubAgentSession.MAX_TOKENS`.
 
+## CI-only failure: the architecture budget gate
+
+The first push failed on `test/reasoning-effort-unification` in a step
+AGENT.md's Required Verification section does not list:
+`tools/check_architecture_budget.py`, which CI runs as part of "Lint".
+`core/commands/provider.py` had reached 929/850 lines and 152/130
+complexity.
+
+The file sat at *exactly* its budget before this feature, so the gate was
+reporting a real boundary rather than an arbitrary one. The ceiling was
+left alone and two cohesive seams were extracted instead:
+
+- `core/commands/_effort_flow.py` — the effort half of `/model`: the
+  chained picker, the "level is not sent" report, scripted level
+  validation, and `/provider effort`.
+- `core/commands/_model_picker.py` — the standalone Prompt Toolkit
+  `Application` used when no terminal controller owns the PTY.
+
+Result: 788/850 lines, 127/130 complexity.
+
+**Why the budget gate is not in AGENT.md's verification list.** It is a
+separate CI step from `ruff check .`, so a clean local lint run says
+nothing about it. Run `python tools/check_architecture_budget.py` before
+pushing any change that grows a budgeted file; `core/commands/provider.py`,
+`core/session.py`, `core/provider_tui.py`, and `pawnlogic/cli.py` are the
+ones most likely to trip it.
+
+The move also exposed a coverage gap, now fixed: the only test of the
+standalone picker asserted it is *not* called when a controller is
+present, so it stayed green if the call site stopped resolving at all.
+`test_model_dispatch_reaches_standalone_picker_when_no_controller` drives
+the no-controller path and is the only test that goes red when the call
+is removed.
+
 ## Verification
 
 - [x] Fast suite green: `1721 passed` (`not slow and not e2e and not packaging`).
