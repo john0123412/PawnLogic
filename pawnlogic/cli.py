@@ -1264,6 +1264,28 @@ async def _main_impl():
             """Show the recovered prompt as an editable replacement draft."""
             prefill_settled_recovery(session, _live_terminal, _submission_state)
 
+        async def _on_live_idle_interrupt() -> None:
+            """Run the double-press exit confirm for an idle Ctrl+C.
+
+            The live path used to exit the Application with
+            ``exception=KeyboardInterrupt()``.  That ``BaseException``
+            unwound through ``asyncio.run`` and skipped the teardown at
+            the bottom of this function, so the non-daemon Turn worker
+            was never released and the interpreter blocked forever in
+            ``threading._shutdown()`` with SIGINT already ignored —
+            the reported "cannot exit, ^C does nothing" hang.  Closing
+            the terminal instead lets the loop reach that teardown
+            through its normal path.
+            """
+            if _signal_state.interrupt_requests_exit():
+                if _live_terminal is not None:
+                    _live_terminal.close()
+                return
+            await _terminal_notice(
+                "\n  [confirm] Press Ctrl+C again within 5s to exit."
+                " Current input is unchanged."
+            )
+
         _kb, _submission_state = build_prompt_toolkit_bindings(
             KeyBindings,
             session=session,
@@ -1271,6 +1293,7 @@ async def _main_impl():
             restore_last_input_buffer=_restore_last_input_buffer,
             last_input_path=_last_input_path,
             on_interrupt_settled=_on_live_interrupt_settled,
+            on_idle_interrupt=_on_live_idle_interrupt,
         )
 
         # ──────────────────────────────────────────────────────────
@@ -1365,173 +1388,187 @@ async def _main_impl():
     _restore_live_sigint = None
     if live_turns_enabled:
         _settled_callback = _on_live_interrupt_settled if _live_terminal is not None else None
-        _restore_live_sigint = install_live_interrupt_handler(session, on_interrupt_settled=_settled_callback)
+        _idle_callback = _on_live_idle_interrupt if _live_terminal is not None else None
+        _restore_live_sigint = install_live_interrupt_handler(
+            session,
+            on_interrupt_settled=_settled_callback,
+            on_idle_interrupt=_idle_callback,
+        )
 
-    if _live_terminal_controller is not None:
-        await _live_terminal_controller.start()
-        sink = _live_terminal.sink
-        # The terminal's event loop only exists after start(); publish it
-        # so tool threads can marshal confirmation modals onto it.
-        try:
-            from core.operation_policy import register_confirmation_loop
+    try:
+        if _live_terminal_controller is not None:
+            await _live_terminal_controller.start()
+            sink = _live_terminal.sink
+            # The terminal's event loop only exists after start(); publish it
+            # so tool threads can marshal confirmation modals onto it.
+            try:
+                from core.operation_policy import register_confirmation_loop
 
-            register_confirmation_loop(_live_terminal_controller.terminal._loop)
-        except Exception:
-            pass
+                register_confirmation_loop(_live_terminal_controller.terminal._loop)
+            except Exception:
+                pass
 
-    while True:
-        try:
-            if (pending_recall := getattr(session, "_pending_recall_draft", "")):
-                _re_edit_default = pending_recall
-                session._pending_recall_draft = ""
-                session._recall_prefill = True
-            if _signal_state.consume_last_input_restore():
-                _cached_input = _read_text_cache(_last_input_path)
-                if _cached_input:
-                    _re_edit_default = _cached_input
+        while True:
+            try:
+                if (pending_recall := getattr(session, "_pending_recall_draft", "")):
+                    _re_edit_default = pending_recall
+                    session._pending_recall_draft = ""
+                    session._recall_prefill = True
+                if _signal_state.consume_last_input_restore():
+                    _cached_input = _read_text_cache(_last_input_path)
+                    if _cached_input:
+                        _re_edit_default = _cached_input
 
-            # ════════════════════════════════════════════════════════
-            # Invisible-history fix: pre-render before any prompt_toolkit API:
-            #   [1] _display_session_history prints ANSI output and flushes.
-            #   [2] sys.stdout.flush() forces the physical write.
-            #   [3] print("\n") reserves a blank line so prompt_async takes over
-            #       below history content instead of repainting over it.
-            # ════════════════════════════════════════════════════════
-            if (_hist_msgs := take_deferred_history()) is not None:
-                logger.debug("pre-render history: {} msgs", len(_hist_msgs))
-                _display_session_history(_hist_msgs, show_recent=len(_hist_msgs))
-                print("─" * 20 + " history context above " + "─" * 20)
-                sys.stdout.flush()
-                print("\n")  # reserve one physical line
+                # ════════════════════════════════════════════════════════
+                # Invisible-history fix: pre-render before any prompt_toolkit API:
+                #   [1] _display_session_history prints ANSI output and flushes.
+                #   [2] sys.stdout.flush() forces the physical write.
+                #   [3] print("\n") reserves a blank line so prompt_async takes over
+                #       below history content instead of repainting over it.
+                # ════════════════════════════════════════════════════════
+                if (_hist_msgs := take_deferred_history()) is not None:
+                    logger.debug("pre-render history: {} msgs", len(_hist_msgs))
+                    _display_session_history(_hist_msgs, show_recent=len(_hist_msgs))
+                    print("─" * 20 + " history context above " + "─" * 20)
+                    sys.stdout.flush()
+                    print("\n")  # reserve one physical line
 
-            if _live_terminal is not None:
-                if _re_edit_default:
-                    _live_terminal.set_default(_re_edit_default)
-                accepted = await _live_terminal.next_submission()
-                if accepted is None:
-                    # Distinguish "the user asked to quit" from "the live
-                    # Application died".  The second case used to be a
-                    # silent stall the user could only escape by force-quit.
-                    # Remember it here and report after the output proxy is
-                    # restored below: printing now would write into the dead
-                    # terminal's sink and never reach the user.
-                    _live_terminal_died = _live_terminal.failed
-                    break
-                raw = accepted.text.strip()
-                submitted_kind = accepted.kind
-                accepted_recovery = bool(getattr(accepted, "recovery", False))
-                if _submission_state is not None:
-                    _submission_state.consume_recovery_draft()
-            else:
-                _label = _re_edit_default if _re_edit_default else ""
-                raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ") + _label).strip()
-                submitted_kind = None
-                accepted_recovery = False
+                if _live_terminal is not None:
+                    if _re_edit_default:
+                        _live_terminal.set_default(_re_edit_default)
+                    accepted = await _live_terminal.next_submission()
+                    if accepted is None:
+                        # Distinguish "the user asked to quit" from "the live
+                        # Application died".  The second case used to be a
+                        # silent stall the user could only escape by force-quit.
+                        # Remember it here and report after the output proxy is
+                        # restored below: printing now would write into the dead
+                        # terminal's sink and never reach the user.
+                        _live_terminal_died = _live_terminal.failed
+                        break
+                    raw = accepted.text.strip()
+                    submitted_kind = accepted.kind
+                    accepted_recovery = bool(getattr(accepted, "recovery", False))
+                    if _submission_state is not None:
+                        _submission_state.consume_recovery_draft()
+                else:
+                    _label = _re_edit_default if _re_edit_default else ""
+                    raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ") + _label).strip()
+                    submitted_kind = None
+                    accepted_recovery = False
 
-            _interrupted_default = _re_edit_default
-            _retry_interrupted = accepted_recovery or (
-                bool(_interrupted_default) and not bool(
-                getattr(session, "_recall_prefill", False)
+                _interrupted_default = _re_edit_default
+                _retry_interrupted = accepted_recovery or (
+                    bool(_interrupted_default) and not bool(
+                    getattr(session, "_recall_prefill", False)
+                    )
                 )
-            )
-            if not raw and _retry_interrupted:
-                # readline cannot place a default value in the editable buffer;
-                # Enter therefore means retry the preserved prompt.
-                raw = _interrupted_default
+                if not raw and _retry_interrupted:
+                    # readline cannot place a default value in the editable buffer;
+                    # Enter therefore means retry the preserved prompt.
+                    raw = _interrupted_default
 
-            _re_edit_default = ""    # clear after consuming it
-            session._recall_prefill = False
-            _signal_state.submitted()
-            if not raw:
-                continue
-            _is_recovery_control = (
-                _retry_interrupted
-                and _is_interrupted_recovery_control(raw)
-            )
-            if raw.startswith("/") and (
-                not _retry_interrupted or _is_recovery_control
-            ):
+                _re_edit_default = ""    # clear after consuming it
+                session._recall_prefill = False
+                _signal_state.submitted()
+                if not raw:
+                    continue
+                _is_recovery_control = (
+                    _retry_interrupted
+                    and _is_interrupted_recovery_control(raw)
+                )
+                if raw.startswith("/") and (
+                    not _retry_interrupted or _is_recovery_control
+                ):
+                    try:
+                        result = await dispatch_live_slash(
+                            raw,
+                            session,
+                            live_enabled=live_turns_enabled,
+                            terminal_controller=_live_terminal_controller,
+                            command_words=_builtin_command_completion_words,
+                            matching_words=_matching_command_words,
+                            dispatcher=handle_slash,
+                            terminal_notice=_terminal_notice,
+                            sink=sink,
+                            exit_sentinel=_EXIT_SENTINEL,
+                        )
+                    except TurnInterrupted:
+                        _re_edit_default = _restore_interrupted_repl_input(session, raw)
+                        _signal_state.submitted()
+                        continue
+                    if result is _EXIT_SENTINEL:
+                        break
+                    continue
+                _write_text_cache(_last_input_path, raw)
                 try:
-                    result = await dispatch_live_slash(
-                        raw,
+                    dispatch_live_input(
                         session,
+                        raw,
                         live_enabled=live_turns_enabled,
-                        terminal_controller=_live_terminal_controller,
-                        command_words=_builtin_command_completion_words,
-                        matching_words=_matching_command_words,
-                        dispatcher=handle_slash,
-                        terminal_notice=_terminal_notice,
-                        sink=sink,
-                        exit_sentinel=_EXIT_SENTINEL,
+                        retry_interrupted=_retry_interrupted,
+                        kind=submitted_kind,
+                        serial_runner=_run_repl_turn,
                     )
                 except TurnInterrupted:
                     _re_edit_default = _restore_interrupted_repl_input(session, raw)
                     _signal_state.submitted()
-                    continue
-                if result is _EXIT_SENTINEL:
+                except SchedulerError as _submission_exc:
+                    await _terminal_notice(f"\n  ⚠ Input was not queued: {_submission_exc}")
+                finally:
+                    if _live_terminal is not None:
+                        _live_terminal.refresh()
+
+            except KeyboardInterrupt:
+                # Idle input state: Ctrl+C only arms the double-press exit flow.
+                # Turn rollback is handled exclusively by the in-flight
+                # TurnInterrupted branch around session.run_turn().
+                if _signal_state.interrupt_requests_exit():
                     break
+                await _terminal_notice("\n  [confirm] Press Ctrl+C again within 5s to exit. Current input is unchanged.")
                 continue
-            _write_text_cache(_last_input_path, raw)
-            try:
-                dispatch_live_input(
-                    session,
-                    raw,
-                    live_enabled=live_turns_enabled,
-                    retry_interrupted=_retry_interrupted,
-                    kind=submitted_kind,
-                    serial_runner=_run_repl_turn,
-                )
-            except TurnInterrupted:
-                _re_edit_default = _restore_interrupted_repl_input(session, raw)
-                _signal_state.submitted()
-            except SchedulerError as _submission_exc:
-                await _terminal_notice(f"\n  ⚠ Input was not queued: {_submission_exc}")
-            finally:
-                if _live_terminal is not None:
-                    _live_terminal.refresh()
-
-        except KeyboardInterrupt:
-            # Idle input state: Ctrl+C only arms the double-press exit flow.
-            # Turn rollback is handled exclusively by the in-flight
-            # TurnInterrupted branch around session.run_turn().
-            if _signal_state.interrupt_requests_exit():
+            except EOFError:
+                # Ctrl+D exits immediately.
                 break
-            await _terminal_notice("\n  [confirm] Press Ctrl+C again within 5s to exit. Current input is unchanged.")
-            continue
-        except EOFError:
-            # Ctrl+D exits immediately.
-            break
-        except Exception as _loop_exc:
-            logger.error("Main loop error: {!r}", _loop_exc)
-            print(c(RED, f"  ✗ Internal error; details were written to logs: {config.LOG_DIR}"))
-            continue
+            except Exception as _loop_exc:
+                logger.error("Main loop error: {!r}", _loop_exc)
+                print(c(RED, f"  ✗ Internal error; details were written to logs: {config.LOG_DIR}"))
+                continue
 
-    # Graceful shutdown: cancel all remaining asyncio tasks.
-    try:
-        session.shutdown()
-    except Exception as _shutdown_exc:  # noqa: BLE001
-        logger.warning("Session scheduler shutdown failed: {!r}", _shutdown_exc)
-    if _restore_live_sigint is not None:
-        _restore_live_sigint()
-    if _live_terminal_controller is not None:
-        await _live_terminal_controller.close()
-        _publish_live_terminal_controller(None)
-        if _live_terminal_died:
-            logger.error(
-                "Live terminal application ended unexpectedly; "
-                "left the interactive loop"
-            )
-        print(c(CYAN, "\n  Goodbye! 👋"))
-    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
-    for t in pending:
-        t.cancel()
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
-    if _previous_sigtstp is not None:
+    finally:
+        # Graceful teardown, and a ``finally`` on purpose.  The only
+        # thing that releases the non-daemon Turn worker is
+        # ``session.shutdown()`` here, so a BaseException that unwound
+        # through ``asyncio.run`` -- which is what an idle Ctrl+C used to
+        # do -- used to skip this block entirely.  The interpreter then
+        # blocked forever in ``threading._shutdown()``, and because the
+        # live observer disarms SIGINT the moment the Application dies,
+        # Ctrl+C could not break that hang either: only SIGKILL could.
         try:
-            signal.signal(signal.SIGTSTP, _previous_sigtstp)
-        except Exception:
-            pass
+            session.shutdown()
+        except Exception as _shutdown_exc:  # noqa: BLE001
+            logger.warning("Session scheduler shutdown failed: {!r}", _shutdown_exc)
+        if _restore_live_sigint is not None:
+            _restore_live_sigint()
+        if _live_terminal_controller is not None:
+            await _live_terminal_controller.close()
+            _publish_live_terminal_controller(None)
+            if _live_terminal_died:
+                logger.error(
+                    "Live terminal application ended unexpectedly; "
+                    "left the interactive loop"
+                )
+            print(c(CYAN, "\n  Goodbye! 👋"))
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        if _previous_sigtstp is not None:
+            try:
+                signal.signal(signal.SIGTSTP, _previous_sigtstp)
+            except Exception:
+                pass
 
 
 async def main():
