@@ -18,7 +18,8 @@ Commands in this module:
   /time [N]               show or set per-turn time budget (seconds)
   /failures [list|clear|N]  inspect / clear the failure audit log
 
-  /low /mid /deep /max /ultra /normal    apply a tier preset
+  /effort [level|status]           select the reasoning-effort level
+  /low /mid /deep /max /ultra /normal    legacy aliases for effort levels
   /limits                          show current dynamic config
   /tokens [N]    set max_tokens
   /ctx [N]       set ctx_max_chars
@@ -35,8 +36,8 @@ import time
 from pathlib import Path
 
 from config import (
-    NORMAL_CONFIG,
-    TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX, TIER_ULTRA,
+    DEFAULT_EFFORT_LEVEL, EFFORT_LEVELS,
+    effort_preset, effort_options, effort_delivery, is_effort_level,
 )
 from core.api_client import stream_request
 from core.memory import list_failures, clear_failures
@@ -49,7 +50,7 @@ from core.state import (
     update_dynamic_config,
 )
 from utils.ansi import (
-    c, BOLD, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA,
+    c, BOLD, GRAY, CYAN, GREEN, YELLOW, RED,
 )
 
 from core.commands import CommandContext, register
@@ -256,70 +257,151 @@ async def cmd_failures(ctx: CommandContext) -> None:
 
 
 # ════════════════════════════════════════════════════════
-# Tier presets
+# Reasoning effort
 # ════════════════════════════════════════════════════════
 
-def _tier_confirmation(label: str, tier: dict) -> str:
-    return (
-        f"  ✓ Switched to {label}: "
-        f"tokens={tier['max_tokens']:,}, "
-        f"ctx={tier['ctx_max_chars']:,}, "
-        f"iter={tier['max_iter']}"
-    )
+def _effort_options(model_alias: str) -> tuple[tuple[str, str, str], ...]:
+    """Build the selector rows for one model."""
+    from core.api_payloads import model_effort_map
+
+    return effort_options(model_effort_map(model_alias))
+
+
+def _effort_delivery(model_alias: str, level: str) -> str:
+    """Describe where the active level is actually applied."""
+    from core.api_payloads import model_effort_map
+
+    return effort_delivery(model_effort_map(model_alias), model_alias, level)
+
+
+def apply_effort(ctx: CommandContext, level: str) -> bool:
+    """Apply one effort level.  Return whether it was applied.
+
+    Single write path for every entry point, so the live selector, ``/effort``
+    and the legacy tier aliases cannot drift apart.
+
+    The explicit ``preferred_worker`` is carried across deliberately.  The tier
+    presets all pin it to ``"auto"``, so a blanket preset write silently undid
+    a ``/worker <alias>`` lock — and because the ``/worker`` menu reads the
+    on-disk policy first, the menu then disagreed with what delegation
+    actually used.
+    """
+    if not is_effort_level(level):
+        _print(c(RED, f"  ✗ Unknown effort level: {level}"))
+        _print(c(GRAY, f"  Levels: {' / '.join(EFFORT_LEVELS)}"))
+        return False
+    preset = effort_preset(level)
+    current_worker = get_dynamic_config_value("preferred_worker", "auto")
+    update_dynamic_config({**preset, "preferred_worker": current_worker})
+    ctx.session._reset_system_prompt()
+    _print(c(
+        GREEN,
+        f"  ✓ effort={level}: "
+        f"tokens={preset['max_tokens']:,}, "
+        f"ctx={preset['ctx_max_chars']:,}, "
+        f"iter={preset['max_iter']}",
+    ))
+    model_alias = getattr(ctx.session, "model_alias", "")
+    _print(c(GRAY, f"    {_effort_delivery(model_alias, level)}"))
+    _print(fmt_config())
+    return True
+
+
+def _effort_alias(ctx: CommandContext, legacy: str, level: str) -> None:
+    """Apply a legacy tier command as an effort level, with a migration note."""
+    _print(c(GRAY,
+        f"  {legacy} is now an effort alias. Current level: {level}"))
+    _print(c(GRAY, "  → pick a level inside /model, or set it directly with /effort"))
+    apply_effort(ctx, level)
+
+
+@register("/effort")
+async def cmd_effort(ctx: CommandContext) -> None:
+    """Show, select, or switch the reasoning-effort level."""
+    current = str(runtime_config().get("effort_level") or DEFAULT_EFFORT_LEVEL)
+    model_alias = getattr(ctx.session, "model_alias", "")
+    arg = (ctx.arg or "").strip().lower()
+    if arg == "status":
+        _print(c(GRAY, f"  Current: effort={current}  ({_effort_delivery(model_alias, current)})"))
+        return
+    if arg:
+        apply_effort(ctx, arg)
+        return
+
+    from core.output import JsonSink
+
+    if isinstance(ctx.sink, JsonSink) or not _effort_tui_available():
+        _print(c(
+            GRAY,
+            "  Interactive effort selector is unavailable; "
+            f"current={current}. Use /effort <level>.",
+        ))
+        return
+    try:
+        controller = getattr(ctx, "terminal_controller", None)
+        if controller is not None and getattr(controller, "run_selector", None) is not None:
+            from pawnlogic.selectors import EffortSelector
+
+            selected = await controller.run_selector(
+                lambda: EffortSelector(current, model_alias)
+            )
+        else:
+            selected = await _select_effort_level(current, model_alias)
+    except (EOFError, KeyboardInterrupt):
+        selected = None
+    except Exception:
+        _print(c(
+            YELLOW,
+            "  Interactive effort selector is unavailable; "
+            f"current={current}. Use /effort <level>.",
+        ))
+        return
+    if selected is None:
+        _print(c(GRAY, f"  Effort unchanged ({current})."))
+        return
+    apply_effort(ctx, selected)
+
 
 @register("/low")
 async def cmd_low(ctx: CommandContext) -> None:
-    update_dynamic_config(TIER_LOW)
-    ctx.session._reset_system_prompt()
-    _print(c(GREEN, _tier_confirmation("/low light mode", TIER_LOW)))
-    _print(fmt_config())
+    _effort_alias(ctx, "/low", "low")
 
 
 @register("/mid")
 async def cmd_mid(ctx: CommandContext) -> None:
-    update_dynamic_config(TIER_MID)
-    ctx.session._reset_system_prompt()
-    _print(c(YELLOW, _tier_confirmation("/mid development mode", TIER_MID)))
-    _print(fmt_config())
+    _effort_alias(ctx, "/mid", "medium")
 
 
 @register("/deep")
 async def cmd_deep(ctx: CommandContext) -> None:
-    update_dynamic_config(TIER_DEEP)
-    ctx.session._reset_system_prompt()
-    _print(c(BOLD + MAGENTA, _tier_confirmation("/deep full-power mode", TIER_DEEP)))
-    _print(fmt_config())
+    _effort_alias(ctx, "/deep", "high")
 
 
 @register("/max")
 async def cmd_max(ctx: CommandContext) -> None:
-    update_dynamic_config(TIER_MAX)
-    ctx.session._reset_system_prompt()
-    _print(c(BOLD + RED, _tier_confirmation("/max maximum mode", TIER_MAX)))
-    _print(fmt_config())
+    _effort_alias(ctx, "/max", "max")
 
 
 @register("/ultra")
 async def cmd_ultra(ctx: CommandContext) -> None:
-    update_dynamic_config(TIER_ULTRA)
-    ctx.session._reset_system_prompt()
-    _print(c(BOLD + CYAN, _tier_confirmation("/ultra ultra mode", TIER_ULTRA)))
-    _print(fmt_config())
+    _effort_alias(ctx, "/ultra", "max")
 
 
 @register("/normal")
 async def cmd_normal(ctx: CommandContext) -> None:
-    update_dynamic_config(NORMAL_CONFIG)
-    ctx.session._reset_system_prompt()
-    _print(c(GREEN, "  ✓ Reset to /mid"))
-    _print(fmt_config())
+    _effort_alias(ctx, "/normal", "medium")
 
 
 @register("/limits")
 async def cmd_limits(ctx: CommandContext) -> None:
     _print(c(BOLD, "\n  Current runtime limits:"))
     _print(fmt_config())
-    _print(c(GRAY, "  /low /mid /deep /max /ultra  |  /tokens /ctx /iter /toolsize /fetchsize"))
+    level = str(runtime_config().get("effort_level") or DEFAULT_EFFORT_LEVEL)
+    _print(c(
+        GRAY,
+        f"  effort={level}  ({_effort_delivery(getattr(ctx.session, 'model_alias', ''), level)})",
+    ))
+    _print(c(GRAY, "  /effort [level]  |  /tokens /ctx /iter /toolsize /fetchsize"))
 
 
 # ════════════════════════════════════════════════════════
@@ -432,6 +514,89 @@ async def cmd_planguard(ctx: CommandContext) -> None:
         return
     set_dynamic_config_value("plan_guard_mode", arg)
     _print(c(GREEN, f"  ✓ plan_guard_mode={arg} (was {current})"))
+
+
+def _effort_tui_available() -> bool:
+    """Return whether the interactive effort selector can run safely."""
+    disabled = os.getenv("PROMPT_TOOLKIT_ENABLED", "1").lower() in ("0", "false")
+    return not disabled and sys.stdin.isatty() and sys.stdout.isatty()
+
+
+async def _select_effort_level(current: str, model_alias: str) -> str | None:
+    """Show a prompt_toolkit effort selector and return the chosen level."""
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout
+    from prompt_toolkit.layout.containers import Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.styles import Style
+
+    options = _effort_options(model_alias)
+    selected_idx = next(
+        (index for index, (level, _, _) in enumerate(options) if level == current),
+        0,
+    )
+
+    def get_fragments():
+        fragments = [
+            ("class:title", "\n  Reasoning Effort\n"),
+            ("class:desc", "  How hard the model thinks, and how much room it gets.\n\n"),
+        ]
+        for index, (level, label, description) in enumerate(options):
+            cursor = "❯" if index == selected_idx else " "
+            marker = "●" if index == selected_idx else "○"
+            style = "class:selected" if index == selected_idx else ""
+            current_marker = "  current" if level == current else ""
+            fragments.append((style, f"  {cursor} {marker} {index + 1}. {label}{current_marker}\n"))
+            fragments.append(("class:desc", f"      {description}\n"))
+        fragments.append(("class:help", "\n  Up/Down or 1-6 select  Enter apply  Esc cancel\n"))
+        return fragments
+
+    control = FormattedTextControl(get_fragments)
+    key_bindings = KeyBindings()
+
+    @key_bindings.add("up")
+    def _move_up(event):
+        nonlocal selected_idx
+        selected_idx = (selected_idx - 1) % len(options)
+        event.app.invalidate()
+
+    @key_bindings.add("down")
+    def _move_down(event):
+        nonlocal selected_idx
+        selected_idx = (selected_idx + 1) % len(options)
+        event.app.invalidate()
+
+    for _digit in range(1, len(options) + 1):
+
+        @key_bindings.add(str(_digit))
+        def _select_by_number(event, _target=_digit - 1):
+            nonlocal selected_idx
+            selected_idx = _target
+            event.app.invalidate()
+
+    @key_bindings.add("enter")
+    def _apply(event):
+        event.app.exit(result=options[selected_idx][0])
+
+    @key_bindings.add("escape")
+    @key_bindings.add("c-c")
+    def _cancel(event):
+        event.app.exit(result=None)
+
+    app = Application(
+        layout=Layout(Window(content=control, always_hide_cursor=True)),
+        key_bindings=key_bindings,
+        style=Style.from_dict({
+            "title": "#00afff bold",
+            "desc": "#888888",
+            "selected": "#00ff00 bold",
+            "help": "#666666",
+        }),
+        full_screen=False,
+        mouse_support=False,
+    )
+    return await app.run_async()
 
 
 def _plan_guard_tui_available() -> bool:

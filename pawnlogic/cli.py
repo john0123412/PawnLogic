@@ -342,12 +342,13 @@ HELP_TEXT = f"""
   {c(CYAN, "/extension disable <name>")} Disable an Extension
 
 {c(BOLD, "Runtime")}
-  {c(GREEN, "/low")}   Light mode
-  {c(YELLOW, "/mid")}  Default mode
-  {c(MAGENTA, "/deep")} Deep mode
-  {c(RED, "/max")}     Maximum mode
-  {c(BOLD + CYAN, "/ultra")} Ultra mode (150 iterations)
+  {c(YELLOW, "/effort [level]")} Reasoning effort: off/low/medium/high/xhigh/max; no arg opens a selector
   {c(YELLOW, "/limits")} Show current limits
+  {c(GREEN, "/low")}   Alias for effort low
+  {c(YELLOW, "/mid")}  Alias for effort medium
+  {c(MAGENTA, "/deep")} Alias for effort high
+  {c(RED, "/max")}     Alias for effort max
+  {c(BOLD + CYAN, "/ultra")} Alias for effort max (150 iterations)
   {c(YELLOW, "/planguard [mode]")} Select plan-guard mode; no arg opens a selector
   {c(YELLOW, "/webstatus /browserstatus /docker /pwnenv")} Tool status
 
@@ -1058,7 +1059,7 @@ async def _main_impl():
 {c(BOLD+CYAN,"╚══════════════════════════════════════════════════════╝")}
   model : {c(MODELS[session.model_alias]['color'],session.model_alias)}  {c(GRAY,MODELS[session.model_alias]['desc'])}
   cwd   : {c(GRAY,session.cwd)}
-  tier  : {c(YELLOW,"[MID]")}  tokens={DYNAMIC_CONFIG['max_tokens']}  ctx={DYNAMIC_CONFIG['ctx_max_chars']//1000}k  iter={DYNAMIC_CONFIG['max_iter']}
+  effort: {c(YELLOW,"[" + str(DYNAMIC_CONFIG.get('effort_level','medium')) + "]")}  tokens={DYNAMIC_CONFIG['max_tokens']}  ctx={DYNAMIC_CONFIG['ctx_max_chars']//1000}k  iter={DYNAMIC_CONFIG['max_iter']}
   tools : {"  ".join(tool_tags)}
   DB    : {c(GRAY,str(DB_PATH))}
 {key_line}
@@ -1113,12 +1114,13 @@ async def _main_impl():
         "/forget":        "Delete a knowledge entry",
         "/init_project":  "Initialize .pawn_state.md project state",
         "/state":         "Show current project .pawn_state.md",
-        "/low":           "Light mode (tokens=4k, ctx=40k)",
-        "/mid":           "Development mode (tokens=8k, ctx=150k) <- default",
-        "/deep":          "Full-power mode (tokens=32k, ctx=400k)",
-        "/max":           "Maximum mode (tokens=32k, ctx=600k, iter=100, 60min)",
-        "/ultra":         "Ultra mode (tokens=32k, ctx=600k, iter=150, 60min)",
-        "/normal":        "Reset to /mid",
+        "/effort":        "Reasoning effort; no arg opens a selector",
+        "/low":           "Alias for effort low (tokens=4k, ctx=40k)",
+        "/mid":           "Alias for effort medium (tokens=8k, ctx=150k) <- default",
+        "/deep":          "Alias for effort high (tokens=32k, ctx=400k)",
+        "/max":           "Alias for effort max (tokens=32k, ctx=600k, iter=150, 60min)",
+        "/ultra":         "Alias for effort max",
+        "/normal":        "Alias for effort medium",
         "/limits":        "Show all runtime limits",
         "/tokens":        "Set max_tokens",
         "/ctx":           "Set context limit",

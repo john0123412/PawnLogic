@@ -490,7 +490,7 @@ def test_running_status_survives_a_narrow_terminal(monkeypatch):
         first_delta=True,
         activity="list_dir [2/30]",
     )
-    fields = " Model: bai:glm-5.3-flash  Ctx: 17%  Tier: MAX  Tk: 0  Dir: /tmp/x"
+    fields = " Model: bai:glm-5.3-flash  Ctx: 17%  Effort: xhigh  Tk: 0  Dir: /tmp/x"
 
     for columns in (60, 80, 100, 120):
         terminal = _toolbar_terminal(session, fields)
@@ -511,7 +511,7 @@ def test_running_status_survives_a_narrow_terminal(monkeypatch):
 def test_sent_status_survives_a_narrow_terminal(monkeypatch):
     """The new Sent state must survive the same widths as the tool state."""
     session = _session(pending=1, submitted_at=time.monotonic() - 2.0)
-    fields = " Model: bai:glm-5.3-flash  Ctx: 17%  Tier: MAX  Tk: 0"
+    fields = " Model: bai:glm-5.3-flash  Ctx: 17%  Effort: xhigh  Tk: 0"
 
     for columns in (60, 80, 100, 120):
         terminal = _toolbar_terminal(session, fields)

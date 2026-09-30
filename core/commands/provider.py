@@ -49,6 +49,16 @@ from config import (
     validate_api_key,
 )
 from config.paths import VERSION
+from core.commands._effort_flow import (
+    apply_scripted_effort,
+    offer_effort_after_model,
+    report_current,
+    set_provider_effort_support,
+)
+# Re-exported, not re-implemented: the call site resolves the name in this
+# module's globals, so tests that replace ``provider_commands.cc_style_model_selector``
+# must keep working.
+from core.commands._model_picker import cc_style_model_selector
 from core.logger import logger
 from core.provider_runtime import (
     ENV_PATH,
@@ -767,126 +777,14 @@ async def _handle_provider_cmd(
         _provider_set_active(sub_arg.strip(), False)
     elif sub == "remove":
         _provider_remove(sub_arg)
+    elif sub == "effort":
+        set_provider_effort_support(sub_arg.strip())
     elif sub == "test":
         maybe_result = _provider_test(session, sub_arg)
         if inspect.isawaitable(maybe_result):
             await maybe_result
     else:
-        _print(c(RED, f"  ✗ Unknown sub-command '{sub}'. Available: list · add · fetch · update · activate · deactivate · remove · test"))
-
-
-# ════════════════════════════════════════════════════════
-# Claude-Code-style inline model picker
-# ════════════════════════════════════════════════════════
-
-async def cc_style_model_selector(
-    models: dict, current_alias: str,
-) -> str | None:
-    """Claude Code style inline model selector."""
-    from prompt_toolkit.application import Application
-    from prompt_toolkit.key_binding import KeyBindings
-    from prompt_toolkit.layout import Layout
-    from prompt_toolkit.layout.controls import FormattedTextControl
-    from prompt_toolkit.layout.containers import Window
-
-    entries = list(models.items())
-    selected_idx = 0
-
-    def get_menu_fragments():
-        fragments = []
-        fragments.append(("class:title", "  Select model\n"))
-        fragments.append(("class:desc",   "  Choose a model for this session\n"))
-        fragments.append(("",             "\n"))
-
-        for i, (alias, cfg_m) in enumerate(entries):
-            if i == selected_idx:
-                fragments.append(("class:cursor", "  ❯ "))
-            else:
-                fragments.append(("", "    "))
-
-            fragments.append(("class:index", f"{i+1}."))
-
-            is_current = (alias == current_alias)
-            if i == selected_idx:
-                fragments.append(("class:selected", f" {alias}"))
-            else:
-                fragments.append(("", f" {alias}"))
-
-            if is_current:
-                fragments.append(("class:current", " ✔"))
-
-            desc = cfg_m.get("desc", "")[:45]
-            if desc:
-                if i == selected_idx:
-                    fragments.append(("class:desc-hi", f"  {desc}"))
-                else:
-                    fragments.append(("class:desc", f"  {desc}"))
-
-            if cfg_m.get("vision"):
-                fragments.append(("class:vision", " 📷"))
-
-            fragments.append(("", "\n"))
-
-        fragments.append(("", "\n"))
-        fragments.append(("class:help", "  Enter to confirm · Esc to exit\n"))
-
-        return fragments
-
-    control = FormattedTextControl(get_menu_fragments)
-    kb = KeyBindings()
-
-    @kb.add("up")
-    def _(event):
-        nonlocal selected_idx
-        selected_idx = (selected_idx - 1) % len(entries)
-
-    @kb.add("down")
-    def _(event):
-        nonlocal selected_idx
-        selected_idx = (selected_idx + 1) % len(entries)
-
-    @kb.add("enter")
-    def _(event):
-        event.app.exit(result=entries[selected_idx][0])
-
-    @kb.add("escape")
-    def _(event):
-        event.app.exit(result=None)
-
-    @kb.add("c-c")
-    def _(event):
-        event.app.exit(result=None)
-
-    for _n in range(1, min(10, len(entries) + 1)):
-        @kb.add(str(_n))
-        def _(event, _idx=_n - 1):
-            nonlocal selected_idx
-            if _idx < len(entries):
-                selected_idx = _idx
-
-    body = Window(content=control, always_hide_cursor=True)
-
-    style = _PTStyle.from_dict({
-        "title":      "#00afff bold",
-        "desc":       "#888888",
-        "desc-hi":    "#aaaaaa",
-        "cursor":     "#00ff00 bold",
-        "selected":   "#00ff00 bold",
-        "current":    "#00d700",
-        "index":      "#666666",
-        "vision":     "#00afff",
-        "help":       "#555555",
-    })
-
-    app = Application(
-        layout=Layout(body),
-        key_bindings=kb,
-        style=style,
-        mouse_support=False,
-        full_screen=False,
-    )
-
-    return await app.run_async()
+        _print(c(RED, f"  ✗ Unknown sub-command '{sub}'. Available: list · add · fetch · update · activate · deactivate · effort · remove · test"))
 
 
 # ════════════════════════════════════════════════════════
@@ -937,10 +835,59 @@ async def cmd_provider(ctx: CommandContext) -> None:
     )
 
 
+async def _apply_model(ctx: CommandContext, alias: str, *, offer_effort: bool = True) -> None:
+    """Switch the session model, then hand off to the effort flow.
+
+    The effort step is chained into the model picker because that is where the
+    user is already choosing how the model behaves.  ``offer_effort=False``
+    suppresses the chained picker for the scripted ``/model <alias> <effort>``
+    form, where the level was already given.  The rest lives in
+    ``core/commands/_effort_flow.py``.
+    """
+    session = ctx.session
+    models = provider_config.model_snapshot()
+    session.model_alias = alias
+    ok, env = validate_api_key(alias)
+    if not ok:
+        _print(c(YELLOW, f"  ⚠ Switched to {alias}, but {env} is not set. Configure it with /setkey."))
+        return
+    _print(c(GREEN, f"  ✓ Switched to {c(models.get(alias, {}).get('color', ''), alias)}"))
+
+    if not offer_effort:
+        report_current(alias, show_level=False)
+    else:
+        await offer_effort_after_model(ctx, alias)
+
+
 @register("/model")
 async def cmd_model(ctx: CommandContext) -> None:
     session = ctx.session
     arg = ctx.arg
+    # The CLI splits the line as ``verb arg arg2`` (see ``handle_slash``), so
+    # ``/model <alias> <effort>`` arrives with the alias in ``arg`` and the
+    # level in ``arg2``.  Accept a two-token ``arg`` too, so a direct call
+    # that hands the whole remainder to ``arg`` still works.
+    _parts = (arg or "").split()
+    if len(_parts) == 1 and (ctx.arg2 or "").strip():
+        _parts.append(ctx.arg2.strip())
+    if len(_parts) == 2:
+        # Scriptable form: /model <alias> <effort>.
+        _alias_arg, _effort_arg = _parts
+        if _alias_arg not in provider_config.model_snapshot():
+            _print(c(RED, f"  ✗ Unknown model '{_alias_arg}'"))
+            return
+        _provider_name = provider_config.model_snapshot()[_alias_arg].get("provider", "")
+        if not is_provider_active(_provider_name):
+            _print(c(YELLOW, f"  ⚠ Provider '{_provider_name}' is not active. Run /provider activate {_provider_name} first."))
+            return
+        # Validate the level *before* switching models, so a typo leaves the
+        # session on the model it already had.  Applying it also suppresses
+        # the chained picker: the caller already scripted the level, so
+        # re-opening the selector would ignore what they asked for.
+        if not apply_scripted_effort(ctx, _effort_arg):
+            return
+        await _apply_model(ctx, _alias_arg, offer_effort=False)
+        return
     if not arg:
         # Claude Code style inline selector.
         _vm = _visible_models()
@@ -969,12 +916,7 @@ async def cmd_model(ctx: CommandContext) -> None:
             else:
                 result = await cc_style_model_selector(_vm, session.model_alias)
             if result:
-                session.model_alias = result
-                ok, env = validate_api_key(result)
-                if not ok:
-                    _print(c(YELLOW, f"  ⚠ Switched to {result}, but {env} is not set. Configure it with /setkey."))
-                else:
-                    _print(c(GREEN, f"  ✓ Switched to {c(MODELS[result]['color'], result)}"))
+                await _apply_model(ctx, result)
             else:
                 _print(c(GRAY, "  Cancelled"))
         else:
@@ -998,17 +940,13 @@ async def cmd_model(ctx: CommandContext) -> None:
                     ftag = c(MAGENTA, " [A]") if get_api_format(_alias) == "anthropic" else ""
                     _print(f"    {c(_cfg_m['color'], f'{_alias:14}')}{_cfg_m['desc']:30} {ktag}{vtag}{ftag}{tick}")
             _print(c(GRAY, "\n  Usage: /model <alias>  📷=vision capable  [A]=Anthropic format"))
+            _print(c(GRAY, "         /model <alias> <effort>  to set both at once"))
     elif arg in provider_config.model_snapshot():
         models = provider_config.model_snapshot()
         provider_name = models[arg].get("provider", "")
         if not is_provider_active(provider_name):
             _print(c(YELLOW, f"  ⚠ Provider '{provider_name}' is not active. Run /provider activate {provider_name} first."))
             return
-        session.model_alias = arg
-        ok, env = validate_api_key(arg)
-        if not ok:
-            _print(c(YELLOW, f"  ⚠ Switched to {arg}, but {env} is not set. Configure it with /setkey."))
-        else:
-            _print(c(GREEN, f"  ✓ Switched to {c(models[arg]['color'], arg)}"))
+        await _apply_model(ctx, arg)
     else:
         _print(c(RED, f"  ✗ Unknown model '{arg}'"))

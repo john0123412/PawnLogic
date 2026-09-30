@@ -5,9 +5,11 @@
 
 ## Active Plan
 
-There is no active plan at the moment. When release work starts, add its plan
-file here. There is exactly one active plan at a time. When the active plan is
-completed and its release is published, it moves to Completed below.
+- [reasoning-effort-unification.md](reasoning-effort-unification.md) — one
+  reasoning-effort level selected inside `/model`, driving both the provider
+  wire value and the runtime limits, replacing the six tier commands. See
+  [ADR 0012](../adr/0012-reasoning-effort-control.md). Implemented but not
+  released; the version stays at `0.3.13`.
 
 ## Completed Plans
 

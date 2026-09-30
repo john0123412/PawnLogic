@@ -444,6 +444,70 @@ class PlanGuardSelector(SelectorState):
         return False
 
 
+class EffortSelector(SelectorState):
+    """Inline reasoning-effort picker for ``/effort`` and the ``/model`` flow.
+
+    Same shape as :class:`PlanGuardSelector`: an options tuple plus a cursor.
+    Each row states the runtime limits the level selects and whether the value
+    reaches the provider, because a level the model has not declared support
+    for still changes the limits and would otherwise look like a no-op.
+    """
+
+    def __init__(self, current: str, model_alias: str = "") -> None:
+        super().__init__(title="Reasoning Effort")
+        from config import effort_options
+        from core.api_payloads import model_effort_map
+
+        self.current = current
+        self.model_alias = model_alias
+        self.options = effort_options(model_effort_map(model_alias))
+        self.selected_idx = next(
+            (index for index, (level, _, _) in enumerate(self.options) if level == current),
+            0,
+        )
+
+    @property
+    def formatted_text(self) -> FormattedText:
+        fragments: list[tuple[str, str]] = []
+        fragments.append((self.style.title, "\n  Reasoning Effort\n"))
+        fragments.append((
+            self.style.desc,
+            "  How hard the model thinks, and how much room it gets.\n\n",
+        ))
+        for index, (level, label, description) in enumerate(self.options):
+            cursor = "❯" if index == self.selected_idx else " "
+            marker = "●" if index == self.selected_idx else "○"
+            style = self.style.selected if index == self.selected_idx else ""
+            current_marker = "  current" if level == self.current else ""
+            fragments.append((style, f"  {cursor} {marker} {index + 1}. {label}{current_marker}\n"))
+            fragments.append((self.style.desc, f"      {description}\n"))
+        fragments.append((
+            self.style.help,
+            f"\n  Up/Down or 1-{len(self.options)} select  Enter apply  Esc cancel\n",
+        ))
+        return FormattedText(fragments)
+
+    def handle_key(self, key: str) -> bool:
+        if key == "up":
+            self.selected_idx = (self.selected_idx - 1) % len(self.options)
+            return True
+        if key == "down":
+            self.selected_idx = (self.selected_idx + 1) % len(self.options)
+            return True
+        if key.isdigit() and key != "0":
+            idx = int(key) - 1
+            if 0 <= idx < len(self.options):
+                self.selected_idx = idx
+            return True
+        if key == "enter":
+            self.close(result=self.options[self.selected_idx][0])
+            return True
+        if key in {"escape", "c-c"}:
+            self.close(result=None)
+            return True
+        return False
+
+
 class ModelSelector(SelectorState):
     """Claude-Code-style inline model picker for the ``/model`` command.
 

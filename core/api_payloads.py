@@ -5,7 +5,9 @@ from __future__ import annotations
 import copy
 import json
 
-from config import DYNAMIC_CONFIG, MODELS
+from config import DYNAMIC_CONFIG, MODELS, PROVIDERS
+from config.tiers import EFFORT_WIRE_VALUES, DEFAULT_EFFORT_LEVEL
+from core.state import runtime_config
 
 
 _REASONING_MODEL_PATTERNS = (
@@ -13,6 +15,44 @@ _REASONING_MODEL_PATTERNS = (
     "deepseek",    # DeepSeek family: v4-flash / v4-pro / reasoner / r1.
     "qwq",         # Alibaba QwQ reasoning series.
 )
+
+# A custom provider that opts in accepts the effort ladder, but opting in is
+# not a claim that it has a ``none`` value.  Leaving ``off`` out keeps that
+# rung local-only, which costs the user nothing: ``off`` already selects the
+# smallest budget, it just does not ask the provider to stop reasoning.
+_EFFORT_OPT_IN_LADDER = {
+    level: value for level, value in EFFORT_WIRE_VALUES.items() if level != "off"
+}
+
+
+def model_effort_map(model_alias: str) -> dict:
+    """Return the rung -> wire value map a model accepts, or an empty dict.
+
+    A built-in model declares its own map.  A custom model inherits the
+    ladder only when its provider explicitly opted in, so a relay that
+    rejects ``reasoning_effort`` is never sent the field by accident.
+    """
+    model = MODELS.get(model_alias) or {}
+    declared = model.get("effort")
+    if isinstance(declared, dict) and declared:
+        return {str(rung): str(value) for rung, value in declared.items()}
+    provider_cfg = PROVIDERS.get(str(model.get("provider") or "")) or {}
+    if provider_cfg.get("reasoning_effort"):
+        return dict(_EFFORT_OPT_IN_LADDER)
+    return {}
+
+
+def resolve_reasoning_effort(model_alias: str) -> str | None:
+    """Return the wire value for the active effort level, or None to omit it.
+
+    Resolved per model alias at the one place every request payload is built,
+    so the main turn, delegated workers, ``/think``, history summaries and
+    workspace naming all resolve the same way and none of them can drift.
+    """
+    level = str(runtime_config().get("effort_level") or DEFAULT_EFFORT_LEVEL)
+    value = model_effort_map(model_alias).get(level)
+    return str(value) if value else None
+
 
 
 def _is_reasoning_model(model_alias: str, model_id: str = "") -> bool:
@@ -187,6 +227,9 @@ def _build_openai_payload(
         payload["tool_choice"] = tool_choice
     if response_format:
         payload["response_format"] = response_format
+    reasoning_effort = resolve_reasoning_effort(model_alias)
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
     payload["stream_options"] = {"include_usage": True}
     return payload
 

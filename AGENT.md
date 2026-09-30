@@ -338,6 +338,13 @@ Lint:
 python -m ruff check .
 ```
 
+Architecture budget (a separate CI step from `ruff check .`, so a clean
+local lint run says nothing about it):
+
+```bash
+python tools/check_architecture_budget.py
+```
+
 CLI smoke checks:
 
 ```bash
@@ -719,391 +726,426 @@ fail; do not list a module here before CI checks it.
 
 ## Known Risks
 
-- Trust/Operation/Network Policy drift across host, Docker, browser, MCP, CTF
-  execution paths. URL adapters must re-evaluate DNS and redirects.
-- Provider visibility drift between CLI, TUI, completions, and runtime fetch.
-- **Never validate a model by inferring with it.** "Check the model works"
-  implemented as a real `POST /chat/completions` is a billable request, and
-  doing it per candidate turned one `/provider fetch` into hundreds of charged
-  inferences. This bit twice: first in `provider_discovery`, then again in
-  `provider_runtime.test_connection`, which is the more dangerous of the two
-  because it fires on a plain user command and reported only "Connected". The
-  rule now binds in "Provider And Model Rules": discovery reads only the free
-  `/v1/models` metadata, and Test Connection reads the same listing. There is
-  no billable path left in the provider flow — the only real inference in the
-  product is a Turn. `core/provider_discovery.py` is the seam; adding a
-  request to it re-opens the billing hole.
-- User-friendly mode accidentally leaking debug internals.
-- Stream adapters changing public delta dict keys or ordering.
-- Extension discovery importing or enabling third-party code during startup.
-- Security Tools bypassing shared Tool Registry, Operation Policy, or
-  Network Policy checks. A tool that wants a policy decision must call the
-  pure `classify_host_process()` (or `classify_shell_command()`), as
-  `tools/shell_ops.authorize_shell_operation` does; `HostProcessRunner.run()`
-  classifies *and* spawns, so it is only for the single real execution.
-  `run_code` additionally classifies the payload's own tractable literal
-  shell surface (bash lines; Python `os.system`/`os.popen`/
-  `subprocess(..., shell=True)`) with the same policy, failing closed on
-  anything but `ALLOW`. Still invisible to it: a script's temp-file
-  contents, dynamic command construction, `from os import system` aliases,
-  and javascript/go/compiled payloads. The boundary is defence-in-depth
-  and consistency, not an OS sandbox.
-- Delegated-agent requests bypassing Provider visibility, allowlists, budgets,
-  or capability filtering.
-- Tool watchdog abandons wedged tool threads instead of blocking the session;
-  abandoned threads keep running until process exit and their results are lost.
-- Prompt Toolkit live composition, worker-thread execution, persistent-screen
-  repainting, modal pause/resume, and TTY-owning interactive Tools can race;
-  live-input tests must exercise the fixed-bottom application, stdout/stderr
-  restoration, and serial readline fallback.
-- The ratatui frontend is a separate wire-v1 client, not a replacement UI
-  embedded into the Python REPL. Its terminal guard must restore raw mode,
-  alternate screen, mouse capture, bracketed paste, and cursor visibility on
-  every error path. The frontend must treat streamed answer text as the
-  authoritative rendered response and use `result` only as a non-streaming
-  fallback; rendering both duplicates every answer. Wire v1 cannot host the
-  Python Prompt Toolkit selectors, so modal-only commands must fail fast with
-  explicit text alternatives.
-- Prompt Toolkit key bindings classify intent before main-loop dispatch; the
-  session Adapter must reconcile stale START/STEER/FOLLOW_UP hints against the
-  latest scheduler view. Text-only completion must drain unclaimed steer input
-  and keep queued content visibly previewed above the composer. Cancellation
-  settlement must stay off the UI thread and mark the automatically prefilled  recovered draft as a one-shot replacement rather than a follow-up.
-- The 0.3.6 Queue TUI is deliberately main-thread-only and must not claim
-  worker stdin. The persistent terminal renders bare `/queue` inline instead
-  of pausing for a nested selector; non-TTY and readline paths use text
-  controls. Escape shares a prefix with Alt shortcuts, so real-input tests
-  must keep its bounded sequence-resolution latency covered. Mouse-wheel and
-  coordinate-free ScrollUp/ScrollDown events must remain owned by the output
-  viewport so composer history cannot consume them.
-- A failed Turn parks the session and mints a recovered draft. That draft is
-  a retry offer, not a queue entry: counting it as queued work classified a
-  newly typed prompt as `FOLLOW_UP`, whose implicit RESUME the anti-cascade
-  gate refuses, so the prompt was queued while the UI still reported `Idle`
-  (the post-429 "typing does nothing" freeze). Admission must resolve a
-  recovered draft to `START` and resume explicitly, on both the live and the
-  serial readline paths.
-- Only one Prompt Toolkit `Application` may own the PTY. Every interactive
-  selector, including the `/provider fetch` model multi-select, must run
-  inside the persistent Application through the controller's `run_selector`;
-  a second `Application.run_async()` corrupts cursor/escape state (ADR 0010).
-- A Prompt Toolkit `Float` never participates in layout: it is painted over
-  rows that already exist. The live terminal is an inline
-  (`full_screen=False`) Application, so its block is only as tall as the rows
-  below the cursor — about three — and `FloatContainer` anchors a
-  cursor-float *below* the cursor whenever the space below is at least the
-  space above, then clips it to what is left. The completion menu was mounted
-  that way, so "below the cursor" was the toolbar row: the model field and
-  the fuzzy-match candidates were drawn on top of each other and the menu was
-  clipped to one line. It is now an `HSplit` child between the output window
-  and the composer, so it reserves its own rows. **Keep any new menu,
-  dropdown, or overlay that a user can type into as real layout, not a
-  Float.** Two traps make this easy to reintroduce unnoticed:
-  `DummyOutput.get_rows_below_cursor_position()` returns a hardcoded `40`
-  (a real host reports the true value via CPR), so every test that renders
-  through a bare `DummyOutput` gets a 40-row block where the float happens to
-  flip above the cursor and looks correct — use an output double that reports
-  production geometry, as `_InlineSizedOutput` does. And `FloatContainer`
-  was doing nothing else here, so the root is a bare `DynamicContainer`;
-  reintroducing it for a new float also reintroduces the clipping.
-  Pinned by
-  `test_completion_menu_gets_its_own_rows_instead_of_covering_the_toolbar`.
-- A tool thread must never leave a selector mounted. Abandoning a worker
+Each entry is an invariant plus the specific mistake that reintroduces the
+bug. Incident history lives in `CHANGELOG.md` and `docs/plans/`; the test
+name at the end is the gate that fails if the invariant is broken.
+
+### Provider, billing, and effort
+
+- **Never validate a model by inferring with it.** "Check the model works" as
+  a real `POST /chat/completions` is billable; per candidate it turned one
+  `/provider fetch` into hundreds of charged inferences. It bit twice, in
+  `provider_discovery` and again in `provider_runtime.test_connection`.
+  Discovery and Test Connection now read only the free `/v1/models` listing;
+  the only real inference in the product is a Turn. `core/provider_discovery.py`
+  is the seam — adding a request there re-opens the hole.
+- **`reasoning_effort` goes only where the model declares it, and the
+  declaration is a per-rung map, not a flag.** `MODELS[alias]["effort"]` is
+  `{rung: wire_value}`, so a model accepting `low`/`medium`/`high` but not
+  `xhigh` simply lacks that key. Collapsing it to a boolean is what would get
+  a partly-supporting model sent a value it rejects. An undeclared model gets
+  an empty map and the field is never written — that is what makes the default
+  safe against a relay that 400s on the parameter. A provider may opt its
+  models in wholesale via `reasoning_effort` in `custom_providers.json`
+  (`/provider effort <name> on|off`), which grants the ladder *minus* `off`.
+  `core/api_payloads.model_effort_map` is the only resolver;
+  `resolve_reasoning_effort` is called from the single `_build_openai_payload`
+  and deliberately not threaded through call sites, because a missed call site
+  fails silently as "the setting does nothing".
+- **DeepSeek 400s when a `tool_calls` turn replays without that assistant
+  message's `reasoning_content`.** A whole-chain invariant: `core/turn_api.py:90`
+  buffers it, **both** branches of `AgentSession._append_assistant_or_tool_call_message`
+  store it (the `tool_calls` branch is what every real turn takes; the other is
+  the easy one to check), and `_sanitize_messages_for_model` preserves it for
+  reasoning models. `TestReasoningContentReadBack` in
+  `tests/test_reasoning_effort.py`.
+- **Effort is one knob, so a delegated worker inherits the level** — a worker
+  resolves from its *own* alias, so "set `high` once" means `high` everywhere.
+  The one exception is `SubAgentSession.MAX_TOKENS`: a worker chosen for speed
+  inheriting a 32k output ceiling contradicts the reason it was chosen (it
+  mirrors the existing `tool_max_chars` clamp). Do not start suppressing
+  effort per call site (`/think`, history summaries, workspace naming,
+  delegation) — four private switches drift, and the user asked for one
+  control.
+- **An effort change must preserve `preferred_worker`.** Every tier preset
+  pins it to `"auto"`, so the old `/deep`-style writes silently undid an
+  explicit `/worker <alias>` lock; because the worker menu reads the on-disk
+  policy *first* (`core/commands/tools.py`), the menu then showed the old value
+  while delegation actually used `auto`. `apply_effort` is the single write path and carries it across —
+  a new writer doing a blanket `update_dynamic_config(preset)` reintroduces
+  this. `TestWorkerLockPreserved`.
+- **Two-token commands arrive as `arg` *and* `arg2`, not one remainder
+  string.** `handle_slash` splits as `split(None, 2)`, so `/model <alias>
+  <effort>` gives the alias in `arg` and the level in `arg2`. A parser that
+  only splits `ctx.arg` makes the documented form unreachable *while its unit
+  test — which passes the whole string as `arg` — still passes*. Same split
+  for `/provider <sub> <rest>`. Test two-token forms through the real split.
+- Provider visibility must agree across CLI, TUI, completions, and runtime fetch.
+- Trust/Operation/Network Policy drift across host, Docker, browser, MCP, and
+  CTF paths; URL adapters must re-evaluate DNS and redirects.
+- Extension discovery must not import or enable third-party code during startup.
+- User-friendly mode must not leak debug internals; `/mode` remains the switch.
+- Stream adapters must not change public delta dict keys or ordering.
+
+### Terminal: selectors, modals, and the single Application
+
+- **Only one Prompt Toolkit `Application` may own the PTY.** Every interactive
+  selector, including the `/provider fetch` multi-select, runs inside the
+  persistent Application via `controller.run_selector`; a second
+  `run_async()` corrupts cursor/escape state (ADR 0010).
+- **`/model` has two front ends, and the selector name resolves in one
+  module's globals.** With a controller it renders a `ModelSelector` through
+  `run_selector`; without one it calls `cc_style_model_selector`, a standalone
+  `Application` that may only run where no controller owns the PTY. That
+  function lives in `core/commands/_model_picker.py` and is **re-exported**
+  into `core/commands/provider.py` — the call site resolves it there, which is
+  what keeps both the real picker and the tests that replace
+  `provider_commands.cc_style_model_selector` working. Do not "clean up" the
+  re-export into a lazy call-site import: it silently disconnects those tests.
+  **Both branches need a positive test** — the original only asserted the
+  standalone picker is *not* called with a controller, so a dead call site
+  stayed green.
+  `test_model_dispatch_reaches_standalone_picker_when_no_controller`.
+- **A `Float` never participates in layout; it paints over existing rows.** The
+  live terminal is inline (`full_screen=False`), so its block is only as tall as
+  the rows below the cursor — about three — and `FloatContainer` anchors a
+  cursor-float *below* whenever space below ≥ space above, then clips it. The
+  completion menu was mounted that way, so "below the cursor" was the toolbar:
+  model field and fuzzy candidates drew on top of each other. It is now an
+  `HSplit` child between output window and composer, so it reserves its own
+  rows. **Any new menu or overlay a user types into must be real layout.**
+  Two traps make this easy to reintroduce unnoticed:
+  `DummyOutput.get_rows_below_cursor_position()` returns a hardcoded `40`, so
+  tests using a bare `DummyOutput` get a block where the float happens to flip
+  above and looks correct — use a double reporting production geometry
+  (`_InlineSizedOutput`); and `FloatContainer` did nothing else here, so the
+  root is a bare `DynamicContainer` — reintroducing it reintroduces the
+  clipping. `test_completion_menu_gets_its_own_rows_instead_of_covering_the_toolbar`.
+- **The toolbar renders fields within a width budget** (`_TOOLBAR_HARD_MAX` /
+  `_TOOLBAR_COL_MARGIN` in `pawnlogic/live_repl.py`; there is no
+  `_TOOLBAR_WIDE_MIN` — an earlier version of this entry named a constant that
+  never existed). The row is `fields + "  ·  " + status` and is clipped as a
+  whole, so **the status is reserved FIRST**: it is the only per-render-changing
+  part, and it used to be the first thing a narrow terminal threw away. Two
+  invariants follow (`tests/test_status_line.py`): fields are cut only on the
+  double-space boundary `build_bottom_toolbar` joins them with, so no row shows
+  a half-label like `Model: bai:`; and when not even one whole field fits,
+  fields are dropped and status takes the row. Keep status short — a model
+  prefix duplicated the never-dropped `Model:` field and forced mid-value
+  clipping at 80 columns. `build_bottom_toolbar` deliberately over-counts the
+  `ctx` segment (~21 columns) and `tests/test_live_repl.py` pins the
+  resulting 80-column set.
+- **A tool thread must never leave a selector mounted.** Abandoning a worker
   does not unwind it, and a thread-side `future.result(timeout=...)` that
-  expires does not cancel the coroutine it was waiting on, so the
-  `finally` in `run_selector` never ran and `has_state` pinned the eager
-  selector key bindings on: the composer went read-only and ordinary
-  typing was consumed as selector input for the rest of the session.
-  Every deadline for a modal that a tool thread is waiting on must be
-  owned by the loop that mounted it (`asyncio.wait_for` in
-  `run_confirmation_modal`), and the tool watchdog's abandon path must
-  additionally reclaim a pending confirmation through
-  `cancel_pending_confirmation()`. The thread-side wait is a backstop
-  and must outlast the loop-side deadline. Pinned by
+  expires does not cancel the coroutine, so `run_selector`'s `finally` never
+  ran and `has_state` pinned the eager bindings on: the composer went read-only
+  for the rest of the session. Every deadline for a modal a tool thread waits
+  on must be owned by the loop that mounted it (`asyncio.wait_for` in
+  `run_confirmation_modal`), and the watchdog's abandon path must additionally
+  reclaim a pending confirmation via `cancel_pending_confirmation()`. The
+  thread-side wait is a backstop and must outlast the loop-side deadline.
   `TestConfirmationModalLifecycle`.
-- A mounted selector owns the keyboard through `eager=True` bindings, so
-  a trust-boundary modal must not resolve on an incidental keystroke.
-  The high-risk confirmation defaults to **Deny** and requires an
-  explicit `y`; a bare `Enter` denies. It also swallows every key until
-  the host has read `formatted_text` at least once, because until the
-  Float has painted, the user has not seen the prompt. Do not widen
-  `ConfirmOperationSelector.handle_key` to fall through, and keep the
-  selector's `escape` binding eager while the Turn-interrupt `escape` in
+- **A mounted selector owns the keyboard through `eager=True` bindings**, so a
+  trust-boundary modal must not resolve on an incidental keystroke. The
+  high-risk confirmation defaults to **Deny** and needs an explicit `y`; bare
+  `Enter` denies. It also swallows every key until the host has read
+  `formatted_text` once — until the Float paints, the user has not seen the
+  prompt. Do not widen `ConfirmOperationSelector.handle_key` to fall through,
+  and keep the selector's `escape` eager while the Turn-interrupt `escape` in
   `live_repl` stays non-eager so the modal wins the key.
-- An Application task that ends without `close()` must both wake the parked
-  CLI submission waiter and resolve any pending selector future. A silent
-  exit there previously left the only recovery a force-quit.
-- An idle Ctrl+C must never become a `BaseException` in the Application
-  task. Two sources used to produce one: the `c-c` binding's
+- **An Application task that ends without `close()` must both wake the parked
+  CLI submission waiter and resolve any pending selector future.** A silent
+  exit there previously left a force-quit as the only recovery.
+- **An idle Ctrl+C must never become a `BaseException` in the Application
+  task.** Two sources used to produce one: the `c-c` binding's
   `event.app.exit(exception=KeyboardInterrupt())` and
-  `install_live_interrupt_handler`'s idle raise. `run_async` does not catch
-  it, so it unwound through `asyncio.run` and skipped the CLI teardown —
-  and `session.shutdown()` is the only thing that releases the non-daemon
+  `install_live_interrupt_handler`'s idle raise. `run_async` does not catch it,
+  so it unwound through `asyncio.run` and skipped the CLI teardown — and
+  `session.shutdown()` is the only thing that releases the non-daemon
   `pawnlogic-turn-*` worker, so the interpreter then blocked in
   `threading._shutdown()`. Because `_observe_terminal_task` had already
-  disarmed SIGINT to `SIG_IGN`, Ctrl+C could not break that hang either:
-  the tty echoes `^C` because ECHO is independent of delivery, so the
-  reported symptom was "cannot exit" with only SIGKILL working. Both
-  sources now route to `on_idle_interrupt`, which runs the same
-  double-press confirm the readline path uses and closes the terminal on
-  the second press, so the loop reaches teardown normally. The bare
-  `raise KeyboardInterrupt` survives only as the fallback for a caller
-  that installs no idle handler. The teardown is a `finally` on purpose —
-  it is the second half of the fix and is what makes the fallback safe, so
-  a `BaseException` unwinding through `asyncio.run` can no longer strand
-  the Turn worker. Do not move `session.shutdown()` back out of that
-  `finally`, and do not give the `c-c` binding its own exit path again.
-- The teardown releases the Turn worker on a bounded deadline, so a wedged
-  worker can still wedge exit — this is the one idle-Ctrl+C path with no
-  recovery. `core/turn_scheduler.py:967` sets `daemon=False`, the only
-  non-daemon thread in the repo, so `threading._shutdown()` waits for it
-  indefinitely and ignores any deadline the thread applied to itself. The
-  release is `join_worker.join(timeout=self._shutdown_timeout)` (`:702`),
-  default **5.0 s** (`:448`); a worker still alive at the deadline is
-  abandoned and recorded as `"worker did not stop before shutdown timeout"`,
-  and the interpreter then blocks on it anyway. The `finally` converts the
-  *common* case (teardown skipped entirely, worker never released) into
-  this *rare* one (worker genuinely refuses to stop). It does not eliminate
-  the hang class; do not write or repeat that it does.
-- The idle-Ctrl+C e2e proves the teardown runs, not that the hang is gone.
-  `test_idle_ctrl_c_exits_cleanly_and_runs_the_teardown` never starts a
-  Turn, so there is no live `pawnlogic-turn-*` worker during the test — the
-  reported scenario (worker alive + idle Ctrl+C) has no end-to-end
-  coverage. A pexpect `\x03` also reaches the `c-c` *binding* rather than
-  the Python signal handler, so that e2e gates only the binding path; the
-  SIGINT path is gated separately by `tests/test_live_sigint_teardown.py`.
-  Mutation-testing each source independently is what established the
-  split — reverting only the signal handler leaves that e2e green.
-- A live-side notice must go through `run_in_terminal`; a direct `print`
-  from the Application's event loop is swallowed, because the renderer owns
-  stdout. `_terminal_notice` is the only correct route. The two idle
-  sources are also independent schedulers (one closure variable each in
-  `build_prompt_toolkit_bindings` and in `install_live_interrupt_handler`),
-  so a new source needs its own guard. The live SIGINT handler is disarmed
-  to `SIG_IGN` from `_observe_terminal_task`; do not restore that guard to
-  depend on `restore()` — the shutdown block is exactly the code the
-  exception skips, so `closing` never became true.
-- Safe-point steering can alter Tool Call batch protocol; skipped results,
-  ordering, and plan-guard accounting must remain complete.
-- Tier presets use advisory plan-guard mode (`plan_guard_mode`) so weak models
-  can run side-effect tools without plan blocks; `/planguard strict` remains
-  explicit opt-in. Operation Policy remains the actual safety gate, not the
-  CoT Guard.
-- `/abort` clears queued input but cannot cancel a provider request already
-  handed to a synchronous stream; Ctrl+C remains the in-flight interruption
-  path.
-- The 0.3.7 multiline composer cannot accept a literal ``\n`` from the
-  composer key path: the ``c-j`` binding was removed because it intercepted
-  bare ``\n`` (which the PTY e2e suite relies on for submit) and the
-  ``eager=True`` flag on the ``enter`` binding made the first typed key
-  disappear.  Authoring a multi-line draft now requires a future
-  ``/draft``-style command that drives ``buffer.insert_text`` directly;
-  until then, the only way to send a multi-line message is to type it
-  pre-formatted in a single ``send`` (no in-composer literal newlines).
-- The multiline composer must keep ``dont_extend_height=True`` with
-  ``Dimension(min=1, max=5)`` and must NOT use ``weight=0``:
-  multiline content raising the preferred height while zero weight
-  excludes the child from the growth rotation sends PT 3.0.52's
-  ``take_using_weights`` into an infinite layout loop (frozen page,
-  dead keys on wrapped input). The narrow live-terminal suite and the
-  e2e live-composer flows pin the working combination.
-- Rich in-Application TUIs (`/provider`, `/skills`) contribute dynamic
-  containers, key bindings, and focus targets to the persistent
-  Application. Their live command factories must never return an
-  awaitable or start a nested `Application`; tests must execute the real
-  command path and preserve the host Application/task identity.
-- The provider Add form and the provider Edit form are one renderer
-  (`core/provider_tui_form.render_wizard`) with two persistence paths, so
-  the invariants that separate them live in different places. Edit locks
-  the Name and API Key rows by **excluding them from the arrow-key focus
-  cycle**, not by validating the field on save: any new row added to the
-  form, or any new binding that sets `_wiz_focus` directly, can make a
-  locked row reachable or writable. Edit also depends on saving with an
-  empty models map and `replace_models=False` to leave loaded models on
-  disk; passing the models map with replacement would silently drop every
-  model the provider had fetched. Both are pinned by tests, and the
-  name/key/delete identity rules belong in `provider_runtime`, not the
-  TUI.
-- `ProviderTUI` mirrors widget state onto `ProviderTUIState` through
-  `_STATE_ATTRS`, but the mirroring is **one-way at render time**: a render
-  that calls a `_sync_*_from_input()` helper copies the widget's text back
-  over the state field. A state-only reset is therefore not a reset — the
-  next paint undoes it. The model search `TextArea` outlives a selection
-  session, so `begin_model_selection` clearing `model_search` left the
-  selector reopening pre-filtered by the previous query, down to an empty
-  list with nothing to tick. Session teardown must go through
-  `ProviderTUI._begin_model_selection`, which clears widget and state
-  together; the state method cannot reach the widget.
-- The model selector shares one cursor between the model rows and the three
-  action buttons, which live at indices `total`, `total + 1`, `total + 2`.
-  Any list longer than a handful of models therefore buries its own actions:
-  a real openrouter sync returned hundreds of models, so loading a ticked one
-  cost one `↓` per model. This is invisible in tests that use a 3-model list
-  and invisible in the panel's own rendering, because the buttons are always
-  painted at the bottom. Two shortcuts must therefore stay: `L` reaches the
-  action row, and `s`/`S` load from the current position without going there
-  at all. They share `_ms_load_selected()` with the action row, so the
-  "select at least one model" guard has a single home — a shortcut added
-  beside `_do_save_models()` instead of through that helper would bypass it.
-  Keep at least one test at realistic list length.
-- Live host scrollback must use Prompt Toolkit's `run_in_terminal`
-  handoff. Worker threads must never write directly to the TTY; complete
-  lines stream live, partial lines flush once at close, and a failed host
-  write must not advance the transcript flush cursor. Live flushes are
-  debounced (at most one per `_HOST_FLUSH_MIN_INTERVAL_SECONDS`) and
-  payloads are pre-wrapped with the host's real column count via
-  `_wrap_host_payload` (`pawnlogic/live_terminal.py`): an erase cycle
-  that assumes one row per logical line leaves residue on rows the host
-  wrapped itself (wcwidth mismatch on CJK/emoji), which previously
-  stacked into duplicated, interleaved scrollback. Tests pin the
-  debounce interval behavior and the wide-glyph pre-wrap folding.
+  disarmed SIGINT to `SIG_IGN`, Ctrl+C could not break that hang either: the
+  tty echoes `^C` because ECHO is independent of delivery, so the reported
+  symptom was "cannot exit" with only SIGKILL working. Both sources now route
+  to `on_idle_interrupt`, which runs the same double-press confirm the readline
+  path uses and closes the terminal on the second press. The bare
+  `raise KeyboardInterrupt` survives only as the fallback for a caller that
+  installs no idle handler. The teardown is a `finally` on purpose — it is the
+  second half of the fix and is what makes the fallback safe. Do not move
+  `session.shutdown()` back out of that `finally`, and do not give the `c-c`
+  binding its own exit path again.
+- **The teardown releases the Turn worker on a bounded deadline, so a wedged
+  worker can still wedge exit — the one idle-Ctrl+C path with no recovery.**
+  `core/turn_scheduler.py:967` sets `daemon=False`, the only non-daemon thread
+  in the repo, so `threading._shutdown()` waits for it indefinitely and
+  ignores any deadline the thread applied to itself. The release is
+  `join_worker.join(timeout=self._shutdown_timeout)` (`:702`), default **5.0 s**
+  (`:448`); a worker still alive at the deadline is abandoned and recorded as
+  `"worker did not stop before shutdown timeout"`, and the interpreter then
+  blocks on it anyway. The `finally` converts the *common* case (teardown
+  skipped entirely, worker never released) into this *rare* one. **It does not
+  eliminate the hang class; do not write or repeat that it does.**
+- **The idle-Ctrl+C e2e proves the teardown runs, not that the hang is gone.**
+  `test_idle_ctrl_c_exits_cleanly_and_runs_the_teardown` never starts a Turn,
+  so there is no live `pawnlogic-turn-*` worker during it — the reported
+  scenario has no end-to-end coverage. A pexpect `\x03` also reaches the `c-c`
+  *binding* rather than the Python signal handler, so that e2e gates only the
+  binding path; the SIGINT path is gated separately by
+  `tests/test_live_sigint_teardown.py`. Mutation-testing each source
+  independently is what established the split: reverting only the signal
+  handler leaves that e2e green.
+- **A live-side notice must go through `run_in_terminal`; a direct `print`
+  from the Application's event loop is swallowed,** because the renderer owns
+  stdout. `_terminal_notice` is the only correct route. The two idle sources
+  are also independent schedulers (one closure variable each in
+  `build_prompt_toolkit_bindings` and in `install_live_interrupt_handler`), so
+  a new source needs its own guard. The live SIGINT handler is disarmed to
+  `SIG_IGN` from `_observe_terminal_task`; do not restore that guard to depend
+  on `restore()` — the shutdown block is exactly the code the exception skips,
+  so `closing` never became true.
+- **Prompt Toolkit live composition, worker threads, persistent repainting,
+  modal pause/resume, and TTY-owning tools can race.** Live-input tests must
+  exercise the fixed-bottom application, stdout/stderr restoration, and the
+  serial readline fallback.
+- **The multiline composer must keep `dont_extend_height=True` with
+  `Dimension(min=1, max=5)` and must NOT use `weight=0`.** Multiline content
+  raising preferred height while zero weight excludes the child from the growth
+  rotation, sending PT 3.0.52's `take_using_weights` into an infinite layout
+  loop (frozen page, dead keys on wrapped input). Pinned by the narrow
+  live-terminal suite and the e2e live-composer flows.
+- **The composer cannot accept a literal `\n` from the key path.** The `c-j`
+  binding was removed because it intercepted bare `\n` (which the PTY e2e
+  suite relies on for submit) and `eager=True` on `enter` made the first typed
+  key disappear. Multi-line drafts need a future `/draft`-style command driving
+  `buffer.insert_text`; until then the only way is one pre-formatted `send`.
+- **Rich in-Application TUIs (`/provider`, `/skills`)** contribute containers,
+  key bindings, and focus targets to the persistent Application. Their live
+  command factories must never return an awaitable or start a nested
+  `Application`; tests must execute the real command path and preserve host
+  Application/task identity.
+- **The 0.3.6 Queue TUI is deliberately main-thread-only** and must not claim
+  worker stdin. The persistent terminal renders bare `/queue` inline rather
+  than pausing for a nested selector; non-TTY and readline paths use text
+  controls. Escape shares a prefix with Alt shortcuts, so real-input tests must
+  keep its bounded sequence-resolution latency covered. Mouse-wheel and
+  coordinate-free ScrollUp/ScrollDown stay owned by the output viewport so
+  composer history cannot consume them.
+- **Live host scrollback must use `run_in_terminal`; worker threads must never
+  write to the TTY.** Complete lines stream live, partial lines flush once at
+  close, and a failed host write must not advance the flush cursor. Live
+  flushes are debounced (`_HOST_FLUSH_MIN_INTERVAL_SECONDS`) and payloads are
+  pre-wrapped to the host's real column count via `_wrap_host_payload`
+  (`pawnlogic/live_terminal.py`) — an
+  erase cycle assuming one row per logical line leaves residue on rows the host
+  wrapped itself (wcwidth mismatch on CJK/emoji), which stacked into duplicated
+  interleaved scrollback.
+- **The ratatui frontend is a separate wire-v1 client**, not a UI embedded in
+  the Python REPL. Its terminal guard must restore raw mode, alternate screen,
+  mouse capture, bracketed paste, and cursor visibility on every error path. It
+  must treat streamed answer text as authoritative and use `result` only as a
+  non-streaming fallback — rendering both duplicates every answer. Wire v1
+  cannot host the Python selectors, so modal-only commands must fail fast with
+  explicit text alternatives.
+- **Prompt Toolkit key bindings classify intent before main-loop dispatch**;
+  the session Adapter must reconcile stale START/STEER/FOLLOW_UP hints against
+  the latest scheduler view. Text-only completion must drain unclaimed steer
+  input and keep queued content visibly previewed above the composer.
+  Cancellation settlement must stay off the UI thread and mark the prefilled
+  recovered draft a one-shot replacement, not a follow-up.
+
+### Provider TUI
+
+- **Add and Edit are one renderer** (`core/provider_tui_form.render_wizard`)
+  with two persistence paths, so their invariants live in different places.
+  Edit locks Name and API Key by **excluding them from the arrow-key focus
+  cycle**, not by validating on save — any new row, or any binding that sets
+  `_wiz_focus` directly, makes a locked row reachable or writable. Edit also
+  saves with an empty models map and `replace_models=False` to leave loaded
+  models on disk; passing the map with replacement silently drops every fetched
+  model. Both are test-pinned; name/key/delete identity rules belong in
+  `provider_runtime`, not the TUI.
+- **`ProviderTUI` mirrors widget state onto `ProviderTUIState` through
+  `_STATE_ATTRS`, one-way, at render time.** A render calling `_sync_*_from_input()` copies widget text back
+  over the state field, so a state-only reset is undone by the next paint. The
+  model search `TextArea` outlives a selection session, so `begin_model_selection`
+  clearing `model_search` left the selector reopening pre-filtered, down to an
+  empty list with nothing to tick. Teardown must go through
+  `ProviderTUI._begin_model_selection`, which clears widget and state together;
+  the state method cannot reach the widget.
+- **The model selector shares one cursor between rows and the three action
+  buttons** at indices `total`, `total + 1`, `total + 2`. Any list longer than
+  a handful buries its own actions — a real openrouter sync returned hundreds,
+  so loading a ticked one cost one `↓` per model. Invisible in a 3-model test
+  and invisible in the panel itself, since buttons are always painted at the
+  bottom. Two shortcuts must stay: `L` reaches the action row, `s`/`S` load
+  from the current position. They share `_ms_load_selected()` with the action
+  row, so the "select at least one model" guard has a single home — a shortcut
+  added beside `_do_save_models()` bypasses it. Keep one test at realistic
+  list length.
+
+### Queue, steering, and turn lifecycle
+
+- **A failed or aborted Turn parks the session and mints a recovered draft.**
+  That draft is a *retry offer, not a queue entry*: counting it as queued work
+  classified a newly typed prompt as `FOLLOW_UP`, whose implicit RESUME the
+  anti-cascade gate refuses — the prompt was queued while the UI still showed
+  `Idle` (the post-429 "typing does nothing" freeze). Admission must resolve a
+  recovered draft to `START` and resume explicitly, on both live and serial
+  readline paths.
+- **The parked state gates only the automatic drain.** Implicit RESUME is
+  rejected until the user explicitly resumes (``/queue resume`` or Enter on the
+  draft, via `ControlAction.explicit`); new input still queues normally. The
+  live terminal keeps failure silent in the toolbar (label-only `Failed`); the
+  internal anti-cascade gate is preserved.
+- **An interrupt with queued work is a STEER, not a recovery.** The scheduler
+  must not mint a recovered draft while the queue is non-empty, and the worker
+  must re-drive the queue after the interrupt settles
+  (`_recover_active_unlocked` queue guard; INTERRUPTED `should_return` in
+  `_drive`). The recovered-draft flow applies ONLY to empty-queue interrupts.
+  Tests pin both halves; the preview never renders recovered rows (status line
+  plus prefilled composer carry them).
+- **Steer semantics changed in P2-0 (ADR 0009 revision).** Esc with queued work
+  now discards the interrupted prompt's parked-draft path entirely; empty-queue
+  Esc still parks. Scripts relying on the interrupted prompt reappearing as an
+  editable draft while a steer was queued will see the queued turn run instead —
+  intended contract, not a regression.
+- **The queue preview above the composer is a CONDITIONAL surface.** It renders
+  nothing while the queue is empty (the 0.3.7 clean-composer goal) and shows
+  the muted `↳ queued [kind]` rows the moment a steer or follow-up is queued.
+  Removing it makes Enter-while-running and the Esc→CLAIM_STEER handoff
+  invisible (the owner's regression report after the initial hidden-queue
+  re-scope). Tests pin empty/queued/failed.
+- **Queued messages are reworkable through gestures, not commands.**
+  `ControlKind.POP_ALL` atomically drains queued lanes and the recovered slot
+  into one editable draft, driven by bare Esc / Up / Alt+Up on an empty idle
+  composer. Esc while a Turn runs keeps the interrupt + CLAIM_STEER meaning.
+  `pop_all_session_queue` is the seam; `/queue` stays hidden from the command
+  surface with its resume/clear aliases intact.
+- **`/q` is a registered alias of `/exit`** and must stay in
+  `LIVE_SLASH_COMMANDS` so the running-Turn whitelist keeps accepting it.
+- **Safe-point steering can alter the Tool Call batch protocol**; skipped
+  results, ordering, and plan-guard accounting must remain complete.
+- **`_build_status` must return `""` for idle**, not a string the toolbar
+  filters. It used to return `"[model]  Idle"` and `_render_toolbar` suppressed
+  it with `"Idle" not in status` — a substring test that also swallowed the
+  recovered-draft state, whose text contains "Idle", so that state had never
+  been displayed despite three docs claiming it was. Do not reintroduce
+  substring matching on status text.
+- **The `Sent` state exists because nothing else is true between admission and
+  first delta**, and its clock is stamped at admission
+  (`_turn_submitted_at` in `core/live_turn_control.py`), not at
+  `session._turn_start_time` — `_prepare_turn` reaches that only after
+  system-prompt resets and a possible blocking summary call, leaving the
+  counter pinned at `0s` through the whole pre-request window.
+  `_turn_first_delta` resets at admission, or the row shows the previous
+  Turn's `Thinking` during the window `Sent` exists to cover. Reasoning is
+  **not** a universal first-delta signal: `core/provider_streams.py` has no
+  `thinking_delta` branch, so Anthropic-format thinking is dropped at the
+  adapter and never reaches `core/turn_api.py` — the status words still appear,
+  the text does not. A `Sent`/`Thinking` state must not start a `\r`-framed
+  spinner, for the same reason `_ThinkingSpinner` is disabled in live mode.
+- **`/abort` clears queued input but cannot cancel a provider request already
+  handed to a synchronous stream**; Ctrl+C remains the in-flight path.
+
+### Execution and policy boundaries
+
+- **Security Tools must not bypass the shared Tool Registry, Operation Policy,
+  or Network Policy.** A tool wanting a policy decision calls the pure
+  `classify_host_process()` / `classify_shell_command()`, as
+  `tools/shell_ops.authorize_shell_operation` does; `HostProcessRunner.run()`
+  classifies *and* spawns, so it is only for the single real execution.
+  `run_code` additionally classifies the payload's own tractable literal shell
+  surface (bash lines; Python `os.system`/`os.popen`/`subprocess(shell=True)`),
+  failing closed on anything but `ALLOW`. Still invisible: temp-file contents,
+  dynamic command construction, `from os import system` aliases, and
+  javascript/go/compiled payloads. Defence-in-depth and consistency, not an OS
+  sandbox.
+- **Delegated-agent requests must not bypass Provider visibility, allowlists,
+  budgets, or capability filtering.**
+- **The tool watchdog abandons wedged tool threads instead of blocking the
+  session**; abandoned threads keep running until process exit and their
+  results are lost.
+- **Tool visibility is not an execution gate.** `AGENT_PHASES` only shapes the
+  prompt; a registered tool the model names still runs.
+- **Tier presets use advisory plan-guard mode (`plan_guard_mode`)** so weak
+  models can run side-effect tools without plan blocks; `/planguard strict` is
+  explicit opt-in. Operation Policy is the safety gate, not the CoT Guard.
+
+### Testing traps
+
+- **A test binding `from config import DYNAMIC_CONFIG` (or `MODELS`,
+  `PROVIDERS`) at import time passes alone and fails in the full suite.**
+  Several test modules — `test_security.py`, `test_config.py`,
+  `test_providers.py`, `test_naming.py` — evict `config` from `sys.modules` at
+  import to defeat a stale mock, re-importing the package and minting a *new*
+  `DYNAMIC_CONFIG`. Earlier-imported modules hold the old object, so the write
+  lands where the product never reads and the test fails with a value that
+  looks like the feature is broken. It is not ordinary order-dependence: the
+  culprit is simply the alphabetically-later file, so a targeted two-file run
+  does not reproduce it. Go through `core.state.runtime_config()` /
+  `update_dynamic_config()`, and patch `core.api_payloads.MODELS` /
+  `.PROVIDERS` — the maps the resolver actually reads, themselves import-time
+  bindings.
+- **A test that only asserts the negative does not prove the wiring is live.**
+  See the `/model` entry above: the original picker test would stay green with
+  the call deleted outright.
+- **A test that provokes `KeyboardInterrupt` or `SystemExit` in-process can
+  abort the whole pytest session instead of failing.** The exception unwinds
+  out of the test, pytest stops doing further work, and the run exits **2** —
+  but the summary line still reports only what already passed, so it reads like
+  success. Measured on a full fast-suite run: **679 of 1727 tests executed**,
+  and the output said "679 passed". A regression touching a signal handler can
+  hide most of the suite behind one line of `!!! KeyboardInterrupt !!!`.
+  Contain the provoked exception in the test (`_run_expecting_routed_interrupt`
+  in `tests/test_live_sigint_teardown.py` does this via `pytest.fail`) so the
+  regression becomes a normal, named failure. A fixture that only restores the
+  previous handler is not enough — it runs *after* the yield, by which time the
+  exception has escaped.
+- **`pexpect.expect` compiles its pattern as a regex, so a literal containing
+  a metacharacter can never match.** `"Press Ctrl+C again"` does not match that
+  notice: `+` binds to the preceding `l`, so the pattern demands `Ctrl` + `l+` +
+  `C` while the stream carries a literal `+`. The result is a timeout on a
+  feature that is working perfectly, with the notice visible in `child.before`.
+  Wrap any literal in `re.escape`. Two traps in the same helper: with
+  `encoding="utf-8"`, assigning a **binary** file to `child.logfile_read`
+  raises `TypeError` on the first read, so every later "the child printed
+  nothing" reading is an artifact of the probe rather than of the product; and
+  pexpect only reads the pty inside `expect`/`read`, so a `send` + `sleep`
+  diagnostic captures nothing unless something is driving reads.
+- **Mutation-test each independent fix source; a suite that covers one does
+  not cover the other.** See the idle-Ctrl+C entries above: reverting only the
+  `install_live_interrupt_handler` route left the headline e2e test green,
+  because the pexpect PTY delivers `\x03` to the `c-c` binding instead. The
+  suite as a whole was correct; only running the mutations separately showed
+  which gate covers which source.
+- **The typed-island module list is stated in three places** (CI mypy step,
+  pyproject overrides, Typed Island section). `tests/test_typed_island_sync.py`
+  fails the build when they diverge — treat that failure as the gate, not as a
+  test to relax. All three name the same **43 library modules**; the CI step
+  passes no `tests/` file to mypy, and `tests/test_e2e.py` appears only on the
+  pytest command line.
+- **`test_live_bare_escape_interrupts_one_turn_without_another_keypress` has a
+  transient environment-sensitive flake.** The pexpect expectations for
+  `Status: interrupted` and `Queued: 1 message(s)` use a 10 s window that
+  sometimes times out on GitHub runners while passing locally and on the owner
+  PTY (seen on runs `33973977545` → re-run `33974631898` cleared it, and again
+  on the `test/release-0.3.12` push). The PTY Esc behavior is intact — a flake,
+  not a regression. Re-check before the next publish; widen the window or split
+  it into "Esc → banner" vs "Esc → worker settles within N s".
+- **The language-policy test scans tracked files only.** Re-run it after
+  staging; a green pre-commit run misses new untracked files.
+
+### Repository hygiene
+
+- English and zh-CN docs must not drift in structure or command examples.
+- Release prep must not edit version literals outside the fixed locations.
+- Packaging must not accidentally include `skills/` content.
 - Session scratch directories live under `~/.pawnlogic/sessions/`
-  (`core/naming.py:stable_workspace_dir`); `~/.pawnlogic/workspace/`
-  holds only auto-named task directories and `by-name/` aliases. The
-  auto-naming swap (`core/session.py:_swap_workspace_dir`) promotes a
-  session across roots with a relative reverse symlink so pre-swap
-  absolute paths keep resolving. Do not reintroduce `session_<id>/`
-  creation under `workspace/`.
-- A failed or aborted Turn parks the queue: implicit RESUME drains are
-  rejected until the user explicitly resumes (``/queue resume`` or
-  Enter on the recovered draft, carried by ``ControlAction.explicit``).
-  New user input still queues normally; only the automatic drain is
-  gated. Tests pin the parked cascade and the explicit pass-through.
-  The 0.3.7 live terminal keeps failure silent in the toolbar
-  (label-only ``Failed``); the internal anti-cascade gate is
-  preserved.
-- The queue preview above the composer is a CONDITIONAL surface: it
-  renders nothing while the queue is empty (the 0.3.7 clean-composer
-  goal) and shows the muted ``↳ queued [kind]`` rows the moment a
-  steer or follow-up is queued. Removing it again would make
-  Enter-while-running and the Esc→CLAIM_STEER handoff invisible
-  (the owner's real-usage regression report after the initial
-  hidden-queue re-scope); tests pin the empty/queued/failed
-  render states.
-- An interrupt with queued work is a STEER, not a recovery: the
-  scheduler must not mint a recovered draft while the queue is
-  non-empty, and the worker must re-drive the queue after the
-  interrupt settles (the ``_recover_active_unlocked`` queue guard
-  and the INTERRUPTED ``should_return`` computation in ``_drive``).
-  The recovered-draft edit flow applies ONLY to empty-queue
-  interrupts. Tests pin both halves; the preview never renders
-  recovered rows (status line + prefilled composer carry them). The
-  status-line half of that contract was dead until the idle
-  substring-suppression bug was fixed — see the `_build_status` entry
-  below.
-- ``/q`` is a registered alias of ``/exit`` and must stay in
-  ``LIVE_SLASH_COMMANDS`` so the running-Turn whitelist keeps
-  accepting it.
-- Queued messages are reworkable through gestures, not commands:
-  ``ControlKind.POP_ALL`` atomically drains the queued lanes and
-  the recovered slot into one editable draft, driven by bare Esc /
-  Up / Alt+Up on an empty, idle composer (the claude-code
-  gesture). Esc while a Turn runs keeps the interrupt + CLAIM_STEER
-  meaning. ``pop_all_session_queue`` is the session seam;
-  ``/queue`` stays hidden from the command surface with its
-  resume/clear aliases intact.
-- The bottom toolbar renders fields within a width budget (see
-  ``_TOOLBAR_HARD_MAX`` / ``_TOOLBAR_COL_MARGIN`` in
-  ``pawnlogic/live_repl.py``; there is no ``_TOOLBAR_WIDE_MIN``, an
-  earlier version of this entry named a constant that never existed).
-  ``_render_toolbar`` then negotiates that budget against the transient
-  turn status, and the status is reserved FIRST: the row is composed as
-  ``fields + "  ·  " + status`` and the whole thing is clipped, so the
-  status — the only part that changes per render — used to be the first
-  thing a narrow terminal threw away, exactly while a waiting user
-  needed it. Two invariants follow, both pinned by
-  `tests/test_status_line.py`: fields are cut only on the double-space
-  boundary ``build_bottom_toolbar`` joins them with, so no row ever shows
-  a half-label like ``Model: bai:``; and when not even one whole field
-  fits beside the status, the fields are dropped and the status takes the
-  row. The status must therefore stay short — do not re-add a model
-  prefix, which duplicated the never-dropped ``Model:`` field and cost
-  enough width to force mid-value clipping at 80 columns. Note the field
-  budget in `build_bottom_toolbar` deliberately over-counts the `ctx`
-  segment (~21 columns) and `tests/test_live_repl.py` pins the resulting
-  80-column field set; changing that accounting changes those tests.
-- The Turn status machine (`_build_status`) must return `""` for idle
-  rather than a string the toolbar filters. It used to return
-  `"[model]  Idle"` and `_render_toolbar` suppressed it with
-  `"Idle" not in status` — a substring test that also silently swallowed
-  the recovered-draft state, whose own text contains the word "Idle".
-  That state had therefore never been displayed, despite three places in
-  the docs claiming it was. Any new state containing "Idle" would have
-  been eaten by the same mechanism; returning `""` removes the class of
-  bug. Do not reintroduce substring matching on status text.
-- The `Sent` state exists because nothing else is true between admission
-  and the first delta, and its clock is stamped at admission
-  (`_turn_submitted_at`, set in `core/live_turn_control.py`) rather than
-  at `session._turn_start_time`, which `_prepare_turn` reaches only after
-  system-prompt resets and a possible blocking summary provider call —
-  counting from there left the counter pinned at `0s` through the whole
-  pre-request window. `_turn_first_delta` must be reset at admission, not
-  in `_prepare_turn`, or the row shows the previous Turn's `Thinking`
-  during the window `Sent` exists to cover. Reasoning is **not** a
-  universal first-delta signal: `core/provider_streams.py` has no
-  `thinking_delta` branch, so Anthropic-format extended thinking is
-  dropped at the adapter and never reaches `core/turn_api.py`. The status
-  words still appear for those models; only the reasoning text is absent.
-  Adding a `Sent`/`Thinking` state must not start a `\r`-framed spinner
-  for the same reason `_ThinkingSpinner` is disabled in live mode.
-- English and zh-CN docs drifting in structure or command examples.
-- Release prep editing version literals outside fixed locations.
-- Packaging accidentally including `skills/` content.
-- Steer semantics changed in P2-0 (ADR 0009 revision): Esc with queued
-  work now discards the interrupted prompt's parked-draft path entirely
-  (the queue takes over; empty-queue Esc still parks as a recovered
-  draft). Client scripts or UI tests that relied on the interrupted
-  prompt reappearing as an editable draft while a steer was queued will
-  see the queued turn run instead — this is the intended contract, not a
-  regression.
-- The Dynamic E2E case
-  `test_live_bare_escape_interrupts_one_turn_without_another_keypress`
-  has shown a transient environment-sensitive flake in CI: the `pexpect`
-  expectations for `Status: interrupted` (the 1.5 s
-  `⏸ interrupted by user` post-Esc banner) and for the queued
-  `Queued: 1 message(s)` row both use a 10 s window that sometimes
-  times out on GitHub-hosted runners while passing locally and on the
-  owner PTY. The publish workflow for `v0.3.7` saw this on
-  `33973977545`; a re-run (`33974631898`) cleared it, and the same
-  signature recurred on the `test/release-0.3.12` push run. The
-  underlying PTY esc behavior is intact — this is a flake, not a
-  product regression. Re-check before the next PyPI publish; the fix
-  is to widen the window or split the test into "Esc → banner shows"
-  vs "Esc → worker settles within N s" to isolate the signature.
-- The typed-island module list is stated in three places (the CI mypy
-  step, the pyproject overrides, and the Typed Island section).
-  `tests/test_typed_island_sync.py` fails the build when they diverge;
-  treat that failure as the gate, not as a test to relax.
-- `pexpect.expect` compiles its pattern as a regex, so a literal string
-  containing a metacharacter can never match. `"Press Ctrl+C again"` does
-  not match that notice: `+` binds to the preceding `l`, so the pattern
-  demands `Ctrl` + `l+` + `C` while the stream carries a literal `+`. The
-  result is a timeout on a feature that is working perfectly, with the
-  notice visible in `child.before`. Wrap any literal in `re.escape`. Two
-  traps in the same helper: with `encoding="utf-8"`, assigning a **binary**
-  file to `child.logfile_read` raises `TypeError` on the first read, so
-  every later "the child printed nothing" reading is an artifact of the
-  probe rather than of the product; and pexpect only reads the pty inside
-  `expect`/`read`, so a `send` + `sleep` diagnostic captures nothing
-  unless something is driving reads.
-- A test that provokes `KeyboardInterrupt` or `SystemExit` in-process can
-  abort the whole pytest session instead of failing. The exception unwinds
-  out of the test, pytest stops doing further work, and the run exits **2**
-  — but the summary line still reports only what already passed, so it
-  reads like success. Measured on a full fast-suite run: **679 of 1727
-  tests executed**, and the output said "679 passed". A regression touching
-  a signal handler can therefore hide most of the suite behind one line of
-  `!!! KeyboardInterrupt !!!`. Contain the provoked exception in the test
-  (`_run_expecting_routed_interrupt` in `tests/test_live_sigint_teardown.py`
-  does this via `pytest.fail`) so the regression becomes a normal, named
-  failure. A fixture that only restores the previous handler is not enough
-  — it runs *after* the yield, by which time the exception has escaped.
-- Mutation-test each independent fix source; a suite that covers one does
-  not cover the other. See the idle-Ctrl+C entries above: reverting only
-  the `install_live_interrupt_handler` route left the headline e2e test
-  green, because the pexpect PTY delivers `\x03` to the `c-c` binding
-  instead. The suite as a whole was correct; only running the mutations
-  separately showed which gate covers which source.
+  (`core/naming.py:stable_workspace_dir`); `~/.pawnlogic/workspace/` holds only
+  auto-named task directories and `by-name/` aliases. The auto-naming swap
+  (`core/session.py:_swap_workspace_dir`) promotes a session across roots with
+  a relative reverse symlink so pre-swap absolute paths keep resolving. Do not
+  reintroduce `session_<id>/` under `workspace/`.
 
 ## Agent Workflow
 

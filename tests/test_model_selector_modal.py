@@ -519,6 +519,65 @@ def test_model_dispatch_uses_run_selector_when_controller_is_present() -> None:
     asyncio.run(_drive())
 
 
+def test_model_dispatch_reaches_standalone_picker_when_no_controller() -> None:
+    """Positive control for the standalone picker branch.
+
+    ``test_model_dispatch_uses_run_selector_when_controller_is_present``
+    only ever asserts that the standalone picker is *not* called, so it
+    stays green if the call site stops resolving at all — which is
+    exactly what happened when the picker moved out of ``provider.py``
+    into ``core/commands/_model_picker.py``.  The call site resolves the
+    name in this module's globals, so both this test and the
+    ``provider_commands``-attribute replacement the sibling test uses
+    must keep working across that move.
+    """
+    from core.commands import CommandContext
+    from core.commands import provider as provider_commands
+
+    class _StubSession:
+        def __init__(self) -> None:
+            self.model_alias = "stub-model"
+
+    async def _drive() -> None:
+        captured: list[Any] = []
+
+        async def _fake_picker(_models: Any, _alias: str) -> str | None:
+            captured.append(_alias)
+            return None
+
+        originals = {
+            name: getattr(provider_commands, name)
+            for name in (
+                "cc_style_model_selector",
+                "_visible_models",
+                "_HAS_PROMPT_TOOLKIT",
+            )
+        }
+        provider_commands.cc_style_model_selector = _fake_picker  # type: ignore[assignment]
+        provider_commands._visible_models = lambda: {  # type: ignore[assignment]
+            "stub-model": {"provider": "stub", "desc": ""}
+        }
+        provider_commands._HAS_PROMPT_TOOLKIT = True
+        try:
+            # No terminal_controller: this is the headless / readline path.
+            ctx = CommandContext(
+                verb="/model",
+                arg="",
+                arg2="",
+                session=_StubSession(),
+            )
+            await provider_commands.cmd_model(ctx)
+        finally:
+            for name, value in originals.items():
+                setattr(provider_commands, name, value)
+        assert captured == ["stub-model"], (
+            "cmd_model must call cc_style_model_selector when no controller "
+            f"is attached; saw {captured!r}"
+        )
+
+    asyncio.run(_drive())
+
+
 def test_provider_dispatch_uses_run_selector_when_controller_is_present() -> None:
     """cmd_provider must route the TUI through controller.run_selector.
 
