@@ -623,38 +623,23 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.3.13`. Published 2026-09-29 through
-  Trusted Publishing from the `Publish to PyPI` workflow run
-  [`36574462310`](https://github.com/john0123412/PawnLogic/actions/runs/36574462310),
-  triggered by pushing the annotated `v0.3.13` tag (tag object `dbf92f6`)
-  onto the PR #161 merge commit `bcd23fd` (peeled target verified on
-  `origin/main`). The full publish gate passed on the first attempt with
-  no re-run: verify-release-source, Test before publish, Dynamic E2E,
-  Build distributions, Build ratatui binary, Publish to PyPI, PyPI
-  install smoke, and GitHub Release creation. The two TestPyPI jobs are
-  skipped by design on a production release. PyPI project page:
-  <https://pypi.org/project/pawnlogic/0.3.13/>. GitHub Release:
-  <https://github.com/john0123412/PawnLogic/releases/tag/v0.3.13>
-  (wheel + sdist + Linux ratatui binary tarball with sha256, non-draft,
-  notes sourced from the `CHANGELOG.md` `[0.3.13]` section).
-  The published wheel's sha256 (`964fbdb0…`) matches the release asset,
-  so the installed artifact is the artifact this repository built. The
-  PyPI long description is the current 0.3.13 README, including the
-  free-listing wording for `Fetch`/`Sync` and `/provider test`. PyPI's
-  `docs_url` field is unset and the `Documentation` project URL points at
-  the GitHub `README.md`, the same as every prior release. The tag had to
-  be cut from a `main` commit because `publish.yml`'s
-  `verify-release-source` requires the tag's target to be an ancestor of
-  `origin/main`; that is why the release needed a candidate PR (#160) and
-  a separate finalization PR (#161). The four owner terminal acceptance
-  checks on the published binary are still owner-gated and are not
-  claimed as passed anywhere.
-  This was a billing-fix release: `Fetch`/`Sync` and `/provider test`
-  both charged real inferences and now read the free `/v1/models`
-  listing only. It also carried the live SIGINT teardown fix (PR #158).
-  `0.3.12` remains complete; it was published 2026-09-28 from run
-  [`36439179697`](https://github.com/john0123412/PawnLogic/actions/runs/36439179697)
-  onto merge commit `613096a`.
+- Current published release: `0.4.0`, **staged but not yet published.** This
+  bullet is written during the finalization PR, which is the last step
+  before tagging; the publish run id, PyPI project URL, GitHub Release URL,
+  and wheel sha256 are deliberately absent and must be filled in from the
+  real `Publish to PyPI` run once the `v0.4.0` tag is pushed. Do not
+  describe this release as shipped before that run reports success, and do
+  not copy the previous version's identifiers forward.
+  `0.4.0` carries the reasoning-effort unification (PR #165, ADR 0012),
+  the immediate Turn feedback and completion-menu layout work (PR #163), and
+  the idle Ctrl+C teardown fix (PR #164). It also carries two fixes found
+  while preparing the release notes: `/max` pointed at the `max` rung
+  instead of `xhigh`, which silently gave it the limits `/ultra` used to set
+  and left `xhigh` unreachable from any legacy alias, and the CLI help and
+  slash-description table advertised that same wrong rung. Both are now
+  pinned by tests, each mutation-verified. `0.3.13` remains the last
+  published release until the tag is pushed; per-release narrative belongs
+  in `CHANGELOG.md`, not here.
 - Runtime version source of truth: `config/paths.py:VERSION`.
 - **Do not edit this section as a release log.** Per-release narrative
   belongs in `CHANGELOG.md`; design narrative belongs in `docs/plans/` and
