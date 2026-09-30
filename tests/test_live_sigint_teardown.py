@@ -23,7 +23,9 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+from collections.abc import Coroutine
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -58,6 +60,26 @@ def _controller(session: _IdleSession) -> PersistentTerminalController:
         report_unexpected_exit=lambda: None,
     )
     return PersistentTerminalController(terminal, session, lambda _sink: None)
+
+
+def _run_expecting_routed_interrupt(coro: Coroutine[Any, Any, None]) -> None:
+    """Run a coroutine that signals *this* process, containing the escape.
+
+    These probes fire a real ``SIGINT`` at the pytest process.  When the
+    routing regresses, the ``KeyboardInterrupt`` unwinds out of
+    ``asyncio.run`` and out of the test, and pytest treats that as a session
+    abort: the run stops at exit code 2 and the remaining tests never execute.
+    Measured on a full fast-suite run, 679 of 1727 tests ran and the summary
+    line still read "679 passed".  Contain the exception here so the
+    regression surfaces as a normal, named failure of this test instead.
+    """
+    try:
+        asyncio.run(coro)
+    except KeyboardInterrupt:
+        pytest.fail(
+            "idle SIGINT escaped as KeyboardInterrupt instead of routing to "
+            "on_idle_interrupt"
+        )
 
 
 def test_idle_ctrl_c_neutralizes_sigint_before_interpreter_shutdown(sigint_guard):
@@ -146,3 +168,67 @@ def test_observer_is_safe_without_a_live_handler(sigint_guard):
     controller._observe_terminal_task(SimpleNamespace(cancelled=lambda: True))
 
     assert signal.getsignal(signal.SIGINT) is baseline
+
+
+def test_idle_ctrl_c_routes_to_the_repl_instead_of_raising(sigint_guard):
+    """An idle Ctrl+C must reach the REPL, not unwind through asyncio.run.
+
+    Raising ``KeyboardInterrupt`` here is what skipped the CLI teardown: the
+    non-daemon Turn worker was never released, so the interpreter blocked in
+    ``threading._shutdown()`` with SIGINT already ignored, and the user could
+    only SIGKILL the process.  With a handler installed the idle press is the
+    REPL's business -- the same double-press confirm the readline path uses.
+    """
+    session = _IdleSession()
+    seen: list[str] = []
+
+    async def main() -> None:
+        install_live_interrupt_handler(
+            session, on_idle_interrupt=lambda: seen.append("idle")
+        )
+        await asyncio.sleep(0.05)
+        os.kill(os.getpid(), signal.SIGINT)
+        await asyncio.sleep(0.05)
+
+    _run_expecting_routed_interrupt(main())
+
+    assert seen == ["idle"]
+
+
+def test_idle_ctrl_c_awaits_an_async_repl_handler(sigint_guard):
+    """The confirm notice is printed through an awaited terminal handoff."""
+    session = _IdleSession()
+    done: list[str] = []
+
+    async def handler() -> None:
+        await asyncio.sleep(0)
+        done.append("notice")
+
+    async def main() -> None:
+        install_live_interrupt_handler(session, on_idle_interrupt=handler)
+        await asyncio.sleep(0.05)
+        os.kill(os.getpid(), signal.SIGINT)
+        await asyncio.sleep(0.1)
+
+    _run_expecting_routed_interrupt(main())
+
+    assert done == ["notice"]
+
+
+def test_idle_ctrl_c_without_a_handler_still_raises(sigint_guard):
+    """A caller that installs no idle handler keeps the raising fallback.
+
+    The CLI teardown is now a ``finally``, so the fallback no longer strands a
+    live Turn worker, but it is still the only signal available to a caller
+    that has nowhere to route the press.
+    """
+    session = _IdleSession()
+
+    async def main() -> None:
+        install_live_interrupt_handler(session)
+        await asyncio.sleep(0.05)
+        os.kill(os.getpid(), signal.SIGINT)
+        await asyncio.sleep(0.05)
+
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(main())

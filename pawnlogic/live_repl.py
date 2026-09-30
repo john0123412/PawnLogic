@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -165,12 +166,14 @@ def build_prompt_toolkit_bindings(
     restore_last_input_buffer: Callable[[Any, str, dict[str, str]], bool],
     last_input_path: Path,
     on_interrupt_settled: Callable[[], None] | None = None,
+    on_idle_interrupt: Callable[[], Any] | None = None,
 ) -> tuple[Any, LiveSubmissionState]:
     """Create live key bindings and return their per-session input state."""
     bindings = key_bindings_factory()
     submission_state = LiveSubmissionState()
     ctrl_z_restore_state: dict[str, str] = {}
     interrupt_task: asyncio.Task[None] | None = None
+    idle_interrupt_task: asyncio.Task[None] | None = None
 
     def running_turn() -> bool:
         return bool(session.queue_status().get("pending_count", 0))
@@ -188,6 +191,37 @@ def build_prompt_toolkit_bindings(
 
     def recovery_draft_pending() -> bool:
         return submission_state.recovery_draft
+
+    def schedule_idle_interrupt(event: Any) -> bool:
+        """Hand an idle Ctrl+C to the REPL; False if it has nowhere to go.
+
+        Exiting the Application with ``exception=KeyboardInterrupt()`` is
+        what made Ctrl+C unusable: the ``BaseException`` unwound through
+        ``asyncio.run`` and skipped the CLI teardown, so the non-daemon
+        Turn worker was never released and the interpreter blocked in
+        ``threading._shutdown()`` with SIGINT already ignored.  The REPL
+        owns the double-press exit confirm, so route the press there.
+        """
+        nonlocal idle_interrupt_task
+        if on_idle_interrupt is None:
+            return False
+        if idle_interrupt_task is not None and not idle_interrupt_task.done():
+            return True
+
+        async def settle() -> None:
+            nonlocal idle_interrupt_task
+            try:
+                result = on_idle_interrupt()
+                if inspect.isawaitable(result):
+                    await result
+            finally:
+                idle_interrupt_task = None
+
+        create_task = getattr(event.app, "create_background_task", None)
+        if not callable(create_task):
+            return False
+        idle_interrupt_task = create_task(settle())
+        return True
 
     def schedule_interrupt(event: Any) -> None:
         """Request cancellation off the Prompt Toolkit event-loop thread."""
@@ -316,6 +350,8 @@ def build_prompt_toolkit_bindings(
         if running_turn():
             schedule_interrupt(event)
             return
+        if schedule_idle_interrupt(event):
+            return
         event.app.exit(exception=KeyboardInterrupt())
 
     # Arrow-key history recall. Prompt Toolkit's stock ``auto_up`` /
@@ -377,19 +413,28 @@ def install_live_interrupt_handler(
     session: Any,
     *,
     on_interrupt_settled: Callable[[], None] | None = None,
+    on_idle_interrupt: Callable[[], Any] | None = None,
 ) -> Callable[[], None]:
     """Route terminal SIGINT to the active Turn's typed cancellation control.
 
     A PTY delivers Ctrl+C as SIGINT before Prompt Toolkit can dispatch its
     ``c-c`` binding.  The handler only schedules the potentially-waiting
     scheduler cancellation; the worker still stops cooperatively at its Turn
-    token.  An idle SIGINT raises ``KeyboardInterrupt``.
+    token.
 
-    The idle raise is not a clean exit path and must not be treated as one:
-    ``KeyboardInterrupt`` is a ``BaseException``, so it unwinds through
-    ``asyncio.run`` and skips the CLI shutdown block entirely.  Callers must
-    therefore call the ``disarm`` published on the session as soon as the
-    live Application dies -- see ``live_terminal._observe_terminal_task``.
+    An idle SIGINT is the REPL's business, not an exception: it is handed to
+    ``on_idle_interrupt`` (sync or async) so the caller can run its
+    double-press exit confirm and close the Application cleanly.  Raising
+    ``KeyboardInterrupt`` instead unwinds through ``asyncio.run`` as a
+    ``BaseException``, which skips the CLI teardown that releases the
+    non-daemon Turn worker -- the process then blocks in
+    ``threading._shutdown()`` and, because the live observer disarms SIGINT
+    as soon as the Application dies, Ctrl+C cannot break that hang either.
+    The raise survives only as the fallback for a caller that installed no
+    idle handler and so has nowhere to route the press.
+
+    Callers must still call the ``disarm`` published on the session as soon as
+    the live Application dies -- see ``live_terminal._observe_terminal_task``.
     """
     previous = signal.getsignal(signal.SIGINT)
     restored = False
@@ -399,6 +444,7 @@ def install_live_interrupt_handler(
     except RuntimeError:
         loop = None
     interrupt_task: asyncio.Task[None] | None = None
+    idle_task: asyncio.Task[None] | None = None
 
     async def settle_interrupt() -> None:
         nonlocal interrupt_task
@@ -417,6 +463,25 @@ def install_live_interrupt_handler(
         if interrupt_task is not None and not interrupt_task.done():
             return True
         interrupt_task = loop.create_task(settle_interrupt())
+        return True
+
+    async def settle_idle_interrupt() -> None:
+        nonlocal idle_task
+        try:
+            if on_idle_interrupt is not None:
+                result = on_idle_interrupt()
+                if inspect.isawaitable(result):
+                    await result
+        finally:
+            idle_task = None
+
+    def schedule_idle_interrupt() -> bool:
+        nonlocal idle_task
+        if loop is None or loop.is_closed():
+            return False
+        if idle_task is not None and not idle_task.done():
+            return True
+        idle_task = loop.create_task(settle_idle_interrupt())
         return True
 
     def _handler(_signum: int, _frame: Any) -> None:
@@ -439,6 +504,8 @@ def install_live_interrupt_handler(
             # install the handler outside an async REPL loop.
             if interrupt_active_turn():
                 return
+        if on_idle_interrupt is not None and schedule_idle_interrupt():
+            return
         raise KeyboardInterrupt
 
     def running_turn() -> bool:
