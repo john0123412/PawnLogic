@@ -29,7 +29,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from config.tiers import EFFORT_LEVELS, TIER_DEEP
+from config.tiers import (
+    EFFORT_LEVELS,
+    TIER_DEEP,
+    TIER_LOW,
+    TIER_MID,
+    TIER_MAX,
+    TIER_ULTRA,
+)
 
 # ── helpers ──────────────────────────────────────────────
 #
@@ -227,6 +234,58 @@ class TestWorkerLockPreserved:
             cmd_deep(CommandContext(verb="/deep", arg="", arg2="", session=_Session()))
         )
         assert _cfg()["preferred_worker"] == "ds-v4-flash"
+
+    @pytest.mark.parametrize(
+        "verb,legacy_tier",
+        [
+            ("/low", TIER_LOW),
+            ("/mid", TIER_MID),
+            ("/normal", TIER_MID),
+            ("/deep", TIER_DEEP),
+            ("/max", TIER_MAX),
+            ("/ultra", TIER_ULTRA),
+        ],
+    )
+    def test_every_legacy_alias_preserves_its_old_tier(
+        self, verb, legacy_tier, restore_dynamic_config
+    ):
+        """Each alias must land on the rung carrying the tier it used to set.
+
+        The expectation is derived from the tier constants rather than written
+        out, so this fails if a rung is renamed or the ladder reshuffled. It
+        catches the case where an alias is pointed at the wrong rung: mapping
+        ``/max`` to ``max`` instead of ``xhigh`` looked harmless because both
+        are "big", but it silently gave ``/max`` the limits ``/ultra`` used to
+        set, made the two commands identical, and left ``xhigh`` unreachable
+        from any legacy alias.
+        """
+        import asyncio
+
+        from core.commands import CommandContext
+        from core.commands import system as system_commands
+
+        class _Session:
+            model_alias = "ds-v4-flash"
+
+            def _reset_system_prompt(self) -> None:
+                pass
+
+        handler = {
+            "/low": system_commands.cmd_low,
+            "/mid": system_commands.cmd_mid,
+            "/normal": system_commands.cmd_normal,
+            "/deep": system_commands.cmd_deep,
+            "/max": system_commands.cmd_max,
+            "/ultra": system_commands.cmd_ultra,
+        }[verb]
+
+        _cfg()["effort_level"] = "off"
+        asyncio.run(
+            handler(CommandContext(verb=verb, arg="", arg2="", session=_Session()))
+        )
+
+        for key, value in legacy_tier.items():
+            assert _cfg()[key] == value, (verb, key)
 
     def test_unset_worker_stays_auto(self, restore_dynamic_config):
         _cfg()["preferred_worker"] = "auto"

@@ -46,6 +46,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   [ADR 0010](docs/adr/0010-inline-terminal-modal.md).
 
 ### Fixed
+- `/max` no longer jumps a rung. The legacy tier commands are preserved by
+  pointing each at the rung that carries the tier it used to set, but `/max`
+  was pointed at `max` instead of `xhigh` — so it silently applied the limits
+  `/ultra` used to set, made the two commands identical, and left `xhigh`
+  unreachable from any legacy alias. `/deep`, `/max`, and `/ultra` now map to
+  `high`, `xhigh`, and `max` again, each keeping the iteration and token
+  limits it had before the effort ladder existed.
 - Changing effort no longer discards an explicit `/worker <alias>` lock.
   Every tier preset pinned the worker to `"auto"`, so `/deep` and its
   siblings silently undid the lock while the worker menu — which reads the
