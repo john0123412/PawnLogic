@@ -752,6 +752,28 @@ name at the end is the gate that fails if the invariant is broken.
   effort per call site (`/think`, history summaries, workspace naming,
   delegation) — four private switches drift, and the user asked for one
   control.
+- **An opt-in that persists into `custom_providers.json` can invalidate the
+  whole file, so it must never create an entry.** `_validated_custom_provider_data`
+  requires *every* entry to carry a valid `base_url` and an `api_key_env`, and
+  `load_custom_providers` abandons the entire file on the first failure — so one
+  bad entry costs the user every custom provider, every custom model, and all
+  persisted activation state on the next start, with no error beyond a warning.
+  `/provider effort` shipped with `setdefault`, which minted exactly such a bare
+  `{"reasoning_effort": true}` for a built-in name and reported success. Two
+  independent guards now hold at the persistence boundary, and both are pinned
+  separately because one subsumes the other for the ordinary case: refuse
+  `BUILTIN_PROVIDER_NAMES` (needed only for a *complete* shadow entry, which
+  `load_custom_providers` skips anyway, so writing to it would report success
+  and change nothing), and require an existing entry that already carries both
+  required fields. The command-layer guard in `_effort_flow.py` is UX; it
+  returns first and would mask a regression in the store, which is why the
+  direct tests exist. `test_provider_effort_on_builtin_is_refused_and_preserves_the_config_file`.
+- **`/provider` subcommand completion is a second hand-maintained list.** The
+  dispatcher in `core/commands/provider.py` and the completion entries in
+  `pawnlogic/cli.py` are separate; `/provider effort` shipped with a handler and
+  README docs but no completion entry, so it was typeable only in full.
+  `test_provider_completion_covers_every_dispatched_subcommand` compares the two
+  by scanning both sources, so a new subcommand cannot merge without one.
 - **An effort change must preserve `preferred_worker`.** Every tier preset
   pins it to `"auto"`, so the old `/deep`-style writes silently undid an
   explicit `/worker <alias>` lock; because the worker menu reads the on-disk

@@ -151,6 +151,21 @@ def set_provider_effort_support(arg: str) -> None:
     if name not in provider_config.PROVIDERS:
         _print(c(RED, f"  ✗ Unknown provider '{name}'"))
         return
+    if name in provider_config.BUILTIN_PROVIDER_NAMES:
+        # Refused rather than silently written: the opt-in lands in
+        # custom_providers.json, where an entry without base_url/api_key_env
+        # invalidates the entire file.  Built-in models already declare their
+        # own effort support per model.
+        _print(
+            c(
+                RED,
+                f"  ✗ '{name}' is a built-in provider; each of its models declares"
+                " its own effort support",
+            )
+        )
+        _print(c(GRAY, "    This command opts in a custom provider only."))
+        _print(c(GRAY, "    Use /effort <level> to choose the level for the current model."))
+        return
 
     enabled = parts[1].lower() == "on"
     if not provider_config.set_provider_reasoning_effort(name, enabled):

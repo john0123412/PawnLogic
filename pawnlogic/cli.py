@@ -1226,6 +1226,7 @@ async def _main_impl():
         ("deactivate", "Hide this provider's models"),
         ("remove", "Delete a custom provider"),
         ("test",   "Test provider connectivity"),
+        ("effort", "Send reasoning_effort for a custom provider's models (on|off)"),
     ]:
         _w = f"/provider {_sub}"
         _all_words.append(_w)

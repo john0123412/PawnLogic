@@ -80,6 +80,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   displayed. `_build_status` now returns `""` for idle.
 - Model reasoning text is shown in user-friendly mode as a dim
   `🧠 [thinking]` stream rather than being hidden behind debug mode.
+- `/provider effort <built-in> on` no longer invalidates the saved provider
+  configuration. The opt-in persists into `custom_providers.json`, where
+  every entry must carry a `base_url` and an `api_key_env`; pointing it at
+  a built-in provider wrote a bare `{"reasoning_effort": true}` entry, and
+  the next start rejected the entire file — every custom provider, every
+  custom model, and all persisted activation state gone, with the command
+  having reported success. Built-in providers are now refused with an
+  explanation at the command and at the persistence boundary, and the
+  opt-in only writes to a custom provider that already exists on disk.
+- `/provider effort` is now offered by command completion. The handler and
+  the README documented it, but the subcommand was reachable only by typing
+  it exactly; a test now compares the completion list against the dispatcher
+  so a new `/provider` subcommand cannot ship without one.
 
 ## [0.3.13] - 2026-09-29
 

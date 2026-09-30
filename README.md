@@ -111,38 +111,42 @@ use the additive `{"type":"event","data":{...}}` envelope.
 
 ## What's New
 
-Version 0.3.12 fixes a high-risk confirmation prompt that could freeze the
-session:
+Version 0.4.0 unifies reasoning effort into a single control:
 
-- **An expired confirmation no longer leaves the terminal stuck:** a
-  high-risk approval prompt whose wait ran out used to stay mounted for
-  the rest of the session. The live selector kept the keyboard, the
-  composer went read-only, and every keystroke was swallowed as selector
-  input — the reported "tool stage" stall, which only a force-quit
-  cleared. The event loop that mounted the prompt now owns its deadline,
-  and the tool watchdog reclaims a prompt its abandoned worker was
-  blocked on.
-- **High-risk operations deny by default:** the approval prompt opens
-  pre-selected on **Deny**. Press `y` to approve, `n` / `Esc` / `Ctrl+C`
-  to reject; a bare `Enter` rejects. Previously the prompt opened on
-  "Approve and run" and the live terminal routed `Enter` to it, so an
-  Enter meant for the composer could silently approve a high-risk
-  command. The prompt also ignores every key until it has been painted
-  once, so an unseen prompt can never resolve a keystroke.
-- **A waiting tool is now visible:** while an approval prompt is mounted,
-  the status line reads `⚠ awaiting confirmation — Esc to review` instead
-  of the ordinary in-flight indicator, so a blocked tool is
-  distinguishable from a working one.
-- **Bounded, configurable confirmation wait:** the wait is
-  `confirmation_wait_sec` (default 300 seconds), clamped below the active
-  `tool_watchdog_sec` so the prompt always tears down while the tool
-  waiting on it is still alive. Both deadlines used to be the literal
-  `600`.
-- **Scripted owner acceptance:** `tools/owner_acceptance_probe.py`
-  automates the checks that can be scripted (entry point starts; the
-  terminal guard restores raw mode, alternate screen, cursor, mouse
-  capture, and bracketed paste) and reports the four that genuinely need
-  human eyes as `manual` rather than passing.
+- **`/effort` is the one control for reasoning effort:** six rungs —
+  `off`, `low`, `medium`, `high`, `xhigh`, `max` — defaulting to `medium`,
+  in a modal selector reachable from `/model`. The old tier commands
+  (`/low`, `/mid`, `/normal`, `/deep`, `/max`, `/ultra`) still work as
+  aliases and print where the setting moved. See
+  [ADR 0012](docs/adr/0012-reasoning-effort-control.md).
+- **The parameter is only sent to models that declare it:** support is a
+  per-rung map, so a model that takes `low`/`medium`/`high` but not
+  `xhigh` never receives `xhigh`, and a model that declares nothing is
+  never sent the parameter at all. That is what keeps the default safe
+  against an OpenAI-compatible relay that rejects it. A whole custom
+  provider can opt its models in with
+  `/provider effort <name> on|off`.
+- **An effort change no longer discards an explicit `/worker` lock.**
+  Every tier preset pinned the worker to `auto`, so the old commands
+  silently undid the lock while the worker menu kept showing the old
+  value.
+- **A Turn reports `Sent` the moment you press Enter,** instead of
+  showing `0s` through the whole pre-request window, where a slow
+  time-to-first-token was indistinguishable from a dead connection.
+  Model reasoning text is shown as a dim `🧠 [thinking]` stream in
+  user-friendly mode.
+- **The completion menu no longer paints over the toolbar.** It is
+  laid out between the output window and the composer, so the model
+  field and the fuzzy candidates no longer draw on top of each other.
+- **An idle Ctrl+C exits cleanly.** It used to unwind past the CLI
+  teardown and leave the non-daemon Turn worker holding the interpreter
+  open, where only SIGKILL worked.
+- **`/provider effort` can no longer break your provider config.**
+  Pointing it at a built-in provider wrote an incomplete entry into
+  `custom_providers.json`, and the next start rejected the whole file —
+  every custom provider, model, and activation state gone. Built-in
+  providers are refused with an explanation; the opt-in applies to
+  custom providers only.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 

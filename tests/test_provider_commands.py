@@ -8,6 +8,7 @@ import os
 import stat
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -20,6 +21,8 @@ from config import providers as provider_config
 from core.api_errors import format_http_error
 from core import provider_runtime, provider_tui
 from core.commands import provider as provider_cmd
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _isolate_provider_env(tmp_path, monkeypatch):
@@ -618,6 +621,36 @@ def test_packaged_cli_completer_refreshes_extension_names_and_subcommands_live()
     assert all("security" not in item.text for item in second)
 
 
+def test_provider_completion_covers_every_dispatched_subcommand():
+    """Every dispatched ``/provider`` subcommand must also be completable.
+
+    ``/provider effort`` shipped with a handler and README documentation but no
+    completion entry, so it was reachable only by typing it exactly. The two
+    lists live in different files and are maintained by hand, so this compares
+    them instead of trusting either one. Only the first name of a
+    ``sub in (...)`` group is canonical; the rest are aliases (``/provider
+    active`` for ``activate``) and are deliberately not advertised.
+    """
+    import re
+
+    source = Path(ROOT, "core", "commands", "provider.py").read_text(encoding="utf-8")
+    body = source[source.index("async def _handle_provider_cmd("):]
+    canonical = set(re.findall(r'\bsub == "([a-z]+)"', body))
+    for group in re.findall(r"\bsub in \(([^)]*)\)", body):
+        names = re.findall(r'"([a-z]+)"', group)
+        canonical.update(names[:1])
+
+    cli_source = Path(ROOT, "pawnlogic", "cli.py").read_text(encoding="utf-8")
+    start = cli_source.index("# Provider subcommands.")
+    block = cli_source[start : cli_source.index("]:", start)]
+    completed = set(re.findall(r'\("([a-z]+)",', block))
+
+    assert canonical, "extraction failed: no subcommands found to compare"
+    assert completed, "extraction failed: no completion entries found"
+    assert canonical <= completed, f"not completable: {sorted(canonical - completed)}"
+    assert "effort" in completed
+
+
 def test_provider_model_name_filter_hides_non_chat_and_legacy_models():
     assert provider_tui._model_is_chat_candidate("gpt-4o") is True
     assert provider_tui._model_is_chat_candidate("gpt-4o-mini-vision") is True
@@ -825,6 +858,270 @@ def test_provider_set_active_persists_and_deepseek_cannot_deactivate(tmp_path, m
 
     assert provider_config.set_provider_active("deepseek", False) is False
     assert provider_config.PROVIDERS["deepseek"]["active"] is True
+
+
+_RELAY_PROVIDER = {
+    "base_url": "https://relay.example.invalid/v1",
+    "api_key_env": "RELAY_API_KEY",
+    "label": "Relay",
+    "api_format": "openai",
+    "active": True,
+}
+
+
+def _live_provider_config():
+    """Return the ``config.providers`` object the product actually reads.
+
+    ``set_provider_reasoning_effort`` and ``_effort_flow`` both resolve the
+    module inside the call, so they get whatever ``sys.modules`` holds *now*.
+    Several test modules evict ``config`` from ``sys.modules`` at import to
+    defeat a stale mock, which mints a new module object; a binding taken at
+    this file's import time is then a different object from the one under
+    test, so patching it silently does nothing. The result is a test that
+    passes alone and fails in the full suite, with the product looking broken.
+    """
+    import config.providers  # noqa: F401 - ensures the module is in sys.modules
+
+    return sys.modules["config.providers"]
+
+
+def _write_custom_provider_file(path):
+    """A valid file: one custom provider, one custom model, two active states."""
+    path.write_text(
+        json.dumps(
+            {
+                "providers": {"relay": dict(_RELAY_PROVIDER)},
+                "models": {
+                    "relay-chat": {
+                        "id": "relay-chat",
+                        "provider": "relay",
+                        "desc": "Relay chat",
+                    }
+                },
+                "provider_states": {"relay": {"active": True}, "openai": {"active": True}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _reload_in_fresh_process(home):
+    """Load custom providers in a new interpreter, the way a restart does.
+
+    An in-process ``load_custom_providers()`` cannot prove this: the poisoned
+    entry and the corrupted table are the same objects either way, so the test
+    would pass even when the on-disk file is what actually breaks.
+    """
+    script = (
+        "import json, config.providers as pc\n"
+        "pc.load_custom_providers()\n"
+        "print(json.dumps({\n"
+        "    'providers': sorted(pc.PROVIDERS),\n"
+        "    'models': sorted(pc.MODELS),\n"
+        "    'relay_active': pc.is_provider_active('relay'),\n"
+        "    'openai_active': pc.is_provider_active('openai'),\n"
+        "}))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        env={**os.environ, "PAWNLOGIC_HOME": str(home), "PAWNLOGIC_TEST_MODE": "true"},
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def _builtin_plus_relay_providers():
+    return {
+        "deepseek": {"api_key_env": "DEEPSEEK_API_KEY", "active": True},
+        "openai": {"api_key_env": "OPENAI_API_KEY", "active": False},
+        "anthropic": {"api_key_env": "ANTHROPIC_API_KEY", "active": False},
+        "relay": dict(_RELAY_PROVIDER),
+    }
+
+
+def test_provider_effort_on_builtin_is_refused_and_preserves_the_config_file(
+    tmp_path, monkeypatch, capsys
+):
+    """``/provider effort <built-in> on`` must not write to custom_providers.json.
+
+    The opt-in persists into the custom provider file, where every entry must
+    carry ``base_url`` and ``api_key_env``. A bare ``{"reasoning_effort": true}``
+    for a built-in therefore fails validation, and ``load_custom_providers``
+    abandons the *whole* file on the first failure — so one reported success
+    cost the user every custom provider, every custom model, and all
+    persisted activation state on the next start.
+    """
+    provider_config = _live_provider_config()
+    home = tmp_path / "home"
+    home.mkdir()
+    path = home / "custom_providers.json"
+    _write_custom_provider_file(path)
+    before = path.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(provider_config, "CUSTOM_PROVIDERS_PATH", path)
+    monkeypatch.setattr(provider_config, "PROVIDERS", _builtin_plus_relay_providers())
+
+    from core.commands import _effort_flow
+
+    _effort_flow.set_provider_effort_support("openai on")
+
+    out = capsys.readouterr().out
+    assert "built-in provider" in out
+    assert "✓" not in out
+    assert path.read_text(encoding="utf-8") == before
+
+    reloaded = _reload_in_fresh_process(home)
+    # The real built-ins are present, so this also shows the custom entry
+    # survived next to them rather than being dropped as a shadowing name.
+    assert reloaded["providers"] == ["anthropic", "deepseek", "openai", "relay"]
+    assert "relay-chat" in reloaded["models"]
+    assert reloaded["relay_active"] is True
+    assert reloaded["openai_active"] is True
+
+
+def test_provider_effort_on_custom_provider_still_persists(tmp_path, monkeypatch, capsys):
+    """The refusal must be scoped to built-ins, not disable the opt-in.
+
+    A guard that simply always returned False would satisfy the test above,
+    so the positive path is pinned here through the same command.
+    """
+    provider_config = _live_provider_config()
+    home = tmp_path / "home"
+    home.mkdir()
+    path = home / "custom_providers.json"
+    _write_custom_provider_file(path)
+
+    monkeypatch.setattr(provider_config, "CUSTOM_PROVIDERS_PATH", path)
+    monkeypatch.setattr(provider_config, "PROVIDERS", _builtin_plus_relay_providers())
+
+    from core.commands import _effort_flow
+
+    _effort_flow.set_provider_effort_support("relay on")
+
+    assert "reasoning_effort enabled" in capsys.readouterr().out
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["providers"]["relay"]["reasoning_effort"] is True
+    # The entry stays complete; the opt-in must not replace what is there.
+    assert data["providers"]["relay"]["base_url"] == _RELAY_PROVIDER["base_url"]
+    assert data["providers"]["relay"]["api_key_env"] == _RELAY_PROVIDER["api_key_env"]
+    assert "openai" not in data["providers"]
+
+    reloaded = _reload_in_fresh_process(home)
+    # The real built-ins are present, so this also shows the custom entry
+    # survived next to them rather than being dropped as a shadowing name.
+    assert reloaded["providers"] == ["anthropic", "deepseek", "openai", "relay"]
+    assert "relay-chat" in reloaded["models"]
+
+
+def test_set_provider_reasoning_effort_refuses_builtins_without_the_command_layer(
+    tmp_path, monkeypatch
+):
+    """Pin the persistence boundary on its own, not through the command.
+
+    The command guard would mask a regression here: it returns before the write
+    is attempted, so deleting the guard in ``config/providers.py`` leaves the
+    command test green. This one is the reason the config file stays safe if a
+    second caller ever reaches the store directly.
+    """
+    provider_config = _live_provider_config()
+    home = tmp_path / "home"
+    home.mkdir()
+    path = home / "custom_providers.json"
+    _write_custom_provider_file(path)
+    before = path.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(provider_config, "CUSTOM_PROVIDERS_PATH", path)
+    monkeypatch.setattr(provider_config, "PROVIDERS", _builtin_plus_relay_providers())
+
+    for builtin in sorted(provider_config.BUILTIN_PROVIDER_NAMES):
+        assert provider_config.set_provider_reasoning_effort(builtin, True) is False
+    assert path.read_text(encoding="utf-8") == before
+
+    reloaded = _reload_in_fresh_process(home)
+    assert reloaded["providers"] == ["anthropic", "deepseek", "openai", "relay"]
+    assert reloaded["relay_active"] is True
+    assert reloaded["openai_active"] is True
+
+
+def test_set_provider_reasoning_effort_never_mints_a_partial_entry(tmp_path, monkeypatch):
+    """A registered name with no complete file entry must not be written.
+
+    ``setdefault`` built a bare ``{"reasoning_effort": true}`` here — the same
+    incomplete entry the built-in path wrote, and the same shape
+    ``_validated_custom_provider_data`` rejects, which discards the whole
+    file. A provider can be registered without a saved entry, so the write
+    has to check rather than create.
+    """
+    provider_config = _live_provider_config()
+    path = tmp_path / "custom_providers.json"
+    path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "halfwritten": {"base_url": "https://relay.example.invalid/v1"}
+                },
+                "models": {},
+                "provider_states": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    halfwritten_before = path.read_text(encoding="utf-8")
+    monkeypatch.setattr(provider_config, "CUSTOM_PROVIDERS_PATH", path)
+    monkeypatch.setattr(
+        provider_config,
+        "PROVIDERS",
+        {
+            "deepseek": {"api_key_env": "DEEPSEEK_API_KEY", "active": True},
+            "halfwritten": {"api_key_env": "HALFWRITTEN_API_KEY", "active": False},
+            "unsaved": {"api_key_env": "UNSAVED_API_KEY", "active": False},
+        },
+    )
+
+    # An incomplete entry on disk, and a registered provider with no file at all.
+    assert provider_config.set_provider_reasoning_effort("halfwritten", True) is False
+    assert provider_config.set_provider_reasoning_effort("unsaved", True) is False
+    assert path.read_text(encoding="utf-8") == halfwritten_before
+
+
+def test_set_provider_reasoning_effort_refuses_a_complete_shadow_entry(tmp_path, monkeypatch):
+    """A built-in name stays refused even when a complete entry exists for it.
+
+    ``load_custom_providers`` skips any provider whose name is a built-in, so
+    an entry like this — hand-edited, or left behind by an older version — is
+    never loaded. Writing the opt-in into it would report success and change
+    nothing on the next start. This is what makes the built-in refusal a
+    decision of its own rather than a duplicate of the completeness check.
+    """
+    provider_config = _live_provider_config()
+    path = tmp_path / "custom_providers.json"
+    path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "openai": {
+                        "base_url": "https://api.openai.com/v1/chat/completions",
+                        "api_key_env": "OPENAI_API_KEY",
+                        "api_format": "openai",
+                    }
+                },
+                "models": {},
+                "provider_states": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    before = path.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(provider_config, "CUSTOM_PROVIDERS_PATH", path)
+    monkeypatch.setattr(provider_config, "PROVIDERS", _builtin_plus_relay_providers())
+
+    assert provider_config.set_provider_reasoning_effort("openai", True) is False
+    assert path.read_text(encoding="utf-8") == before
 
 
 def test_provider_model_probe_rejects_explicit_unsupported_response():

@@ -1,9 +1,19 @@
 # Reasoning-Effort Unification
 
-> **Status:** Implemented on `feat/reasoning-effort-unification`;
-> not released. Version is unchanged at `0.3.13` — the owner asked for
-> the commit without a release.
+> **Status:** Implemented and released in `0.4.0` (PR #165, then the
+> `test/release-0.4.0` candidate and `test/release-0.4.0-finalize`
+> finalization PRs). The tag is not pushed yet, so `0.4.0` is staged
+> rather than published.
 > Design rationale: [ADR 0012](../adr/0012-reasoning-effort-control.md).
+>
+> **Owner decision on the version bump (required by the AGENT.md
+> Version Numbering Policy):** the owner chose **0.4.0**, a minor bump,
+> when approving the release preparation on 2026-09-30, together with the
+> boundary that the work stops at the release-ready state — both release
+> PRs merged and green, with no tag and no PyPI publish. The bump is
+> therefore authorized in writing; the plan stayed in Active Plans because
+> `docs/plans/INDEX.md` treats a plan as complete only once its release
+> tag exists.
 
 ## Goal
 
@@ -138,15 +148,19 @@ is removed.
 - [ ] Owner PTY acceptance: `/model` chains into the effort screen;
       `/effort` opens the selector; `/deep` reports the merge; `/limits`
       shows the level and whether it is sent; a `/worker` lock survives
-      an effort change.
+      an effort change. Left unchecked deliberately: these are visual and
+      interactive judgements on a real terminal, which synthetic input
+      cannot attest. Do not tick this from a green test run.
 
 ## Not in this change
 
 - **Anthropic-format models** take local limits only. The Messages API
   uses `thinking.budget_tokens`, and `core/provider_streams.py` has no
   `thinking_delta` branch, so the value could not be displayed.
-- **No version bump.** The owner asked to commit without releasing, so
-  `config/paths.py:VERSION`, the README badges, `SECURITY.md`, and
-  `CHANGELOG.md` are untouched.
+- **The version bump was decided later.** The original change was
+  committed without a release, so `config/paths.py:VERSION`, the README
+  badges, `SECURITY.md`, and `CHANGELOG.md` were untouched at that point.
+  The owner subsequently chose 0.4.0 for the release that carries this
+  work; see the status block at the top of this file.
 - **The four owner-terminal acceptance checks** carried since 0.3.12
   remain unverified.

@@ -1,7 +1,6 @@
 # ADR 0010 — Inline Terminal and Single-Application Modal
 
-> **Status:** Proposed (implementation merged and owner PTY accepted;
-> publication pending).
+> **Status:** Accepted (shipped in `0.3.7`).
 > The 0.3.7 candidate implements `full_screen=False`,
 > `mouse_support=False`, live host-scrollback handoff through
 > `TerminalTranscript`, and one in-Application modal host for every
