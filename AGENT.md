@@ -632,12 +632,19 @@ are source-checkout or user-installed assets; pip/curl installations should use
   not copy the previous version's identifiers forward.
   `0.4.0` carries the reasoning-effort unification (PR #165, ADR 0012),
   the immediate Turn feedback and completion-menu layout work (PR #163), and
-  the idle Ctrl+C teardown fix (PR #164). It also carries two fixes found
-  while preparing the release notes: `/max` pointed at the `max` rung
-  instead of `xhigh`, which silently gave it the limits `/ultra` used to set
-  and left `xhigh` unreachable from any legacy alias, and the CLI help and
-  slash-description table advertised that same wrong rung. Both are now
-  pinned by tests, each mutation-verified. `0.3.13` remains the last
+  the idle Ctrl+C teardown fix (PR #164). It also carries three fixes found
+  while preparing the release notes. Two were in the effort work: `/max`
+  pointed at the `max` rung instead of `xhigh`, which silently gave it the
+  limits `/ultra` used to set and left `xhigh` unreachable from any legacy
+  alias, and the CLI help and slash-description table advertised that same
+  wrong rung. The third is release-blocking and came from an independent
+  audit: `/provider effort <built-in> on` wrote a bare
+  `{"reasoning_effort": true}` into `custom_providers.json`, and because
+  every entry in that file must carry a `base_url` and an `api_key_env`, the
+  next start rejected the whole file — every custom provider, model, and
+  persisted activation state gone, after the command had reported success
+  (PR #168). All three are now pinned by tests, each mutation-verified.
+  `0.3.13` remains the last
   published release until the tag is pushed; per-release narrative belongs
   in `CHANGELOG.md`, not here.
 - Runtime version source of truth: `config/paths.py:VERSION`.
@@ -1093,6 +1100,18 @@ name at the end is the gate that fails if the invariant is broken.
   `update_dynamic_config()`, and patch `core.api_payloads.MODELS` /
   `.PROVIDERS` — the maps the resolver actually reads, themselves import-time
   bindings.
+- **The trap above has a second form: the *module object* can differ, not just
+  the attribute value.** When the product resolves the module inside the call
+  (`import config.providers as provider_config` inside a function, as
+  `set_provider_reasoning_effort` and `_effort_flow` do), a test file's
+  top-level `from config import providers` is a different object from the one
+  the product reads, if an earlier module evicted `config` from `sys.modules`.
+  Then `monkeypatch.setattr` succeeds, changes nothing, and the test reports
+  `✗ Unknown provider '<name>'` — a message that reads like a product bug.
+  There is no `core.state` indirection to route around here: resolve the live
+  object at test time with `sys.modules["config.providers"]`.
+  `test_provider_effort_on_custom_provider_still_persists` (the failure was
+  the positive path; the negative ones passed vacuously for the same reason).
 - **A test that only asserts the negative does not prove the wiring is live.**
   See the `/model` entry above: the original picker test would stay green with
   the call deleted outright.
