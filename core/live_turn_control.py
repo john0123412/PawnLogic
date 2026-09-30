@@ -8,6 +8,7 @@ adapter usable by lightweight test sessions and avoids an import cycle.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from core.tool_executor import ToolExecutionOutcome
@@ -132,6 +133,20 @@ def _replace_recovered_and_resume(scheduler: Any, user_input: str) -> bool:
     return True
 
 
+def _mark_turn_submitted(session: Any) -> None:
+    """Stamp the admission instant and clear the previous Turn's first-delta flag.
+
+    This runs at admission rather than in ``_prepare_turn`` on purpose:
+    ``_prepare_turn`` performs system-prompt resets and may issue a blocking
+    summary provider call, so the gap between Enter and that method is
+    exactly the window the user needs told that the request went out.  Resetting
+    here means the toolbar reads ``Sent`` instead of inheriting the last
+    Turn's ``Thinking`` for those seconds.
+    """
+    session._turn_submitted_at = time.monotonic()
+    session._turn_first_delta = False
+
+
 def submit_session_turn(
     session: Any,
     user_input: str,
@@ -153,11 +168,13 @@ def submit_session_turn(
     view = scheduler.view()
     if view.active is None and view.recovered is not None:
         _replace_recovered_and_resume(scheduler, user_input)
+        _mark_turn_submitted(session)
         return
     selected_kind = _kind_for_view(view) if kind is None else kind
     selected_kind = _reconcile_submission_kind(view, selected_kind)
     submission = Submission(user_input, kind=selected_kind, source="session")
     scheduler.submit(submission)
+    _mark_turn_submitted(session)
     if selected_kind is SubmissionKind.FOLLOW_UP and view.active is None:
         _resume_idle_follow_up(scheduler, view)
 
@@ -181,6 +198,7 @@ def run_session_turn(session: Any, user_input: str) -> Any:
             source="session",
         )
         scheduler.submit(submission)
+        _mark_turn_submitted(session)
         if submission.kind is SubmissionKind.FOLLOW_UP and view.active is None:
             _resume_idle_follow_up(scheduler, view)
     return None

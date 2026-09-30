@@ -85,7 +85,11 @@ pawn resume <session>              # 加载指定会话但不自动执行
 python -m pawnlogic --help
 ```
 
-默认 `pawn` 使用用户友好的输出，会隐藏原始工具调用细节、解析器诊断、详细 reasoning 流和底层 API 错误。
+默认 `pawn` 使用用户友好的输出，会隐藏原始工具调用细节、解析器诊断和底层 API 错误。
+模型 reasoning 会以暗色 `🧠 [thinking]` 流显示：否则首个 token 来得很慢时，界面和「连接已断」
+无法区分。它只是旁路展示，不计入答案。不流式返回 `reasoning_content` 的 Provider 不会显示
+reasoning 文本 —— 包括 Anthropic 格式的模型，其 `thinking_delta` 目前尚未被流适配器处理 ——
+但底栏状态词照常显示。
 工具调用恢复仅为尽力而为，不作保证。若格式错误的工具调用尝试无法解析，则不会产生或执行工具调用；用户友好模式仍会隐藏详细的解析器诊断信息。
 需要详细诊断时，使用 `pawn --debug` 或 `/mode`。
 使用 `--json` 时，每一行都是独立的 NDJSON record。现有 `text`、`chunk` 和 `json`
@@ -327,7 +331,7 @@ A: 可以。输入唯一前缀或子序列，例如 `/plg`；按 Tab 会列出 `
 A: 在交互式终端运行 `/planguard`（或 `/plg`），用 Up/Down 或 1/2 选择后按 Enter。脚本或非交互环境请使用 `/planguard advisory`、`/planguard strict` 或 `/planguard status`。默认是 advisory；在 strict 模式下，前两批缺少 plan block 的工具调用仍会执行并收到纠正提示，第三次此类尝试会在执行工具前被停止。
 
 **Q: live composer 在 Turn 运行期间如何处理输入？**
-A: 在 Prompt Toolkit 模式下，一个持久终端界面会把模型和工具输出放在底部输入编辑区和状态栏上方。完整输出行会通过 Prompt Toolkit 的安全终端交接写入宿主终端，因此 Application 运行期间仍可使用原生 scrollback、鼠标选择和复制。连续提交的内容会以淡色队列行显示在输入区正上方。Enter 会提交 steer，并在下一个 Tool safe point 生效；如果纯文本响应先自然结束，尚未应用的 steer 会作为相互独立的后续 Turn 依次执行。Alt+Enter 会排队一条在自然完成后执行的 follow-up。Esc 会中断当前 Turn；如果已有排队工作，会立即把控制权交给该工作，如果队列为空，则把被中断的 prompt 变成可编辑的 recovered draft。在 idle 且输入框为空时，Esc、Up 或 Alt+Up 会把排队/恢复工作合并进可编辑草稿。`/queue` 仍是高级诊断与管理命令，且不会暂停当前 Turn。readline 模式明确保持串行，并在 Turn 完成前缓存输入。
+A: 在 Prompt Toolkit 模式下，一个持久终端界面会把模型和工具输出放在底部输入编辑区和状态栏上方。状态栏直接回答「到底有没有在干活」：按下 Enter 立刻显示 `Sent · ⏱ 0s`，首个 token 到达后切到 `Thinking`，开始执行工具时显示 `⏱ 12s · list_dir [2/30]`；三者都以 `Esc to interrupt` 结尾。状态段优先占用宽度，终端变窄时它仍然可读，而不会第一个被裁掉。完整输出行会通过 Prompt Toolkit 的安全终端交接写入宿主终端，因此 Application 运行期间仍可使用原生 scrollback、鼠标选择和复制。连续提交的内容会以淡色队列行显示在输入区正上方。命令和模型补全列表单独占用输入区正上方的若干行，不会遮挡底栏或模型字段。Enter 会提交 steer，并在下一个 Tool safe point 生效；如果纯文本响应先自然结束，尚未应用的 steer 会作为相互独立的后续 Turn 依次执行。Alt+Enter 会排队一条在自然完成后执行的 follow-up。Esc 会中断当前 Turn；如果已有排队工作，会立即把控制权交给该工作，如果队列为空，则把被中断的 prompt 变成可编辑的 recovered draft。在 idle 且输入框为空时，Esc、Up 或 Alt+Up 会把排队/恢复工作合并进可编辑草稿。`/queue` 仍是高级诊断与管理命令，且不会暂停当前 Turn。readline 模式明确保持串行，并在 Turn 完成前缓存输入。
 
 **Q: 中断正在运行的 turn 后会怎样？**
 A: Pawn 会等待协作式取消完成。如果已有排队工作，Esc 会把它作为新的 steer 继续执行，不会额外创建重复的 recovered 行。如果队列为空，被中断的 prompt 会预填为可编辑的 recovered draft，但不会自动重跑；按 Enter 只重试一次，编辑后按 Enter 只执行替换后的内容一次（包括以 `/` 开头的编辑）。`/queue remove <id>`、`/queue clear`、`/queue steer <id>`、`/queue follow-up <id>` 和 `/queue recall <id>` 仍可用于高级队列管理。`/abort` 会中断当前 Turn 并清除全部排队/恢复工作，不再有单独的 `--all` 形式。重启后，`pawn --continue` 会加载最近的 interrupted、running 或 failed 会话，`pawn resume <session>` 会加载指定会话。两个命令都会显示历史并预填草稿，但不会自动执行。

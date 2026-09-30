@@ -1570,7 +1570,20 @@ def test_run_turn_starts_and_stops_thinking_spinner(monkeypatch):
     assert stops
 
 
-def test_user_mode_reasoning_keeps_spinner_until_visible_output(monkeypatch):
+def test_user_mode_reasoning_stops_spinner_because_reasoning_is_visible(
+    monkeypatch, capsys
+):
+    """Reasoning is visible output in user-friendly mode, so it ends the spinner.
+
+    This used to assert the opposite: the reasoning was gated behind
+    ``_debug_mode()``, so a user-mode ``reasoning_content`` delta was
+    "hidden thought" and the spinner had to keep animating until the real
+    answer arrived, or the terminal would have gone silent mid-Turn.
+
+    Reasoning is now rendered in user-friendly mode too -- that visibility is
+    the whole point of the feedback work -- so the spinner must yield to the
+    first reasoning delta instead of animating over text the user can read.
+    """
     s, session_mod = _prepare_run_turn_session(monkeypatch)
 
     events = []
@@ -1589,20 +1602,25 @@ def test_user_mode_reasoning_keeps_spinner_until_visible_output(monkeypatch):
         events.append(("yield", "usage"))
         yield {"_usage": {"prompt_tokens": 1, "completion_tokens": 0}}
         events.append(("yield", "reasoning"))
-        yield {"choices": [{"delta": {"reasoning_content": "hidden thought"}}]}
+        yield {"choices": [{"delta": {"reasoning_content": "visible thought"}}]}
         events.append(("yield", "content"))
         yield {"choices": [{"delta": {"content": "done"}}]}
 
     monkeypatch.setattr(session_mod, "_ThinkingSpinner", FakeSpinner)
     monkeypatch.setattr(session_mod, "stream_request", fake_stream_request)
 
-    s.run_turn("keep spinner while reasoning")
+    s.run_turn("reasoning is visible now")
 
     assert ("init", True, "Thinking") in events
     assert events.index(("yield", "usage")) < events.index(("yield", "reasoning"))
     assert events.index(("yield", "reasoning")) < events.index(("yield", "content"))
-    assert ("stop",) not in events[:events.index(("yield", "content"))]
-    assert ("stop",) in events[events.index(("yield", "content")):]
+    # The spinner stops as soon as the reasoning delta is handled, which is
+    # before the answer content arrives.
+    assert events.index(("yield", "reasoning")) < events.index(("stop",))
+    assert events.index(("stop",)) < events.index(("yield", "content"))
+    # And that reasoning genuinely reached the user, which is the premise
+    # that makes stopping the spinner correct.
+    assert "visible thought" in capsys.readouterr().out
 
 
 def test_usage_and_reasoning_only_response_retries_until_visible_output(monkeypatch):

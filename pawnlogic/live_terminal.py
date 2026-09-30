@@ -47,8 +47,6 @@ from prompt_toolkit.layout import Dimension, Layout
 from prompt_toolkit.layout.containers import (
     ConditionalContainer,
     DynamicContainer,
-    Float,
-    FloatContainer,
     HSplit,
     Window,
 )
@@ -1509,8 +1507,27 @@ class PersistentTerminal:
         # one output region is ever visible at a time, which avoids
         # the "two output panes stacked" scramble on small terminals
         # and guarantees the selector sees the full body height.
+        #
+        # The completion menu is a real HSplit child, not a Float.  A Float
+        # never participates in layout: it is painted over rows that already
+        # exist, and ``FloatContainer`` anchors a cursor float *below* the
+        # cursor whenever the space below is at least the space above, then
+        # clips it to whatever is left.  This Application is inline
+        # (``full_screen=False``), so its block is only as tall as the rows
+        # below the cursor -- about three.  "Below the cursor" was therefore
+        # the toolbar row, and the model field and the candidates were drawn
+        # on top of each other with the menu clipped to one line.  As an
+        # HSplit child it reserves its own rows between the output viewport
+        # and the composer, so it can never cover the toolbar.
+        completion_menu = CompletionsMenu(max_height=6, scroll_offset=1)
         body = HSplit(
-            [output_window, queue_preview, self._composer.window, toolbar_window]
+            [
+                output_window,
+                queue_preview,
+                completion_menu,
+                self._composer.window,
+                toolbar_window,
+            ]
         )
         def root_content() -> Any:
             """Select the body that determines the inline app's height.
@@ -1529,16 +1546,7 @@ class PersistentTerminal:
                 return modal.container
             return body
 
-        root = FloatContainer(
-            content=DynamicContainer(root_content),
-            floats=[
-                Float(
-                    xcursor=True,
-                    ycursor=True,
-                    content=CompletionsMenu(max_height=6, scroll_offset=1),
-                ),
-            ],
-        )
+        root = DynamicContainer(root_content)
         self._application = Application(
             layout=Layout(root, focused_element=self._composer),
             key_bindings=bindings,
@@ -1671,22 +1679,67 @@ class PersistentTerminal:
 
     def _render_toolbar(self) -> Any:
         text = self._toolbar_text()
-        # Fold the transient turn status into the fixed toolbar row. Only
-        # non-Idle states are appended — the toolbar already says what the
-        # session is via its own fields.
+        # Fold the transient turn status into the fixed toolbar row.  The
+        # idle state contributes nothing: the toolbar's own fields already
+        # say what the session is, so ``_build_status`` returns "" and this
+        # method only tests truthiness.  (It used to test ``"Idle" not in
+        # status``, a substring check that silently swallowed the recovered
+        # draft state, whose own text contains the word "Idle".)
         try:
             status = self._build_status() or ""
         except Exception:
             status = ""
-        if status and "Idle" not in status:
-            text = f"{text}  ·  {status}"
         try:
             from prompt_toolkit.application.current import get_app
 
             columns = get_app().output.get_size().columns
         except Exception:
             columns = 120
-        return self._clip_line(text, max(20, int(columns) - 1))
+        width = max(20, int(columns) - 1)
+        if not status:
+            # Idle: no status to reserve, but still cut on a field boundary
+            # so a narrow row never shows a half-label. Keep the full text if
+            # not even one whole field fits -- an empty toolbar is worse.
+            return self._clip_line(self._trim_to_width(text, width) or text, width)
+        # Reserve the status segment BEFORE composing the row.  Appending it
+        # to the fields and clipping the joined result made the status the
+        # first thing to disappear on a narrow terminal -- precisely during
+        # the seconds a waiting user most needs it, since the fields beside
+        # it are static decoration the user can read at any idle moment.
+        # The trade is deliberate: when the row cannot hold both, the status
+        # takes it and the fields return as soon as the Turn does.
+        separator = "  ·  "
+        available = width - len(separator)
+        if len(status) >= available:
+            # The status alone fills the row.  ASCII marker: an ellipsis
+            # glyph is East-Asian ambiguous width and this row is already
+            # at its column budget.
+            return self._clip_line(
+                status[: max(1, available - 3)] + "...", width
+            )
+        field_text = self._trim_to_width(text, available - len(status))
+        if not field_text:
+            # Not even one whole field fits beside the status. The status
+            # is the state; the fields are static decoration.
+            return self._clip_line(status, width)
+        return self._clip_line(f"{field_text}{separator}{status}", width)
+
+    @staticmethod
+    def _trim_to_width(text: str, width: int) -> str:
+        """Cut a toolbar field row to ``width`` at a whole-field boundary.
+
+        ``build_bottom_toolbar`` joins its chosen segments with a double
+        space, so any prefix that ends on a boundary is a set of complete
+        ``Label: value`` fields.  Returns ``""`` when not even one whole
+        field fits: a hard cut there would emit a half-label like
+        ``Model: bai:``, which is the mid-field clipping this avoids.
+        """
+        if len(text) <= width:
+            return text
+        head, sep, _tail = text.rpartition("  ")
+        while sep and len(head) > width:
+            head, sep, _tail = head.rpartition("  ")
+        return head if sep and len(head) <= width else ""
 
     def _build_status(self) -> str:
         """Return the transient turn status text (plain, toolbar-rendered).
@@ -1696,15 +1749,31 @@ class PersistentTerminal:
         text renders inside the fixed toolbar row — never as its own
         transcript line.  States, in priority order:
 
-        * **Esc interrupt** — ``[model]  ⏸ interrupted by user`` for
-          1.5 s after the last interrupt, then back to ``Idle``.
-        * **Recovered draft** — ``[model]  Idle — edit the draft and
-          press Enter`` for 1.5 s after a recovery prefill.
-        * **Running** — ``[model]  ⏱ Ns · <tool> [n/m] · Esc to
-          interrupt`` while ``pending_count > 0``; the 250 ms ticker
-          keeps the seconds counter honest and ``_current_tool_activity``
-          shows which tool is executing.
-        * **Idle** — ``[model]  Idle`` otherwise.
+        * **Esc interrupt** — ``⏸ interrupted by user`` for 1.5 s after
+          the last interrupt.
+        * **Recovered draft** — ``Idle — edit the draft and press Enter``
+          for 1.5 s after a recovery prefill.
+        * **Confirmation** — ``⚠ awaiting confirmation — Esc to review``
+          while a high-risk modal owns the keyboard.
+        * **Running** — ``Sent`` until the first delta arrives, then
+          ``Thinking`` while the model generates with no tool running,
+          then ``⏱ Ns · <tool> [n/m]`` once a tool is executing.  All
+          three end with ``· Esc to interrupt``; the 250 ms ticker keeps
+          the seconds counter honest.
+        * **Idle** — ``""``, so the toolbar folds nothing.
+
+        No state repeats the model alias.  ``build_bottom_toolbar`` always
+        keeps its first segment (``if ... and chosen: continue`` lets the
+        model field through unconditionally), so a model prefix here is a
+        duplicate that costs ~20 columns on a real alias -- enough to push
+        the field row into mid-value clipping at 80 columns.
+
+        ``Sent`` exists because nothing else is true in the window between
+        admission and the first delta: ``_turn_submitted_at`` is stamped at
+        admission, but ``_prepare_turn`` only reaches ``_turn_start_time``
+        after system-prompt resets and a possible blocking summary call, and
+        ``_current_tool_activity`` stays empty until a tool actually runs.
+        Without a state for that window the row read as a frozen ``⏱ 0s``.
 
         Failure is silent: a failed Turn parks the queue but does NOT
         surface a ``Failed · +N parked`` label here.  The user can still
@@ -1715,11 +1784,10 @@ class PersistentTerminal:
         if session is None:
             return ""
         now = time.monotonic()
-        model = str(getattr(session, "model_alias", "model") or "model")
 
         interrupt_at = getattr(session, "_last_interrupt_at", None)
         if interrupt_at is not None and (now - float(interrupt_at)) < 1.5:
-            return f"{model}  ⏸ interrupted by user"
+            return "⏸ interrupted by user"
 
         recovery_at = getattr(self, "_last_recovery_at", None)
         if (
@@ -1727,7 +1795,7 @@ class PersistentTerminal:
             and (now - float(recovery_at)) < 1.5
             and getattr(self, "_draft_is_recovery", False)
         ):
-            return f"{model}  Idle — edit the draft and press Enter"
+            return "Idle — edit the draft and press Enter"
 
         try:
             pending = int(
@@ -1746,17 +1814,25 @@ class PersistentTerminal:
             # cannot see", and every keystroke they type is being eaten
             # by the modal. Esc reaches the selector first (its binding
             # is eager; the Turn-interrupt one is not).
-            return f"{model}  ⚠ awaiting confirmation — Esc to review"
+            return "⚠ awaiting confirmation — Esc to review"
         if pending > 0:
-            started = float(getattr(session, "_turn_start_time", 0.0) or 0.0)
+            # Admission time, not _turn_start_time: the latter is stamped
+            # late in _prepare_turn, so counting from it left the elapsed
+            # counter pinned at 0s through the whole pre-request window.
+            started = float(getattr(session, "_turn_submitted_at", 0.0) or 0.0)
+            if started <= 0.0:
+                started = float(getattr(session, "_turn_start_time", 0.0) or 0.0)
             elapsed = int(max(0, now - started)) if started > 0 else 0
             activity = str(getattr(session, "_current_tool_activity", "") or "")
-            line = f"{model}  ⏱ {elapsed}s"
             if activity:
-                line += f" · {activity}"
+                line = f"⏱ {elapsed}s · {activity}"
+            elif getattr(session, "_turn_first_delta", False):
+                line = f"Thinking · ⏱ {elapsed}s"
+            else:
+                line = f"Sent · ⏱ {elapsed}s"
             return f"{line} · Esc to interrupt"
 
-        return f"{model}  Idle"
+        return ""
 
     def _render_queue_preview(self) -> Any:
         callback = self._queue_preview
