@@ -49,7 +49,16 @@ from config import (
     validate_api_key,
 )
 from config.paths import VERSION
-from config.tiers import EFFORT_LEVELS, is_effort_level
+from core.commands._effort_flow import (
+    apply_scripted_effort,
+    offer_effort_after_model,
+    report_current,
+    set_provider_effort_support,
+)
+# Re-exported, not re-implemented: the call site resolves the name in this
+# module's globals, so tests that replace ``provider_commands.cc_style_model_selector``
+# must keep working.
+from core.commands._model_picker import cc_style_model_selector
 from core.logger import logger
 from core.provider_runtime import (
     ENV_PATH,
@@ -769,151 +778,13 @@ async def _handle_provider_cmd(
     elif sub == "remove":
         _provider_remove(sub_arg)
     elif sub == "effort":
-        _provider_set_effort_support(sub_arg.strip())
+        set_provider_effort_support(sub_arg.strip())
     elif sub == "test":
         maybe_result = _provider_test(session, sub_arg)
         if inspect.isawaitable(maybe_result):
             await maybe_result
     else:
         _print(c(RED, f"  ✗ Unknown sub-command '{sub}'. Available: list · add · fetch · update · activate · deactivate · effort · remove · test"))
-
-
-def _provider_set_effort_support(arg: str) -> None:
-    """Toggle whether a custom provider receives ``reasoning_effort``."""
-    parts = arg.split()
-    if not parts:
-        _print(c(RED, "  Usage: /provider effort <name> on|off"))
-        return
-    name = parts[0]
-    if len(parts) < 2 or parts[1].lower() not in ("on", "off"):
-        _print(c(RED, "  Usage: /provider effort <name> on|off"))
-        return
-    enabled = parts[1].lower() == "on"
-    if name not in provider_config.PROVIDERS:
-        _print(c(RED, f"  ✗ Unknown provider '{name}'"))
-        return
-    if not provider_config.set_provider_reasoning_effort(name, enabled):
-        _print(c(RED, f"  ✗ Could not update reasoning-effort support for '{name}'"))
-        return
-    state = "enabled" if enabled else "disabled"
-    _print(c(GREEN, f"  ✓ reasoning_effort {state} for provider '{name}'"))
-    if enabled:
-        _print(c(GRAY, "    Its models will now receive reasoning_effort for /effort levels."))
-    else:
-        _print(c(GRAY, "    Effort levels still apply local runtime limits only."))
-
-
-# ════════════════════════════════════════════════════════
-# Claude-Code-style inline model picker
-# ════════════════════════════════════════════════════════
-async def cc_style_model_selector(
-    models: dict, current_alias: str,
-) -> str | None:
-    """Claude Code style inline model selector."""
-    from prompt_toolkit.application import Application
-    from prompt_toolkit.key_binding import KeyBindings
-    from prompt_toolkit.layout import Layout
-    from prompt_toolkit.layout.controls import FormattedTextControl
-    from prompt_toolkit.layout.containers import Window
-
-    entries = list(models.items())
-    selected_idx = 0
-
-    def get_menu_fragments():
-        fragments = []
-        fragments.append(("class:title", "  Select model\n"))
-        fragments.append(("class:desc",   "  Choose a model for this session\n"))
-        fragments.append(("",             "\n"))
-
-        for i, (alias, cfg_m) in enumerate(entries):
-            if i == selected_idx:
-                fragments.append(("class:cursor", "  ❯ "))
-            else:
-                fragments.append(("", "    "))
-
-            fragments.append(("class:index", f"{i+1}."))
-
-            is_current = (alias == current_alias)
-            if i == selected_idx:
-                fragments.append(("class:selected", f" {alias}"))
-            else:
-                fragments.append(("", f" {alias}"))
-
-            if is_current:
-                fragments.append(("class:current", " ✔"))
-
-            desc = cfg_m.get("desc", "")[:45]
-            if desc:
-                if i == selected_idx:
-                    fragments.append(("class:desc-hi", f"  {desc}"))
-                else:
-                    fragments.append(("class:desc", f"  {desc}"))
-
-            if cfg_m.get("vision"):
-                fragments.append(("class:vision", " 📷"))
-
-            fragments.append(("", "\n"))
-
-        fragments.append(("", "\n"))
-        fragments.append(("class:help", "  Enter to confirm · Esc to exit\n"))
-
-        return fragments
-
-    control = FormattedTextControl(get_menu_fragments)
-    kb = KeyBindings()
-
-    @kb.add("up")
-    def _(event):
-        nonlocal selected_idx
-        selected_idx = (selected_idx - 1) % len(entries)
-
-    @kb.add("down")
-    def _(event):
-        nonlocal selected_idx
-        selected_idx = (selected_idx + 1) % len(entries)
-
-    @kb.add("enter")
-    def _(event):
-        event.app.exit(result=entries[selected_idx][0])
-
-    @kb.add("escape")
-    def _(event):
-        event.app.exit(result=None)
-
-    @kb.add("c-c")
-    def _(event):
-        event.app.exit(result=None)
-
-    for _n in range(1, min(10, len(entries) + 1)):
-        @kb.add(str(_n))
-        def _(event, _idx=_n - 1):
-            nonlocal selected_idx
-            if _idx < len(entries):
-                selected_idx = _idx
-
-    body = Window(content=control, always_hide_cursor=True)
-
-    style = _PTStyle.from_dict({
-        "title":      "#00afff bold",
-        "desc":       "#888888",
-        "desc-hi":    "#aaaaaa",
-        "cursor":     "#00ff00 bold",
-        "selected":   "#00ff00 bold",
-        "current":    "#00d700",
-        "index":      "#666666",
-        "vision":     "#00afff",
-        "help":       "#555555",
-    })
-
-    app = Application(
-        layout=Layout(body),
-        key_bindings=kb,
-        style=style,
-        mouse_support=False,
-        full_screen=False,
-    )
-
-    return await app.run_async()
 
 
 # ════════════════════════════════════════════════════════
@@ -965,22 +836,14 @@ async def cmd_provider(ctx: CommandContext) -> None:
 
 
 async def _apply_model(ctx: CommandContext, alias: str, *, offer_effort: bool = True) -> None:
-    """Switch the session model, then offer its reasoning-effort level.
+    """Switch the session model, then hand off to the effort flow.
 
     The effort step is chained into the model picker because that is where the
-    user is already choosing how the model behaves.  It is skipped when the
-    model declares no ``reasoning_effort`` support: the level would still move
-    the runtime limits, but there is nothing to negotiate with the provider, so
-    prompting would be noise.  ``/effort`` still reaches those models.
-
-    ``offer_effort=False`` suppresses the chained picker for the scripted
-    ``/model <alias> <effort>`` form, where the level was already given.
+    user is already choosing how the model behaves.  ``offer_effort=False``
+    suppresses the chained picker for the scripted ``/model <alias> <effort>``
+    form, where the level was already given.  The rest lives in
+    ``core/commands/_effort_flow.py``.
     """
-    from core.api_payloads import model_effort_map
-    from core.commands.system import _effort_delivery, _effort_tui_available, _select_effort_level
-    from core.state import runtime_config
-    from config import DEFAULT_EFFORT_LEVEL
-
     session = ctx.session
     models = provider_config.model_snapshot()
     session.model_alias = alias
@@ -991,42 +854,9 @@ async def _apply_model(ctx: CommandContext, alias: str, *, offer_effort: bool = 
     _print(c(GREEN, f"  ✓ Switched to {c(models.get(alias, {}).get('color', ''), alias)}"))
 
     if not offer_effort:
-        level = str(runtime_config().get("effort_level") or DEFAULT_EFFORT_LEVEL)
-        _print(c(GRAY, f"    {_effort_delivery(alias, level)}"))
-        return
-
-    if not model_effort_map(alias):
-        level = str(runtime_config().get("effort_level") or DEFAULT_EFFORT_LEVEL)
-        _print(c(GRAY, f"    effort={level}  ({_effort_delivery(alias, level)})"))
-        return
-
-    controller = getattr(ctx, "terminal_controller", None)
-    use_controller = controller is not None and getattr(controller, "run_selector", None) is not None
-    if not use_controller and not _effort_tui_available():
-        _print(c(GRAY, "  Pick a reasoning effort with /effort, or /model <alias> <effort>."))
-        return
-
-    current = str(runtime_config().get("effort_level") or DEFAULT_EFFORT_LEVEL)
-    try:
-        if use_controller:
-            from pawnlogic.selectors import EffortSelector
-
-            selected = await controller.run_selector(
-                lambda: EffortSelector(current, alias)
-            )
-        else:
-            selected = await _select_effort_level(current, alias)
-    except (EOFError, KeyboardInterrupt):
-        selected = None
-    except Exception:
-        _print(c(YELLOW, "  Effort selector unavailable; use /effort <level>."))
-        return
-    if selected is None:
-        _print(c(GRAY, f"  Effort unchanged ({current})."))
-        return
-    from core.commands.system import apply_effort
-
-    apply_effort(ctx, selected)
+        report_current(alias, show_level=False)
+    else:
+        await offer_effort_after_model(ctx, alias)
 
 
 @register("/model")
@@ -1043,24 +873,20 @@ async def cmd_model(ctx: CommandContext) -> None:
     if len(_parts) == 2:
         # Scriptable form: /model <alias> <effort>.
         _alias_arg, _effort_arg = _parts
-        if _alias_arg in provider_config.model_snapshot():
-            _provider_name = provider_config.model_snapshot()[_alias_arg].get("provider", "")
-            if not is_provider_active(_provider_name):
-                _print(c(YELLOW, f"  ⚠ Provider '{_provider_name}' is not active. Run /provider activate {_provider_name} first."))
-                return
-            from core.commands.system import apply_effort
-
-            if not is_effort_level(_effort_arg.lower()):
-                _print(c(RED, f"  ✗ Unknown effort level: {_effort_arg}"))
-                _print(c(GRAY, f"  Levels: {' / '.join(EFFORT_LEVELS)}"))
-                return
-            # Apply the level before switching models, and suppress the
-            # chained picker: the caller already scripted the level, so
-            # re-opening the selector would ignore what they asked for.
-            apply_effort(ctx, _effort_arg.lower())
-            await _apply_model(ctx, _alias_arg, offer_effort=False)
+        if _alias_arg not in provider_config.model_snapshot():
+            _print(c(RED, f"  ✗ Unknown model '{_alias_arg}'"))
             return
-        _print(c(RED, f"  ✗ Unknown model '{_alias_arg}'"))
+        _provider_name = provider_config.model_snapshot()[_alias_arg].get("provider", "")
+        if not is_provider_active(_provider_name):
+            _print(c(YELLOW, f"  ⚠ Provider '{_provider_name}' is not active. Run /provider activate {_provider_name} first."))
+            return
+        # Validate the level *before* switching models, so a typo leaves the
+        # session on the model it already had.  Applying it also suppresses
+        # the chained picker: the caller already scripted the level, so
+        # re-opening the selector would ignore what they asked for.
+        if not apply_scripted_effort(ctx, _effort_arg):
+            return
+        await _apply_model(ctx, _alias_arg, offer_effort=False)
         return
     if not arg:
         # Claude Code style inline selector.
