@@ -347,7 +347,7 @@ HELP_TEXT = f"""
   {c(GREEN, "/low")}   Alias for effort low
   {c(YELLOW, "/mid")}  Alias for effort medium
   {c(MAGENTA, "/deep")} Alias for effort high
-  {c(RED, "/max")}     Alias for effort max
+  {c(RED, "/max")}     Alias for effort xhigh
   {c(BOLD + CYAN, "/ultra")} Alias for effort max (150 iterations)
   {c(YELLOW, "/planguard [mode]")} Select plan-guard mode; no arg opens a selector
   {c(YELLOW, "/webstatus /browserstatus /docker /pwnenv")} Tool status
@@ -1118,8 +1118,8 @@ async def _main_impl():
         "/low":           "Alias for effort low (tokens=4k, ctx=40k)",
         "/mid":           "Alias for effort medium (tokens=8k, ctx=150k) <- default",
         "/deep":          "Alias for effort high (tokens=32k, ctx=400k)",
-        "/max":           "Alias for effort max (tokens=32k, ctx=600k, iter=150, 60min)",
-        "/ultra":         "Alias for effort max",
+        "/max":           "Alias for effort xhigh (tokens=32k, ctx=600k, iter=100, 60min)",
+        "/ultra":         "Alias for effort max (tokens=32k, ctx=600k, iter=150, 60min)",
         "/normal":        "Alias for effort medium",
         "/limits":        "Show all runtime limits",
         "/tokens":        "Set max_tokens",

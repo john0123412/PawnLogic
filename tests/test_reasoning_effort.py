@@ -25,6 +25,8 @@ control rather than two independent ones that can disagree:
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -295,6 +297,71 @@ class TestWorkerLockPreserved:
     def test_effort_change_still_applies_the_new_limits(self, restore_dynamic_config):
         self._apply("high")
         assert _cfg()["max_iter"] == TIER_DEEP["max_iter"]
+
+
+# ── 2b. What the help text advertises ────────────────────
+#
+# The behavioural test above pins where each alias lands. This one pins that
+# the CLI *says* the same thing, because the two drifted together: `/max` was
+# re-pointed at `xhigh` while both the help block and the slash-description
+# table still advertised it as `max`, and the description even quoted
+# `iter=150` — the `/ultra` limit. The strings live in a function-local dict
+# and a banner literal, so they are read as text rather than imported.
+
+
+class TestAliasHelpText:
+    """The advertised rung must equal the rung the alias actually applies."""
+
+    ALIASES = ("/low", "/mid", "/normal", "/deep", "/max", "/ultra")
+
+    def _advertised(self, verb: str) -> list[str]:
+        source = (Path(__file__).resolve().parents[1] / "pawnlogic" / "cli.py").read_text(
+            encoding="utf-8"
+        )
+        # Both surfaces are matched: the `{/max}  Alias for effort X` help
+        # block and the `"/max":  "Alias for effort X (...)"` dict entry.
+        found = []
+        for pattern in (
+            rf'"{re.escape(verb)}":\s*"Alias for effort (\w+)',
+            rf"\{{{re.escape(verb)}\}}\s+Alias for effort (\w+)",
+        ):
+            found += re.findall(pattern, source)
+        return found
+
+    @pytest.mark.parametrize("verb", ALIASES)
+    def test_help_text_names_the_rung_the_alias_applies(self, verb, restore_dynamic_config):
+        import asyncio
+
+        from core.commands import CommandContext
+        from core.commands import system as system_commands
+
+        class _Session:
+            model_alias = "ds-v4-flash"
+
+            def _reset_system_prompt(self) -> None:
+                pass
+
+        handler = {
+            "/low": system_commands.cmd_low,
+            "/mid": system_commands.cmd_mid,
+            "/normal": system_commands.cmd_normal,
+            "/deep": system_commands.cmd_deep,
+            "/max": system_commands.cmd_max,
+            "/ultra": system_commands.cmd_ultra,
+        }[verb]
+
+        _cfg()["effort_level"] = "off"
+        asyncio.run(
+            handler(CommandContext(verb=verb, arg="", arg2="", session=_Session()))
+        )
+        applied = _cfg()["effort_level"]
+
+        advertised = self._advertised(verb)
+        assert advertised, f"no help text advertises {verb}"
+        for level in advertised:
+            assert level == applied, (
+                f"{verb} applies effort={applied} but the help text says {level}"
+            )
 
 
 # ── 3. Sub-agent output clamp ────────────────────────────
