@@ -44,7 +44,7 @@ class FakeBindings:
         return register
 
 
-def _build_bindings(session, *, on_interrupt_settled=None):
+def _build_bindings(session, *, on_interrupt_settled=None, on_idle_interrupt=None):
     bindings = FakeBindings()
     restore = MagicMock()
     built, state = build_prompt_toolkit_bindings(
@@ -54,6 +54,7 @@ def _build_bindings(session, *, on_interrupt_settled=None):
         restore_last_input_buffer=restore,
         last_input_path=Path(".last_input"),
         on_interrupt_settled=on_interrupt_settled,
+        on_idle_interrupt=on_idle_interrupt,
     )
     assert built is bindings
     return bindings, state
@@ -183,6 +184,70 @@ def test_idle_ctrl_c_exits_prompt_and_does_not_call_session_control():
     session.interrupt_active.assert_not_called()
     app.exit.assert_called_once()
     assert isinstance(app.exit.call_args.kwargs["exception"], KeyboardInterrupt)
+
+
+def test_idle_ctrl_c_routes_to_the_repl_handler_instead_of_exiting():
+    """An idle Ctrl+C must not put a BaseException into the Application task.
+
+    ``app.exit(exception=KeyboardInterrupt())`` unwinds through
+    ``asyncio.run`` and skips the CLI teardown, so the non-daemon Turn
+    worker is never released and the interpreter blocks in
+    ``threading._shutdown()`` with SIGINT already ignored -- the reported
+    "cannot exit, ^C does nothing" hang.  The REPL owns the double-press
+    confirm, so the press goes there instead.
+    """
+    session = SimpleNamespace(
+        queue_status=lambda: {"pending_count": 0},
+        interrupt_active=MagicMock(),
+    )
+    seen: list[str] = []
+    bindings, _state = _build_bindings(
+        session, on_idle_interrupt=lambda: seen.append("idle")
+    )
+    app = SimpleNamespace(
+        current_buffer=SimpleNamespace(),
+        exit=MagicMock(),
+        create_background_task=asyncio.create_task,
+    )
+
+    async def scenario():
+        bindings.handlers[("c-c",)](SimpleNamespace(app=app))
+        await asyncio.sleep(0.05)
+
+    asyncio.run(scenario())
+
+    assert seen == ["idle"]
+    session.interrupt_active.assert_not_called()
+    app.exit.assert_not_called()
+
+
+def test_idle_ctrl_c_awaits_an_async_repl_handler():
+    """The confirm notice is printed through an awaited terminal handoff."""
+    session = SimpleNamespace(
+        queue_status=lambda: {"pending_count": 0},
+        interrupt_active=MagicMock(),
+    )
+    done: list[str] = []
+
+    async def handler():
+        await asyncio.sleep(0)
+        done.append("notice")
+
+    bindings, _state = _build_bindings(session, on_idle_interrupt=handler)
+    app = SimpleNamespace(
+        current_buffer=SimpleNamespace(),
+        exit=MagicMock(),
+        create_background_task=asyncio.create_task,
+    )
+
+    async def scenario():
+        bindings.handlers[("c-c",)](SimpleNamespace(app=app))
+        await asyncio.sleep(0.05)
+
+    asyncio.run(scenario())
+
+    assert done == ["notice"]
+    app.exit.assert_not_called()
 
 
 def test_escape_enter_still_marks_follow_up_while_running():

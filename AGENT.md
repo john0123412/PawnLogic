@@ -833,18 +833,54 @@ fail; do not list a module here before CI checks it.
 - An Application task that ends without `close()` must both wake the parked
   CLI submission waiter and resolve any pending selector future. A silent
   exit there previously left the only recovery a force-quit.
-- An idle Ctrl+C is still a `BaseException` exit, not a graceful one. Both
-  the `c-c` binding (`event.app.exit(exception=KeyboardInterrupt())`) and
-  `install_live_interrupt_handler`'s idle raise put a `KeyboardInterrupt`
-  into the Application task, which `run_async` does not catch; it unwinds
-  through `asyncio.run`, so the CLI shutdown block never runs. The visible
-  consequences are the `stopped unexpectedly` notice and a skipped
-  `session.shutdown()` / pending-task cancel. The `c-c`-on-idle path is
-  unreachable as a clean exit, so the double-press confirm in
-  `cli.py` only ever runs on the readline path. The half of this that is
-  fixed: the live SIGINT handler is now disarmed to `SIG_IGN` from
-  `_observe_terminal_task`, so the handler cannot outlive the REPL and
-  re-raise inside `threading._shutdown`. Do not restore that guard to
+- An idle Ctrl+C must never become a `BaseException` in the Application
+  task. Two sources used to produce one: the `c-c` binding's
+  `event.app.exit(exception=KeyboardInterrupt())` and
+  `install_live_interrupt_handler`'s idle raise. `run_async` does not catch
+  it, so it unwound through `asyncio.run` and skipped the CLI teardown —
+  and `session.shutdown()` is the only thing that releases the non-daemon
+  `pawnlogic-turn-*` worker, so the interpreter then blocked in
+  `threading._shutdown()`. Because `_observe_terminal_task` had already
+  disarmed SIGINT to `SIG_IGN`, Ctrl+C could not break that hang either:
+  the tty echoes `^C` because ECHO is independent of delivery, so the
+  reported symptom was "cannot exit" with only SIGKILL working. Both
+  sources now route to `on_idle_interrupt`, which runs the same
+  double-press confirm the readline path uses and closes the terminal on
+  the second press, so the loop reaches teardown normally. The bare
+  `raise KeyboardInterrupt` survives only as the fallback for a caller
+  that installs no idle handler. The teardown is a `finally` on purpose —
+  it is the second half of the fix and is what makes the fallback safe, so
+  a `BaseException` unwinding through `asyncio.run` can no longer strand
+  the Turn worker. Do not move `session.shutdown()` back out of that
+  `finally`, and do not give the `c-c` binding its own exit path again.
+- The teardown releases the Turn worker on a bounded deadline, so a wedged
+  worker can still wedge exit — this is the one idle-Ctrl+C path with no
+  recovery. `core/turn_scheduler.py:967` sets `daemon=False`, the only
+  non-daemon thread in the repo, so `threading._shutdown()` waits for it
+  indefinitely and ignores any deadline the thread applied to itself. The
+  release is `join_worker.join(timeout=self._shutdown_timeout)` (`:702`),
+  default **5.0 s** (`:448`); a worker still alive at the deadline is
+  abandoned and recorded as `"worker did not stop before shutdown timeout"`,
+  and the interpreter then blocks on it anyway. The `finally` converts the
+  *common* case (teardown skipped entirely, worker never released) into
+  this *rare* one (worker genuinely refuses to stop). It does not eliminate
+  the hang class; do not write or repeat that it does.
+- The idle-Ctrl+C e2e proves the teardown runs, not that the hang is gone.
+  `test_idle_ctrl_c_exits_cleanly_and_runs_the_teardown` never starts a
+  Turn, so there is no live `pawnlogic-turn-*` worker during the test — the
+  reported scenario (worker alive + idle Ctrl+C) has no end-to-end
+  coverage. A pexpect `\x03` also reaches the `c-c` *binding* rather than
+  the Python signal handler, so that e2e gates only the binding path; the
+  SIGINT path is gated separately by `tests/test_live_sigint_teardown.py`.
+  Mutation-testing each source independently is what established the
+  split — reverting only the signal handler leaves that e2e green.
+- A live-side notice must go through `run_in_terminal`; a direct `print`
+  from the Application's event loop is swallowed, because the renderer owns
+  stdout. `_terminal_notice` is the only correct route. The two idle
+  sources are also independent schedulers (one closure variable each in
+  `build_prompt_toolkit_bindings` and in `install_live_interrupt_handler`),
+  so a new source needs its own guard. The live SIGINT handler is disarmed
+  to `SIG_IGN` from `_observe_terminal_task`; do not restore that guard to
   depend on `restore()` — the shutdown block is exactly the code the
   exception skips, so `closing` never became true.
 - Safe-point steering can alter Tool Call batch protocol; skipped results,
@@ -1038,6 +1074,36 @@ fail; do not list a module here before CI checks it.
   step, the pyproject overrides, and the Typed Island section).
   `tests/test_typed_island_sync.py` fails the build when they diverge;
   treat that failure as the gate, not as a test to relax.
+- `pexpect.expect` compiles its pattern as a regex, so a literal string
+  containing a metacharacter can never match. `"Press Ctrl+C again"` does
+  not match that notice: `+` binds to the preceding `l`, so the pattern
+  demands `Ctrl` + `l+` + `C` while the stream carries a literal `+`. The
+  result is a timeout on a feature that is working perfectly, with the
+  notice visible in `child.before`. Wrap any literal in `re.escape`. Two
+  traps in the same helper: with `encoding="utf-8"`, assigning a **binary**
+  file to `child.logfile_read` raises `TypeError` on the first read, so
+  every later "the child printed nothing" reading is an artifact of the
+  probe rather than of the product; and pexpect only reads the pty inside
+  `expect`/`read`, so a `send` + `sleep` diagnostic captures nothing
+  unless something is driving reads.
+- A test that provokes `KeyboardInterrupt` or `SystemExit` in-process can
+  abort the whole pytest session instead of failing. The exception unwinds
+  out of the test, pytest stops doing further work, and the run exits **2**
+  — but the summary line still reports only what already passed, so it
+  reads like success. Measured on a full fast-suite run: **679 of 1727
+  tests executed**, and the output said "679 passed". A regression touching
+  a signal handler can therefore hide most of the suite behind one line of
+  `!!! KeyboardInterrupt !!!`. Contain the provoked exception in the test
+  (`_run_expecting_routed_interrupt` in `tests/test_live_sigint_teardown.py`
+  does this via `pytest.fail`) so the regression becomes a normal, named
+  failure. A fixture that only restores the previous handler is not enough
+  — it runs *after* the yield, by which time the exception has escaped.
+- Mutation-test each independent fix source; a suite that covers one does
+  not cover the other. See the idle-Ctrl+C entries above: reverting only
+  the `install_live_interrupt_handler` route left the headline e2e test
+  green, because the pexpect PTY delivers `\x03` to the `c-c` binding
+  instead. The suite as a whole was correct; only running the mutations
+  separately showed which gate covers which source.
 
 ## Agent Workflow
 

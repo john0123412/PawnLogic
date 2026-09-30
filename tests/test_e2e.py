@@ -303,6 +303,109 @@ def test_ctrl_c_retry_and_queue_resume_keep_one_recoverable_message(tmp_path):
             child.close(force=True)
 
 
+def _spawn_teardown_probe_process(tmp_path):
+    """Spawn the live terminal with a probe that records the CLI teardown.
+
+    The probe is a file write, not a log line: loguru's file sink is a daemon
+    thread with a queue, so a teardown record can be lost if the process dies
+    abruptly.  This is the invariant that matters, so it needs an unlosable
+    witness.
+    """
+    test_home = tmp_path / "teardown-home"
+    pawnlogic_home = test_home / ".pawnlogic"
+    pawnlogic_home.mkdir(parents=True)
+    bootstrap_dir = tmp_path / "teardown-bootstrap"
+    bootstrap_dir.mkdir()
+    marker_path = tmp_path / "teardown-ran.txt"
+    (bootstrap_dir / "sitecustomize.py").write_text(
+        """
+import os
+from pathlib import Path
+
+import core.live_turn_control
+import core.session
+
+_marker = Path(os.environ["PAWNLOGIC_TEARDOWN_MARKER"])
+_original = core.live_turn_control.shutdown_session
+
+
+def _traced(session):
+    _marker.write_text("teardown", encoding="utf-8")
+    return _original(session)
+
+
+core.live_turn_control.shutdown_session = _traced
+core.session.shutdown_session = _traced
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env.update({
+        "HOME": str(test_home),
+        "PAWNLOGIC_HOME": str(pawnlogic_home),
+        "PAWNLOGIC_TEST_MODE": "true",
+        "DEEPSEEK_API_KEY": "sk-test-fake-key-for-ci",
+        "PAWN_API_KEY": "test-fake-key",
+        "TERM": "xterm",
+        "NO_COLOR": "1",
+        "MCP_ENABLED": "false",
+        "PAWNLOGIC_TEARDOWN_MARKER": str(marker_path),
+    })
+    env.pop("PROMPT_TOOLKIT_ENABLED", None)
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(ROOT), str(bootstrap_dir), existing_pythonpath) if part
+    )
+    child = pexpect.spawn(
+        f"{sys.executable} main.py",
+        cwd=str(ROOT),
+        timeout=15,
+        encoding="utf-8",
+        env=env,
+    )
+    return child, marker_path
+
+
+def test_idle_ctrl_c_exits_cleanly_and_runs_the_teardown(tmp_path):
+    """Two idle Ctrl+C presses must exit the live terminal, not wedge it.
+
+    The reported failure was one Ctrl+C at an idle prompt: the handler raised
+    ``KeyboardInterrupt`` inside the Application task, which unwound through
+    ``asyncio.run`` and skipped the CLI teardown entirely.
+    ``session.shutdown()`` -- the only caller of which is that teardown -- is
+    what releases the non-daemon Turn worker, so the process then blocked in
+    ``threading._shutdown()``; and because the live observer had already
+    disarmed SIGINT to ``SIG_IGN``, Ctrl+C could not break that hang either,
+    leaving SIGKILL as the only way out.
+    """
+    child, marker_path = _spawn_teardown_probe_process(tmp_path)
+    try:
+        _wait_for_prompt(child)
+
+        # First press only arms the confirm, exactly as the readline path does.
+        # ``re.escape`` matters: pexpect compiles the pattern, and the bare
+        # ``+`` in "Ctrl+C" would otherwise make it unmatchable against the
+        # literal notice text.
+        child.sendcontrol("c")
+        child.expect(re.escape("Press Ctrl+C again"), timeout=15)
+        assert child.isalive(), "a single idle Ctrl+C must not exit the REPL"
+
+        child.sendcontrol("c")
+        child.expect(pexpect.EOF, timeout=20)
+        assert not child.isalive()
+        assert marker_path.exists(), (
+            "the CLI teardown never ran, so the non-daemon Turn worker was "
+            "never released"
+        )
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        print(f"\n=== OUTPUT ===\n{child.before}")
+        pytest.fail(f"idle Ctrl+C exit flow failed: {e}")
+    finally:
+        if child.isalive():
+            child.close(force=True)
+
+
 @pytest.mark.parametrize("replacement", ["edited prompt", "/replacement prompt"])
 def test_ctrl_c_edit_replaces_the_preserved_prompt(tmp_path, replacement):
     """Plain and slash-prefixed edits replace the preserved prompt once."""
