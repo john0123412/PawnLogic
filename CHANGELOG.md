@@ -7,6 +7,80 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-30
+
+### Added
+- `/effort` is now the single control for reasoning effort, with six rungs —
+  `off`, `low`, `medium`, `high`, `xhigh`, `max` — defaulting to `medium`.
+  It is a modal selector reachable from `/model`, and
+  `core/commands/_effort_flow.py` owns the flow shared by the selector and
+  the aliases. The wire-v1 ratatui client intercepts a bare `/effort` the
+  same way it already intercepted bare `/model` and points the user at
+  `/effort <level>`. See
+  [ADR 0012](docs/adr/0012-reasoning-effort-control.md).
+
+### Changed
+- `/low`, `/mid`, `/deep`, `/max`, `/ultra`, and `/normal` are kept as
+  aliases that print where the setting moved, so existing habits and scripts
+  keep working. `apply_effort` is the one write path behind the selector and
+  every alias, so they cannot drift apart.
+- `MODELS[alias]["effort"]` is a per-rung map (`{rung: wire_value}`) rather
+  than a flag. A model that accepts `low`/`medium`/`high` but not `xhigh`
+  simply has no `xhigh` key, so the rung is never sent. An undeclared model
+  gets an empty map and the parameter is omitted entirely, which is what
+  keeps the default safe against an OpenAI-compatible relay that rejects it.
+- A delegated worker inherits the parent's effort level, because it resolves
+  from its own model alias. Its `max_tokens` stays clamped by
+  `SubAgentSession.MAX_TOKENS`, so a worker chosen for speed does not inherit
+  the 32k output ceiling that a high rung implies.
+- Sessions saved before this release carry runtime limits but no
+  `effort_level`. `infer_effort_level` reverse-infers the rung, so an old
+  `/ultra` session restores as `max` instead of snapping to the default.
+- The toolbar field is `Effort:` rather than `Tier:`, reading `effort_level`
+  directly and falling back to reverse inference.
+- The completion menu is an `HSplit` child between the output window and the
+  composer instead of a `Float`. The live terminal is inline, so a float is
+  only as tall as the rows below the cursor and the menu painted over the
+  toolbar — the model field and the fuzzy candidates drew on top of each
+  other. See
+  [ADR 0010](docs/adr/0010-inline-terminal-modal.md).
+
+### Fixed
+- `/max` no longer jumps a rung. The legacy tier commands are preserved by
+  pointing each at the rung that carries the tier it used to set, but `/max`
+  was pointed at `max` instead of `xhigh` — so it silently applied the limits
+  `/ultra` used to set, made the two commands identical, and left `xhigh`
+  unreachable from any legacy alias. `/deep`, `/max`, and `/ultra` now map to
+  `high`, `xhigh`, and `max` again, each keeping the iteration and token
+  limits it had before the effort ladder existed.
+- Changing effort no longer discards an explicit `/worker <alias>` lock.
+  Every tier preset pinned the worker to `"auto"`, so `/deep` and its
+  siblings silently undid the lock while the worker menu — which reads the
+  on-disk policy first — kept showing the old value, so delegation ran on a
+  different model than the menu claimed. `apply_effort` carries the current
+  worker across.
+- An idle Ctrl+C could not be exited from. Both the `c-c` binding and the
+  live SIGINT handler raised into the Prompt Toolkit application task, which
+  unwound past the CLI teardown, and `session.shutdown()` is the only thing
+  that releases the non-daemon Turn worker. The interpreter then blocked in
+  `threading._shutdown()` with SIGINT already disarmed, so the symptom was
+  "cannot exit" with only SIGKILL working. Both sources now route to
+  `on_idle_interrupt`, which runs the same double-press confirm the readline
+  path uses, and the teardown is a `finally` so a stray `BaseException` can no
+  longer strand the worker.
+- The Turn status line now says `Sent` the moment Enter is pressed. The
+  counter used to be stamped at `_turn_start_time`, which is only reached
+  after system-prompt resets and a possible blocking summary call, so the
+  toolbar read `0s` through the whole pre-request window and a slow
+  time-to-first-token was indistinguishable from a dead connection.
+- The toolbar no longer matches status text by substring. `_build_status`
+  returned `"[model]  Idle"` and `_render_toolbar` suppressed it with
+  `"Idle" not in status`, which also swallowed the recovered-draft state
+  because that state's text contains "Idle" — so it had never been
+  displayed. `_build_status` now returns `""` for idle.
+- Model reasoning text is shown in user-friendly mode as a dim
+  `🧠 [thinking]` stream rather than being hidden behind debug mode.
+
 ## [0.3.13] - 2026-09-29
 
 ### Added

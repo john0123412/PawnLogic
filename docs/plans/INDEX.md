@@ -8,8 +8,9 @@
 - [reasoning-effort-unification.md](reasoning-effort-unification.md) — one
   reasoning-effort level selected inside `/model`, driving both the provider
   wire value and the runtime limits, replacing the six tier commands. See
-  [ADR 0012](../adr/0012-reasoning-effort-control.md). Implemented but not
-  released; the version stays at `0.3.13`.
+  [ADR 0012](../adr/0012-reasoning-effort-control.md). Merged by PR #165 and
+  shipping in the `0.4.0` release candidate; it moves to Completed Plans once
+  the `v0.4.0` tag exists, per the rule below.
 
 ## Completed Plans
 

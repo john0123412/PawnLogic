@@ -379,7 +379,7 @@ async def cmd_deep(ctx: CommandContext) -> None:
 
 @register("/max")
 async def cmd_max(ctx: CommandContext) -> None:
-    _effort_alias(ctx, "/max", "max")
+    _effort_alias(ctx, "/max", "xhigh")
 
 
 @register("/ultra")

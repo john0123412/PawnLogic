@@ -25,11 +25,20 @@ control rather than two independent ones that can disagree:
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from config.tiers import EFFORT_LEVELS, TIER_DEEP
+from config.tiers import (
+    EFFORT_LEVELS,
+    TIER_DEEP,
+    TIER_LOW,
+    TIER_MID,
+    TIER_MAX,
+    TIER_ULTRA,
+)
 
 # ── helpers ──────────────────────────────────────────────
 #
@@ -228,6 +237,58 @@ class TestWorkerLockPreserved:
         )
         assert _cfg()["preferred_worker"] == "ds-v4-flash"
 
+    @pytest.mark.parametrize(
+        "verb,legacy_tier",
+        [
+            ("/low", TIER_LOW),
+            ("/mid", TIER_MID),
+            ("/normal", TIER_MID),
+            ("/deep", TIER_DEEP),
+            ("/max", TIER_MAX),
+            ("/ultra", TIER_ULTRA),
+        ],
+    )
+    def test_every_legacy_alias_preserves_its_old_tier(
+        self, verb, legacy_tier, restore_dynamic_config
+    ):
+        """Each alias must land on the rung carrying the tier it used to set.
+
+        The expectation is derived from the tier constants rather than written
+        out, so this fails if a rung is renamed or the ladder reshuffled. It
+        catches the case where an alias is pointed at the wrong rung: mapping
+        ``/max`` to ``max`` instead of ``xhigh`` looked harmless because both
+        are "big", but it silently gave ``/max`` the limits ``/ultra`` used to
+        set, made the two commands identical, and left ``xhigh`` unreachable
+        from any legacy alias.
+        """
+        import asyncio
+
+        from core.commands import CommandContext
+        from core.commands import system as system_commands
+
+        class _Session:
+            model_alias = "ds-v4-flash"
+
+            def _reset_system_prompt(self) -> None:
+                pass
+
+        handler = {
+            "/low": system_commands.cmd_low,
+            "/mid": system_commands.cmd_mid,
+            "/normal": system_commands.cmd_normal,
+            "/deep": system_commands.cmd_deep,
+            "/max": system_commands.cmd_max,
+            "/ultra": system_commands.cmd_ultra,
+        }[verb]
+
+        _cfg()["effort_level"] = "off"
+        asyncio.run(
+            handler(CommandContext(verb=verb, arg="", arg2="", session=_Session()))
+        )
+
+        for key, value in legacy_tier.items():
+            assert _cfg()[key] == value, (verb, key)
+
     def test_unset_worker_stays_auto(self, restore_dynamic_config):
         _cfg()["preferred_worker"] = "auto"
         self._apply("low")
@@ -236,6 +297,71 @@ class TestWorkerLockPreserved:
     def test_effort_change_still_applies_the_new_limits(self, restore_dynamic_config):
         self._apply("high")
         assert _cfg()["max_iter"] == TIER_DEEP["max_iter"]
+
+
+# ── 2b. What the help text advertises ────────────────────
+#
+# The behavioural test above pins where each alias lands. This one pins that
+# the CLI *says* the same thing, because the two drifted together: `/max` was
+# re-pointed at `xhigh` while both the help block and the slash-description
+# table still advertised it as `max`, and the description even quoted
+# `iter=150` — the `/ultra` limit. The strings live in a function-local dict
+# and a banner literal, so they are read as text rather than imported.
+
+
+class TestAliasHelpText:
+    """The advertised rung must equal the rung the alias actually applies."""
+
+    ALIASES = ("/low", "/mid", "/normal", "/deep", "/max", "/ultra")
+
+    def _advertised(self, verb: str) -> list[str]:
+        source = (Path(__file__).resolve().parents[1] / "pawnlogic" / "cli.py").read_text(
+            encoding="utf-8"
+        )
+        # Both surfaces are matched: the `{/max}  Alias for effort X` help
+        # block and the `"/max":  "Alias for effort X (...)"` dict entry.
+        found = []
+        for pattern in (
+            rf'"{re.escape(verb)}":\s*"Alias for effort (\w+)',
+            rf"\{{{re.escape(verb)}\}}\s+Alias for effort (\w+)",
+        ):
+            found += re.findall(pattern, source)
+        return found
+
+    @pytest.mark.parametrize("verb", ALIASES)
+    def test_help_text_names_the_rung_the_alias_applies(self, verb, restore_dynamic_config):
+        import asyncio
+
+        from core.commands import CommandContext
+        from core.commands import system as system_commands
+
+        class _Session:
+            model_alias = "ds-v4-flash"
+
+            def _reset_system_prompt(self) -> None:
+                pass
+
+        handler = {
+            "/low": system_commands.cmd_low,
+            "/mid": system_commands.cmd_mid,
+            "/normal": system_commands.cmd_normal,
+            "/deep": system_commands.cmd_deep,
+            "/max": system_commands.cmd_max,
+            "/ultra": system_commands.cmd_ultra,
+        }[verb]
+
+        _cfg()["effort_level"] = "off"
+        asyncio.run(
+            handler(CommandContext(verb=verb, arg="", arg2="", session=_Session()))
+        )
+        applied = _cfg()["effort_level"]
+
+        advertised = self._advertised(verb)
+        assert advertised, f"no help text advertises {verb}"
+        for level in advertised:
+            assert level == applied, (
+                f"{verb} applies effort={applied} but the help text says {level}"
+            )
 
 
 # ── 3. Sub-agent output clamp ────────────────────────────
