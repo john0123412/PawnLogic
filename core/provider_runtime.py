@@ -30,6 +30,11 @@ from core.api_retry import (
 )
 from core.file_store import atomic_write_text, ensure_private_dir
 from core.logger import logger
+from core.provider_formats import (
+    build_auth_headers,
+    normalize_api_format,
+    normalize_auth,
+)
 from core.provider_models import (
     REASONING_KEYWORDS,
     candidate_save_alias,
@@ -179,26 +184,39 @@ def save_provider_with_rollback(
 
 
 def update_custom_provider(
-    provider_name: str, base_url: str, api_format: str
+    provider_name: str,
+    base_url: str,
+    api_format: str,
+    auth: str | None = None,
 ) -> tuple[bool, str]:
     """Replace a custom provider's endpoint fields, keeping its identity.
 
     The name, API key env var, label, active state, and loaded models all
-    survive: only the base URL and the wire format are replaced, in a single
-    atomic write. Renaming is deliberately out of scope here — it would have
-    to re-point every model entry and rename the env var, which cannot be
-    done in one write without a window where the provider is half-migrated.
+    survive: only the base URL, the wire format, and — when given — the auth
+    scheme are replaced, in a single atomic write. Renaming is deliberately out
+    of scope here — it would have to re-point every model entry and rename the
+    env var, which cannot be done in one write without a window where the
+    provider is half-migrated.
+
+    ``auth`` left as ``None`` keeps whatever the provider already had, so an
+    Edit that does not touch the Auth row cannot silently reset it.
     """
     if provider_name not in PROVIDERS:
         return False, f"Provider not found: {provider_name}"
     if provider_name in BUILTIN_PROVIDER_NAMES:
         return False, f"Cannot edit built-in provider: {provider_name}"
-    fmt = str(api_format).strip().lower()
-    if fmt not in {"openai", "anthropic"}:
-        return False, f"Unsupported API format: {api_format}"
+    try:
+        fmt = normalize_api_format(api_format)
+    except ValueError as exc:
+        return False, str(exc)
     cfg = dict(PROVIDERS[provider_name])
     cfg["base_url"] = str(base_url).strip()
     cfg["api_format"] = fmt
+    if auth is not None:
+        try:
+            cfg["auth"] = normalize_auth(auth)
+        except ValueError as exc:
+            return False, str(exc)
     # An empty models map with replace_models left False is what keeps the
     # provider's already-loaded models on disk.
     ok, err = save_provider_with_rollback(provider_name, cfg, {})
@@ -245,6 +263,7 @@ async def test_connection(
     api_key: str,
     api_format: str,
     model_id: str,
+    auth: str = "auto",
 ) -> tuple[bool, str, int]:
     """Check reachability and credentials for free.
 
@@ -257,6 +276,10 @@ async def test_connection(
 
     The trade-off: it no longer proves that ``model_id`` can serve chat. A
     model the key cannot use is reported by the provider on first real use.
+
+    ``auth`` is sent as configured, so a relay that authenticates differently
+    from the protocol it speaks can still be tested here rather than only at
+    the first real request.
     """
     import httpx
 
@@ -266,14 +289,10 @@ async def test_connection(
         return False, "API key is not configured.", 0
     listing = models_url_from_base_url(base_url)
     maybe_warn_insecure_provider(listing)
-    if api_format == "anthropic":
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-    else:
-        headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
+    try:
+        headers = build_auth_headers(api_format, auth, api_key)
+    except ValueError as exc:
+        return False, str(exc), 0
     try:
         async with httpx.AsyncClient(timeout=policy.nonstream_timeout_seconds) as client:
             resp = await _request_with_retry(
@@ -281,7 +300,7 @@ async def test_connection(
                 policy=policy,
             )
         ms = int((time.monotonic() - t0) * 1000)
-        ok, msg = connection_result_from_listing(resp, ms)
+        ok, msg = connection_result_from_listing(resp, ms, api_format=api_format, auth=auth)
         return ok, msg, ms
     except httpx.TimeoutException:
         return (
@@ -299,6 +318,7 @@ async def fetch_models(
     base_url: str,
     api_key: str,
     api_format: str = "openai",
+    auth: str = "auto",
 ) -> tuple[list[tuple[str, dict]], str, dict]:
     import httpx
 
@@ -312,7 +332,7 @@ async def fetch_models(
         "hidden_by_metadata": 0,
         "selectable": 0,
     }
-    headers = provider_headers(api_format, api_key)
+    headers = provider_headers(api_format, api_key, auth)
     url: str | None = f"{models_url}?limit=200"
     try:
         async with httpx.AsyncClient(timeout=policy.nonstream_timeout_seconds) as client:
@@ -329,7 +349,12 @@ async def fetch_models(
                 try:
                     resp.raise_for_status()
                 except httpx.HTTPStatusError as exc:
-                    return [], format_http_error(exc.response.status_code, exc.response.text), stats
+                    return [], format_http_error(
+                        exc.response.status_code,
+                        exc.response.text,
+                        api_format=api_format,
+                        auth=auth,
+                    ), stats
                 try:
                     body = resp.json()
                 except ValueError:

@@ -195,7 +195,7 @@ Anthropic 格式的模型暂未接入：Messages API 用 `thinking.budget_tokens
 
 ```bash
 /provider                         # 打开 Provider TUI
-/provider add <name> <base_url> <ENV_KEY> [anthropic]
+/provider add <name> <base_url> <ENV_KEY> [format] [auth]
 /provider fetch <name>            # 拉取可用模型并选择别名
 /provider update <name>           # 重新拉取 Provider 模型
 /provider activate <name>         # 显示已选择的 Provider 模型
@@ -209,7 +209,30 @@ Anthropic 格式的模型暂未接入：Messages API 用 `thinking.budget_tokens
 
 API Key 存储在 `~/.pawnlogic/.env`。Provider 配置、模型别名和描述存储在 `~/.pawnlogic/custom_providers.json`，不包含 secret value。Provider 配置流程不会把 Key 写入 shell 启动文件。
 
-交互式 TUI 也支持原地修改 Provider。进入某个 Provider 的详情页并选择 `Edit Provider`，即可修正它的 `Base URL` 和 `Format`；保存会保留 Provider 名称、API Key 以及已加载的模型。这里不提供重命名：重命名必须同时改写每一个模型条目的 provider 字段和 Key 的环境变量，无法原子完成。需要更换 Key 请使用 `Update API Key`，它会要求重新粘贴完整值，且始终不显示已保存的值。
+### 协议与鉴权
+
+`format` 取 `openai`、`anthropic` 或 `responses`：
+
+| 格式 | 端点 | 请求体 |
+|---|---|---|
+| `openai` | `POST {base}/chat/completions` | OpenAI Chat Completions |
+| `anthropic` | `POST {base}/messages` | Anthropic Messages |
+| `responses` | `POST {base}/responses` | OpenAI Responses |
+
+`auth` 是独立的一项设置，因为这两者在实践中互不绑定。中转站经常以 `Authorization: Bearer` 提供 Anthropic 形状的请求体并拒绝 `x-api-key`（返回 401），反过来也一样。`auto` 是默认值，沿用该协议原本的鉴权方式，因此既有 Provider 无需任何改动：
+
+| `auth` | 实际发送的头 |
+|---|---|
+| `auto` | 协议默认值（Anthropic 用 `x-api-key`，其余用 `Bearer`） |
+| `bearer` | `Authorization: Bearer` |
+| `x_api_key` | `x-api-key` |
+| `both` | 两个头都发送 |
+
+只要格式是 `anthropic`，无论 `auth` 如何设置都会发送 `anthropic-version`——它标识的是请求体形状而不是凭据，Anthropic 端点要求带上它。
+
+遇到 401 时，错误信息会指出实际发送的是哪个凭据头，并指向 `Auth` 设置，而不是让你去更换一个可能根本没问题的 Key。请先改 `Auth`；只有在中转站期望的那个头下 Key 也被拒绝时，才需要更换 Key。
+
+交互式 TUI 也支持原地修改 Provider。进入某个 Provider 的详情页并选择 `Edit Provider`，即可修正它的 `Base URL`、`Format` 和 `Auth`；保存会保留 Provider 名称、API Key 以及已加载的模型。这里不提供重命名：重命名必须同时改写每一个模型条目的 provider 字段和 Key 的环境变量，无法原子完成。需要更换 Key 请使用 `Update API Key`，它会要求重新粘贴完整值，且始终不显示已保存的值。
 
 确认弹窗除颜色外还用文字标记当前按钮，`←` `→` `↑` `↓` 和 `Tab` 都可以在按钮之间移动。`Delete Provider` 打开的弹窗默认停在 `Cancel` 上，因此直接按 `Enter` 不会误删。
 
@@ -354,6 +377,14 @@ MCP 子进程 stderr 默认写入 `~/.pawnlogic/logs/mcp/<server>.stderr.log`。
 /provider fetch myrelay
 /provider activate myrelay
 /model <别名>
+```
+
+如果中转站使用 Anthropic 协议但要求 Bearer 鉴权（反过来的情况同样如此），
+只需在同一条命令里换一个 `auth`：
+
+```
+/provider add myrelay https://relay.example.com/v1 MYRELAY_API_KEY anthropic bearer
+/provider test <别名>
 ```
 
 ### 视觉分析

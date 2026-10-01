@@ -10,6 +10,12 @@ from threading import RLock
 from urllib.parse import urlparse
 
 from core.file_store import atomic_write_text
+from core.provider_formats import (
+    FORMATS as FORMAT_SPECS,
+    endpoint_suffix,
+    normalize_api_format,
+    normalize_auth,
+)
 
 from .paths import PAWNLOGIC_HOME
 
@@ -469,11 +475,16 @@ def _normalise_custom_model_entries(
 
 
 def _normalize_url(raw: str, api_format: str = "openai") -> str:
-    """Ensure base_url ends with the correct chat endpoint path."""
+    """Ensure base_url ends with the correct chat endpoint path.
+
+    A base URL that already carries a known endpoint suffix is returned
+    unchanged, so a provider configured with a fully-qualified endpoint keeps
+    exactly that URL. Otherwise the format's registered suffix is appended.
+    """
     raw = raw.rstrip("/")
-    if raw.endswith("/chat/completions") or raw.endswith("/messages"):
+    if any(raw.endswith(spec.path_suffix) for spec in FORMAT_SPECS.values()):
         return raw
-    suffix = "/messages" if api_format == "anthropic" else "/chat/completions"
+    suffix = endpoint_suffix(api_format)
     if raw.endswith("/v1"):
         return raw + suffix
     return raw + "/v1" + suffix
@@ -508,9 +519,14 @@ def _validated_custom_provider_data(data: dict) -> tuple[dict, dict]:
             raise ValueError(f"provider '{name}' must be an object")
         base_url = _validate_base_url(prov.get("base_url", ""))
         api_key_env = str(prov.get("api_key_env", "")).strip()
-        api_format = str(prov.get("api_format", "openai")).strip().lower() or "openai"
-        if api_format not in {"openai", "anthropic"}:
-            raise ValueError(f"provider '{name}' has unsupported api_format '{api_format}'")
+        try:
+            api_format = normalize_api_format(prov.get("api_format", "openai"))
+        except ValueError as exc:
+            raise ValueError(f"provider '{name}' has unsupported api_format {exc}") from exc
+        try:
+            auth = normalize_auth(prov.get("auth", "auto"))
+        except ValueError as exc:
+            raise ValueError(f"provider '{name}' has unsupported auth {exc}") from exc
         if not api_key_env:
             raise ValueError(f"provider '{name}' must declare api_key_env")
         validated_providers[name] = {
@@ -518,6 +534,7 @@ def _validated_custom_provider_data(data: dict) -> tuple[dict, dict]:
             "base_url": base_url,
             "api_key_env": api_key_env,
             "api_format": api_format,
+            "auth": auth,
         }
 
     validated_models: dict = {}
@@ -546,9 +563,9 @@ def models_url_from_base_url(raw: str) -> str:
     if path.endswith("/v1/models"):
         models_path = path
     else:
-        for suffix in ("/chat/completions", "/messages"):
-            if path.endswith(suffix):
-                path = path[: -len(suffix)]
+        for spec in FORMAT_SPECS.values():
+            if path.endswith(spec.path_suffix):
+                path = path[: -len(spec.path_suffix)]
                 break
         if path.endswith("/v1"):
             path = path[: -len("/v1")]
@@ -603,11 +620,19 @@ def get_api_config(model_alias: str) -> tuple[str, str]:
 
 
 def get_api_format(model_alias: str) -> str:
-    """Return 'openai' or 'anthropic'."""
+    """Return the model's wire protocol: 'openai', 'anthropic' or 'responses'."""
     _ensure_providers_initialized()
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
     prov = PROVIDERS.get(m["provider"], {})
     return prov.get("api_format", "openai")
+
+
+def get_provider_auth(model_alias: str) -> str:
+    """Return the model's auth scheme: 'auto', 'bearer', 'x_api_key' or 'both'."""
+    _ensure_providers_initialized()
+    m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
+    prov = PROVIDERS.get(m["provider"], {})
+    return prov.get("auth", "auto")
 
 
 def get_provider_config(model_alias: str) -> dict:
@@ -621,6 +646,7 @@ def get_provider_config(model_alias: str) -> dict:
         "base_url":   _normalize_url(prov["base_url"], fmt),
         "api_key":    key,
         "api_format": fmt,
+        "auth":       prov.get("auth", "auto"),
         "label":      prov.get("label", ""),
     }
 

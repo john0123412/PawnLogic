@@ -237,7 +237,7 @@ for speed does not inherit a 32k ceiling.
 
 ```bash
 /provider                         # open the provider TUI
-/provider add <name> <base_url> <ENV_KEY> [anthropic]
+/provider add <name> <base_url> <ENV_KEY> [format] [auth]
 /provider fetch <name>            # fetch available models and select aliases
 /provider update <name>           # re-fetch provider models
 /provider activate <name>         # show selected provider models
@@ -253,10 +253,42 @@ API keys are stored in `~/.pawnlogic/.env`. Provider configs, model aliases,
 and descriptions are stored in `~/.pawnlogic/custom_providers.json` without
 secret values. Provider setup does not write keys into shell startup files.
 
+### Protocols and authentication
+
+`format` is one of `openai`, `anthropic`, or `responses`:
+
+| Format | Endpoint | Payload |
+|---|---|---|
+| `openai` | `POST {base}/chat/completions` | OpenAI Chat Completions |
+| `anthropic` | `POST {base}/messages` | Anthropic Messages |
+| `responses` | `POST {base}/responses` | OpenAI Responses |
+
+`auth` is a separate setting, because the two are independent in practice.
+Relays routinely serve Anthropic-shaped payloads over `Authorization: Bearer`
+and reject `x-api-key` with a 401, and the reverse also occurs. `auto` — the
+default — reproduces the protocol's own historical scheme, so existing
+providers keep working unchanged:
+
+| `auth` | Header sent |
+|---|---|
+| `auto` | the protocol default (`x-api-key` for Anthropic, `Bearer` otherwise) |
+| `bearer` | `Authorization: Bearer` |
+| `x_api_key` | `x-api-key` |
+| `both` | both headers |
+
+`anthropic-version` is sent for every `anthropic` request regardless of `auth`
+— it identifies the payload shape rather than the credential, and Anthropic
+endpoints require it.
+
+When a 401 happens, the error names the credential header that was actually
+sent and points at the `Auth` setting, instead of telling you to replace a key
+that may be working. Change `Auth` first, and only rotate the key if it is
+also rejected on the header the relay expects.
+
 The interactive TUI also edits a provider in place. Open a provider's detail
-view and choose `Edit Provider` to correct its `Base URL` and `Format`; the
-save keeps the provider name, its API key, and its loaded models. Renaming is
-not offered there, because a rename must re-point every model entry and the
+view and choose `Edit Provider` to correct its `Base URL`, `Format`, and `Auth`;
+the save keeps the provider name, its API key, and its loaded models. Renaming
+is not offered there, because a rename must re-point every model entry and the
 key's environment variable and cannot be written atomically. Replace the key
 with `Update API Key`, which asks for the full value again and never displays
 the stored one.
@@ -472,6 +504,14 @@ The project directory contains no secrets and is safe to commit or share.
 /provider fetch myrelay
 /provider activate myrelay
 /model <alias>
+```
+
+A relay that speaks the Anthropic protocol but authenticates with a Bearer
+token — or the reverse — is the same command with a different `auth`:
+
+```
+/provider add myrelay https://relay.example.com/v1 MYRELAY_API_KEY anthropic bearer
+/provider test <alias>
 ```
 
 ### Vision analysis

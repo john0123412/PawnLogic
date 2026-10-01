@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from config.providers import custom_model_alias, is_chat_model_candidate
-from core.api_errors import format_http_error
+from core.api_errors import format_http_error, model_listing_unavailable_hint
 
 UNSUPPORTED_MODEL_MARKERS = (
     "not supported",
@@ -20,7 +20,13 @@ UNSUPPORTED_MODEL_MARKERS = (
 REASONING_KEYWORDS = ("mimo", "deepseek", "qwq")
 
 
-def connection_result_from_listing(resp: Any, ms: int) -> tuple[bool, str]:
+def connection_result_from_listing(
+    resp: Any,
+    ms: int,
+    *,
+    api_format: str | None = None,
+    auth: str | None = None,
+) -> tuple[bool, str]:
     """Interpret a response from the free model-listing endpoint.
 
     Used by Test Connection, which must never infer. A 2xx means the base
@@ -28,12 +34,21 @@ def connection_result_from_listing(resp: Any, ms: int) -> tuple[bool, str]:
     failure, formatted by the shared error helper — which already names the
     likely cause for 401/403 rather than a generic status line.
 
+    ``api_format``/``auth`` let the 401 hint name the credential header that
+    was actually sent. Without them a relay that speaks Anthropic but
+    authenticates with Bearer reports "your API key is invalid" for a key that
+    works, which is what sent one user to rotate a valid credential.
+
     A listing response says nothing about whether a specific model can serve
     chat, so this deliberately does not take a model id.
     """
     if 200 <= resp.status_code < 300:
         return True, f"Connected ({ms}ms; free model listing, no inference sent)"
-    return False, format_http_error(resp.status_code, resp.text)
+    msg = format_http_error(
+        resp.status_code, resp.text, api_format=api_format, auth=auth
+    )
+    listing_hint = model_listing_unavailable_hint(resp.status_code)
+    return False, f"{msg} {listing_hint}" if listing_hint else msg
 
 
 def model_is_chat_candidate(model_id: str) -> bool:

@@ -1,0 +1,10 @@
+{"format":"responses","kind":"text","event":"response.output_text.delta","payload":{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"Hello"}}
+{"format":"responses","kind":"tool_call","event":"response.output_item.added","payload":{"type":"response.output_item.added","output_index":1,"item":{"id":"fc_a","type":"function_call","call_id":"call_a","name":"list_dir","arguments":""}}}
+{"format":"responses","kind":"tool_call","event":"response.output_item.added","payload":{"type":"response.output_item.added","output_index":2,"item":{"id":"fc_b","type":"function_call","call_id":"call_b","name":"read_file","arguments":""}}}
+{"format":"responses","kind":"tool_call","event":"response.function_call_arguments.delta","payload":{"type":"response.function_call_arguments.delta","item_id":"fc_a","output_index":1,"delta":"{\"path\":"}}
+{"format":"responses","kind":"tool_call","event":"response.function_call_arguments.delta","payload":{"type":"response.function_call_arguments.delta","item_id":"fc_b","output_index":2,"delta":"{\"path\":\"/etc\""}}
+{"format":"responses","kind":"tool_call","event":"response.function_call_arguments.delta","payload":{"type":"response.function_call_arguments.delta","item_id":"fc_a","output_index":1,"delta":"\"/tmp\"}"}}
+{"format":"responses","kind":"tool_call","event":"response.function_call_arguments.done","payload":{"type":"response.function_call_arguments.done","item_id":"fc_a","output_index":1,"arguments":"{\"path\":\"/tmp\"}"}}
+{"format":"responses","kind":"tool_call","event":"response.function_call_arguments.done","payload":{"type":"response.function_call_arguments.done","item_id":"fc_b","output_index":2,"arguments":"{\"path\":\"/etc\"}"}}
+{"format":"responses","kind":"reasoning","event":"response.reasoning_summary_text.delta","payload":{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"Considering the request."}}
+{"format":"responses","kind":"usage","event":"response.completed","payload":{"type":"response.completed","response":{"id":"resp_fixture","status":"completed","usage":{"input_tokens":9,"output_tokens":4,"total_tokens":13}}}}

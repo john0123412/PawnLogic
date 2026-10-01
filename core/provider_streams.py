@@ -14,6 +14,8 @@ class StreamResponse(Protocol):
 
 InterruptCheck = Callable[[], None]
 
+StreamReader = Callable[..., Iterator[dict[str, Any]]]
+
 # An empty ``readline()`` result is not a reliable EOF discriminator across
 # response adapters. Retry only a bounded number of times so a persistent empty
 # result cannot create an unbounded polling loop.
@@ -304,18 +306,23 @@ def read_sse_lines(
     read_timeout: int,
     raise_if_interrupted: InterruptCheck,
 ) -> Iterator[dict[str, Any]]:
-    if api_format == "anthropic":
-        yield from read_anthropic_sse_lines(
-            resp,
-            read_timeout=read_timeout,
-            raise_if_interrupted=raise_if_interrupted,
-        )
-    else:
-        yield from read_openai_sse_lines(
-            resp,
-            read_timeout=read_timeout,
-            raise_if_interrupted=raise_if_interrupted,
-        )
+    """Dispatch to the reader for ``api_format``.
+
+    The lookup refuses an unregistered format rather than falling through to
+    the OpenAI reader. The implicit ``else`` this replaces is what let a
+    format added to the registry but missing from this dispatch parse another
+    protocol's events as OpenAI chunks -- wrong content, no error.
+    """
+    from core.provider_formats import format_spec
+
+    reader = _STREAM_READERS.get(format_spec(api_format).value)
+    if reader is None:
+        raise ValueError(f"No stream reader registered for format {api_format!r}.")
+    yield from reader(
+        resp,
+        read_timeout=read_timeout,
+        raise_if_interrupted=raise_if_interrupted,
+    )
 
 
 __all__ = [
@@ -326,3 +333,31 @@ __all__ = [
     "read_sse_lines",
     "stream_interruption_delta",
 ]
+
+
+def _responses_reader(
+    resp: StreamResponse,
+    *,
+    read_timeout: int,
+    raise_if_interrupted: InterruptCheck,
+) -> Iterator[dict[str, Any]]:
+    # Imported here, not at module scope: core.provider_responses reads the
+    # timeout and interruption helpers from this module, so a top-level import
+    # would be circular.
+    from core.provider_responses import read_responses_sse_lines
+
+    yield from read_responses_sse_lines(
+        resp,
+        read_timeout=read_timeout,
+        raise_if_interrupted=raise_if_interrupted,
+    )
+
+
+# Every registered format must name a reader here. A format present in
+# core.provider_formats but absent from this table fails loudly at dispatch
+# instead of silently parsing with the wrong protocol's parser.
+_STREAM_READERS: dict[str, StreamReader] = {
+    "openai": read_openai_sse_lines,
+    "anthropic": read_anthropic_sse_lines,
+    "responses": _responses_reader,
+}

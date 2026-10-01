@@ -689,7 +689,7 @@ mode.
 authoritative list.** A module is in the island only when CI passes its file
 to mypy; the matching `[[tool.mypy.overrides]]` entry in `pyproject.toml` is
 what actually turns on `disallow_untyped_defs` / `check_untyped_defs` for it.
-Both files, plus the list below, must name the same 43 modules;
+Both files, plus the list below, must name the same 47 modules;
 `tests/test_typed_island_sync.py` fails the build when they diverge.
 
 To add a module: annotate it until it passes
@@ -703,7 +703,9 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `core/turn_state`, `core/session_tool_loop`, `core/session_snapshot`,
 `core/message_history`, `core/provider_streams`, `core/runtime_metrics`,
 `core/mcp_client_manager`, `core/path_policy`, `core/provider_transport`,
-`core/api_retry`, `core/provider_tui_state`, `core/turn_scheduler`,
+`core/api_retry`, `core/provider_formats`, `core/provider_protocol`,
+`core/provider_responses`, `core/provider_tui_rows`, `core/provider_tui_state`,
+`core/turn_scheduler`,
 `core/live_turn_control`, `core/turn_cancellation`, `core/queue_tui`,
 `pawnlogic/live_repl`, `pawnlogic/live_terminal`, `pawnlogic/selectors`,
 `pawnlogic/confirm_selector`, `pawnlogic/terminal_transcript`,
@@ -731,6 +733,42 @@ name at the end is the gate that fails if the invariant is broken.
   Discovery and Test Connection now read only the free `/v1/models` listing;
   the only real inference in the product is a Turn. `core/provider_discovery.py`
   is the seam — adding a request there re-opens the hole.
+- **The format registry is the only source of truth for "which protocol and
+  which credential header", and an unknown value raises rather than falling
+  back to OpenAI.** `api_format` was a hard binary fork with an implicit
+  `else` meaning openai across 47 sites in 12 files; adding a third format
+  meant adding a third `else` to all of them, and a missed branch degraded
+  silently instead of failing. `core/provider_formats.py` now holds the
+  registry, `core/provider_protocol.py` the per-format payload/parse/header
+  seam, and `core/provider_responses.py` the Responses adapter. **A new
+  format is a registry entry plus a `Protocol` row — never a new `if
+  api_format == ...` anywhere else.** `protocol_for()` raises on an
+  unregistered format; keep it that way. The TUI's `/provider add` menus are
+  generated from `core/provider_tui_rows.py` for the same reason: a
+  hand-written menu is how the third format ended up unselectable outside the
+  TUI.
+- **Auth is an axis orthogonal to the payload format, and `anthropic-version`
+  is a protocol constant, not a credential.** The reported 401 was a relay
+  serving Anthropic-shaped payloads over `Authorization: Bearer`, which
+  rejects `x-api-key` — no configuration could work, because the credential
+  header was *derived from* the format. `auth` is now its own setting and
+  `protocol_headers()` owns the non-credential headers, keyed to the format.
+  Keying `anthropic-version` off the auth scheme instead — the first cut —
+  dropped it under `auth: bearer`, trading the reported 401 for a 400 on the
+  exact combination the feature exists to support, and wrongly added it to
+  `openai` payloads, where some gateways reject unknown headers.
+  `test_anthropic_version_rides_along_under_every_auth_scheme` and
+  `test_anthropic_version_never_leaks_onto_an_openai_payload` gate both
+  halves; mutate them separately, because one subsumes the other in a test
+  that only checks the positive.
+- **A 401 hint must not tell a user to rotate a key that works.** The old
+  wording was unconditional, and it fired on exactly the reported case: a
+  valid key rejected because of the header it was sent in. `auth_failure_hint`
+  now names the credential header actually sent and points at the `Auth`
+  setting, keeping the "your key is invalid" wording only where the protocol
+  already sends Bearer by default — there is nothing for the user to change.
+  `test_no_hint_ever_suggests_setkey_while_naming_a_credential_header` sweeps
+  every format x scheme pair.
 - **`reasoning_effort` goes only where the model declares it, and the
   declaration is a per-rung map, not a flag.** `MODELS[alias]["effort"]` is
   `{rung: wire_value}`, so a model accepting `low`/`medium`/`high` but not
@@ -1147,7 +1185,7 @@ name at the end is the gate that fails if the invariant is broken.
 - **The typed-island module list is stated in three places** (CI mypy step,
   pyproject overrides, Typed Island section). `tests/test_typed_island_sync.py`
   fails the build when they diverge — treat that failure as the gate, not as a
-  test to relax. All three name the same **43 library modules**; the CI step
+  test to relax. All three name the same **47 library modules**; the CI step
   passes no `tests/` file to mypy, and `tests/test_e2e.py` appears only on the
   pytest command line.
 - **`test_live_bare_escape_interrupts_one_turn_without_another_keypress` has a

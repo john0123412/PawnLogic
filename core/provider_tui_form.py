@@ -18,6 +18,15 @@ from typing import Any
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 
 from config.providers import is_provider_active
+from core.provider_tui_rows import (
+    ROW_SAVE,
+    WIZ_LABELS,
+    display_value,
+    dropdown_values,
+    focus_cycle,
+    input_slot_for_row,
+    locked_rows,
+)
 
 __all__ = [
     "detail_actions",
@@ -27,12 +36,20 @@ __all__ = [
     "wiz_focus_cycle",
 ]
 
-# Row indices of the shared add/edit form: Name, Base URL, Format, API Key,
-# then the save button.
-_ROW_NAME, _ROW_URL, _ROW_FORMAT, _ROW_KEY, _ROW_SAVE = 0, 1, 2, 3, 4
-# Rows that only the "add a new provider" mode may change.
-_ADD_ONLY_ROWS = (_ROW_NAME, _ROW_KEY)
-_FORMATS = ("OpenAI Compatible", "Anthropic Compatible")
+#: Ornamented row markers, one per form row. Circled numerals keep the row
+#: visually distinct from the dropdown option bullets below it.
+_ROW_MARKS = "①②③④⑤"
+
+
+def _row_mark(row: int) -> str:
+    return _ROW_MARKS[row] if row < len(_ROW_MARKS) else str(row + 1)
+
+
+def wiz_dropdown_cursor(state: Any, row: int) -> int:
+    """Cursor position for a dropdown row, derived from its stored value."""
+    from core.provider_tui_rows import cursor_for_value
+
+    return cursor_for_value(row, state.wiz_fields[row])
 
 
 def detail_actions(state: Any) -> list[str]:
@@ -61,9 +78,7 @@ def wiz_focus_cycle(state: Any) -> list[int]:
     Editing locks the name and the key, so those rows drop out of the cycle
     rather than swallowing keystrokes.
     """
-    if state.wiz_edit:
-        return [i for i in range(5) if i not in _ADD_ONLY_ROWS]
-    return list(range(5))
+    return focus_cycle(bool(state.wiz_edit))
 
 
 def _wiz_locked(state: Any, row: int) -> bool:
@@ -74,7 +89,7 @@ def _wiz_locked(state: Any, row: int) -> bool:
     because it is never displayed, so it keeps its own Update API Key flow
     and its own security notice.
     """
-    return bool(state.wiz_edit) and row in _ADD_ONLY_ROWS
+    return bool(state.wiz_edit) and row in locked_rows(True)
 
 
 def render_wizard(tui: Any) -> StyleAndTextTuples:
@@ -87,45 +102,36 @@ def render_wizard(tui: Any) -> StyleAndTextTuples:
     )
     f: StyleAndTextTuples = [("class:title", title)]
     tui._sync_wizard_fields_from_inputs()
-    for i, label in enumerate(["Name", "Base URL", "Format", "API Key"]):
-        focused = (i == state.wiz_focus) and not _wiz_locked(state, i)
+    for row, label in enumerate(WIZ_LABELS):
+        focused = (row == state.wiz_focus) and not _wiz_locked(state, row)
         s = "class:field-focus" if focused else "class:field-normal"
-        val = state.wiz_fields[i]
-        if i == _ROW_KEY:
-            if state.wiz_edit:
-                display = "unchanged — use Update API Key"
-            else:
-                display = "•" * len(val) if val else ""
-        elif i == _ROW_FORMAT:
-            display = "Anthropic Compatible" if val == "anthropic" else _FORMATS[0]
-        else:
-            display = val
+        display = display_value(row, state.wiz_fields[row], editing=bool(state.wiz_edit))
+        is_open = bool(state.wiz_dropdowns.get(row))
         # The form is drawn by hand, so nothing else marks the caret. Show it
         # at the real buffer position, or the user cannot tell where the next
-        # keystroke lands. Format is a dropdown, not a text field, so it gets
-        # the row marker only.
-        if focused and i in (_ROW_NAME, _ROW_URL, _ROW_KEY) and not state.wiz_fmt_open:
-            pos = tui._wiz_inputs[
-                {_ROW_NAME: 0, _ROW_URL: 1, _ROW_KEY: 2}[i]
-            ].buffer.cursor_position
+        # keystroke lands. Dropdown rows are not text fields, so they get the
+        # row marker only.
+        if focused and input_slot_for_row(row) is not None and not is_open:
+            pos = tui._wiz_inputs[input_slot_for_row(row)].buffer.cursor_position
             pos = max(0, min(pos, len(display)))
             display = f"{display[:pos]}▌{display[pos:]}"
         f.append(
             (
                 s,
-                f"  {'▶' if focused else ' '}{'①②③④'[i]} {label:<10} [ {display:<39} ]\n",
+                f"  {'▶' if focused else ' '}{_row_mark(row)} {label:<10} [ {display:<39} ]\n",
             )
         )
-        if i == _ROW_FORMAT and focused and state.wiz_fmt_open:
-            for j, opt in enumerate(_FORMATS):
-                cur = "▶ " if j == state.wiz_fmt_cursor else "  "
-                fs = "class:cursor" if j == state.wiz_fmt_cursor else "class:subtitle"
+        if focused and is_open:
+            cursor = state.wiz_dropdown_cursors.get(row, 0)
+            for j, opt in enumerate(dropdown_values(row)):
+                cur = "▶ " if j == cursor else "  "
+                fs = "class:cursor" if j == cursor else "class:subtitle"
                 f.append((fs, f"       {cur}{opt}\n"))
     f.append(("", "\n"))
-    bs = "class:btn-focus" if state.wiz_focus == _ROW_SAVE else "class:btn-normal"
+    bs = "class:btn-focus" if state.wiz_focus == ROW_SAVE else "class:btn-normal"
     save = "Save Changes" if state.wiz_edit else "Save Provider"
     f.append(
-        (bs, "  " + ("▶" if state.wiz_focus == _ROW_SAVE else " ") + f" [ {save} ]\n\n")
+        (bs, "  " + ("▶" if state.wiz_focus == ROW_SAVE else " ") + f" [ {save} ]\n\n")
     )
     if state.wiz_error:
         f.append(("class:error", f"  ✗ {state.wiz_error}\n"))

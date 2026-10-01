@@ -20,6 +20,7 @@ import pawnlogic.cli as pawn_cli
 from config import providers as provider_config
 from core.api_errors import format_http_error
 from core import provider_runtime, provider_tui
+from core import provider_tui_rows as rows_mod
 from core.commands import provider as provider_cmd
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -75,17 +76,19 @@ def test_provider_tui_add_wizard_api_key_field_accepts_pasted_text():
 
     tui._wiz_inputs[0].text = "relay"
     tui._wiz_inputs[1].text = "https://api.example.com/v1"
-    tui._wiz_fields[2] = "openai"
+    tui._wiz_fields[rows_mod.ROW_FORMAT] = "openai"
     tui._wiz_inputs[2].text = pasted_key
 
     tui._sync_wizard_fields_from_inputs()
 
-    assert tui._wiz_fields == [
-        "relay",
-        "https://api.example.com/v1",
-        "openai",
-        pasted_key,
-    ]
+    # Compared by row, not as a literal list: this list grew from four entries
+    # to five when the Auth row was added, and a positional assertion is what
+    # silently mis-maps the password field onto the Auth dropdown.
+    assert tui._wiz_fields[rows_mod.ROW_NAME] == "relay"
+    assert tui._wiz_fields[rows_mod.ROW_URL] == "https://api.example.com/v1"
+    assert tui._wiz_fields[rows_mod.ROW_FORMAT] == "openai"
+    assert tui._wiz_fields[rows_mod.ROW_AUTH] == "auto"
+    assert tui._wiz_fields[rows_mod.ROW_KEY] == pasted_key
 
 
 def test_provider_tui_add_wizard_navigation_moves_real_input_focus():
@@ -105,13 +108,21 @@ def test_provider_tui_add_wizard_navigation_moves_real_input_focus():
 
     next_handler(SimpleNamespace(app=app))
 
-    assert tui._wiz_focus == 1
+    assert tui._wiz_focus == rows_mod.ROW_URL
     assert app.layout.current_control is tui._wiz_inputs[1].control
 
     next_handler(SimpleNamespace(app=app))
+    assert tui._wiz_focus == rows_mod.ROW_FORMAT
     next_handler(SimpleNamespace(app=app))
 
-    assert tui._wiz_focus == 3
+    # The Auth row has no TextArea -- it is a dropdown -- so keyboard focus
+    # stays where it was while the row cursor advances.
+    assert tui._wiz_focus == rows_mod.ROW_AUTH
+    assert rows_mod.input_slot_for_row(tui._wiz_focus) is None
+
+    next_handler(SimpleNamespace(app=app))
+
+    assert tui._wiz_focus == rows_mod.ROW_KEY
     assert app.layout.current_control is tui._wiz_inputs[2].control
 
 
@@ -137,15 +148,23 @@ def test_provider_tui_wizard_marks_exactly_one_row_at_a_time():
     tui._wiz_inputs[1].text = "https://api.example.com/v1"
     tui._wiz_inputs[2].text = "sk-secret-1234567890"
 
-    for focus, marked in ((0, "\u25b6\u2460"), (1, "\u25b6\u2461"), (2, "\u25b6\u2462"),
-                          (3, "\u25b6\u2463"), (4, "\u25b6 [ Save Provider ]")):
-        tui._wiz_focus = focus
+    # Driven off the row table, so adding a row updates this test rather than
+    # leaving a hardcoded marker count pointing at the wrong field.
+    circled = "\u2460\u2461\u2462\u2463\u2464"
+    for row in range(rows_mod.ROW_SAVE):
+        tui._wiz_focus = row
         rendered = "".join(text for _style, text in tui._render_wizard())
-        assert rendered.count("\u25b6") >= 1, f"no marker at focus {focus}"
-        assert marked in rendered, f"focus {focus} did not mark {marked!r}"
+        marked = [f"\u25b6{mark}" for mark in circled if f"\u25b6{mark}" in rendered]
+        assert marked == [f"\u25b6{circled[row]}"], (
+            f"focus {row} should mark exactly one row, got {marked}"
+        )
+
+    tui._wiz_focus = rows_mod.ROW_SAVE
+    rendered = "".join(text for _style, text in tui._render_wizard())
+    assert "\u25b6 [ Save Provider ]" in rendered
 
     # The API key stays masked, and the caret rides the masked string.
-    tui._wiz_focus = 3
+    tui._wiz_focus = rows_mod.ROW_KEY
     rendered = "".join(text for _style, text in tui._render_wizard())
     assert "sk-secret" not in rendered
     assert "\u2022" in rendered and "\u258c" in rendered
@@ -1209,11 +1228,12 @@ def test_provider_detail_test_uses_registered_provider_model(monkeypatch):
     )
     seen = {}
 
-    async def fake_test_connection(base_url, api_key, api_format, model_id=None):
+    async def fake_test_connection(base_url, api_key, api_format, model_id=None, auth="auto"):
         seen["base_url"] = base_url
         seen["api_key"] = api_key
         seen["api_format"] = api_format
         seen["model_id"] = model_id
+        seen["auth"] = auth
         return True, "Connected", 1
 
     monkeypatch.setattr(provider_tui, "_test_connection", fake_test_connection)
@@ -1225,6 +1245,10 @@ def test_provider_detail_test_uses_registered_provider_model(monkeypatch):
         "api_key": "test-key",
         "api_format": "openai",
         "model_id": "relay-chat-id",
+        # The stored scheme is forwarded, so a provider configured for Bearer
+        # is not re-probed with the format's default scheme -- which is the
+        # 401 this whole change exists to stop.
+        "auth": "auto",
     }
     assert tui._detail_status == "✅ Connected"
 
@@ -1258,11 +1282,12 @@ def test_provider_command_test_uses_loaded_model_id(monkeypatch):
     monkeypatch.setattr(provider_cmd, "validate_api_key", lambda _alias: (True, env_key))
     seen: dict[str, str] = {}
 
-    async def fake_test_connection(base_url, api_key, api_format, model_id):
+    async def fake_test_connection(base_url, api_key, api_format, model_id, auth="auto"):
         seen["base_url"] = base_url
         seen["api_key"] = api_key
         seen["api_format"] = api_format
         seen["model_id"] = model_id
+        seen["auth"] = auth
         return True, "Connected", 1
 
     monkeypatch.setattr(provider_cmd, "test_connection", fake_test_connection)
@@ -1274,6 +1299,7 @@ def test_provider_command_test_uses_loaded_model_id(monkeypatch):
         "api_key": "test-key",
         "api_format": "openai",
         "model_id": "provider-native-chat-id",
+        "auth": "auto",
     }
     assert seen["model_id"] not in {"gpt-3.5-turbo", "ds-chat", "ds-r1"}
 
@@ -1640,7 +1666,7 @@ def test_provider_tui_and_cli_share_http_error_message(monkeypatch, capsys):
     }
     monkeypatch.setenv(env_key, "test-key")
 
-    async def fake_fetch_models(_base_url, _api_key, _api_format):
+    async def fake_fetch_models(_base_url, _api_key, _api_format, auth="auto"):
         return [], expected, {"returned": 0, "hidden_by_name": 0, "hidden_by_metadata": 0, "selectable": 0}
 
     monkeypatch.setattr(provider_cmd, "fetch_models", fake_fetch_models)
@@ -1918,7 +1944,7 @@ def test_provider_fetch_prints_filter_and_alias_summary(monkeypatch, capsys):
         saved["models_cfg"] = models_cfg
         saved["replace_models"] = replace_models
 
-    async def fake_fetch_models(_base_url, _api_key, _api_format):
+    async def fake_fetch_models(_base_url, _api_key, _api_format, auth="auto"):
         return (
             [
                 (
@@ -2097,9 +2123,9 @@ def test_provider_tui_edit_prefills_endpoint_and_locks_the_name(monkeypatch):
     assert tui._wiz_edit == "openrouter"
     assert tui._panel == "wizard"
     assert tui._wiz_inputs[1].text == "https://api.openrouter.ai/api/v1"
-    assert tui._wiz_fields[2] == "anthropic"
+    assert tui._wiz_fields[rows_mod.ROW_FORMAT] == "anthropic"
     # Focus starts on the first editable row, not the locked name.
-    assert tui._wiz_focus == 1
+    assert tui._wiz_focus == rows_mod.ROW_URL
     # The key is left to the existing Update API Key action: the form must not
     # offer to write a key, because the stored one is never displayed.
     assert tui._wiz_inputs[2].text == ""
@@ -2116,12 +2142,19 @@ def test_provider_tui_edit_navigation_skips_the_locked_rows():
     down = [b.handler for b in kb.get_bindings_for_keys((_Keys.Down,)) if b.filter()][-1]
 
     visited = []
-    for _ in range(3):
+    for _ in range(len(rows_mod.focus_cycle(editing=True))):
         visited.append(tui._wiz_focus)
         down(None)
 
-    assert visited == [1, 2, 4]                 # Base URL, Format, Save
-    assert tui._wiz_focus == 1                  # and it wraps back
+    # Name and key stay out of the cycle; Auth is in it, because it is exactly
+    # the row a user editing a mis-authenticated provider needs to reach.
+    assert visited == [
+        rows_mod.ROW_URL,
+        rows_mod.ROW_FORMAT,
+        rows_mod.ROW_AUTH,
+        rows_mod.ROW_SAVE,
+    ]
+    assert tui._wiz_focus == rows_mod.ROW_URL   # and it wraps back
 
 
 def test_provider_tui_edit_confirm_saves_url_and_format_keeping_name(monkeypatch):
@@ -2130,14 +2163,16 @@ def test_provider_tui_edit_confirm_saves_url_and_format_keeping_name(monkeypatch
     tui._detail_provider = "openrouter"
     tui._open_edit_provider("openrouter")
     tui._wiz_inputs[1].text = "https://relay.example.com/v1"
-    tui._wiz_fields[2] = "openai"
+    tui._wiz_fields[rows_mod.ROW_FORMAT] = "anthropic"
+    tui._wiz_fields[rows_mod.ROW_AUTH] = "bearer"
 
     saved = {}
 
-    def fake_update(name, base_url, api_format):
+    def fake_update(name, base_url, api_format, auth="auto"):
         saved["name"] = name
         saved["base_url"] = base_url
         saved["api_format"] = api_format
+        saved["auth"] = auth
         return True, ""
 
     def fail_key_write(*_a, **_k):
@@ -2149,8 +2184,11 @@ def test_provider_tui_edit_confirm_saves_url_and_format_keeping_name(monkeypatch
 
     asyncio.run(tui._wizard_confirm())
 
+    # ``auth`` is asserted here, not merely accepted: a renderer that shows the
+    # row while the save silently drops it is the worst possible failure, since
+    # the user watches the field confirm and the setting never takes effect.
     assert saved == {"name": "openrouter", "base_url": "https://relay.example.com/v1",
-                     "api_format": "openai"}
+                     "api_format": "anthropic", "auth": "bearer"}
     assert tui._panel == "detail"
     assert tui._wiz_edit == ""
 
@@ -2170,3 +2208,127 @@ def test_provider_tui_edit_confirm_reports_failure_without_leaving_edit(monkeypa
 
     assert "Failed to save" in tui._wiz_error
     assert tui._panel == "wizard"
+
+
+# ── the auth scheme must reach every request path, not just the TUI ──
+#
+# The reported bug was not "Auth is missing from a config file" but "Auth is
+# ignored at the three places a request actually goes out". Each of these
+# asserts the value *arrives*, because a fake that merely accepts the keyword
+# would let a call site that hardcodes "auto" stay green.
+
+
+def _provider_with_auth(monkeypatch, alias, env_key, fmt, auth):
+    """Install one provider into both registries the two paths read.
+
+    The TUI reads ``core.provider_tui.PROVIDERS`` and the CLI reads
+    ``core.commands.provider.PROVIDERS``; patching only one leaves the other
+    resolving an empty provider and the assertion silently checks nothing.
+    """
+    entry = {
+        alias: {
+            "base_url": "https://api.example.com/v1",
+            "api_key_env": env_key,
+            "api_format": fmt,
+            "auth": auth,
+        }
+    }
+    monkeypatch.setattr(provider_cmd, "PROVIDERS", entry)
+    monkeypatch.setattr(provider_tui, "PROVIDERS", entry)
+    monkeypatch.setenv(env_key, "test-key")
+
+
+def test_provider_tui_fetch_forwards_the_configured_auth_scheme(monkeypatch):
+    alias = "relay"
+    env_key = "RELAY_API_KEY"
+    _provider_with_auth(monkeypatch, alias, env_key, "anthropic", "bearer")
+    seen: dict[str, str] = {}
+
+    async def fake_fetch_models(base_url, api_key, api_format, auth="auto"):
+        seen["api_format"] = api_format
+        seen["auth"] = auth
+        return [], "", {"returned": 0, "hidden_by_name": 0,
+                        "hidden_by_metadata": 0, "selectable": 0}
+
+    monkeypatch.setattr(provider_tui, "_fetch_models", fake_fetch_models)
+
+    tui = provider_tui.ProviderTUI()
+    asyncio.run(tui._open_model_selector(alias, "detail"))
+
+    assert seen == {"api_format": "anthropic", "auth": "bearer"}
+
+
+def test_provider_cli_fetch_forwards_the_configured_auth_scheme(monkeypatch):
+    alias = "relay"
+    env_key = "RELAY_API_KEY"
+    _provider_with_auth(monkeypatch, alias, env_key, "anthropic", "bearer")
+    seen: dict[str, str] = {}
+
+    async def fake_fetch_models(base_url, api_key, api_format, auth="auto"):
+        seen["api_format"] = api_format
+        seen["auth"] = auth
+        return [], "", {"returned": 0, "hidden_by_name": 0,
+                        "hidden_by_metadata": 0, "selectable": 0}
+
+    monkeypatch.setattr(provider_cmd, "fetch_models", fake_fetch_models)
+
+    asyncio.run(provider_cmd._provider_fetch(alias))
+
+    assert seen == {"api_format": "anthropic", "auth": "bearer"}
+
+
+def test_provider_add_cli_persists_an_explicit_auth_scheme(monkeypatch):
+    saved: dict[str, dict] = {}
+
+    def fake_save(name, prov_cfg, models_cfg, replace_models=True):
+        saved[name] = dict(prov_cfg)
+        return True, ""
+
+    monkeypatch.setattr(provider_runtime, "save_provider_with_rollback", fake_save)
+    monkeypatch.setattr(provider_cmd, "PROVIDERS", {})
+    monkeypatch.setattr(provider_config, "init_providers", lambda force=False: None)
+    monkeypatch.delenv("RELAY_API_KEY", raising=False)
+
+    ok = provider_cmd._provider_add_cli(
+        "relay", "https://api.example.com/v1", "RELAY_API_KEY",
+        "anthropic", "bearer",
+    )
+
+    # Non-interactive /provider add must be able to express the combination
+    # that the TUI can; otherwise anyone scripting a relay setup is stuck.
+    assert ok is False           # key unset -> prompts to fetch
+    assert saved["relay"]["auth"] == "bearer"
+    assert saved["relay"]["api_format"] == "anthropic"
+
+
+def test_provider_add_cli_defaults_auth_to_auto_for_existing_scripts(monkeypatch):
+    saved: dict[str, dict] = {}
+
+    def fake_save(name, prov_cfg, models_cfg, replace_models=True):
+        saved[name] = dict(prov_cfg)
+        return True, ""
+
+    monkeypatch.setattr(provider_runtime, "save_provider_with_rollback", fake_save)
+    monkeypatch.setattr(provider_cmd, "PROVIDERS", {})
+    monkeypatch.setattr(provider_config, "init_providers", lambda force=False: None)
+    monkeypatch.delenv("RELAY_API_KEY", raising=False)
+
+    provider_cmd._provider_add_cli("relay", "https://api.example.com/v1",
+                                   "RELAY_API_KEY", "openai")
+
+    assert saved["relay"]["auth"] == "auto"
+
+
+def test_provider_add_cli_refuses_an_unknown_auth_scheme(monkeypatch):
+    saved: dict[str, dict] = {}
+    monkeypatch.setattr(
+        provider_runtime, "save_provider_with_rollback",
+        lambda name, cfg, models, replace_models=True: saved.setdefault(name, cfg) and (True, ""),
+    )
+    monkeypatch.setattr(provider_cmd, "PROVIDERS", {})
+
+    ok = provider_cmd._provider_add_cli("relay", "https://api.example.com/v1",
+                                        "RELAY_API_KEY", "openai", "oauth")
+
+    assert ok is False
+    assert saved == {}

@@ -1,5 +1,6 @@
 """Deterministic provider TUI state-transition tests."""
 
+from core import provider_tui_rows as rows_mod
 from core.provider_tui_state import ProviderTUIState
 
 
@@ -15,12 +16,15 @@ def test_model_filter_is_case_insensitive_and_cached():
 
 def test_reset_wizard_restores_deterministic_defaults():
     state = ProviderTUIState(
-        wiz_fields=["custom", "https://example.test", "anthropic", "secret"],
+        wiz_fields=["custom", "https://example.test", "anthropic", "bearer", "secret"],
         wiz_focus=4,
         wiz_error="bad",
     )
     state.reset_wizard()
-    assert state.wiz_fields == ["", "", "openai", ""]
+    # One entry per wizard row, Auth included. Compared against the row table so
+    # the Auth row's presence is asserted rather than incidental.
+    assert state.wiz_fields == rows_mod.default_wiz_fields()
+    assert state.wiz_fields[rows_mod.ROW_AUTH] == "auto"
     assert state.wiz_focus == 0
     assert state.wiz_error == ""
 

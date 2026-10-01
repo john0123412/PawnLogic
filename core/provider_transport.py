@@ -2,6 +2,10 @@
 
 Centralizes format-specific HTTP headers, provider definition validation,
 and provider metadata validation before any disk or registry mutation.
+
+The format table and header construction live in `core.provider_formats`, which
+is the single source of truth for both. Nothing here branches on a format by
+hand: a new protocol registers once and every call site picks it up.
 """
 
 from __future__ import annotations
@@ -9,7 +13,21 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-VALID_API_FORMATS = frozenset({"openai", "anthropic"})
+from core.provider_formats import (
+    VALID_API_FORMATS,
+    VALID_AUTH_SCHEMES,
+    build_auth_headers,
+    normalize_api_format,
+    normalize_auth,
+)
+
+__all__ = [
+    "VALID_API_FORMATS",
+    "VALID_AUTH_SCHEMES",
+    "ProviderDefinition",
+    "provider_headers",
+    "validate_provider_definition",
+]
 
 
 @dataclass(frozen=True)
@@ -20,25 +38,19 @@ class ProviderDefinition:
     base_url: str
     api_key_env: str
     api_format: str
+    auth: str = "auto"
 
 
-def provider_headers(api_format: str, api_key: str) -> dict[str, str]:
-    """Return format-specific HTTP headers for provider requests.
+def provider_headers(
+    api_format: str, api_key: str, auth: str = "auto"
+) -> dict[str, str]:
+    """Return authentication headers for a provider request.
 
-    OpenAI format uses Bearer token authentication.
-    Anthropic format uses x-api-key and anthropic-version headers.
+    ``auth`` defaults to ``auto``, which reproduces the historical per-format
+    mapping. Set it explicitly for a relay that authenticates differently from
+    the protocol it speaks -- e.g. Anthropic-shaped payloads over Bearer.
     """
-    if api_format == "anthropic":
-        return {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-    # Default: OpenAI format.
-    return {
-        "Authorization": f"Bearer {api_key}",
-        "content-type": "application/json",
-    }
+    return build_auth_headers(api_format, auth, api_key)
 
 
 def validate_provider_definition(
@@ -61,16 +73,20 @@ def validate_provider_definition(
     if not api_key_env:
         raise ValueError(f"Provider '{name}' requires an api_key_env.")
 
-    api_format = str(config.get("api_format", "openai")).strip()
-    if api_format not in VALID_API_FORMATS:
-        raise ValueError(
-            f"Provider '{name}' has unsupported api_format '{api_format}'. "
-            f"Supported: {', '.join(sorted(VALID_API_FORMATS))}."
-        )
+    try:
+        api_format = normalize_api_format(config.get("api_format", "openai"))
+    except ValueError as exc:
+        raise ValueError(f"Provider '{name}' has {exc}") from exc
+
+    try:
+        auth = normalize_auth(config.get("auth", "auto"))
+    except ValueError as exc:
+        raise ValueError(f"Provider '{name}' has {exc}") from exc
 
     return ProviderDefinition(
         name=name,
         base_url=base_url,
         api_key_env=api_key_env,
         api_format=api_format,
+        auth=auth,
     )

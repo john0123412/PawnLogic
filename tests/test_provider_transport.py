@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from core.provider_formats import VALID_API_FORMATS
 from core.provider_transport import (
     provider_headers,
     validate_provider_definition,
@@ -34,13 +35,29 @@ class TestProviderHeaders:
         assert "Authorization" not in headers
         assert headers["anthropic-version"] == "2023-06-01"
 
-    def test_unknown_format_defaults_to_openai(self) -> None:
-        headers = provider_headers("unknown", "key")
-        assert "Authorization" in headers
-        assert headers["Authorization"] == "Bearer key"
+    def test_unknown_format_is_refused_rather_than_defaulted_to_openai(self) -> None:
+        # This assertion used to be the opposite. The implicit
+        # "unknown -> openai" fallback is what let a format registered in one
+        # place but missing from another branch keep running, silently, against
+        # the wrong endpoint. Refusing is the whole point of the registry.
+        with pytest.raises(ValueError, match="Unsupported API format"):
+            provider_headers("unknown", "key")
 
-    def test_all_formats_include_content_type(self) -> None:
-        for fmt in ("openai", "anthropic", "unknown"):
+    def test_responses_format_uses_bearer_token(self) -> None:
+        headers = provider_headers("responses", "sk-test-key")
+        assert headers["Authorization"] == "Bearer sk-test-key"
+        assert "x-api-key" not in headers
+
+    def test_bearer_auth_over_anthropic_payload(self) -> None:
+        # eas-llm-gateway serves Anthropic-shaped payloads and only accepts
+        # Authorization: Bearer. Without this override it answered x-api-key
+        # with 401, which the product reported as an invalid API key.
+        headers = provider_headers("anthropic", "sk-test-key", "bearer")
+        assert headers["Authorization"] == "Bearer sk-test-key"
+        assert "x-api-key" not in headers
+
+    def test_all_registered_formats_include_content_type(self) -> None:
+        for fmt in VALID_API_FORMATS:
             headers = provider_headers(fmt, "key")
             assert headers.get("content-type") == "application/json"
 
@@ -103,7 +120,7 @@ class TestValidateProviderDefinition:
             validate_provider_definition("test", {"base_url": "https://x.com"})
 
     def test_unknown_format_rejected(self) -> None:
-        with pytest.raises(ValueError, match="unsupported api_format"):
+        with pytest.raises(ValueError, match=r"unsupported api_format|Unsupported API format"):
             validate_provider_definition(
                 "test",
                 {
@@ -112,6 +129,38 @@ class TestValidateProviderDefinition:
                     "api_format": "graphql",
                 },
             )
+
+    def test_unknown_auth_scheme_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"unsupported auth|Unsupported auth"):
+            validate_provider_definition(
+                "test",
+                {
+                    "base_url": "https://x.com",
+                    "api_key_env": "K",
+                    "api_format": "openai",
+                    "auth": "oauth",
+                },
+            )
+
+    def test_valid_auth_scheme_is_carried_on_the_definition(self) -> None:
+        defn = validate_provider_definition(
+            "test",
+            {
+                "base_url": "https://x.com",
+                "api_key_env": "K",
+                "api_format": "anthropic",
+                "auth": "bearer",
+            },
+        )
+        assert defn.auth == "bearer"
+        assert defn.api_format == "anthropic"
+
+    def test_auth_defaults_to_auto_when_absent(self) -> None:
+        defn = validate_provider_definition(
+            "test",
+            {"base_url": "https://x.com", "api_key_env": "K", "api_format": "openai"},
+        )
+        assert defn.auth == "auto"
 
     def test_definition_is_frozen(self) -> None:
         defn = validate_provider_definition(
