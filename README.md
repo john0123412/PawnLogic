@@ -111,7 +111,7 @@ use the additive `{"type":"event","data":{...}}` envelope.
 
 ## What's New
 
-Version 0.4.0 unifies reasoning effort into a single control:
+Version 0.4.0 unifies reasoning effort into a single control, and adds a third provider protocol with authentication no longer bound to it:
 
 - **`/effort` is the one control for reasoning effort:** six rungs —
   `off`, `low`, `medium`, `high`, `xhigh`, `max` — defaulting to `medium`,
@@ -147,6 +147,19 @@ Version 0.4.0 unifies reasoning effort into a single control:
   every custom provider, model, and activation state gone. Built-in
   providers are refused with an explanation; the opt-in applies to
   custom providers only.
+- **A third provider protocol, and authentication is no longer tied to
+  it.** `api_format` accepts `openai`, `anthropic`, or the new
+  `responses` (OpenAI Responses, `POST {base}/responses`). The
+  credential header used to be *derived* from the format, so a relay
+  serving Anthropic-shaped payloads over `Authorization: Bearer` — which
+  rejects `x-api-key` — had no configuration that could work. Auth is
+  now its own setting (`auto`, `bearer`, `x_api_key`, `both`) in the
+  provider TUI and in
+  `/provider add <alias> <url> <KEY> [format] [auth]`; `auto` keeps the
+  previous behaviour exactly. A 401 now names the credential header
+  that was actually sent and points at the Auth setting instead of
+  asserting your key is invalid. See
+  [Protocols and authentication](#protocols-and-authentication).
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
@@ -154,7 +167,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
 | Capability | Description |
 |-----------|-------------|
-| Multi-provider models | Built-in DeepSeek, OpenAI, and Anthropic aliases plus custom OpenAI-compatible or Anthropic-style providers through `/provider`. |
+| Multi-provider models | Built-in DeepSeek, OpenAI, and Anthropic aliases plus custom OpenAI-compatible, Anthropic-style, or OpenAI Responses providers through `/provider`, each with an independent authentication scheme. |
 | Delegated agents | Bounded sub-agents use host-controlled dynamic model routing, user allow/deny policy, token/tool/cost budgets, capability-filtered Tools, task-local workspaces, and one-or-two-worker orchestration with task lineage. |
 | Structured context | Versioned task state, Tool-call-safe trimming, `ctx_trim_to` targeting, and host-selected delegated context keep long sessions bounded without copying raw parent history. |
 | Persistent workspace | SQLite-backed sessions, searchable history, memory commands, bounded provenance-aware knowledge retrieval, per-session workspaces, and audit logs under `~/.pawnlogic/`. |

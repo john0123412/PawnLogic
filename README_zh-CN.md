@@ -98,7 +98,7 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 
 ## 新特性
 
-0.4.0 把推理强度统一为一个控制入口：
+0.4.0 把推理强度统一为一个控制入口，并新增第三种 Provider 协议、让鉴权不再与协议绑定：
 
 - **推理强度只有 `/effort` 一个控制入口：** 六档 —— `off`、`low`、`medium`、
   `high`、`xhigh`、`max` —— 默认 `medium`，以弹窗选择器的形式挂在 `/model`
@@ -123,6 +123,15 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
   会向 `custom_providers.json` 写入一条不完整的记录，下次启动时整份文件被拒绝
   —— 所有自定义 Provider、模型和激活状态全部丢失。现在内置 Provider 会被
   拒绝并给出说明；该开关只作用于自定义 Provider。
+- **新增第三种 Provider 协议，鉴权也不再与它绑定。** `api_format` 现在接受
+  `openai`、`anthropic` 以及新增的 `responses`（OpenAI Responses，
+  `POST {base}/responses`）。此前凭据头是从协议*推导*出来的，因此一个用
+  `Authorization: Bearer` 提供 Anthropic 形状 payload（并拒绝 `x-api-key`）
+  的中转站，在产品里根本没有任何可用配置。现在鉴权是独立设置
+  （`auto`、`bearer`、`x_api_key`、`both`），可从 Provider TUI 设置，也可用
+  `/provider add <alias> <url> <KEY> [format] [auth]`；`auto` 与改动前行为
+  完全一致。401 现在会指出实际发送的是哪个凭据头，并指向 Auth 设置，而不是
+  断言你的 key 无效。参见[协议与鉴权](#协议与鉴权)。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -130,7 +139,7 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 
 | 能力 | 描述 |
 |------|------|
-| 多 Provider 模型 | 内置 DeepSeek、OpenAI、Anthropic 别名，并可通过 `/provider` 添加自定义 OpenAI-compatible 或 Anthropic-style Provider。 |
+| 多 Provider 模型 | 内置 DeepSeek、OpenAI、Anthropic 别名，并可通过 `/provider` 添加自定义 OpenAI-compatible、Anthropic-style 或 OpenAI Responses Provider，每个 Provider 的鉴权方式独立配置。 |
 | 委派 Agent | 有界 sub-agent 使用由 host 控制的动态模型路由、用户 allow/deny 策略、Token/工具/成本预算、按能力过滤的工具、task-local workspace，以及带 task lineage 的一至两个 worker 编排。 |
 | 结构化上下文 | 版本化任务状态、保持 Tool Call 完整性的裁剪、`ctx_trim_to` 目标和由 host 选择的委派上下文，使长会话保持有界且不会复制原始父级历史。 |
 | 持久化工作区 | 基于 SQLite 的会话、可搜索历史、memory 命令、有界且携带来源信息的知识检索、每会话 workspace 和 `~/.pawnlogic/` 下的审计日志。 |
