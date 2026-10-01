@@ -54,7 +54,6 @@ from core.context_manager import (
 from core.context_window import (
     _ctx_chars as _ctx_chars,
     _drop_dangling_tool_call_messages as _drop_dangling_tool_call_messages,
-    _trim_and_compact_context as _trim_and_compact_context,
 )
 from core.state import state as _runtime_state, runtime_config
 from core.runtime_context import RuntimeContext, current_runtime_context

@@ -3,7 +3,6 @@ tests/test_session_utils.py — Unit tests for core/session.py utility functions
 
 Targets zero-dependency or minimal-dependency functions only:
   - _ctx_chars
-  - _trim_and_compact_context
   - _is_plan_exempt
   - _PlanRenderer.feed / flush
   - AgentSession._count_turns
@@ -116,7 +115,6 @@ from core.session import (  # noqa: E402
     _ThinkingSpinner,
     _ctx_chars,
     _drop_dangling_tool_call_messages,
-    _trim_and_compact_context,
     _is_plan_exempt,
     _tool_call_missing_plan,
     _PlanRenderer,
@@ -242,46 +240,6 @@ def test_run_turn_marks_iteration_limit_as_failed(monkeypatch):
 
     assert s.queue_status()["status"] == "failed"
     s._autosave.assert_called_once_with(turn_status="failed")
-
-
-# ══════════════════════════════════════════════════════════
-# _trim_and_compact_context
-# ══════════════════════════════════════════════════════════
-
-def test_trim_no_op_when_under_limit(monkeypatch):
-    from config import DYNAMIC_CONFIG
-    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_max_chars", 100_000)
-    msgs = [_msg("system", "sys"), _msg("user", "hi"), _msg("assistant", "ok")]
-    original = list(msgs)
-    result = _trim_and_compact_context(msgs)
-    assert result == 0
-    assert msgs == original
-
-
-def test_trim_compacts_when_over_limit(monkeypatch):
-    from config import DYNAMIC_CONFIG
-    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_max_chars", 10)  # tiny limit
-    msgs = [
-        _msg("system", "sys"),
-        *[_msg("user", f"message_{i}" * 5) for i in range(20)],
-    ]
-    original_len = len(msgs)
-    result = _trim_and_compact_context(msgs)
-    assert result > 0
-    assert len(msgs) < original_len
-    # system prompt always preserved at index 0
-    assert msgs[0]["role"] == "system"
-    # summary injected at index 1
-    assert msgs[1]["role"] == "assistant"
-    assert "Context Compacted" in msgs[1]["content"]
-
-
-def test_trim_returns_zero_if_too_few_msgs(monkeypatch):
-    from config import DYNAMIC_CONFIG
-    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_max_chars", 1)
-    msgs = [_msg("system", "s"), _msg("user", "u")]  # only 2 msgs
-    result = _trim_and_compact_context(msgs)
-    assert result == 0
 
 
 # ══════════════════════════════════════════════════════════
