@@ -43,6 +43,38 @@ def test_load_snapshot_converts_legacy_character_budget(isolated_memory):
     assert "ctx_trim_to" not in config
 
 
+def test_load_snapshot_keeps_explicit_token_budget_over_stale_legacy_keys(isolated_memory):
+    # A snapshot saved by an intermediate version can carry BOTH the user's
+    # explicit token budget and stale legacy character keys. The token keys
+    # are what the user last set; the migration must not rewrite them.
+    memory = isolated_memory
+    from core import persistence
+
+    sid = "sess_mixed_budget"
+    memory.upsert_session(
+        session_id=sid,
+        name="",
+        model="ds-v4-flash",
+        cwd="/tmp",
+        config_dict={
+            "ctx_max_tokens": 8_000,
+            "ctx_trim_tokens": 6_000,
+            "ctx_max_chars": 90_000,
+            "ctx_trim_to": 60_000,
+        },
+        workspace_dir="/tmp/ws",
+    )
+
+    snapshot = persistence.load_snapshot(sid)
+
+    assert snapshot is not None
+    config = snapshot.runtime["config"]
+    assert config["ctx_max_tokens"] == 8_000
+    assert config["ctx_trim_tokens"] == 6_000
+    assert "ctx_max_chars" not in config
+    assert "ctx_trim_to" not in config
+
+
 def test_turn_context_marker_survives_save_and_load(isolated_memory):
     # The retrieval block is recognized by its `_turn_context` flag; if the
     # flag is lost across save/load, undo after a reload strands the block.

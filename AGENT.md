@@ -1123,13 +1123,19 @@ name at the end is the gate that fails if the invariant is broken.
   migration for old DBs), so save/load keeps undo exact —
   `test_undo_after_reload_removes_retrieval_block_with_its_turn` gates the
   roundtrip. Budget trimming groups history from `_turn_context` markers as
-  well as user messages; reverting that grouping evicts the current
-  question's retrieval block at the budget boundary
-  (`test_overflow_keeps_each_retrieval_block_with_its_own_turn`). Legacy
+  well as user messages, and a block's group ABSORBS the user message that
+  immediately follows it — treating the user as a second group start splits
+  the turn in two, and the budget boundary then evicts the retrieval block
+  while keeping the question
+  (`test_overflow_budget_boundary_evicts_block_and_question_together`,
+  `test_count_turns_groups_retrieval_block_with_its_user`). Legacy
   character budgets (`ctx_max_chars`/`ctx_trim_to`) convert to token keys at
-  snapshot load (`migrate_legacy_context_budget`), because the runtime preset
-  already seeds token defaults that would otherwise mask the saved budget —
-  `test_load_snapshot_converts_legacy_character_budget` gates it.
+  snapshot load (`migrate_legacy_context_budget`) per key and never overwrite
+  an explicit token value, because the runtime preset already seeds token
+  defaults that would otherwise mask the saved budget —
+  `test_load_snapshot_converts_legacy_character_budget` and
+  `test_load_snapshot_keeps_explicit_token_budget_over_stale_legacy_keys`
+  gate both snapshots.
 
 ### Execution and policy boundaries
 

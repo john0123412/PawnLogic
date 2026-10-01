@@ -359,3 +359,74 @@ def test_overflow_keeps_each_retrieval_block_with_its_own_turn():
     assert "[Retrieved Context one]" in selected_contents
     assert "question-one" in selected_contents
     assert "m" * 160 not in selected_contents
+
+
+def test_overflow_budget_boundary_evicts_block_and_question_together():
+    # Critical boundary: the current turn (block + question + answer = 13
+    # tokens) fits the trim budget exactly at 26 and is evicted as ONE unit
+    # at 25. The question must never survive without its retrieval block.
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "assistant", "content": "[Retrieved Context one]", "_turn_context": True},
+        {"role": "user", "content": "question-one"},
+        {"role": "assistant", "content": "answer-one"},
+        {"role": "user", "content": "m" * 160},
+        {"role": "assistant", "content": "answer-mid"},
+        {"role": "assistant", "content": "[Retrieved Context]", "_turn_context": True},
+        {"role": "user", "content": "question-current"},
+        {"role": "assistant", "content": "answer-current"},
+    ]
+
+    def _selected(trim_tokens: int):
+        envelope = ContextManager(max_tokens=40, trim_tokens=trim_tokens).build(messages)
+        return [str(m.get("content")) for m in envelope.messages]
+
+    at_limit = _selected(26)
+    assert "question-current" in at_limit
+    assert "[Retrieved Context]" in at_limit
+    assert "m" * 160 not in at_limit
+
+    one_below = _selected(25)
+    assert "question-current" not in one_below
+    assert "[Retrieved Context]" not in one_below
+    # The protected first turn stays whole either way.
+    assert "[Retrieved Context one]" in one_below
+    assert "question-one" in one_below
+
+
+def test_structured_state_inserts_after_the_first_full_turn():
+    # The pinned state carrier is inserted at the end of the first turn
+    # group. With a retrieval block leading that group, the state must land
+    # AFTER the turn's answer — not between the block and its user message,
+    # where it would break the block+user pairing for undo.
+    state = ContextState(goal="Goal")
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "assistant", "content": "[Retrieved Context]", "_turn_context": True},
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "answer"},
+    ]
+
+    with_state = replace_context_state_message(messages, state)
+
+    def _index_of(marker: str) -> int:
+        return next(
+            index
+            for index, message in enumerate(with_state)
+            if marker in str(message.get("content") or "")
+        )
+
+    block_index = _index_of("[Retrieved Context]")
+    user_index = _index_of("question")
+    answer_index = _index_of("answer")
+    state_index = next(
+        index
+        for index, message in enumerate(with_state)
+        if str(message.get("content") or "").startswith("[PawnLogic Context State")
+    )
+
+    # The block stays glued to its user, and the pinned state lands after
+    # the whole first turn, never between the block and the user.
+    assert user_index == block_index + 1
+    assert answer_index == user_index + 1
+    assert state_index > answer_index

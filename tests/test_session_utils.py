@@ -2283,3 +2283,31 @@ def test_prepare_turn_rebuilds_system_prompt_when_urgent_mode_changes(monkeypatc
 
     assert s.messages[0]["content"] != system_before
     assert s._prompt_urgent is True
+
+
+def test_count_turns_groups_retrieval_block_with_its_user():
+    s = _make_session()
+    s.messages = [
+        _msg("system", "sys"),
+        _msg("assistant", "[Retrieved Context]", _turn_context=True),
+        _msg("user", "q1"),
+        _msg("assistant", "a1"),
+        _msg("assistant", "[Retrieved Context 2]", _turn_context=True),
+        _msg("user", "q2"),
+        _msg("assistant", "a2"),
+    ]
+
+    assert s._count_turns(s.messages) == [(1, 4), (4, 7)]
+
+
+def test_count_turns_plain_history_is_unchanged():
+    s = _make_session()
+    s.messages = [
+        _msg("system", "sys"),
+        _msg("user", "q1"),
+        _msg("assistant", "a1"),
+        _msg("user", "q2"),
+        _msg("assistant", "a2"),
+    ]
+
+    assert s._count_turns(s.messages) == [(1, 3), (3, 5)]

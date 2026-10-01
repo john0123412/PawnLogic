@@ -89,20 +89,34 @@ def migrate_legacy_context_budget(cfg: dict) -> bool:
     snapshot merges into a runtime config already seeded with token
     defaults) is what keeps the saved budget authoritative: a plain merge
     would leave both key sets present, and the preset's token defaults
-    would mask the user's saved character budget. Legacy keys are removed
-    so a later ``/ctx`` token write can never be shadowed by them.
-    Returns True when a conversion happened.
+    would mask the user's saved character budget.
+
+    Token keys are the authoritative surface: each legacy key only fills in
+    the token key it predates, so a snapshot that already carries an
+    explicit token value keeps it even when stale character keys ride
+    along. Legacy keys are removed either way, so a later ``/ctx`` token
+    write can never be shadowed by them. Returns True when any key was
+    converted or removed.
     """
     legacy_max = cfg.get("ctx_max_chars")
-    if legacy_max is None:
+    legacy_trim = cfg.get("ctx_trim_to")
+    if legacy_max is None and legacy_trim is None:
         return False
-    legacy_cfg = {"ctx_max_chars": legacy_max, "ctx_trim_to": cfg.get("ctx_trim_to")}
     try:
-        max_tokens, trim_tokens = resolve_context_budget(legacy_cfg)
-    except Exception:
+        if legacy_max is not None and "ctx_max_tokens" not in cfg:
+            cfg["ctx_max_tokens"] = max(
+                _MIN_TOKEN_BUDGET, int(legacy_max) // _LEGACY_CHARS_PER_TOKEN
+            )
+        if legacy_trim is not None and "ctx_trim_tokens" not in cfg:
+            cfg["ctx_trim_tokens"] = max(
+                _MIN_TOKEN_TRIM, int(legacy_trim) // _LEGACY_CHARS_PER_TOKEN
+            )
+    except (TypeError, ValueError):
         return False
-    cfg["ctx_max_tokens"] = max_tokens
-    cfg["ctx_trim_tokens"] = trim_tokens
+    max_tokens = cfg.get("ctx_max_tokens")
+    trim_tokens = cfg.get("ctx_trim_tokens")
+    if isinstance(max_tokens, int) and isinstance(trim_tokens, int):
+        cfg["ctx_trim_tokens"] = min(trim_tokens, max_tokens)
     cfg.pop("ctx_max_chars", None)
     cfg.pop("ctx_trim_to", None)
     return True

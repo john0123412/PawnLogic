@@ -1083,21 +1083,33 @@ class AgentSession:
         """Group msgs[1:] into iteration units and return [(start_idx, end_idx), ...].
 
         An iteration unit is one user message plus all following assistant/tool
-        messages until the next user message. The system message at index 0 is
-        not included in grouping.
+        messages until the next user message. A `_turn_context` retrieval block
+        starts the group of the turn it was retrieved for and absorbs the user
+        message that immediately follows it — the same grouping the budget
+        trimmer uses (`core.context_manager._turn_groups`). The system message
+        at index 0 is not included in grouping.
         """
         turns: list[tuple[int, int]] = []
         i = 1  # skip system
         while i < len(msgs):
-            if msgs[i].get("role") == "user":
+            if msgs[i].get("_turn_context"):
                 start = i
                 i += 1
-                # Absorb following assistant/tool messages until the next user or end.
-                while i < len(msgs) and msgs[i].get("role") != "user":
+                # Absorb the user message this block was retrieved for.
+                if i < len(msgs) and msgs[i].get("role") == "user":
                     i += 1
-                turns.append((start, i))
+            elif msgs[i].get("role") == "user":
+                start = i
+                i += 1
             else:
                 i += 1
+                continue
+            # Absorb assistant/tool messages until the next group start.
+            while i < len(msgs) and not (
+                msgs[i].get("role") == "user" or msgs[i].get("_turn_context")
+            ):
+                i += 1
+            turns.append((start, i))
         return turns
 
     def _maybe_update_summary(self, msgs: list, current_turn_count: int) -> None:

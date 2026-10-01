@@ -7,7 +7,7 @@ ROOT = str(Path(__file__).resolve().parent.parent)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from core.context_window import resolve_context_budget
+from core.context_window import migrate_legacy_context_budget, resolve_context_budget
 from core.token_estimate import estimate_tokens
 
 
@@ -90,3 +90,47 @@ class TestResolveContextBudget:
             128_000,
             128_000,
         )
+
+
+class TestMigrateLegacyContextBudget:
+    def test_pure_legacy_snapshot_converts_both_keys(self):
+        cfg = {"ctx_max_chars": 90_000, "ctx_trim_to": 60_000}
+        assert migrate_legacy_context_budget(cfg) is True
+        assert cfg == {"ctx_max_tokens": 30_000, "ctx_trim_tokens": 20_000}
+
+    def test_explicit_token_values_survive_stale_legacy_keys(self):
+        # A snapshot saved by an intermediate version can carry the user's
+        # explicit token keys AND stale character keys. Token keys are
+        # authoritative: 8k/6k must survive, never be rewritten to 30k/20k.
+        cfg = {
+            "ctx_max_tokens": 8_000,
+            "ctx_trim_tokens": 6_000,
+            "ctx_max_chars": 90_000,
+            "ctx_trim_to": 60_000,
+        }
+        assert migrate_legacy_context_budget(cfg) is True
+        assert cfg == {"ctx_max_tokens": 8_000, "ctx_trim_tokens": 6_000}
+
+    def test_missing_token_keys_are_filled_per_key(self):
+        cfg = {
+            "ctx_max_tokens": 8_000,
+            "ctx_max_chars": 90_000,
+            "ctx_trim_to": 60_000,
+        }
+        migrate_legacy_context_budget(cfg)
+        assert cfg["ctx_max_tokens"] == 8_000
+        # The converted trim (20000) exceeds the explicit max (8000); the
+        # trim-never-exceeds-max invariant clamps it instead of erroring.
+        assert cfg["ctx_trim_tokens"] == 8_000
+        assert "ctx_max_chars" not in cfg
+
+    def test_trim_is_clamped_to_max_after_migration(self):
+        cfg = {"ctx_max_chars": 30_000, "ctx_trim_to": 90_000}
+        migrate_legacy_context_budget(cfg)
+        assert cfg["ctx_max_tokens"] == 10_000
+        assert cfg["ctx_trim_tokens"] == 10_000
+
+    def test_no_legacy_keys_is_a_no_op(self):
+        cfg = {"ctx_max_tokens": 48_000, "ctx_trim_tokens": 36_000}
+        assert migrate_legacy_context_budget(cfg) is False
+        assert cfg == {"ctx_max_tokens": 48_000, "ctx_trim_tokens": 36_000}
