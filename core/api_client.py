@@ -14,15 +14,20 @@ import http.client
 from collections.abc import Callable
 from urllib.parse import urlparse
 from config import get_provider_config, MODELS, DEFAULT_MODEL, DYNAMIC_CONFIG
+# Re-exported so callers and tests that reach for these names through
+# api_client keep resolving; the real per-format dispatch lives in
+# core.provider_protocol.
+from core.provider_protocol import (
+    _anthropic_build_headers as _anthropic_build_headers,
+    _anthropic_build_payload as _anthropic_build_payload,
+    _build_openai_headers as _build_openai_headers,
+    _build_openai_payload as _build_openai_payload,
+)
 from core.api_payloads import (
-    _anthropic_build_headers,
-    _anthropic_build_payload,
     _anthropic_convert_messages as _anthropic_convert_messages,
     _anthropic_convert_tools as _anthropic_convert_tools,
-    _build_openai_headers,
-    _build_openai_payload,
     _is_reasoning_model as _is_reasoning_model,
-    _sanitize_messages_for_model,
+    _sanitize_messages_for_model as _sanitize_messages_for_model,
 )
 from core.api_errors import (
     RETRYABLE_HTTP_STATUS_CODES,
@@ -45,6 +50,7 @@ from core.stream_cancellation import (
     raise_if_task_cancelled as _raise_if_task_cancelled,
 )
 from core import provider_streams
+from core import provider_protocol
 from core.provider_runtime import maybe_warn_insecure_provider
 from core.runtime_metrics import RuntimeMetrics, RuntimeMetricsSnapshot
 
@@ -389,30 +395,29 @@ def stream_request(
 ):
     """
     Streaming SSE generator with circuit breaker, exponential backoff, and
-    partial-stream recovery. Chooses OpenAI or Anthropic native path from
-    api_format. Yields parsed delta dicts or {"_error": "..."}.
+    partial-stream recovery. The wire protocol is resolved through
+    core.provider_protocol, which refuses an unregistered format rather than
+    falling back to OpenAI. Yields parsed delta dicts or {"_error": "..."}.
     """
     cfg       = get_provider_config(model_alias)
     base_url  = cfg["base_url"]
     api_key   = cfg["api_key"]
     api_fmt   = cfg["api_format"]
+    api_auth  = cfg.get("auth", "auto")
     model_id  = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])["id"]
     provider  = base_url   # Use base_url as the circuit-breaker key.
     _max_tok  = max_tokens or DYNAMIC_CONFIG["max_tokens"]
 
-    # Build payload and headers by format.
-    if api_fmt == "anthropic":
-        payload = _anthropic_build_payload(messages, model_id, _max_tok, tools_schema)
-    else:
-        payload = _build_openai_payload(
-            messages,
-            model_alias,
-            model_id,
-            _max_tok,
-            tools_schema,
-            tool_choice,
-            response_format,
-        )
+    payload = provider_protocol.build_stream_payload(
+        api_fmt,
+        messages,
+        model_alias,
+        model_id,
+        _max_tok,
+        tools_schema,
+        tool_choice,
+        response_format,
+    )
 
     proxy = _detect_proxy()
 
@@ -458,10 +463,9 @@ def stream_request(
             _raise_if_stream_interrupted(cancellation)
 
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            if api_fmt == "anthropic":
-                hdrs = _anthropic_build_headers(api_key, len(body))
-            else:
-                hdrs = _build_openai_headers(api_key, len(body))
+            hdrs = provider_protocol.build_stream_headers(
+                api_fmt, api_key, len(body), auth=api_auth
+            )
             conn.request("POST", path, body=body, headers=hdrs)
 
             if conn.sock:
@@ -474,7 +478,9 @@ def stream_request(
             if is_retryable_http_status(resp.status):
                 _cb_record_failure(provider)
                 err_body = resp.read(600)
-                err_msg = format_http_error(resp.status, err_body)
+                err_msg = format_http_error(
+                    resp.status, err_body, api_format=api_fmt, auth=api_auth
+                )
                 if attempt >= max_attempts - 1:
                     yield {"_error": err_msg}
                     return
@@ -487,7 +493,11 @@ def stream_request(
             if resp.status != 200:
                 _cb_record_failure(provider)
                 err_body = resp.read(600)
-                yield {"_error": format_http_error(resp.status, err_body)}
+                yield {
+                    "_error": format_http_error(
+                        resp.status, err_body, api_format=api_fmt, auth=api_auth
+                    )
+                }
                 return
 
             partial_terminal = False
@@ -628,6 +638,7 @@ def call_once(
     base_url  = cfg["base_url"]
     api_key   = cfg["api_key"]
     api_fmt   = cfg["api_format"]
+    api_auth  = cfg.get("auth", "auto")
     model_id  = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])["id"]
 
     if vision_payload_override:
@@ -635,18 +646,10 @@ def call_once(
         payload.setdefault("model",      model_id)
         payload.setdefault("max_tokens", max_tokens)
         payload.setdefault("stream",     False)
-    elif api_fmt == "anthropic":
-        payload = _anthropic_build_payload(messages, model_id, max_tokens, None)
-        payload["stream"] = False
     else:
-        # thinking-mode: use the same sanitizer as stream_request.
-        clean = _sanitize_messages_for_model(messages, model_alias, model_id)
-        payload = {
-            "model":      model_id,
-            "messages":   clean,
-            "max_tokens": max_tokens,
-            "stream":     False,
-        }
+        payload = provider_protocol.build_nonstream_payload(
+            api_fmt, messages, model_alias, model_id, max_tokens
+        )
 
     proxy = _detect_proxy()
 
@@ -668,14 +671,9 @@ def call_once(
             )
 
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            if api_fmt == "anthropic":
-                hdrs = _anthropic_build_headers(api_key, len(body))
-            else:
-                hdrs = {
-                    "Authorization":  f"Bearer {api_key}",
-                    "Content-Type":   "application/json",
-                    "Content-Length": str(len(body)),
-                }
+            hdrs = provider_protocol.build_stream_headers(
+                api_fmt, api_key, len(body), auth=api_auth, stream=False
+            )
             conn.request("POST", path, body=body, headers=hdrs)
             if conn.sock:
                 conn.sock.settimeout(policy.nonstream_timeout_seconds)
@@ -688,13 +686,13 @@ def call_once(
                 _interruptible_sleep(_retry_delay(attempt, resp.headers.get("Retry-After"), retry_after_max=policy.retry_after_cap_seconds))
                 continue
             if resp.status != 200:
-                return "", format_http_error(resp.status, raw[:600])
+                return "", format_http_error(
+                    resp.status, raw[:600], api_format=api_fmt, auth=api_auth
+                )
 
             _cb_record_success(base_url)
 
-            if api_fmt == "anthropic":
-                return _anthropic_parse_response(raw)
-            return _parse_openai_nonstream_text(raw)
+            return provider_protocol.parse_nonstream_response(api_fmt, raw)
 
         except socket.timeout:
             if attempt < max_attempts - 1:

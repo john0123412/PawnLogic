@@ -169,6 +169,10 @@ jobs:
             core/path_policy.py \
             core/provider_transport.py \
             core/api_retry.py \
+            core/provider_formats.py \
+            core/provider_protocol.py \
+            core/provider_responses.py \
+            core/provider_tui_rows.py \
             core/provider_tui_state.py \
             core/session_tool_loop.py \
             core/session_snapshot.py \

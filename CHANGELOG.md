@@ -19,6 +19,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `/effort <level>`. See
   [ADR 0012](docs/adr/0012-reasoning-effort-control.md).
 
+- A third provider protocol: the OpenAI Responses API. `api_format:
+  responses` targets `POST {base}/responses` and sends the Responses request
+  shape — `input`, `instructions`, `max_output_tokens`, `store: false`, and
+  nested `reasoning: {effort: ...}` rather than a flat `reasoning_effort`.
+  Tool calls and results travel as first-class `function_call` /
+  `function_call_output` items. Streaming events are normalized into the
+  existing delta contract in `core/provider_responses.py`, so the Turn
+  pipeline needed no changes. Select it from the TUI dropdown or run
+  `/provider add <alias> <url> <KEY> responses`.
 ### Changed
 - `/low`, `/mid`, `/deep`, `/max`, `/ultra`, and `/normal` are kept as
   aliases that print where the setting moved, so existing habits and scripts
@@ -93,6 +102,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the README documented it, but the subcommand was reachable only by typing
   it exactly; a test now compares the completion list against the dispatcher
   so a new `/provider` subcommand cannot ship without one.
+- A third-party relay could reject a perfectly good key with a 401 that
+  PawnLogic then reported as "API key is missing or invalid; reconfigure it
+  with /setkey", sending the user to rotate a working credential. The
+  credential header was derived from the payload format, so a relay serving
+  Anthropic-shaped payloads over `Authorization: Bearer` — which rejects
+  `x-api-key` — had no configuration that could work. Authentication is now a
+  separate `auth` setting (`auto`, `bearer`, `x_api_key`, `both`) defaulting to
+  each protocol's historical header, selectable in the provider TUI's new
+  `Auth` row, in `/provider add <alias> <url> <KEY> <format> <auth>`, and
+  honoured by Fetch, Test Connection, and the real Turn alike.
+- A 401 now names the credential header that was actually sent and points at
+  the `Auth` setting. The old "your key is invalid" wording is kept only where
+  the protocol already sends Bearer by default, so there is nothing for the
+  user to change.
+- A relay that does not publish `/v1/models` no longer reads as a credential
+  failure: Test Connection explains that the endpoint has no model listing and
+  to add models by hand.
 
 ## [0.3.13] - 2026-09-29
 

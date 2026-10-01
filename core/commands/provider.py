@@ -20,7 +20,7 @@ commands and by main.py's startup wizard, which imports `_run_key_wizard`,
     _handle_provider_cmd       dispatcher for /provider sub-commands
     _provider_list             display all providers and their key status
     _provider_add              interactive: add a custom provider
-    _provider_add_cli          non-interactive: /provider add <a> <url> <env>
+    _provider_add_cli          non-interactive: /provider add <a> <url> <env> [fmt] [auth]
     _provider_set_active       show or hide a provider's models in /model
     _provider_remove           remove a custom provider
     _provider_test             smoke-test an API connection
@@ -60,6 +60,12 @@ from core.commands._effort_flow import (
 # must keep working.
 from core.commands._model_picker import cc_style_model_selector
 from core.logger import logger
+from core.provider_formats import (
+    AUTH_LABELS,
+    normalize_api_format,
+    normalize_auth,
+)
+from core import provider_tui_rows as rows_mod
 from core.provider_runtime import (
     ENV_PATH,
     fetch_models,
@@ -327,15 +333,20 @@ def _provider_add() -> None:
         _print(c(RED, f"  ✗ Invalid or duplicate provider name: {name}"))
         return
 
-    _print(f"\n  {c(BOLD, 'API format:')}")
-    _print(f"    {c(CYAN, '[1]')} OpenAI Chat Completions format")
-    _print(f"    {c(CYAN, '[2]')} Anthropic Messages format")
-    try:
-        fmt_choice = input(cp(BOLD, "  Select [1/2]: ")).strip()
-    except (EOFError, KeyboardInterrupt):
-        _print()
+    # Both menus are generated from the registry: a hand-written one is how the
+    # third format ended up unselectable outside the TUI.
+    ask = lambda prompt: input(cp(BOLD, prompt))
+    api_format = rows_mod.prompt_menu(
+        ask, rows_mod.ROW_FORMAT, write=_print,
+        header=c(BOLD, "API format:"), style=lambda t: c(CYAN, t))
+    auth = rows_mod.prompt_menu(
+        ask, rows_mod.ROW_AUTH, write=_print,
+        header=c(BOLD, "Auth:"),
+        note=c(GRAY, "How the API key is sent. Change this only if the default 401s."),
+        style=lambda t: c(CYAN, t))
+    if api_format is None or auth is None:
+        _print(c(RED, "  ✗ Cancelled or invalid selection."))
         return
-    api_format = "anthropic" if fmt_choice == "2" else "openai"
 
     try:
         base_url = input(cp(BOLD, "  Base URL (e.g. https://api.example.com/v1/chat/completions): ")).strip()
@@ -362,6 +373,7 @@ def _provider_add() -> None:
         "api_key_env": env_var_name,
         "label":       f"Custom ({name})",
         "api_format":  api_format,
+        "auth":        auth,
     }
 
     from core.provider_runtime import save_provider_with_rollback
@@ -372,6 +384,7 @@ def _provider_add() -> None:
 
     _print(c(GREEN, f"\n  ✓ Provider '{name}' added."))
     _print(c(GRAY,  f"    Format: {api_format}"))
+    _print(c(GRAY,  f"    Auth: {AUTH_LABELS[auth]}"))
     _print(c(GRAY,  f"    URL:  {base_url}"))
     _print(c(GRAY,  f"    Config: {CUSTOM_PROVIDERS_PATH}"))
     _print(c(CYAN,  f"    Next: run /provider fetch {name} to fetch the model list."))
@@ -444,20 +457,28 @@ async def _provider_test(session, model_alias: str = "") -> None:
     _print(c(GRAY, f"  Testing {model_alias} ({api_format}) -> {base_url} ..."))
     _print(c(GRAY, "  Checking the free model listing (no inference, no charge)..."))
 
-    ok, msg, _ms = await test_connection(base_url, api_key, api_format, model_id)
+    ok, msg, _ms = await test_connection(
+        base_url, api_key, api_format, model_id,
+        auth=provider.get("auth", "auto"),
+    )
     if ok:
         _print(c(GREEN, f"  ✓ Connection succeeded. {msg}"))
     else:
         _print(c(RED, f"  ✗ Test failed: {msg}"))
 
 
-def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str = "openai") -> bool:
-    """Non-interactive: /provider add <alias> <base_url> <ENV_KEY> [anthropic]."""
+def _provider_add_cli(
+    alias: str, base_url: str, env_key: str,
+    api_format: str = "openai", auth: str = "auto",
+) -> bool:
+    """Non-interactive: /provider add <alias> <base_url> <ENV_KEY> [format] [auth]."""
     from core.provider_transport import validate_provider_definition
 
     if alias in PROVIDERS:
         _print(c(YELLOW, f"  ⚠ Provider '{alias}' already exists; config will be overwritten."))
     try:
+        api_format = normalize_api_format(api_format)
+        auth = normalize_auth(auth)
         validate_provider_definition(alias, {
             "base_url": base_url,
             "api_key_env": env_key,
@@ -471,6 +492,7 @@ def _provider_add_cli(alias: str, base_url: str, env_key: str, api_format: str =
         "api_key_env": env_key,
         "label":       f"Custom ({alias})",
         "api_format":  api_format,
+        "auth":        auth,
         "active":      False,
     }
     from core.provider_runtime import save_provider_with_rollback
@@ -632,6 +654,7 @@ async def _provider_fetch(
         prov["base_url"],
         api_key,
         prov.get("api_format", "openai"),
+        auth=prov.get("auth", "auto"),
     )
     if err:
         _print(c(RED, f"  ✗ Request failed: {err}"))
@@ -755,8 +778,11 @@ async def _handle_provider_cmd(
     elif sub == "add":
         parts_add = sub_arg.split() if sub_arg else []
         if len(parts_add) >= 3:
-            should_fetch = _provider_add_cli(parts_add[0], parts_add[1], parts_add[2],
-                                             parts_add[3] if len(parts_add) > 3 else "openai")
+            should_fetch = _provider_add_cli(
+                parts_add[0], parts_add[1], parts_add[2],
+                parts_add[3] if len(parts_add) > 3 else "openai",
+                parts_add[4] if len(parts_add) > 4 else "auto",
+            )
             if should_fetch:
                 await _provider_fetch(parts_add[0], terminal_controller=terminal_controller)
         else:

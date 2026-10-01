@@ -27,6 +27,75 @@ HTTP_STATUS_HINTS: dict[int, tuple[str, str]] = {
     504: ("Gateway Timeout", "provider gateway timed out waiting for the model service."),
 }
 
+#: Statuses a model-listing probe returns when the provider simply does not
+#: publish one. Many relays expose only the inference endpoints.
+_NO_MODEL_LISTING_STATUSES = (403, 404)
+
+
+def auth_failure_hint(api_format: str, auth: str) -> str:
+    """Return the 401 hint for a request whose auth scheme we know.
+
+    The hint names the credential header actually sent, whatever the scheme.
+
+    Naming it only for an *explicit* scheme was wrong, and the reported case is
+    why: the user had ``auth: auto`` on an Anthropic-format relay, so the
+    generic "your API key is invalid, run /setkey" is exactly what they saw,
+    and it sent them to rotate a key that works. The relay's own body said
+    "invalid API key or JWT token" -- which is what a gateway says when it
+    cannot read the header at all, so the header was the thing to report.
+
+    For a protocol whose default is ``Bearer`` there is nothing a user can
+    change here, so the plain key wording is kept; only a scheme the user
+    could have chosen differently is worth describing.
+    """
+    from core.provider_formats import (
+        AUTH_LABELS,
+        format_spec,
+        normalize_auth,
+        resolve_auth,
+    )
+
+    spec = format_spec(api_format)
+    scheme = normalize_auth(auth)
+    resolved = resolve_auth(spec.value, scheme)
+    # The header is named whenever the user could change it. That covers an
+    # explicit override (openai + x_api_key) and, for Anthropic, the default
+    # itself -- relays commonly reject x-api-key, which is exactly the reported
+    # 401. Only a protocol that already sends Bearer under its own default
+    # leaves nothing to point at, so the plain key wording is kept there.
+    if resolved == spec.default_auth == "bearer":
+        return HTTP_STATUS_HINTS[401][1]
+
+    protocol_label = spec.label.removesuffix(" Compatible")
+    sent = {
+        "bearer": "Authorization: Bearer",
+        "x_api_key": "x-api-key",
+    }.get(resolved, "both Authorization: Bearer and x-api-key")
+
+    return (
+        f"{protocol_label} request sent {sent} and the provider rejected it. "
+        f"Relays often accept one credential header and not the other, so check "
+        f"the provider's Auth setting in the provider TUI before rotating the key "
+        f"(currently '{AUTH_LABELS[scheme]}'; 'Match protocol' uses the protocol "
+        f"default). Only replace the key if it is also rejected on the header "
+        f"the relay expects."
+    )
+
+
+def model_listing_unavailable_hint(status: int) -> str:
+    """Return guidance for a probe that hit a provider with no model listing.
+
+    Empty string when the status is not one of those, so callers can append it
+    unconditionally.
+    """
+    if status not in _NO_MODEL_LISTING_STATUSES:
+        return ""
+    return (
+        "This provider does not publish a /v1/models listing, so the free "
+        "connection check cannot confirm the key. Add models by ID in the "
+        "provider TUI; a model the key cannot use is reported on first use."
+    )
+
 
 def response_excerpt(body: bytes | str, limit: int = 240) -> str:
     """Return a compact, credential-safe excerpt from a provider response body."""
@@ -61,12 +130,29 @@ def response_excerpt(body: bytes | str, limit: int = 240) -> str:
     return " ".join(text.split())[:limit]
 
 
-def format_http_error(status: int, body: bytes | str = b"") -> str:
-    """Format provider HTTP errors with stable status-code-specific guidance."""
-    label, hint = HTTP_STATUS_HINTS.get(
-        status,
-        (http.client.responses.get(status, "HTTP Error"), "provider returned an error."),
-    )
+def format_http_error(
+    status: int,
+    body: bytes | str = b"",
+    *,
+    api_format: str | None = None,
+    auth: str | None = None,
+) -> str:
+    """Format provider HTTP errors with stable status-code-specific guidance.
+
+    Passing ``api_format`` and ``auth`` swaps the 401 hint for one that names
+    the credential header actually sent. Omit them when the caller has no
+    provider context -- a hint about an Auth row the user never saw is worse
+    than the generic wording.
+    """
+    if status == 401 and api_format is not None:
+        label, hint = HTTP_STATUS_HINTS[401][0], auth_failure_hint(
+            api_format, auth if auth is not None else "auto"
+        )
+    else:
+        label, hint = HTTP_STATUS_HINTS.get(
+            status,
+            (http.client.responses.get(status, "HTTP Error"), "provider returned an error."),
+        )
     msg = f"HTTP {status} {label}: {hint}"
     excerpt = response_excerpt(body)
     if excerpt:
@@ -139,9 +225,11 @@ def retry_notice(message: str, attempt: int, max_attempts: int, delay: float) ->
 
 __all__ = [
     "RETRYABLE_HTTP_STATUS_CODES",
+    "auth_failure_hint",
     "format_http_error",
     "format_transport_error",
     "is_retryable_http_status",
+    "model_listing_unavailable_hint",
     "retry_after_max_from_env",
     "retry_notice",
 ]

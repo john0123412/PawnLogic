@@ -19,11 +19,14 @@ class ProviderTUIState:
     dialog_cursor: int = 0
     wiz_fields_pending: tuple[Any, ...] = ()
     wiz_fields: list[str] = field(
-        default_factory=lambda: ["", "", "openai", ""]
+        default_factory=lambda: ["", "", "openai", "auto", ""]
     )
     wiz_focus: int = 0
-    wiz_fmt_open: bool = False
-    wiz_fmt_cursor: int = 0
+    #: Which dropdown row is expanded, if any. Keyed by row constant rather
+    #: than a single ``wiz_fmt_open`` flag so a second dropdown row needs no
+    #: parallel state or key-binding family.
+    wiz_dropdowns: dict[int, bool] = field(default_factory=dict)
+    wiz_dropdown_cursors: dict[int, int] = field(default_factory=dict)
     # Provider name while the wizard edits an existing entry; "" means the
     # wizard is adding a new provider.
     wiz_edit: str = ""
@@ -63,14 +66,48 @@ class ProviderTUIState:
         return self.model_filter_cache[1]
 
     def reset_wizard(self) -> None:
-        self.wiz_fields = ["", "", "openai", ""]
+        from core.provider_tui_rows import default_wiz_fields
+
+        self.wiz_fields = default_wiz_fields()
         self.wiz_focus = 0
-        self.wiz_fmt_open = False
-        self.wiz_fmt_cursor = 0
+        self.wiz_dropdowns = {}
+        self.wiz_dropdown_cursors = {}
         self.wiz_edit = ""
         self.wiz_error = ""
         self.wiz_status = ""
         self.wiz_status_style = ""
+
+    def dropdown_open(self, row: int) -> bool:
+        return bool(self.wiz_dropdowns.get(row))
+
+    def close_dropdowns(self) -> None:
+        """Collapse every expanded dropdown; used when focus moves."""
+        self.wiz_dropdowns = {}
+
+    def open_dropdown(self, row: int) -> None:
+        """Expand ``row``, seeding its cursor from the stored value."""
+        from core.provider_tui_rows import cursor_for_value
+
+        self.close_dropdowns()
+        self.wiz_dropdowns[row] = True
+        self.wiz_dropdown_cursors[row] = cursor_for_value(row, self.wiz_fields[row])
+
+    def move_dropdown(self, row: int, delta: int) -> None:
+        from core.provider_tui_rows import row_options
+
+        options = row_options(row)
+        if not options:
+            return
+        current = self.wiz_dropdown_cursors.get(row, 0)
+        self.wiz_dropdown_cursors[row] = (current + delta) % len(options)
+
+    def pick_dropdown(self, row: int) -> None:
+        """Commit the highlighted option into the row's stored value."""
+        from core.provider_tui_rows import set_from_cursor
+
+        cursor = self.wiz_dropdown_cursors.get(row, 0)
+        self.wiz_fields[row] = set_from_cursor(row, cursor)
+        self.close_dropdowns()
 
     def open_detail(self, provider: str) -> None:
         self.detail_provider = provider

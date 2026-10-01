@@ -26,6 +26,8 @@ from config.providers import (
 )
 from core.provider_tui_state import ProviderTUIState
 from core import provider_tui_form as _form
+from core import provider_tui_rows as rows_mod
+from core.provider_tui_rows import default_wiz_fields
 from pawnlogic.selectors import ModalSpec
 from core.provider_runtime import (
     candidate_save_alias as _candidate_save_alias,
@@ -142,7 +144,8 @@ class ProviderTUI:
         "_detail_key_active": "detail_key_active", "_dialog": "dialog",
         "_dialog_cursor": "dialog_cursor", "_wiz_fields_pending": "wiz_fields_pending",
         "_wiz_fields": "wiz_fields", "_wiz_focus": "wiz_focus",
-        "_wiz_fmt_open": "wiz_fmt_open", "_wiz_fmt_cursor": "wiz_fmt_cursor",
+        "_wiz_dropdowns": "wiz_dropdowns",
+        "_wiz_dropdown_cursors": "wiz_dropdown_cursors",
         "_wiz_edit": "wiz_edit",
         "_wiz_error": "wiz_error", "_wiz_status": "wiz_status",
         "_wiz_status_style": "wiz_status_style", "_ms_all": "model_all",
@@ -194,15 +197,13 @@ class ProviderTUI:
         self._dialog_cursor: int = 0
         self._wiz_fields_pending: tuple = ()
         # wizard
-        self._wiz_fields: list = ["", "", "openai", ""]
+        self._wiz_fields: list = default_wiz_fields()
         self._wiz_inputs = [
             TextArea(multiline=False, height=1, style="class:field-focus"),
             TextArea(multiline=False, height=1, style="class:field-focus"),
             TextArea(password=True, multiline=False, height=1, style="class:field-focus"),
         ]
         self._wiz_focus: int = 0
-        self._wiz_fmt_open: bool = False
-        self._wiz_fmt_cursor: int = 0
         self._wiz_edit: str = ""
         self._wiz_error: str = ""
         self._wiz_status: str = ""
@@ -247,15 +248,15 @@ class ProviderTUI:
             field.text = ""
 
     def _sync_wizard_fields_from_inputs(self) -> None:
-        self._wiz_fields[0] = self._wiz_inputs[0].text.strip()
-        self._wiz_fields[1] = self._wiz_inputs[1].text.strip()
-        self._wiz_fields[3] = self._wiz_inputs[2].text.strip()
+        rows_mod.sync_fields_from_inputs(self._wiz_fields, self._wiz_inputs)
 
     def _active_focus_target(self):
         if self._panel == "detail" and self._detail_key_active:
             return self._key_ta
-        if self._panel == "wizard" and self._wiz_focus in (0, 1, 3) and not self._dialog:
-            return self._wiz_inputs[{0: 0, 1: 1, 3: 2}[self._wiz_focus]]
+        if self._panel == "wizard" and not self._dialog and not self._state.wiz_dropdowns:
+            slot = rows_mod.input_slot_for_row(self._wiz_focus)
+            if slot is not None:
+                return self._wiz_inputs[slot]
         if self._panel == "models" and self._ms_search_focus:
             return self._ms_search_ta
         return None
@@ -418,6 +419,18 @@ class ProviderTUI:
     def _wiz_focus_cycle(self) -> list[int]:
         return _form.wiz_focus_cycle(self._state)
 
+    def _wiz_advance(self, delta: int) -> None:
+        """Move the wizard row cursor ``delta`` places through the cycle.
+
+        A row not in the cycle -- a locked row reached by an out-of-band jump --
+        enters it at its first or last element rather than raising, matching
+        what the up and down handlers each did before they were merged.
+        """
+        self._state.close_dropdowns()
+        cycle = self._wiz_focus_cycle()
+        at = cycle.index(self._wiz_focus) if self._wiz_focus in cycle else (0 if delta < 0 else -1)
+        self._wiz_focus = cycle[(at + delta) % len(cycle)]
+
     def _render_wizard(self) -> StyleAndTextTuples:
         return _form.render_wizard(self)
 
@@ -539,21 +552,23 @@ class ProviderTUI:
             content=HSplit([Window(height=1), self._key_ta, Window(height=1)]),
             filter=Condition(lambda: self._panel == "detail" and self._detail_key_active),
         )
-        wiz_name_input = ConditionalContainer(
-            content=HSplit([Window(height=1), self._wiz_inputs[0], Window(height=1)]),
-            filter=Condition(lambda: self._panel == "wizard" and self._wiz_focus == 0
-                             and not self._dialog),
-        )
-        wiz_url_input = ConditionalContainer(
-            content=HSplit([Window(height=1), self._wiz_inputs[1], Window(height=1)]),
-            filter=Condition(lambda: self._panel == "wizard" and self._wiz_focus == 1
-                             and not self._dialog),
-        )
-        wiz_key_input = ConditionalContainer(
-            content=HSplit([Window(height=1), self._wiz_inputs[2], Window(height=1)]),
-            filter=Condition(lambda: self._panel == "wizard" and self._wiz_focus == 3
-                             and not self._dialog),
-        )
+        def _wiz_row_input(row):
+            """Mount a wizard text row only while that row has focus.
+
+            Bound to the row constant, never a literal: row 3 was the API key
+            before the Auth row was inserted, and leaving it as a literal would
+            mount the password field under the Auth dropdown.
+            """
+            slot = rows_mod.input_slot_for_row(row)
+            return ConditionalContainer(
+                content=HSplit([Window(height=1), self._wiz_inputs[slot], Window(height=1)]),
+                filter=rows_mod.panel_filter(
+                    self, lambda: self._wiz_focus == row and not self._wiz_dropdowns),
+            )
+
+        wiz_name_input = _wiz_row_input(rows_mod.ROW_NAME)
+        wiz_url_input = _wiz_row_input(rows_mod.ROW_URL)
+        wiz_key_input = _wiz_row_input(rows_mod.ROW_KEY)
         model_search_input = ConditionalContainer(
             content=HSplit([Window(height=1), self._ms_search_ta, Window(height=1)]),
             filter=Condition(lambda: self._panel == "models" and self._ms_search_focus),
@@ -764,55 +779,53 @@ class ProviderTUI:
         def _mm_esc(e): self._panel = "detail"; rebuild()
 
         # ── wizard ────────────────────────────────────────────────────────────
-        _wiz = Condition(lambda: self._panel == "wizard" and not self._dialog)
-        _wiz_nav = Condition(lambda: self._panel == "wizard" and not self._dialog
-                             and not (self._wiz_focus == 2 and self._wiz_fmt_open))
-        _wiz_text = Condition(lambda: self._panel == "wizard" and self._wiz_focus in (0, 1, 3)
-                              and not self._dialog and not self._wiz_fmt_open)
+        # Every dropdown row shares one binding family, driven by the focused
+        # row. The Format dropdown was previously hardcoded to row 2 with a
+        # two-option modulus; the Auth row reuses this instead of adding a
+        # parallel copy that could drift from it.
+        _wiz = rows_mod.panel_filter(self)
+        _wiz_dropdown_open = rows_mod.panel_filter(
+            self, lambda: bool(self._wiz_dropdowns))
+        _wiz_dropdown_shut = rows_mod.panel_filter(
+            self, lambda: not self._wiz_dropdowns
+            and rows_mod.row_options(self._wiz_focus) != ())
+        _wiz_nav = rows_mod.panel_filter(
+            self, lambda: not self._wiz_dropdowns)
+        _wiz_text = rows_mod.panel_filter(
+            self, lambda: not self._wiz_dropdowns
+            and rows_mod.is_text_row(self._wiz_focus))
 
         @kb.add("tab",   filter=_wiz_nav)
         @kb.add("down",  filter=_wiz_nav)
         def _w_next(e):
-            self._wiz_fmt_open = False
-            rows = self._wiz_focus_cycle()
-            at = rows.index(self._wiz_focus) if self._wiz_focus in rows else -1
-            self._wiz_focus = rows[(at + 1) % len(rows)]
-            self._focus_active_input()
+            self._wiz_advance(1); self._focus_active_input()
 
         @kb.add("s-tab", filter=_wiz_nav)
         @kb.add("up",    filter=_wiz_nav)
         def _w_prev(e):
-            self._wiz_fmt_open = False
-            rows = self._wiz_focus_cycle()
-            at = rows.index(self._wiz_focus) if self._wiz_focus in rows else 0
-            self._wiz_focus = rows[(at - 1) % len(rows)]
+            self._wiz_advance(-1); self._focus_active_input()
+
+        @kb.add("enter", filter=_wiz_dropdown_shut)
+        @kb.add("space", filter=_wiz_dropdown_shut)
+        def _w_dropdown_open(e):
+            self._state.open_dropdown(self._wiz_focus); inv()
+
+        @kb.add("up",    filter=_wiz_dropdown_open)
+        def _w_drop_up(e):
+            self._state.move_dropdown(self._wiz_focus, -1); inv()
+
+        @kb.add("down",  filter=_wiz_dropdown_open)
+        def _w_drop_dn(e):
+            self._state.move_dropdown(self._wiz_focus, 1); inv()
+
+        @kb.add("enter", filter=_wiz_dropdown_open)
+        @kb.add("space", filter=_wiz_dropdown_open)
+        def _w_drop_pick(e):
+            self._state.pick_dropdown(self._wiz_focus)
             self._focus_active_input()
 
-        _fmt_closed = Condition(lambda: self._panel == "wizard" and self._wiz_focus == 2
-                                and not self._wiz_fmt_open and not self._dialog)
-        _fmt_open   = Condition(lambda: self._panel == "wizard" and self._wiz_focus == 2
-                                and self._wiz_fmt_open)
-
-        @kb.add("enter", filter=_fmt_closed)
-        @kb.add("space", filter=_fmt_closed)
-        def _w_fmt_open(e):
-            self._wiz_fmt_open = True
-            self._wiz_fmt_cursor = 0 if self._wiz_fields[2] == "openai" else 1; inv()
-
-        @kb.add("up",    filter=_fmt_open)
-        def _w_fmt_up(e): self._wiz_fmt_cursor = (self._wiz_fmt_cursor - 1) % 2; inv()
-
-        @kb.add("down",  filter=_fmt_open)
-        def _w_fmt_dn(e): self._wiz_fmt_cursor = (self._wiz_fmt_cursor + 1) % 2; inv()
-
-        @kb.add("enter", filter=_fmt_open)
-        @kb.add("space", filter=_fmt_open)
-        def _w_fmt_pick(e):
-            self._wiz_fields[2] = "anthropic" if self._wiz_fmt_cursor == 1 else "openai"
-            self._wiz_fmt_open = False; self._focus_active_input()
-
-        _btn = Condition(lambda: self._panel == "wizard" and self._wiz_focus == 4
-                         and not self._wiz_fmt_open and not self._dialog)
+        _btn = Condition(lambda: self._panel == "wizard" and self._wiz_focus == rows_mod.ROW_SAVE
+                         and not self._wiz_dropdowns and not self._dialog)
 
         @kb.add("enter", filter=_btn)
         def _w_confirm(e): e.app.create_background_task(self._wizard_confirm())
@@ -823,7 +836,7 @@ class ProviderTUI:
         @kb.add("enter", filter=_wiz_text)
         def _w_text_enter(e):
             self._sync_wizard_fields_from_inputs()
-            self._wiz_focus = 2 if self._wiz_focus == 1 else self._wiz_focus + 1
+            self._wiz_advance(1)
             rebuild()
             self._focus_active_input()
 
@@ -1060,11 +1073,11 @@ class ProviderTUI:
     def _do_save_provider_no_test(self):
         if not self._wiz_fields_pending:
             return
-        name, url, fmt, key, env_var = self._wiz_fields_pending
+        name, url, fmt, auth, key, env_var = self._wiz_fields_pending
         _save_key_to_env(env_var, key)
         prov_cfg = {"base_url": url, "api_key_env": env_var,
                     "label": f"Custom ({name})", "api_format": fmt,
-                    "active": False}
+                    "auth": auth, "active": False}
         from core.provider_runtime import save_provider_with_rollback
         ok, save_err = save_provider_with_rollback(name, prov_cfg, {})
         if not ok:
@@ -1087,7 +1100,8 @@ class ProviderTUI:
                 self._app.invalidate()
             return
         ok, msg, _ = await _test_connection(
-            pinfo.get("base_url", ""), key, pinfo.get("api_format", "openai"), model_id)
+            pinfo.get("base_url", ""), key, pinfo.get("api_format", "openai"),
+            model_id, auth=pinfo.get("auth", "auto"))
         self._detail_status = f"✅ {msg}" if ok else f"✗ {msg}"
         self._detail_status_style = "class:success" if ok else "class:error"
         if self._app:
@@ -1117,6 +1131,7 @@ class ProviderTUI:
             pinfo.get("base_url", ""),
             key,
             pinfo.get("api_format", "openai"),
+            auth=pinfo.get("auth", "auto"),
         )
         if err or not candidates:
             if err:
@@ -1187,7 +1202,7 @@ class ProviderTUI:
     def _open_edit_provider(self, pname: str) -> None:
         """Reuse the wizard form to correct an existing provider's endpoint.
 
-        Only the Base URL and Format rows are live; the name and the key are
+        The Base URL, Format, and Auth rows are live; the name and the key are
         shown read-only so the user can see what is being edited without
         offering a rename or a blind key overwrite.
         """
@@ -1196,20 +1211,23 @@ class ProviderTUI:
         self._wiz_edit = pname
         self._wiz_inputs[0].text = pname
         self._wiz_inputs[1].text = str(pinfo.get("base_url", ""))
-        self._wiz_fields[2] = str(pinfo.get("api_format", "openai"))
-        self._wiz_focus = 1
+        self._wiz_fields[rows_mod.ROW_FORMAT] = str(pinfo.get("api_format", "openai"))
+        self._wiz_fields[rows_mod.ROW_AUTH] = str(pinfo.get("auth", "auto"))
+        self._wiz_focus = rows_mod.ROW_URL
         self._panel = "wizard"
         self._refresh_layout()
 
     async def _confirm_edit(self) -> None:
         pname = self._wiz_edit
-        url, fmt = self._wiz_fields[1], self._wiz_fields[2]
+        url = self._wiz_fields[rows_mod.ROW_URL]
+        fmt = self._wiz_fields[rows_mod.ROW_FORMAT]
+        auth = self._wiz_fields[rows_mod.ROW_AUTH]
         if not url:
             self._wiz_error = "Base URL is required."
             if self._app:
                 self._app.invalidate()
             return
-        ok, err = _update_custom_provider(pname, base_url=url, api_format=fmt)
+        ok, err = _update_custom_provider(pname, base_url=url, api_format=fmt, auth=auth)
         if not ok:
             self._wiz_error = f"Save failed: {err}"
             if self._app:
@@ -1226,7 +1244,11 @@ class ProviderTUI:
         if self._wiz_edit:
             await self._confirm_edit()
             return
-        name, url, fmt, key = self._wiz_fields
+        name = self._wiz_fields[rows_mod.ROW_NAME]
+        url = self._wiz_fields[rows_mod.ROW_URL]
+        fmt = self._wiz_fields[rows_mod.ROW_FORMAT]
+        auth = self._wiz_fields[rows_mod.ROW_AUTH]
+        key = self._wiz_fields[rows_mod.ROW_KEY]
         if not name:
             self._wiz_error = "Name is required."; self._app and self._app.invalidate(); return
         if name in PROVIDERS:
@@ -1241,6 +1263,7 @@ class ProviderTUI:
         _save_key_to_env(env_var, key)
         prov_cfg = {"base_url": url, "api_key_env": env_var,
                     "label": f"Custom ({name})", "api_format": fmt,
+                    "auth": auth,
                     "active": False}
         from core.provider_runtime import save_provider_with_rollback
         ok, save_err = save_provider_with_rollback(name, prov_cfg, {})

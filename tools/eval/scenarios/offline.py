@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from core.provider_responses import parse_responses_sse_event
 from core.provider_streams import (
     parse_anthropic_sse_event,
     parse_sse_delta,
@@ -37,6 +38,12 @@ def run_offline_replay(fixtures_dir: Path) -> dict[str, object]:
     kinds: set[str] = set()
     anthropic_state: dict[str, Any] = {"tool_blocks": {}}
     for path in fixture_paths:
+        # Responses carries no integer tool-call slot, so the adapter mints one
+        # per ``item_id`` and holds it in this state. It is per-file, not
+        # shared, because each fixture is one independent stream: a shared dict
+        # would let a second fixture's items inherit the first file's slots,
+        # which is exactly the collapse the allocation exists to prevent.
+        responses_state: dict[str, Any] = {"items": {}}
         for event in _load(path):
             kind = str(event["kind"])
             kinds.add(kind)
@@ -46,6 +53,12 @@ def run_offline_replay(fixtures_dir: Path) -> dict[str, object]:
                     str(event.get("event", "")),
                     json.dumps(event["payload"]),
                     anthropic_state,
+                )
+            elif event["format"] == "responses":
+                parsed = parse_responses_sse_event(
+                    str(event.get("event", "")),
+                    json.dumps(event["payload"]),
+                    responses_state,
                 )
             elif kind == "interruption":
                 parsed = stream_interruption_delta(

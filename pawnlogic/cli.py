@@ -1219,7 +1219,8 @@ async def _main_impl():
     # Provider subcommands.
     for _sub, _desc in [
         ("list",   "List all provider status"),
-        ("add",    "Register a custom provider interactively or add <alias> <url> <KEY> [anthropic]"),
+        ("add",    "Register a custom provider interactively, or add <alias> <url> <KEY> [format] [auth] "
+                  "(format: openai|anthropic|responses; auth: auto|bearer|x_api_key|both)"),
         ("fetch",  "Fetch usable models and register selections"),
         ("update", "Re-fetch and update registered provider models"),
         ("activate", "Show this provider's selected models"),
