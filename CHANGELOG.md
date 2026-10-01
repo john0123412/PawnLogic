@@ -7,6 +7,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Context budgets are now denominated in estimated tokens via a
+  dependency-free CJK-aware estimator (`core/token_estimate.py`), so the
+  same budget means the same share of the model window whether the session
+  is English/code or CJK prose (PR #172).
+- Skill retrieval now combines a saturated BM25 score over the full block
+  body with the existing title Jaccard score and takes the max, so skills
+  whose body discusses the queried concept are no longer missed when the
+  title wording differs (PR #172).
+- The system prompt is now a stable cache prefix: per-turn retrieved
+  content and the wall-clock timestamp no longer rebuild `messages[0]`,
+  so the provider prompt cache is not invalidated from position zero on
+  every call (PR #172).
+
+### Changed
+- README trimmed to essentials; stale release notes removed (PR #175).
+
+### Fixed
+- Closed audit gaps in turn-context and token-budget accounting so every
+  boundary is covered (PR #172).
+- Retrieval blocks now stay attached to their turns at every context
+  boundary (PR #172).
+- `None` token keys are treated as absent during budget migration (PR #172).
+- Test isolation: `session_utils` import-time stubs are dropped from
+  `sys.modules` instead of leaking into other tests (PR #174).
+
 ### Security
 - Third-party security audit fixes (PR #176, 47 findings across provider,
   tool security, core, and UI/packaging): circuit breaker no longer records
