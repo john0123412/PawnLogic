@@ -26,7 +26,7 @@ def _build_prompt(**overrides):
             "effort_level": "high",
             "max_tokens": 2048,
             "max_iter": 9,
-            "ctx_max_chars": 128_000,
+            "ctx_max_tokens": 128_000,
             "tool_max_chars": 16_000,
         },
         "cwd": "/tmp/pawnlogic-project",
@@ -75,7 +75,7 @@ def test_build_session_prompt_injects_retrieved_context():
     assert "Model       : test-model (provider/model-id)" in prompt
     assert (
         "Limits      : effort=high  max_tokens=2048  max_iter=9  "
-        "ctx=128k  tool_out=16000"
+        "ctx=128k tokens  tool_out=16000"
     ) in prompt
     assert "=== Current GSA Categories (from global_skills.md) ===\n# Pwn\n# Python" in prompt
     assert "=== GSA Relevant Skills (ranked by recency" in prompt

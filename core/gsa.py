@@ -57,7 +57,8 @@ Decay Algorithm Notes
 ─────────────────────────────────────────────────────────────
 """
 
-import re, json
+import re, json, math
+from collections import Counter
 from datetime import datetime
 from config import GLOBAL_SKILLS_PATH
 from core.knowledge import (
@@ -286,22 +287,74 @@ def _final_score(similarity: float, meta: dict) -> float:
 
 
 # ════════════════════════════════════════════════════════
-# Lightweight similarity: Jaccard over word-token sets.
+# Lightweight similarity: Jaccard over word-token sets,
+# combined with a saturated BM25 score over block bodies.
 # ════════════════════════════════════════════════════════
+
+_WORD_RE = re.compile(r'[a-z0-9_\-]+')
+
+
+def _word_tokens(s: str) -> list[str]:
+    return _WORD_RE.findall(s.lower())
+
 
 def _jaccard_sim(str1: str, str2: str) -> float:
     """
     Jaccard similarity over lowercase word-token sets.
     Returns [0.0, 1.0], where exact equality returns 1.0.
     """
-    def _tokens(s: str) -> set[str]:
-        return set(re.findall(r'[a-z0-9_\-]+', s.lower()))
-    a, b = _tokens(str1), _tokens(str2)
+    a, b = set(_word_tokens(str1)), set(_word_tokens(str2))
     if not a and not b:
         return 1.0
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
+
+
+# BM25 parameters. Raw scores are unbounded, so they are saturated onto the
+# Jaccard scale: a raw score of _BM25_SATURATION maps to 0.5 relevance.
+_BM25_K1 = 1.5
+_BM25_B = 0.75
+_BM25_SATURATION = 8.0
+
+
+def _bm25_norm_scores(query: str, blocks: list[str]) -> list[float]:
+    """
+    Saturated BM25 relevance of each block against the query, in [0, 1).
+
+    BM25 weights rare, distinctive terms, so a skill whose body discusses
+    the queried concept still surfaces when its title wording differs —
+    exactly the case Jaccard's word-overlap over the title misses. The
+    archive is a single Markdown file, so the corpus statistics are
+    recomputed per call.
+    """
+    documents = [Counter(_word_tokens(block)) for block in blocks]
+    query_terms = _word_tokens(query)
+    if not documents or not query_terms:
+        return [0.0] * len(documents)
+
+    total_docs = len(documents)
+    doc_lengths = [sum(doc.values()) for doc in documents]
+    avg_length = (sum(doc_lengths) / total_docs) or 1.0
+
+    doc_freq: Counter = Counter()
+    for doc in documents:
+        doc_freq.update(doc.keys())
+
+    scores: list[float] = []
+    for doc, length in zip(documents, doc_lengths, strict=False):
+        score = 0.0
+        for term in query_terms:
+            tf = doc.get(term, 0)
+            if not tf:
+                continue
+            idf = math.log((total_docs - doc_freq[term] + 0.5) / (doc_freq[term] + 0.5) + 1.0)
+            score += (
+                idf * tf * (_BM25_K1 + 1.0)
+                / (tf + _BM25_K1 * (1.0 - _BM25_B + _BM25_B * length / avg_length))
+            )
+        scores.append(score / (score + _BM25_SATURATION))
+    return scores
 
 
 # ════════════════════════════════════════════════════════
@@ -353,7 +406,8 @@ def _detect_conflicts(
 
 
 # ════════════════════════════════════════════════════════
-# Upgraded load_relevant_skills with decay scoring and conflict detection.
+# Upgraded load_relevant_skills with hybrid (BM25 + Jaccard)
+# scoring and conflict detection.
 # ════════════════════════════════════════════════════════
 
 def _rank_relevant_blocks(query: str, top_k: int) -> list[tuple[float, str, str]]:
@@ -366,25 +420,30 @@ def _rank_relevant_blocks(query: str, top_k: int) -> list[tuple[float, str, str]
         return []
 
     # Split by "## " while preserving heading lines.
-    raw_blocks = re.split(r'(?=^## )', content, flags=re.MULTILINE)
-    # (final_score, title, block_text)
-    scored: list[tuple[float, str, str]] = []
+    raw_blocks = [
+        block.strip()
+        for block in re.split(r'(?=^## )', content, flags=re.MULTILINE)
+        if block.strip().startswith("## ")
+    ]
+    if not raw_blocks:
+        return []
 
+    entries: list[tuple[str, str, str]] = []
     for block in raw_blocks:
-        block = block.strip()
-        if not block.startswith("## "):
-            continue
         first_line = block.splitlines()[0]
         title      = re.sub(r'^##\s+', '', first_line).strip()
-        # Strip meta comments before Jaccard to avoid date-string noise.
+        # Strip meta-style Case suffixes before Jaccard to reduce noise.
         clean_title = _CASE_STRIP_RE.sub("", title).strip()
-        sim         = _jaccard_sim(query, clean_title)
-        meta        = _parse_meta(block)
-        score       = _final_score(sim, meta)
-        scored.append((score, title, block))
+        entries.append((block, title, clean_title))
 
-    if not scored:
-        return []
+    bm25_scores = _bm25_norm_scores(query, [block for block, _, _ in entries])
+
+    scored: list[tuple[float, str, str]] = []
+    for (block, title, clean_title), bm25 in zip(entries, bm25_scores, strict=False):
+        sim  = max(_jaccard_sim(query, clean_title), bm25)
+        meta = _parse_meta(block)
+        score = _final_score(sim, meta)
+        scored.append((score, title, block))
 
     scored.sort(key=lambda x: x[0], reverse=True)
     top = scored[:top_k]
@@ -427,9 +486,9 @@ def search_gsa_hits(
                 source_revision=revision,
                 content=content,
                 score=score,
-                score_kind="gsa_fsrs_jaccard",
+                score_kind="gsa_fsrs_bm25_jaccard",
                 provenance={
-                    "retrieval_algorithm": "gsa_fsrs_jaccard",
+                    "retrieval_algorithm": "gsa_fsrs_bm25_jaccard",
                     "archive": "global_skills.md",
                     "title": title,
                     "content_source": "gsa_markdown",
@@ -452,7 +511,7 @@ class GSAKnowledgeAdapter:
         return RetrievalBatch(
             hits=hits,
             adapter="gsa",
-            algorithm="gsa_fsrs_jaccard",
+            algorithm="gsa_fsrs_bm25_jaccard",
             index_version="gsa-markdown-v1",
         )
 

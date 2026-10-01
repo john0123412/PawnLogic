@@ -2,7 +2,7 @@
 tests/test_session_utils.py — Unit tests for core/session.py utility functions
 
 Targets zero-dependency or minimal-dependency functions only:
-  - _ctx_chars
+  - _ctx_tokens
   - _is_plan_exempt
   - _PlanRenderer.feed / flush
   - AgentSession._count_turns
@@ -32,6 +32,8 @@ for _key in list(sys.modules):
 
 # ── Import real config first, then patch heavy session.py deps ───────
 import config  # noqa: E402 — force-cache real package
+
+from core.token_estimate import estimate_tokens  # noqa: E402
 assert config.VERSION
 from tests.helpers import fake_stream_request, fake_stream_response, fake_stream_sequence  # noqa: E402
 
@@ -113,7 +115,7 @@ if _mock_deps["core.skill_manager"] is not None:
 from core.session import (  # noqa: E402
     TurnInterrupted,
     _ThinkingSpinner,
-    _ctx_chars,
+    _ctx_tokens,
     _drop_dangling_tool_call_messages,
     _is_plan_exempt,
     _tool_call_missing_plan,
@@ -139,26 +141,28 @@ def _msg(role, content="", **kw):
 
 
 # ══════════════════════════════════════════════════════════
-# _ctx_chars
+# _ctx_tokens
 # ══════════════════════════════════════════════════════════
 
-def test_ctx_chars_basic():
+def test_ctx_tokens_basic():
     msgs = [_msg("user", "hello"), _msg("assistant", "world")]
-    assert _ctx_chars(msgs) == 10
+    assert _ctx_tokens(msgs) == (
+        estimate_tokens("hello") + estimate_tokens("world")
+    )
 
 
-def test_ctx_chars_includes_reasoning_content():
+def test_ctx_tokens_includes_reasoning_content():
     msgs = [{"role": "assistant", "content": "hi", "reasoning_content": "think"}]
-    assert _ctx_chars(msgs) == len("hi") + len("think")
+    assert _ctx_tokens(msgs) == estimate_tokens("hi") + estimate_tokens("think")
 
 
-def test_ctx_chars_none_content():
+def test_ctx_tokens_none_content():
     msgs = [{"role": "assistant", "content": None}]
-    assert _ctx_chars(msgs) == 0
+    assert _ctx_tokens(msgs) == 0
 
 
-def test_ctx_chars_empty():
-    assert _ctx_chars([]) == 0
+def test_ctx_tokens_empty():
+    assert _ctx_tokens([]) == 0
 
 
 def test_run_turn_hard_stops_after_soft_plan_corrections(monkeypatch, capsys):
@@ -631,7 +635,7 @@ def test_delegation_context_is_host_owned_bounded_and_excludes_raw_history():
     assert selected.messages == ()
     assert selected.state.goal == "parent goal"
     assert selected.state.facts == ("Verified parent summary",)
-    assert selected.char_count <= 2400
+    assert selected.token_count <= 600
     assert minimal.messages == ()
     assert minimal.state.goal == "parent goal"
     assert minimal.state.facts == ()
@@ -1709,7 +1713,12 @@ def test_run_turn_metrics_do_not_change_message_shape(monkeypatch):
 
     s.run_turn("list files")
 
-    allowed_keys = {"role", "content", "tool_calls", "tool_call_id", "reasoning_content"}
+    # _turn_context marks the injected per-turn retrieval block — an
+    # internal routing flag like _pinned, not a metrics leak.
+    allowed_keys = {
+        "role", "content", "tool_calls", "tool_call_id", "reasoning_content",
+        "_turn_context",
+    }
     assert s._runtime_metrics_snapshot().turn_tool_calls == 1
     for message in s.messages:
         assert set(message) <= allowed_keys
@@ -2182,3 +2191,123 @@ def test_sandbox_timeout_falls_back_to_parent_kill(monkeypatch, tmp_path):
     assert rc == 1
     assert calls.count("killpg") == 1
     assert calls.count("kill") == 1
+
+
+# ══════════════════════════════════════════════════════════
+# Prompt prefix stability (provider prompt caching)
+# ══════════════════════════════════════════════════════════
+
+def _stable_prompt_session(monkeypatch):
+    """A run_turn-style session whose real prompt build runs with stubbed retrieval."""
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    # The helper mocks _reset_system_prompt; restore the real one so the
+    # stability test exercises the actual build path.
+    monkeypatch.setattr(
+        s,
+        "_reset_system_prompt",
+        types.MethodType(session_mod.AgentSession._reset_system_prompt, s),
+    )
+    monkeypatch.setattr(session_mod, "search_knowledge", lambda *a, **k: [])
+    monkeypatch.setattr(
+        session_mod, "search_knowledge_records", lambda *a, **k: []
+    )
+    monkeypatch.setattr(
+        session_mod, "format_knowledge_for_prompt", lambda rows: ""
+    )
+    monkeypatch.setattr(
+        session_mod,
+        "load_relevant_skills",
+        lambda query, top_k=3: ("## Pwn Stack Skills\nuse pwntools", ""),
+    )
+
+    class _FakeScanner:
+        def match(self, query, top_k=3):
+            return []
+
+        def format_for_prompt(self, packs):
+            return ""
+
+    monkeypatch.setattr(session_mod, "_skill_scanner", _FakeScanner())
+    # A non-empty TOC makes the urgent-mode suppression observable: with
+    # urgent_mode the system prompt drops this section entirely.
+    monkeypatch.setattr(session_mod, "_load_skills_toc", lambda: "# Pwn\n# Python")
+    return s, session_mod
+
+
+def test_prepare_turn_keeps_system_prompt_byte_identical_across_turns(monkeypatch):
+    s, _session_mod = _stable_prompt_session(monkeypatch)
+
+    s._prepare_turn("first question")
+    system_after_first = s.messages[0]["content"]
+    retrieval_blocks = [
+        m for m in s.messages if "Retrieved Context" in str(m.get("content", ""))
+    ]
+
+    s._prepare_turn("second question")
+    system_after_second = s.messages[0]["content"]
+
+    assert s.messages[0]["role"] == "system"
+    assert system_after_first == system_after_second
+    assert len(retrieval_blocks) == 1
+    block = retrieval_blocks[0]
+    assert block["role"] == "assistant"
+    assert "Pwn Stack Skills" in block["content"]
+    # The retrieval block sits immediately before its own user message.
+    index = s.messages.index(block)
+    assert s.messages[index + 1]["content"] == "first question"
+
+
+def test_prepare_turn_rebuilds_system_prompt_when_phase_changes(monkeypatch):
+    s, _session_mod = _stable_prompt_session(monkeypatch)
+
+    s._prepare_turn("first question")
+    system_before = s.messages[0]["content"]
+
+    s.current_phase = "EXPLOIT"
+    s._prepare_turn("second question")
+
+    assert s.messages[0]["content"] != system_before
+    assert s._prompt_phase == "EXPLOIT"
+
+
+def test_prepare_turn_rebuilds_system_prompt_when_urgent_mode_changes(monkeypatch):
+    s, _session_mod = _stable_prompt_session(monkeypatch)
+
+    s._prepare_turn("first question")
+    system_before = s.messages[0]["content"]
+    assert s._prompt_urgent is False
+
+    # Urgent mode activates mid-turn; the next turn must observe it.
+    s._urgent_mode = True
+    s._prepare_turn("second question")
+
+    assert s.messages[0]["content"] != system_before
+    assert s._prompt_urgent is True
+
+
+def test_count_turns_groups_retrieval_block_with_its_user():
+    s = _make_session()
+    s.messages = [
+        _msg("system", "sys"),
+        _msg("assistant", "[Retrieved Context]", _turn_context=True),
+        _msg("user", "q1"),
+        _msg("assistant", "a1"),
+        _msg("assistant", "[Retrieved Context 2]", _turn_context=True),
+        _msg("user", "q2"),
+        _msg("assistant", "a2"),
+    ]
+
+    assert s._count_turns(s.messages) == [(1, 4), (4, 7)]
+
+
+def test_count_turns_plain_history_is_unchanged():
+    s = _make_session()
+    s.messages = [
+        _msg("system", "sys"),
+        _msg("user", "q1"),
+        _msg("assistant", "a1"),
+        _msg("user", "q2"),
+        _msg("assistant", "a2"),
+    ]
+
+    assert s._count_turns(s.messages) == [(1, 3), (3, 5)]

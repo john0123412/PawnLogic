@@ -184,6 +184,7 @@ module = [
     "core.api_errors",
     "core.tool_calls",
     "core.tool_registry",
+    "core.token_estimate",
     "core.context_window",
     "core.workspace_cleanup",
     "core.turn_state",

@@ -694,7 +694,7 @@ mode.
 authoritative list.** A module is in the island only when CI passes its file
 to mypy; the matching `[[tool.mypy.overrides]]` entry in `pyproject.toml` is
 what actually turns on `disallow_untyped_defs` / `check_untyped_defs` for it.
-Both files, plus the list below, must name the same 47 modules;
+Both files, plus the list below, must name the same 48 modules;
 `tests/test_typed_island_sync.py` fails the build when they diverge.
 
 To add a module: annotate it until it passes
@@ -704,7 +704,7 @@ and the pyproject override, and add it to the list below.
 Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `core/tool_executor`, `core/runtime_context`, `core/provider_runtime`,
 `core/provider_models`, `core/api_errors`, `core/tool_calls`,
-`core/tool_registry`, `core/context_window`, `core/workspace_cleanup`,
+`core/tool_registry`, `core/token_estimate`, `core/context_window`, `core/workspace_cleanup`,
 `core/turn_state`, `core/session_tool_loop`, `core/session_snapshot`,
 `core/message_history`, `core/provider_streams`, `core/runtime_metrics`,
 `core/mcp_client_manager`, `core/path_policy`, `core/provider_transport`,
@@ -1103,6 +1103,40 @@ name at the end is the gate that fails if the invariant is broken.
   spinner, for the same reason `_ThinkingSpinner` is disabled in live mode.
 - **`/abort` clears queued input but cannot cancel a provider request already
   handed to a synchronous stream**; Ctrl+C remains the in-flight path.
+- **The system prompt is a cache prefix, not a scratchpad.** It is rebuilt
+  only when its inputs change (`_prompt_phase` / `_prompt_urgent`), and it
+  must stay byte-stable across turns: rewriting it invalidates the provider
+  prompt cache from position zero, so every request pays full prefill again.
+  Per-turn retrieval (knowledge hits, GSA skills, local packs) is injected
+  at the conversation TAIL as an assistant message marked `_turn_context`,
+  immediately before its user message — and every user-message rollback
+  path (`undo`, API-error pop, hard plan-guard stop) must remove that block
+  together with its user message, or history stops round-tripping to its
+  pre-turn shape.
+  `test_prepare_turn_keeps_system_prompt_byte_identical_across_turns`
+  and `test_run_turn_api_error_terminates_turn_without_hanging` gate the two
+  halves. Moving retrieval back into `build_session_prompt`'s query path, or
+  adding a wall-clock line to the prompt, silently reintroduces the cache
+  bust; deleting the `_turn_context` flag from `_prepare_turn` without
+  extending every rollback site strands the block in history. The flag
+  persists through SQLite (`messages.is_turn_context`, with an ALTER TABLE
+  migration for old DBs), so save/load keeps undo exact —
+  `test_undo_after_reload_removes_retrieval_block_with_its_turn` gates the
+  roundtrip. Budget trimming groups history from `_turn_context` markers as
+  well as user messages, and a block's group ABSORBS the user message that
+  immediately follows it — treating the user as a second group start splits
+  the turn in two, and the budget boundary then evicts the retrieval block
+  while keeping the question
+  (`test_overflow_budget_boundary_evicts_block_and_question_together`,
+  `test_count_turns_groups_retrieval_block_with_its_user`). Legacy
+  character budgets (`ctx_max_chars`/`ctx_trim_to`) convert to token keys at
+  snapshot load (`migrate_legacy_context_budget`) per key and never overwrite
+  an explicit (non-None) token value — a None token key counts as absent, the
+  same convention the resolver applies — because the runtime preset already seeds token
+  defaults that would otherwise mask the saved budget —
+  `test_load_snapshot_converts_legacy_character_budget` and
+  `test_load_snapshot_keeps_explicit_token_budget_over_stale_legacy_keys`
+  gate both snapshots.
 
 ### Execution and policy boundaries
 

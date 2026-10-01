@@ -48,7 +48,7 @@ from config.tiers import (  # noqa: E402
 # ── helpers ──────────────────────────────────────────────
 
 def _tier_keys():
-    return {"max_tokens", "ctx_max_chars", "ctx_trim_to", "max_iter",
+    return {"max_tokens", "ctx_max_tokens", "ctx_trim_tokens", "max_iter",
             "tool_max_chars", "fetch_max_chars"}
 
 
@@ -162,7 +162,7 @@ def test_ultra_only_raises_max_tool_call_iterations():
 
 def test_ctx_trim_less_than_max():
     for tier in (TIER_LOW, TIER_MID, TIER_DEEP, TIER_MAX, TIER_ULTRA):
-        assert tier["ctx_trim_to"] < tier["ctx_max_chars"]
+        assert tier["ctx_trim_tokens"] < tier["ctx_max_tokens"]
 
 
 def test_tier_plan_guard_defaults_to_advisory():
@@ -198,7 +198,7 @@ def test_effort_ladder_is_monotonic_in_iterations():
 
 def test_effort_ladder_is_monotonic_in_tokens_and_context():
     ordered = EFFORT_LEVELS[EFFORT_LEVELS.index("low"):]
-    for key in ("max_tokens", "ctx_max_chars", "tool_max_chars"):
+    for key in ("max_tokens", "ctx_max_tokens", "tool_max_chars"):
         values = [EFFORT_PRESETS[level][key] for level in ordered]
         assert values == sorted(values), key
 
@@ -206,7 +206,7 @@ def test_effort_ladder_is_monotonic_in_tokens_and_context():
 def test_effort_ctx_trim_stays_below_max():
     for level in EFFORT_LEVELS:
         preset = EFFORT_PRESETS[level]
-        assert preset["ctx_trim_to"] < preset["ctx_max_chars"], level
+        assert preset["ctx_trim_tokens"] < preset["ctx_max_tokens"], level
 
 
 def test_top_effort_rung_keeps_the_150_iteration_ceiling():

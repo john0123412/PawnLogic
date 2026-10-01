@@ -31,6 +31,7 @@ from core.naming import (
 )
 from core.logger import logger
 from core.runtime_context import RuntimeContext
+from core.context_window import migrate_legacy_context_budget
 from core.message_history import repair_dangling_tool_calls
 from core.session_snapshot import SessionSnapshot
 from core.turn_scheduler import (
@@ -269,8 +270,8 @@ def _save_scheduler_snapshot_atomic(snapshot: SessionSnapshot) -> None:
                     """
                     INSERT INTO messages
                         (session_id, seq, role, content, tool_calls, tool_call_id,
-                         is_pinned, reasoning_content, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         is_pinned, reasoning_content, created_at, is_turn_context)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     rows,
                 )
@@ -299,6 +300,11 @@ def load_snapshot(session_id: str) -> SessionSnapshot | None:
         config_dict = json.loads(full["config"])
     except Exception:
         config_dict = {}
+    # Snapshots saved before token budgeting carry character-denominated
+    # context keys. Convert here, before the config merges into a runtime
+    # config already seeded with token defaults — otherwise the defaults
+    # mask the budget the user actually saved.
+    migrate_legacy_context_budget(config_dict)
     raw_queue_state = dict(full).get("queue_state", "")
     try:
         queue_state = json.loads(raw_queue_state) if raw_queue_state else {}

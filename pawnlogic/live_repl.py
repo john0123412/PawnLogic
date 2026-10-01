@@ -22,6 +22,7 @@ from typing import Any
 from core.queue_tui import queue_rows
 from core.turn_scheduler import SubmissionKind
 from config.tiers import infer_effort_level
+from core.context_window import resolve_context_budget
 from utils.ansi import YELLOW, c
 
 
@@ -577,8 +578,8 @@ def build_bottom_toolbar(
         token_count = session.total_prompt_tokens + session.total_completion_tokens
         # Context size is refreshed by the session's API-message builder;
         # never traverse mutable history from the live UI thread.
-        context_used = int(getattr(session, "_toolbar_context_chars", 0))
-        context_max = dynamic_config["ctx_max_chars"]
+        context_used = int(getattr(session, "_toolbar_context_tokens", 0))
+        context_max = resolve_context_budget(dynamic_config)[0]
         context_pct = (
             min(100, int(context_used * 100 / context_max)) if context_max else 0
         )

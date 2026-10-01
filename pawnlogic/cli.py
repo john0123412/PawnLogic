@@ -75,6 +75,7 @@ def _fatal_startup_import_error(exc: ImportError) -> None:
 # returns the same sentinel object so identity comparison still works.
 try:
     from core.commands._common import EXIT_SENTINEL as _EXIT_SENTINEL
+    from core.context_window import resolve_context_budget
     from core.turn_scheduler import SchedulerError
 
     # Deferred render queue. /load and /resume set it; the main loop consumes
@@ -1059,7 +1060,7 @@ async def _main_impl():
 {c(BOLD+CYAN,"╚══════════════════════════════════════════════════════╝")}
   model : {c(MODELS[session.model_alias]['color'],session.model_alias)}  {c(GRAY,MODELS[session.model_alias]['desc'])}
   cwd   : {c(GRAY,session.cwd)}
-  effort: {c(YELLOW,"[" + str(DYNAMIC_CONFIG.get('effort_level','medium')) + "]")}  tokens={DYNAMIC_CONFIG['max_tokens']}  ctx={DYNAMIC_CONFIG['ctx_max_chars']//1000}k  iter={DYNAMIC_CONFIG['max_iter']}
+  effort: {c(YELLOW,"[" + str(DYNAMIC_CONFIG.get('effort_level','medium')) + "]")}  tokens={DYNAMIC_CONFIG['max_tokens']}  ctx={resolve_context_budget(DYNAMIC_CONFIG)[0]//1000}k tokens  iter={DYNAMIC_CONFIG['max_iter']}
   tools : {"  ".join(tool_tags)}
   DB    : {c(GRAY,str(DB_PATH))}
 {key_line}

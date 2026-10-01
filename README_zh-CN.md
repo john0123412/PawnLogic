@@ -141,7 +141,7 @@ record 保持稳定；带版本的 Agent lifecycle record 使用新增的
 |------|------|
 | 多 Provider 模型 | 内置 DeepSeek、OpenAI、Anthropic 别名，并可通过 `/provider` 添加自定义 OpenAI-compatible、Anthropic-style 或 OpenAI Responses Provider，每个 Provider 的鉴权方式独立配置。 |
 | 委派 Agent | 有界 sub-agent 使用由 host 控制的动态模型路由、用户 allow/deny 策略、Token/工具/成本预算、按能力过滤的工具、task-local workspace，以及带 task lineage 的一至两个 worker 编排。 |
-| 结构化上下文 | 版本化任务状态、保持 Tool Call 完整性的裁剪、`ctx_trim_to` 目标和由 host 选择的委派上下文，使长会话保持有界且不会复制原始父级历史。 |
+| 结构化上下文 | 版本化任务状态、按估算 token 的上下文预算（`/ctx <tokens>`，旧字符预算在加载时自动迁移）做保持 Tool Call 完整性的裁剪，以及由 host 选择的委派上下文，使长会话保持有界且不会复制原始父级历史。 |
 | 持久化工作区 | 基于 SQLite 的会话、可搜索历史、memory 命令、有界且携带来源信息的知识检索、每会话 workspace 和 `~/.pawnlogic/` 下的审计日志。 |
 | 真实工具执行 | Host shell、代码沙箱、文件操作、URL fetch、浏览器自动化、Docker 容器和 CTF helper。 |
 | Trust-boundary UX | 用户模式会明确提示工具何时跨越本地主机、容器、浏览器、网络、delegate 或明文 HTTP 边界。 |
@@ -173,8 +173,8 @@ caller 生效，绝不会隐式 fan-out。
 ## 思考强度
 
 思考强度是一个旋钮，不是两个。同一个档位同时决定模型思考多少、以及它有多少可用空间：
-发给 Provider 的 `reasoning_effort`，以及输出 token、工具调用迭代次数、上下文窗口、
-工具输出上限和时间预算这一整套运行时限制。`/model` 在你选完模型后会接着询问档位，
+发给 Provider 的 `reasoning_effort`，以及输出 token、工具调用迭代次数、以估算 token
+计的上下文窗口、工具输出上限和时间预算这一整套运行时限制。`/model` 在你选完模型后会接着询问档位，
 两个选择在同一个交互里完成。
 
 | 档位 | 发给 Provider | 工具调用迭代 | 替代 |

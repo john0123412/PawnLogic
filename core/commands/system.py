@@ -22,7 +22,7 @@ Commands in this module:
   /low /mid /deep /max /ultra /normal    legacy aliases for effort levels
   /limits                          show current dynamic config
   /tokens [N]    set max_tokens
-  /ctx [N]       set ctx_max_chars
+  /ctx [N]       set ctx budget in tokens (ctx_max_tokens)
   /iter [N]      set max_iter
   /toolsize [N]  set tool_max_chars
   /fetchsize [N] set fetch_max_chars
@@ -41,7 +41,8 @@ from config import (
 )
 from core.api_client import stream_request
 from core.memory import list_failures, clear_failures
-from core.session import _ctx_chars, STATE_FILENAME
+from core.context_window import _ctx_tokens, resolve_context_budget
+from core.session import STATE_FILENAME
 from core.state import (
     state as _runtime_state,
     get_dynamic_config_value,
@@ -94,9 +95,9 @@ async def cmd_clear(ctx: CommandContext) -> None:
 async def cmd_context(ctx: CommandContext) -> None:
     session = ctx.session
     msgs = session.messages
-    chars = _ctx_chars(msgs)
-    pct = chars / runtime_config()["ctx_max_chars"] * 100
-    tok = chars // 4
+    tok = _ctx_tokens(msgs)
+    ctx_max, _trim = resolve_context_budget(runtime_config())
+    pct = tok / ctx_max * 100
     pinned = sum(1 for m in msgs if m.get("_pinned"))
     filled = int(min(pct, 100) / 100 * 30)
     bcol = RED if pct > 80 else (YELLOW if pct > 50 else GREEN)
@@ -298,7 +299,7 @@ def apply_effort(ctx: CommandContext, level: str) -> bool:
         GREEN,
         f"  ✓ effort={level}: "
         f"tokens={preset['max_tokens']:,}, "
-        f"ctx={preset['ctx_max_chars']:,}, "
+        f"ctx={preset['ctx_max_tokens'] // 1000}k tokens, "
         f"iter={preset['max_iter']}",
     ))
     model_alias = getattr(ctx.session, "model_alias", "")
@@ -427,14 +428,15 @@ async def cmd_tokens(ctx: CommandContext) -> None:
 async def cmd_ctx(ctx: CommandContext) -> None:
     arg = ctx.arg
     if not arg:
-        _print(c(GRAY, f"  Current: {runtime_config()['ctx_max_chars']}  /ctx <n>"))
+        current, _trim = resolve_context_budget(runtime_config())
+        _print(c(GRAY, f"  Current: {current:,} tokens  /ctx <tokens>"))
         return
     try:
-        n = max(10_000, int(arg))
-        set_dynamic_config_value("ctx_max_chars", n)
-        set_dynamic_config_value("ctx_trim_to", int(n * .75))
+        n = max(4_000, int(arg))
+        set_dynamic_config_value("ctx_max_tokens", n)
+        set_dynamic_config_value("ctx_trim_tokens", int(n * .75))
         ctx.session._reset_system_prompt()
-        _print(c(GREEN, f"  ✓ ctx_max_chars={n}"))
+        _print(c(GREEN, f"  ✓ ctx_max_tokens={n}"))
     except ValueError:
         _print(c(RED, "  ✗ Invalid number"))
 

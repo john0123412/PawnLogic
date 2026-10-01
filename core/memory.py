@@ -133,6 +133,7 @@ def _create_core_tables():
             tool_call_id      TEXT,
             is_pinned         INTEGER DEFAULT 0,
             reasoning_content TEXT,
+            is_turn_context   INTEGER DEFAULT 0,
             created_at        TEXT    NOT NULL,
             UNIQUE (session_id, seq),
             FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
@@ -216,6 +217,9 @@ def _create_core_tables():
         msg_cols = [row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()]
         msg_migrations = {
             "reasoning_content": "ALTER TABLE messages ADD COLUMN reasoning_content TEXT",
+            # Per-turn retrieval blocks must survive save/load so undo and
+            # failed-turn rollback can still remove them after a reload.
+            "is_turn_context": "ALTER TABLE messages ADD COLUMN is_turn_context INTEGER DEFAULT 0",
         }
         for col, ddl in msg_migrations.items():
             if col not in msg_cols:
@@ -256,6 +260,7 @@ def _build_rows(session_id: str, messages: list) -> list[tuple]:
             # Persist reasoning_content so /chat load can continue reasoning-model sessions.
             m.get("reasoning_content"),
             now,
+            1 if m.get("_turn_context") else 0,
         ))
         seq += 1
     return rows
@@ -660,8 +665,8 @@ def save_messages(session_id: str, messages: list):
                     conn.executemany("""
                         INSERT INTO messages
                             (session_id, seq, role, content, tool_calls, tool_call_id,
-                             is_pinned, reasoning_content, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             is_pinned, reasoning_content, created_at, is_turn_context)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, all_rows)
             else:
                 new_rows = [r for r in all_rows if r[1] > last_seq]
@@ -669,8 +674,8 @@ def save_messages(session_id: str, messages: list):
                     conn.executemany("""
                         INSERT OR REPLACE INTO messages
                             (session_id, seq, role, content, tool_calls, tool_call_id,
-                             is_pinned, reasoning_content, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             is_pinned, reasoning_content, created_at, is_turn_context)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, new_rows)
                 cur_pins = {r[1]: r[6] for r in all_rows}
                 for seq_idx, pinned in cur_pins.items():
@@ -697,6 +702,12 @@ def load_messages(session_id: str) -> list[dict]:
             except Exception: pass
         if r["tool_call_id"]: m["tool_call_id"] = r["tool_call_id"]
         if r["is_pinned"]:    m["_pinned"] = True
+        # Restore the turn-context marker (missing in DBs predating it).
+        try:
+            if r["is_turn_context"]:
+                m["_turn_context"] = True
+        except (IndexError, KeyError):
+            pass
         # Restore reasoning_content. Old DBs may not have this column.
         try:
             rc = r["reasoning_content"]
