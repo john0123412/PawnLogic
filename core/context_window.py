@@ -81,6 +81,33 @@ def resolve_context_budget(cfg: Mapping[str, Any]) -> tuple[int, int]:
     return max_tokens, trim_tokens
 
 
+def migrate_legacy_context_budget(cfg: dict) -> bool:
+    """Convert legacy character-denominated context keys in place to tokens.
+
+    Session snapshots saved before token budgeting carry
+    ``ctx_max_chars``/``ctx_trim_to``. Converting at LOAD time (before the
+    snapshot merges into a runtime config already seeded with token
+    defaults) is what keeps the saved budget authoritative: a plain merge
+    would leave both key sets present, and the preset's token defaults
+    would mask the user's saved character budget. Legacy keys are removed
+    so a later ``/ctx`` token write can never be shadowed by them.
+    Returns True when a conversion happened.
+    """
+    legacy_max = cfg.get("ctx_max_chars")
+    if legacy_max is None:
+        return False
+    legacy_cfg = {"ctx_max_chars": legacy_max, "ctx_trim_to": cfg.get("ctx_trim_to")}
+    try:
+        max_tokens, trim_tokens = resolve_context_budget(legacy_cfg)
+    except Exception:
+        return False
+    cfg["ctx_max_tokens"] = max_tokens
+    cfg["ctx_trim_tokens"] = trim_tokens
+    cfg.pop("ctx_max_chars", None)
+    cfg.pop("ctx_trim_to", None)
+    return True
+
+
 def _drop_dangling_tool_call_messages(msgs: list) -> list:
     """Return a copy without assistant tool calls that lack matching tool output."""
     return repair_dangling_tool_calls(msgs)

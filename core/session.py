@@ -882,7 +882,8 @@ class AgentSession:
                             last_user_text = str(prev.get("content") or "")
                             self.messages.pop()
                             removed += 1
-                            self._pop_orphan_turn_context_block()
+                            if self._pop_orphan_turn_context_block():
+                                removed += 1
                             break
                         elif prev.get("role") == "assistant":
                             # Consecutive assistant messages can happen across tool loops.

@@ -169,7 +169,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 |-----------|-------------|
 | Multi-provider models | Built-in DeepSeek, OpenAI, and Anthropic aliases plus custom OpenAI-compatible, Anthropic-style, or OpenAI Responses providers through `/provider`, each with an independent authentication scheme. |
 | Delegated agents | Bounded sub-agents use host-controlled dynamic model routing, user allow/deny policy, token/tool/cost budgets, capability-filtered Tools, task-local workspaces, and one-or-two-worker orchestration with task lineage. |
-| Structured context | Versioned task state, Tool-call-safe trimming, `ctx_trim_to` targeting, and host-selected delegated context keep long sessions bounded without copying raw parent history. |
+| Structured context | Versioned task state, Tool-call-safe trimming against an estimated-token context budget (`/ctx <tokens>`; legacy character budgets migrate on load), and host-selected delegated context keep long sessions bounded without copying raw parent history. |
 | Persistent workspace | SQLite-backed sessions, searchable history, memory commands, bounded provenance-aware knowledge retrieval, per-session workspaces, and audit logs under `~/.pawnlogic/`. |
 | Real tool execution | Host shell, code sandbox, file operations, URL fetch, browser automation, Docker containers, and CTF helpers. |
 | Trust-boundary UX | User-mode warnings make it explicit when a tool crosses local host, container, browser, network, delegate, or plaintext HTTP boundaries. |
@@ -215,7 +215,8 @@ effect only for a supported batch caller and never causes implicit fan-out.
 Thinking effort is one control, not two. A single level decides both how hard
 the model thinks and how much room it gets: the `reasoning_effort` value sent
 to the provider, plus the runtime limits for output tokens, tool-call
-iterations, context window, Tool output, and time budget. `/model` asks for the
+iterations, a context window denominated in estimated tokens, Tool output, and
+time budget. `/model` asks for the
 level right after you pick a model, so the two choices are made in one place.
 
 | Level | Sent to the provider | Tool-call iterations | Replaces |

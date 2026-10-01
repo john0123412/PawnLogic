@@ -1118,7 +1118,18 @@ name at the end is the gate that fails if the invariant is broken.
   halves. Moving retrieval back into `build_session_prompt`'s query path, or
   adding a wall-clock line to the prompt, silently reintroduces the cache
   bust; deleting the `_turn_context` flag from `_prepare_turn` without
-  extending every rollback site strands the block in history.
+  extending every rollback site strands the block in history. The flag
+  persists through SQLite (`messages.is_turn_context`, with an ALTER TABLE
+  migration for old DBs), so save/load keeps undo exact —
+  `test_undo_after_reload_removes_retrieval_block_with_its_turn` gates the
+  roundtrip. Budget trimming groups history from `_turn_context` markers as
+  well as user messages; reverting that grouping evicts the current
+  question's retrieval block at the budget boundary
+  (`test_overflow_keeps_each_retrieval_block_with_its_own_turn`). Legacy
+  character budgets (`ctx_max_chars`/`ctx_trim_to`) convert to token keys at
+  snapshot load (`migrate_legacy_context_budget`), because the runtime preset
+  already seeds token defaults that would otherwise mask the saved budget —
+  `test_load_snapshot_converts_legacy_character_budget` gates it.
 
 ### Execution and policy boundaries
 

@@ -81,8 +81,15 @@ def _message_tokens(message: Mapping[str, Any]) -> int:
 
 
 def _turn_groups(messages: Sequence[Mapping[str, Any]]) -> list[tuple[int, ...]]:
+    # A `_turn_context` retrieval block is injected immediately BEFORE its
+    # user message, so it starts the group of the turn it belongs to. Starting
+    # groups only at user messages would attach each block to the END of the
+    # previous turn, and budget trimming would then keep old questions while
+    # discarding the retrieval block of the current one.
     starts = [
-        index for index, message in enumerate(messages) if message.get("role") == "user"
+        index
+        for index, message in enumerate(messages)
+        if message.get("role") == "user" or message.get("_turn_context")
     ]
     groups: list[tuple[int, ...]] = []
     for position, start in enumerate(starts):

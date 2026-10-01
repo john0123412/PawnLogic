@@ -328,3 +328,34 @@ def test_prompt_rendering_is_stable_bounded_and_redacts_credentials():
     assert "sk-proj-" not in state_text
     assert "[REDACTED_SECRET]" in state_text
     assert len(envelope_text) <= 80
+
+
+def test_overflow_keeps_each_retrieval_block_with_its_own_turn():
+    # A `_turn_context` retrieval block is injected immediately BEFORE its
+    # user message. Turn groups must start at the block, not the user:
+    # otherwise trimming attaches the block to the END of the previous turn,
+    # and an overflow keeps old questions while dropping the retrieval block
+    # of the question that is actually being answered.
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "assistant", "content": "[Retrieved Context one]", "_turn_context": True},
+        {"role": "user", "content": "question-one"},
+        {"role": "assistant", "content": "answer-one"},
+        {"role": "user", "content": "m" * 160},
+        {"role": "assistant", "content": "answer-mid"},
+        {"role": "assistant", "content": "[Retrieved Context]", "_turn_context": True},
+        {"role": "user", "content": "question-current"},
+        {"role": "assistant", "content": "answer-current"},
+    ]
+
+    envelope = ContextManager(max_tokens=30, trim_tokens=28).build(messages)
+
+    selected_contents = [str(m.get("content")) for m in envelope.messages]
+    # The current turn survives complete with its retrieval block.
+    assert "question-current" in selected_contents
+    assert "[Retrieved Context]" in selected_contents
+    # The first turn survives with its own retrieval block (first-turn
+    # protection), and the bulky middle turn is what got evicted.
+    assert "[Retrieved Context one]" in selected_contents
+    assert "question-one" in selected_contents
+    assert "m" * 160 not in selected_contents
