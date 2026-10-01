@@ -42,7 +42,7 @@ from core.turn_scheduler import (
 )
 from core.state import runtime_config, update_dynamic_config
 from tools.file_ops import sync_runtime_context
-from utils.ansi import c, CYAN, GRAY, YELLOW, DIM
+from utils.ansi import c, CYAN, GRAY, YELLOW, DIM, strip_ansi
 
 # Prefer prompt_toolkit's render channel to avoid hijacked stdout.
 try:
@@ -276,15 +276,19 @@ def _save_scheduler_snapshot_atomic(snapshot: SessionSnapshot) -> None:
                     rows,
                 )
 
-    _memory._write_with_retry(
-        snapshot.session_id,
-        "save_scheduler_checkpoint",
-        _write,
-    )
-    _memory._last_saved_seq[snapshot.session_id] = len(rows) - 1
-    _memory._pinned_snapshot[snapshot.session_id] = {
-        row[1]: row[6] for row in rows
-    }
+    # Serialize against save_messages' incremental writer (shared lock in
+    # core.memory): the full DELETE+INSERT rewrite and the _last_saved_seq
+    # bookkeeping must not interleave with a stale incremental write.
+    with _memory._message_write_lock:
+        _memory._write_with_retry(
+            snapshot.session_id,
+            "save_scheduler_checkpoint",
+            _write,
+        )
+        _memory._last_saved_seq[snapshot.session_id] = len(rows) - 1
+        _memory._pinned_snapshot[snapshot.session_id] = {
+            row[1]: row[6] for row in rows
+        }
 
 
 def load_snapshot(session_id: str) -> SessionSnapshot | None:
@@ -402,7 +406,16 @@ def autosave_agent_session(
     session_id = snapshot.session_id
 
     def _save() -> None:
-        if not session._save_lock.acquire(blocking=False):
+        # A non-blocking acquire silently dropped the NEWER snapshot whenever
+        # a stale autosave still held the lock. Wait briefly instead; the
+        # daemon thread is joined below with a 3.0s timeout, so a short wait
+        # here cannot stall the REPL.
+        if not session._save_lock.acquire(timeout=2.0):
+            logger.warning(
+                "Autosave skipped: save lock still held after 2.0s; "
+                "a newer snapshot may be lost on crash | session={}",
+                session_id[:8],
+            )
             return
         try:
             save_snapshot(snapshot)
@@ -642,6 +655,20 @@ def render_session_markdown_export(
 
 def session_load(session, query: str) -> str:
     """Load a session by list index or name substring."""
+    # Refuse while a Turn is active: the scheduler RESTORE below raises
+    # InvalidControlError in that case, and by then messages/config have
+    # already been replaced, which would leave a half-restored session.
+    scheduler = getattr(session, "_turn_scheduler", None)
+    if scheduler is not None:
+        try:
+            active_turn = scheduler.view().active
+        except Exception:
+            active_turn = None
+        if active_turn is not None:
+            return (
+                "ERROR: cannot /load while a Turn is active; "
+                "interrupt it (/abort) or wait for it to finish, then retry."
+            )
     init_db()
     rows = list_sessions(50)
     if not rows:
@@ -735,6 +762,14 @@ def session_load(session, query: str) -> str:
     session._reset_system_prompt()
     session.messages.extend(msgs)
     session.session_id = sid
+    # The event emitter and RuntimeContext captured the pre-load session id
+    # when bound earlier; re-key them so post-load events correlate with the
+    # loaded session instead of the stale one.
+    _emitter_factory = getattr(session, "_event_emitter", None)
+    if callable(_emitter_factory):
+        _ctx = getattr(session, "runtime_context", None)
+        if _ctx is not None:
+            _emitter_factory().rebind(_ctx, sid)
     scheduler = getattr(session, "_turn_scheduler", None)
     if scheduler is not None:
         restore_state = dict(snapshot.queue_state)
@@ -972,7 +1007,9 @@ def _fallback_render_history(msgs: list, total: int, folded: int) -> None:
 
     for j, m in enumerate(msgs):
         role = m.get("role", "")
-        content = m.get("content") or ""
+        # Untrusted model/tool/user text: strip ANSI escape sequences so a
+        # payload cannot inject terminal control codes on this no-rich path.
+        content = strip_ansi(str(m.get("content") or ""))
         is_last = (j == len(msgs) - 1)
         branch = "└" if is_last else "├"
 
@@ -987,7 +1024,7 @@ def _fallback_render_history(msgs: list, total: int, folded: int) -> None:
             tool_calls = m.get("tool_calls")
             if tool_calls and not content:
                 names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
-                _emit(f"  {branch} [assistant]{thinking_tag} [Tool calls: {','.join(names)}]")
+                _emit(f"  {branch} [assistant]{thinking_tag} [Tool calls: {strip_ansi(','.join(str(n) for n in names))}]")
             elif content:
                 _emit(f"  {branch} [assistant]{thinking_tag} {content}")
             else:

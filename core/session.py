@@ -1230,6 +1230,19 @@ class AgentSession:
         )
         state = self._structured_context_state()
         envelope = manager.build(without_context_state_messages(self.messages), state=state)
+        if envelope.over_budget:
+            # The current question exceeded the whole budget alongside the
+            # protected first turn: even protected turns were dropped and the
+            # provider view is degraded. Loud on purpose — answering with a
+            # partial prompt here is a silent-wrong-answer risk.
+            logger.warning(
+                "context budget exceeded even after protected turns were "
+                "dropped | session={} budget={} tokens={} dropped={}",
+                self.session_id[:8],
+                max_tokens,
+                envelope.token_count,
+                envelope.dropped_messages,
+            )
         result = list(envelope.messages)
         state_block = format_context_state_for_prompt(state)
         if state_block:
@@ -2216,9 +2229,15 @@ class AgentSession:
         with activation, activate_turn_cancellation(cancellation):
             try:
                 outcome = self._run_turn_active(user_input)
-            except (TurnInterrupted, StreamCancellationError):
+            except TurnInterrupted:
                 self._autosave(turn_status="interrupted")
-                raise TurnInterrupted()
+                raise
+            except StreamCancellationError as exc:
+                # A cancelled stream is a user interrupt, not a failure:
+                # convert it so the scheduler and CLI take the interrupt
+                # path. Chain the original to preserve its traceback.
+                self._autosave(turn_status="interrupted")
+                raise TurnInterrupted(str(exc)) from exc
             except Exception:
                 self._autosave(turn_status="failed")
                 raise

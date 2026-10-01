@@ -364,6 +364,27 @@ class SkillScanner:
         if not scripts:
             for ext in ("*.py", "*.sh"):
                 scripts.extend(f.name for f in sorted(skill_dir.glob(ext)))
+        else:
+            # Manifest scripts are untrusted metadata: keep only entries
+            # that resolve to real files inside the pack directory. A
+            # "../escape" or absolute path would otherwise render a run
+            # command outside the pack in format_for_prompt.
+            try:
+                pack_root = skill_dir.resolve()
+            except OSError:
+                pack_root = skill_dir
+            safe_scripts = []
+            for entry in scripts:
+                if not isinstance(entry, str) or not entry.strip():
+                    continue
+                candidate = (skill_dir / entry).resolve()
+                try:
+                    candidate.relative_to(pack_root)
+                except ValueError:
+                    continue
+                if candidate.is_file():
+                    safe_scripts.append(entry)
+            scripts = safe_scripts
 
         return {
             "name": name,

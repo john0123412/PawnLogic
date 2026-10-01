@@ -7,6 +7,8 @@ import difflib
 from pathlib import Path
 import re
 
+from core.file_store import atomic_write_text
+
 PATCH_BLOCK_RE = re.compile(
     r"<<<<<<+\s*SEARCH\s*\n(.*?)=======+\s*\n(.*?)>>>>>>>+\s*REPLACE",
     re.DOTALL,
@@ -169,7 +171,7 @@ def apply_patch_blocks(
     if not applied and errors:
         return "ERROR: all SEARCH/REPLACE blocks failed:\n" + "\n".join(errors)
     try:
-        target.write_text("".join(file_lines), encoding="utf-8")
+        atomic_write_text(target, "".join(file_lines))
     except Exception as exc:
         return f"ERROR: failed to write file: {exc}"
     result = [f"OK: applied {applied}/{len(blocks)} SEARCH/REPLACE blocks to {path}"]

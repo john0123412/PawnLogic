@@ -483,7 +483,11 @@ def test_budget_admission_retries_after_an_inflight_claim_settles():
     assert result.budget.reserved_tokens == 0
 
 
-def test_overreported_usage_fails_closed_and_releases_reservation():
+def test_overreported_usage_fails_closed_and_settles_clamped_actuals():
+    # The executor reported 8 tokens against a 5-token reservation. The run
+    # fails closed as budget_exhausted, but the real spend is settled clamped
+    # to the reservation (5 tokens) instead of vanishing via a zero-usage
+    # release — the ledger must reflect what was actually spent.
     executor = RecordingExecutor(
         usage=AgentUsage(prompt_tokens=4, completion_tokens=4, tool_calls=1)
     )
@@ -497,8 +501,10 @@ def test_overreported_usage_fails_closed_and_releases_reservation():
     assert result.results[0].failures[0].code == (
         "reported_usage_exceeded_reservation"
     )
-    assert result.budget.available_tokens == 5
+    assert result.budget.consumed_tokens == 5
+    assert result.budget.consumed_tool_calls == 1
     assert result.budget.reserved_tokens == 0
+    assert result.budget.available_tokens == 0
 
 
 def test_executor_failures_are_safe_and_do_not_leak_exception_text():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import inspect
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -13,6 +14,7 @@ from core.agent_orchestrator import CancellationToken
 from core.api_client import StreamCancellationError, ensure_tool_call_id, stream_request
 from core.context_manager import ContextEnvelope
 from core.agent_events import AgentEventKind
+from core.logger import logger
 from core.delegation import (
     AgentBudget,
     AgentResult,
@@ -166,6 +168,25 @@ def _tool_execution_resolver():
     from core.session import _TOOL_REGISTRY
 
     return _TOOL_REGISTRY.resolve_for_execution
+
+
+def _stream_accepts_cancellation() -> bool:
+    """Return whether the active ``stream_request`` takes a ``cancellation`` kwarg.
+
+    Explicit feature detection for the legacy-test-double fallback in
+    :meth:`SubAgentSession._request_stream`.  Anything without an
+    introspectable signature is treated as legacy (and logged loudly at the
+    call site); production's ``stream_request`` always accepts the keyword.
+    """
+    try:
+        parameters = inspect.signature(stream_request).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        or parameter.name == "cancellation"
+        for parameter in parameters
+    )
 
 
 def make_sub_executor(tool_resolver, *, concurrent_execution: bool = False):
@@ -523,16 +544,17 @@ class SubAgentSession:
     ):
         """Call the stream API while retaining legacy test-double support.
 
-        Production always receives the task cancellation token.  The fallback
-        is intentionally limited to an older test double which rejects the
-        newly added keyword; unrelated ``TypeError`` instances still surface.
+        Whether the ``cancellation`` keyword is supported is detected up
+        front via :func:`inspect.signature` instead of sniffing ``TypeError``
+        messages: a genuine ``TypeError`` raised inside the stream call must
+        never be misread as a legacy double, silently dropping cancellation.
         """
         max_tokens = min(
             int(runtime_config()["max_tokens"]),
             remaining_tokens,
             self.MAX_TOKENS,
         )
-        try:
+        if _stream_accepts_cancellation():
             return stream_request(
                 self.messages,
                 self.model_alias,
@@ -540,18 +562,20 @@ class SubAgentSession:
                 max_tokens=max_tokens,
                 cancellation=self.cancellation,
             )
-        except TypeError as exc:
-            message = str(exc)
-            if "cancellation" not in message or (
-                "unexpected" not in message and "keyword" not in message
-            ):
-                raise
-            return stream_request(
-                self.messages,
-                self.model_alias,
-                tools_schema=tools_schema,
-                max_tokens=max_tokens,
-            )
+        # Legacy test double without cancellation support. This is loud on
+        # purpose: production must never take this path.
+        logger.warning(
+            "stream_request does not accept a 'cancellation' keyword; "
+            "sub-agent stream will run WITHOUT cancellation support "
+            "(legacy test double?) | session={}",
+            getattr(self, "session_id", "?"),
+        )
+        return stream_request(
+            self.messages,
+            self.model_alias,
+            tools_schema=tools_schema,
+            max_tokens=max_tokens,
+        )
 
     def _append_assistant(self, api) -> None:
         self.messages.append(

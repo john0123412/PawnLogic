@@ -19,17 +19,15 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from core.context_manager import _message_tokens
 from core.message_history import repair_dangling_tool_calls
-from core.token_estimate import estimate_tokens
 
 
 def _ctx_tokens(msgs: list) -> int:
-    # Reasoning content must count toward the real context budget.
-    return sum(
-        estimate_tokens(str(m.get("content") or ""))
-        + estimate_tokens(str(m.get("reasoning_content") or ""))
-        for m in msgs
-    )
+    # Single counting rule shared with ContextManager: message content,
+    # reasoning_content, AND serialized tool-call arguments all count toward
+    # the real context budget.
+    return sum(_message_tokens(m) for m in msgs)
 
 
 # Mixed-content characters-per-token factor used only to translate legacy

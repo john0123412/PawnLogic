@@ -30,6 +30,17 @@ class SessionEventEmitter:
         runtime_context.session_id = self._session_id
         runtime_context.agent_id = self._session_id
 
+    def rebind(self, runtime_context: Any, session_id: str) -> None:
+        """Re-key the emitter to a new session id (e.g. after ``/load``).
+
+        The emitter captures the session id at bind time; when
+        ``session_load`` replaces the live session's identity, the emitter
+        must follow or post-load events would keep carrying the stale id
+        while snapshots persist under the new one.
+        """
+        self._session_id = session_id
+        self.bind(runtime_context)
+
     def start_turn(self, model_alias: str, phase: str) -> None:
         self._turn_id = f"turn-{uuid.uuid4().hex}"
         self._sequence = 0
@@ -160,9 +171,10 @@ class SessionEventEmitter:
             "completed": AgentEventKind.TURN_COMPLETED,
             "interrupted": AgentEventKind.TURN_CANCELLED,
             "failed": AgentEventKind.TURN_FAILED,
-        }.get(status)
-        if event_type is None:
-            return
+        }.get(status, AgentEventKind.TURN_CANCELLED)
+        # Unknown statuses are treated like "interrupted": the turn must
+        # still be marked finished and open tools flushed, otherwise a later
+        # start_turn would inherit stale per-turn state.
         for tool_call_id, (tool_name, iteration) in tuple(
             self._open_tools.items()
         ):

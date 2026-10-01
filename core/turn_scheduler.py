@@ -853,9 +853,14 @@ class TurnScheduler:
                 except KeyboardInterrupt:
                     with self._lock:
                         user_requested = self._interrupt_requested
+                        # Snapshot the abort flag BEFORE the settle helpers
+                        # below reset it; reading it afterwards is always
+                        # False, which would let an abort+queued turn slip
+                        # through with `continue` instead of raising.
+                        was_abort = self._abort_requested
                         view = (
                             self._abort_active_unlocked()
-                            if self._abort_requested
+                            if was_abort
                             else self._recover_active_unlocked()
                         )
                         queued = bool(self._steer or self._follow_up)
@@ -865,7 +870,7 @@ class TurnScheduler:
                     # queued head starts as a fresh Turn — re-raising here
                     # stranded the queue and lost the steer (the worker
                     # died between settlement and the next _drive round).
-                    if user_requested and queued and not self._abort_requested:
+                    if user_requested and queued and not was_abort:
                         continue
                     raise
                 except Exception:
@@ -884,9 +889,14 @@ class TurnScheduler:
                 outcome = self._normalize_result(raw_result)
                 with self._lock:
                     if self._interrupt_requested:
+                        # Snapshot the abort flag BEFORE the settle helpers
+                        # below reset it; the stale read afterwards is always
+                        # False, which would keep driving the queue after an
+                        # abort instead of returning.
+                        was_abort = self._abort_requested
                         view = (
                             self._abort_active_unlocked()
-                            if self._abort_requested
+                            if was_abort
                             else self._recover_active_unlocked()
                         )
                         # An interrupted Turn with queued work hands the
@@ -897,7 +907,7 @@ class TurnScheduler:
                         # queue is non-empty, so keep driving the queue.
                         # With an empty queue the interrupt parks.
                         should_return = bool(
-                            self._abort_requested
+                            was_abort
                             or not (self._steer or self._follow_up)
                         )
                     elif outcome.status is TurnExecutionStatus.INTERRUPTED:
