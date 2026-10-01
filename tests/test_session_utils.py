@@ -122,14 +122,22 @@ from core.session import (  # noqa: E402
     _PlanRenderer,
 )
 
-# core.session is now imported with its dependency stubs bound. Drop the
-# core.mcp_client_manager stub from sys.modules so a test module collected after
-# this one (e.g. test_mcp_config) imports the real implementation rather than
-# inheriting a MagicMock. session.py only imports it lazily, so core.session's
-# existing bindings are unaffected, and this module's own MCP test monkeypatches
-# the real module.
-if isinstance(sys.modules.get("core.mcp_client_manager"), _StubModule):
-    del sys.modules["core.mcp_client_manager"]
+# core.session is now imported with its dependency stubs bound. Drop every
+# stub this module installed from sys.modules: they existed only to satisfy
+# `import core.session`, and leaving them behind pollutes any test module
+# collected afterwards that lazily imports the real implementations —
+# e.g. test_memory_reliability.py doing `from core import memory` in a
+# fixture, or test_mcp_config importing core.mcp_client_manager.
+# core.session's own bindings were captured at its import time (including the
+# names pulled in by its module-level try/except imports), so they are
+# unaffected; its only function-level lazy import of a stubbed module
+# (_load_skills_toc -> core.gsa) has no callers. The tests below that need
+# real modules pop/re-import them explicitly.
+# Only _StubModule instances are removed: modules that were already imported
+# for real before the stubs were installed are never touched.
+for _stub_name in _MOCKS:
+    if isinstance(sys.modules.get(_stub_name), _StubModule):
+        del sys.modules[_stub_name]
 
 
 # ── helpers ───────────────────────────────────────────────
