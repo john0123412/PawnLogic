@@ -1146,9 +1146,12 @@ name at the end is the gate that fails if the invariant is broken.
   `tools/shell_ops.authorize_shell_operation` does; `HostProcessRunner.run()`
   classifies *and* spawns, so it is only for the single real execution.
   `run_code` additionally classifies the payload's own tractable literal shell
-  surface (bash lines; Python `os.system`/`os.popen`/`subprocess(shell=True)`),
-  failing closed on anything but `ALLOW`. Still invisible: temp-file contents,
-  dynamic command construction, `from os import system` aliases, and
+  surface (bash lines; Python `os.system`/`os.popen`/`subprocess(shell=True)`)
+  and AST-scans Python payloads for filesystem access whose literal (or
+  expanduser/expandvars-wrapped literal) path resolves under READ_BLACKLIST
+  (`open()`/`pathlib` reads, `os`/`shutil` mutators), failing closed on
+  anything but `ALLOW`. Still invisible: temp-file contents, dynamically
+  constructed paths, `from os import system` aliases, and
   javascript/go/compiled payloads. Defence-in-depth and consistency, not an OS
   sandbox.
 - **Delegated-agent requests must not bypass Provider visibility, allowlists,

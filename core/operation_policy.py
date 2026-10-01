@@ -69,7 +69,7 @@ class OperationDecision:
 
 
 _REDIRECT_RE = re.compile(
-    r"(?:^|[\s;|&])(?P<op>&>|(?:\d)?>>|(?:\d)?>)\s*"
+    r"(?:^|[\s;|&])(?P<op>&>|(?:\d)?>>|(?:\d)?>\|?)\s*"
     r"(?P<target>'[^']+'|\"[^\"]+\"|[^\s;&|]+)"
 )
 _PIPE_TO_SHELL_RE = re.compile(
@@ -206,6 +206,100 @@ def _redirection_targets(command: str, cwd: str | Path) -> list[tuple[str, Path]
     return targets
 
 
+# Interpreters whose -c/-e/-r flag takes an inline code string. A command
+# like ``python3 -c "open('/etc/shadow','w').write('x')"`` hides its path
+# and redirection surface inside that string, so the code is extracted and
+# re-checked with the same path/redirection rules as a direct command.
+_WRAPPER_INTERPRETERS = frozenset(
+    {"python", "python2", "python3", "perl", "ruby", "node", "nodejs", "php"}
+)
+_WRAPPER_CODE_FLAGS = frozenset({"-c", "-e", "-r"})
+
+_CODE_LITERAL_RE = re.compile(
+    r"'([^'\\]*(?:\\.[^'\\]*)*)'|\"([^\"\\]*(?:\\.[^\"\\]*)*)\""
+)
+
+
+def _wrapper_code_argument(tokens: list[str]) -> str | None:
+    """Return the inline code string of a wrapper-interpreter invocation."""
+    for index, token in enumerate(tokens):
+        if Path(token).name.lower() not in _WRAPPER_INTERPRETERS:
+            continue
+        code: str | None = None
+        rest = tokens[index + 1 :]
+        for j, flag in enumerate(rest):
+            is_code_flag = flag in _WRAPPER_CODE_FLAGS or (
+                flag.startswith("-")
+                and not flag.startswith("--")
+                and any(ch in flag[1:] for ch in "cer")
+            )
+            if (
+                is_code_flag
+                and j + 1 < len(rest)
+                and not rest[j + 1].startswith("-")
+            ):
+                code = rest[j + 1]
+        return code
+    return None
+
+
+def _code_string_literals(code: str) -> list[str]:
+    """Extract single/double-quoted string literals from a code string."""
+    literals = []
+    for match in _CODE_LITERAL_RE.finditer(code):
+        literals.append(match.group(1) if match.group(1) is not None else match.group(2))
+    return literals
+
+
+def _wrapper_payload_violation(
+    code: str, cwd: Path, workspace: Path
+) -> tuple[OperationAction, str] | None:
+    """Re-run path/redirection checks against inline interpreter code.
+
+    Returns (action, matched_rule) when the embedded code references or
+    writes a protected path, else None.
+    """
+    code_tokens = _split_shell(code)
+    rule = _critical_path_mentioned(code, code_tokens, cwd)
+    if rule:
+        return OperationAction.DENY, f"wrapper_interpreter:{rule}"
+    targets = _redirection_targets(code, cwd)
+    for op, target in targets:
+        if str(target) == "/":
+            return (
+                OperationAction.DENY,
+                f"wrapper_interpreter:redirection:{op}:filesystem_root",
+            )
+        if _path_is_critical_write(target):
+            return (
+                OperationAction.DENY,
+                f"wrapper_interpreter:redirection:{op}:critical_write_path",
+            )
+    for op, target in targets:
+        if not _is_within(target, workspace):
+            return (
+                OperationAction.CONFIRM,
+                f"wrapper_interpreter:redirection:{op}:outside_workspace",
+            )
+    for literal in _code_string_literals(code):
+        # Perl-style open modes embed the redirect in the literal itself:
+        # open(F, ">/etc/passwd"). Strip it before the path check.
+        candidate_literal = literal
+        for prefix in (">>", ">|", ">"):
+            if candidate_literal.startswith(prefix):
+                candidate_literal = candidate_literal[len(prefix):]
+                break
+        if not _looks_like_path(candidate_literal):
+            continue
+        path = _resolve_policy_path(candidate_literal, cwd)
+        if _path_is_critical_write(path):
+            return (
+                OperationAction.DENY,
+                "wrapper_interpreter:literal:critical_write_path",
+            )
+    return None
+
+
 def _tee_targets(tokens: list[str], cwd: str | Path) -> list[Path]:
     targets: list[Path] = []
     for index, token in enumerate(tokens):
@@ -337,6 +431,22 @@ def classify_shell_command(
     cwd_path = Path(cwd).expanduser().resolve()
     workspace = Path(workspace_dir or cwd_path).expanduser().resolve()
     tokens = _split_shell(command)
+
+    # Wrapper interpreters (python3 -c, perl -e, ...) hide their real path
+    # and redirection surface inside an inline code string. Extract it and
+    # re-run the path/redirection checks against its contents.
+    wrapper_code = _wrapper_code_argument(tokens)
+    if wrapper_code:
+        violation = _wrapper_payload_violation(wrapper_code, cwd_path, workspace)
+        if violation:
+            action, rule = violation
+            return _decision(
+                action,
+                RiskLevel.CRITICAL if action is OperationAction.DENY else RiskLevel.HIGH,
+                "Inline interpreter code (-c/-e/-r) touches a protected path.",
+                rule,
+                command,
+            )
 
     critical_rule = _critical_path_mentioned(command, tokens, cwd_path)
     if critical_rule:

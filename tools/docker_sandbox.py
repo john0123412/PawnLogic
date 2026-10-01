@@ -16,7 +16,7 @@ Dependencies:
   - Local Docker CE runtime (dockerd).
 """
 
-import os, re, tempfile
+import os, re, tempfile, threading
 
 from config import DANGEROUS_PATTERNS, READ_BLACKLIST, WORKSPACE_DIR
 from core.network_policy import NetworkOperation, NetworkPolicy
@@ -41,12 +41,27 @@ def _is_under(path: str, root: str) -> bool:
         return False
 
 
+# System locations that must never be host-mounted into a sandbox, even
+# read-only. Checked under-only (a candidate inside them is denied).
+_HOST_SENSITIVE_DIRS = ("/var/run", "/run", "/root", "/etc")
+
+
 def _is_sensitive_host_path(path: str) -> bool:
     if os.path.basename(path) == "docker.sock":
         return True
+    real = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
+    if real == "/":
+        return True
+    # Bidirectional check against credential locations: deny the candidate
+    # when it is *under* a sensitive path OR when it is an *ancestor* of one
+    # (e.g. mounting "/" or "/home" would expose ~/.ssh inside the container).
     for blocked in READ_BLACKLIST:
         blocked_real = os.path.realpath(os.path.abspath(os.path.expanduser(blocked)))
-        if _is_under(path, blocked_real):
+        if _is_under(real, blocked_real) or _is_under(blocked_real, real):
+            return True
+    for blocked in _HOST_SENSITIVE_DIRS:
+        blocked_real = os.path.realpath(blocked)
+        if _is_under(real, blocked_real) or _is_under(blocked_real, real):
             return True
     return False
 
@@ -58,7 +73,11 @@ def _check_path_safety(host_path: str, mode: str, *, allow_host_read_mount: bool
     - rw mode: path must be inside SAFE_WORKSPACE or PermissionError is raised.
     - ro mode: path must also be inside SAFE_WORKSPACE by default. Explicit
       allow_host_read_mount permits outside read-only challenge files, but
-      credential paths and docker.sock remain denied.
+      credential paths, docker.sock, and sensitive system locations
+      (/var/run, /run, /root, /etc, /) remain denied — in both directions
+      (the candidate may not sit under a sensitive path nor be an ancestor
+      of one, since mounting an ancestor would expose it inside the
+      container).
     Returns the canonical absolute path string.
     """
     mode = str(mode or "ro").lower()
@@ -553,12 +572,36 @@ def tool_pwn_container(a: dict) -> str:
             print(c(YELLOW, trust_notice_for_boundary(TrustBoundaryKind.CONTAINER_EXEC)))
 
         try:
-            exit_code, output = container.exec_run(
-                cmd=["bash", "-c", command],
-                stdout=True,
-                stderr=True,
-                demux=False,
-            )
+            timeout = int(a.get("timeout", 30) or 30)
+        except (TypeError, ValueError):
+            timeout = 30
+        timeout = max(1, timeout)
+
+        # docker-py's exec_run has no per-call timeout, so bound it with a
+        # join timeout; a hung exec reports instead of hanging the tool.
+        exec_holder: dict = {}
+
+        def _do_exec() -> None:
+            try:
+                exec_holder["result"] = container.exec_run(
+                    cmd=["bash", "-c", command],
+                    stdout=True,
+                    stderr=True,
+                    demux=False,
+                )
+            except Exception as e:
+                exec_holder["error"] = e
+
+        worker = threading.Thread(target=_do_exec, daemon=True)
+        worker.start()
+        worker.join(timeout)
+        if worker.is_alive():
+            return f"ERROR: exec timed out after {timeout}s"
+        if "error" in exec_holder:
+            e = exec_holder["error"]
+            return f"ERROR: exec failed: {type(e).__name__}: {e}"
+        try:
+            exit_code, output = exec_holder["result"]
             result = output.decode("utf-8", errors="ignore")
         except Exception as e:
             return f"ERROR: exec failed: {type(e).__name__}: {e}"

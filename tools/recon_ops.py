@@ -111,6 +111,27 @@ _REPORTABLE_ENV_KEYS = {
 }
 
 
+# Process cmdlines routinely carry credential flags (--password, --token, ...).
+# Redact the value, keep the flag name for diagnostics.
+_CMDLINE_SECRET_RE = re.compile(
+    r"(--?(?:password|passwd|token|secret|api[-_]?key|access[-_]?key"
+    r"|client[-_]?secret|private[-_]?key)(?:=|\s+))(\S+)",
+    re.IGNORECASE,
+)
+
+
+def _redact_cmdline_secrets(cmdline: str) -> str:
+    return _CMDLINE_SECRET_RE.sub(r"\1<redacted>", cmdline)
+
+
+def _proc_owned_by_current_user(pid: int) -> bool:
+    """True when /proc/<pid> is owned by the current effective user."""
+    try:
+        return os.stat(f"/proc/{pid}").st_uid == os.geteuid()
+    except OSError:
+        return False
+
+
 def _redact_url_auth(value: str) -> str:
     try:
         parsed = urlsplit(value)
@@ -156,10 +177,10 @@ def _get_proc_info(pid: int) -> dict:
     except OSError:
         info["exe"] = "?"
 
-    # Command line.
+    # Command line (secret flags redacted).
     try:
         cmdline = (base / "cmdline").read_text(errors="ignore")
-        info["cmdline"] = cmdline.replace("\x00", " ").strip()
+        info["cmdline"] = _redact_cmdline_secrets(cmdline.replace("\x00", " ").strip())
     except OSError:
         info["cmdline"] = "?"
 
@@ -227,6 +248,15 @@ def tool_check_service(args: dict) -> str:
 
     results = []
     for p in unique_pids:
+        # Only report processes owned by the current user: another user's
+        # /proc/<pid>/cmdline routinely contains other users' credential flags.
+        if not _proc_owned_by_current_user(p["pid"]):
+            results.append(
+                f"=== Port {port} process information (via {method}) ===\n"
+                f"  PID       : {p['pid']}\n"
+                f"  Note      : owned by another user; details withheld."
+            )
+            continue
         info = _get_proc_info(p["pid"])
         lines = [
             f"=== Port {port} process information (via {method}) ===",
