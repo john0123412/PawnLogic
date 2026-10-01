@@ -13,7 +13,7 @@ and re-exported there under its original private name for compatibility.
 
 import sys
 
-from utils.ansi import c, GRAY, CYAN, MAGENTA, YELLOW, DIM
+from utils.ansi import c, strip_ansi, GRAY, CYAN, MAGENTA, YELLOW, DIM
 
 _TAG_PAIRS = [
     ("<plan>", "</plan>"),
@@ -113,7 +113,7 @@ class _PlanRenderer:
                 if not self.in_plan:
                     output += self.tail
                 else:
-                    col = self._color(self.tail)
+                    col = self._color(strip_ansi(self.tail))
                     if col:
                         sys.stdout.write(col)
                         sys.stdout.flush()
@@ -126,7 +126,7 @@ class _PlanRenderer:
                 if not self.in_plan:
                     output += safe
                 else:
-                    col = self._color(safe)
+                    col = self._color(strip_ansi(safe))
                     if col:
                         sys.stdout.write(col)
                         sys.stdout.flush()
@@ -146,7 +146,7 @@ class _PlanRenderer:
                     if not self.in_plan:
                         output += self.tail[0]
                     else:
-                        sys.stdout.write(self._color(self.tail[0]))
+                        sys.stdout.write(self._color(strip_ansi(self.tail[0])))
                         sys.stdout.flush()
                     self.tail = self.tail[1:]
                 else:
@@ -164,7 +164,7 @@ class _PlanRenderer:
                     self.tail = self.tail[len(et) :]
             else:
                 # inside <plan> — handle open and close subtags
-                col = self._color(self.tail[:ep])
+                col = self._color(strip_ansi(self.tail[:ep]))
                 if col:
                     sys.stdout.write(col)
                     sys.stdout.flush()
@@ -197,7 +197,7 @@ class _PlanRenderer:
     def flush(self) -> str:
         leftover = ""
         if self.in_plan:
-            sys.stdout.write(c(GRAY + DIM, self.tail))
+            sys.stdout.write(c(GRAY + DIM, strip_ansi(self.tail)))
             sys.stdout.flush()
         else:
             leftover = self.tail

@@ -31,6 +31,7 @@ from pawnlogic.startup import (
     has_any_api_key,
     install_proxy as _install_proxy,
     manual_load_env as _manual_load_env,
+    redact_proxy_url as _redact_proxy_url,
 )
 from pawnlogic.live_repl import (
     build_bottom_toolbar,
@@ -252,7 +253,8 @@ def _ensure_runtime_templates(runtime_dir: Path) -> None:
             path.write_text(content, encoding="utf-8")
 
 
-PROXY_STATUS = _install_proxy()
+# Redacted for display: the raw proxy URL may carry credentials (userinfo).
+PROXY_STATUS = _redact_proxy_url(_install_proxy())
 
 try:
     import config  # kept for backward-compat attribute access
@@ -262,7 +264,7 @@ try:
         MODELS, DB_PATH, PROVIDERS,
         validate_api_key, list_vision_models,
     )
-    from utils.ansi       import c, cp, BOLD, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
+    from utils.ansi       import c, cp, rl_wrap, strip_ansi, BOLD, GRAY, CYAN, GREEN, YELLOW, RED, MAGENTA
     from core.session     import (
         AgentSession, STATE_FILENAME,
         attach_external_mcp_tools, detach_external_mcp_tools,
@@ -502,7 +504,12 @@ def render_agent_output(text: str) -> None:
     Render agent text output.
     - With rich: detect Markdown structures and render them.
     - Without rich: print directly.
+
+    Model text is stripped of ANSI escapes first: this path reaches the real
+    terminal in the readline fallback and in ``pawn --eval`` human mode, where
+    nothing else filters control sequences.
     """
+    text = strip_ansi(text)
     if not _HAS_RICH or not text.strip():
         print(text)
         return
@@ -1458,7 +1465,7 @@ async def _main_impl():
                         _submission_state.consume_recovery_draft()
                 else:
                     _label = _re_edit_default if _re_edit_default else ""
-                    raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ") + _label).strip()
+                    raw = input(cp(BOLD+GREEN, "▶ ") + cp(BOLD, "You > ") + rl_wrap(_label)).strip()
                     submitted_kind = None
                     accepted_recovery = False
 

@@ -44,6 +44,8 @@ def parse_cli_arguments(parser: argparse.ArgumentParser) -> Any:
             "--continue is interactive and cannot be combined with "
             "--eval, --session, or --json"
         )
+    if args.session and not args.eval:
+        parser.error("--session requires --eval")
     if args.command and (args.eval or args.session or args.json):
         parser.error(
             "`resume` is interactive and cannot be combined with "

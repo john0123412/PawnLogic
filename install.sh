@@ -28,6 +28,12 @@ then
     exit 1
 fi
 
+if ! "$PYTHON_BIN" -c "import venv, ensurepip" 2>/dev/null; then
+    printf '\\033[91m  ✗ The Python venv module is missing.\\033[0m\\n' >&2
+    printf '    Install it first, e.g.: sudo apt install python3-venv\\n' >&2
+    exit 1
+fi
+
 mkdir -p "$APP_HOME" "$BIN_DIR"
 
 "$PYTHON_BIN" -m venv "$APP_HOME/venv"

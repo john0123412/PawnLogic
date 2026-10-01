@@ -332,13 +332,6 @@ class SelectorRegistry:
         return getattr(self._active, "formatted_text", FormattedText([]))
 
 
-# Sentinel type used by selectors that have no result.  Returning
-# ``None`` from a selector is a legitimate user choice (cancel), so
-# a separate sentinel is needed to distinguish "no result yet" from
-# "user cancelled".
-NO_RESULT: Any = object()
-
-
 def style_dict() -> dict[str, str]:
     """Return the Prompt Toolkit style dict shared by every selector Float.
 
@@ -364,7 +357,7 @@ def style_dict() -> dict[str, str]:
 
 __all__ = [
     "DEFAULT_SELECTOR_STYLE",
-    "NO_RESULT",
+    "EffortSelector",
     "EmbeddedSelector",
     "ModalSpec",
     "ModelMultiSelect",

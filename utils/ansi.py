@@ -49,6 +49,20 @@ def box(txt: str, col: str = CYAN) -> str:
 
 _ANSI_RE = _re.compile(r'(\033\[[0-9;]*m)')
 
+# Full ANSI escape sequence matcher (CSI sequences and OSC sequences),
+# for stripping model/tool text before it reaches a real terminal sink.
+_STRIP_ANSI_RE = _re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from *text*.
+
+    Use on untrusted model/tool text before writing it to a real terminal
+    sink (readline fallback prompts, ``--eval`` human mode, non-PT output
+    paths). The live Prompt Toolkit path strips escapes separately; these
+    sinks do not, so a bare ``print(text)`` here is an ANSI injection.
+    """
+    return _STRIP_ANSI_RE.sub("", text)
+
 def rl_wrap(text: str) -> str:
     """
     Wrap every ANSI escape sequence with readline ignore markers.
