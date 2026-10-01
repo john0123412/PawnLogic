@@ -9,6 +9,7 @@ import os
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import quote
 
 from config.paths import PAWNLOGIC_HOME
 from config import providers as provider_config
@@ -368,7 +369,7 @@ async def fetch_models(
                 if not body.get("has_more"):
                     break
                 cursor = body.get("next_cursor") or body.get("next_page")
-                url = f"{models_url}?limit=200&after={cursor}" if cursor else None
+                url = f"{models_url}?limit=200&after={quote(str(cursor), safe='')}" if cursor else None
     except httpx.TimeoutException:
         return [], (
             "Connection timeout: provider did not return /v1/models within "

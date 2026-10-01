@@ -296,7 +296,7 @@ def read_responses_sse_lines(
             # ``turn_api._usage_counts`` accumulates on every delta it sees, so
             # the usage half must not ride along a second time inside this one.
             yield {k: v for k, v in parsed.items() if k != "_usage"}
-        if current_event == "response.completed":
+        if current_event in ("response.completed", "response.incomplete"):
             return
 
 

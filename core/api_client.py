@@ -81,7 +81,6 @@ def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
 
 
 # Load retry policy at request start, not module import.
-_RETRY_MAX = _env_int("PAWNLOGIC_API_RETRY_MAX", 3, 1, 8)
 
 
 def get_retry_policy() -> RetryPolicy:
@@ -193,11 +192,9 @@ def _stream_retry_sleep(
     _interruptible_sleep(delay, cancellation)
 
 
-# ── per-read / connect timeout ────────────────────────────
-
-_READ_TIMEOUT = _env_int("PAWNLOGIC_API_READ_TIMEOUT", 60, 5, 300)
-_CONN_TIMEOUT = _env_int("PAWNLOGIC_API_CONNECT_TIMEOUT", 20, 3, 120)
-_NONSTREAM_TIMEOUT = _env_int("PAWNLOGIC_API_NONSTREAM_TIMEOUT", 60, 5, 300)
+# Timeout values come from the per-request retry policy (core.api_retry) and
+# are passed down explicitly, so the clamping in one place is the one used
+# everywhere.
 
 # ════════════════════════════════════════════════════════
 # Proxy detection.
@@ -346,11 +343,16 @@ def _stream_interruption_delta(error: OSError, partial_text: str) -> dict[str, o
 def _read_anthropic_sse_lines(
     resp,
     *,
+    read_timeout: float | None = None,
     cancellation: StreamCancellation | None = None,
 ):
     yield from provider_streams.read_anthropic_sse_lines(
         resp,
-        read_timeout=_READ_TIMEOUT,
+        read_timeout=(
+            read_timeout
+            if read_timeout is not None
+            else get_retry_policy().read_timeout_seconds
+        ),
         raise_if_interrupted=lambda: _raise_if_stream_interrupted(cancellation),
     )
 
@@ -358,11 +360,16 @@ def _read_anthropic_sse_lines(
 def _read_openai_sse_lines(
     resp,
     *,
+    read_timeout: float | None = None,
     cancellation: StreamCancellation | None = None,
 ):
     yield from provider_streams.read_openai_sse_lines(
         resp,
-        read_timeout=_READ_TIMEOUT,
+        read_timeout=(
+            read_timeout
+            if read_timeout is not None
+            else get_retry_policy().read_timeout_seconds
+        ),
         raise_if_interrupted=lambda: _raise_if_stream_interrupted(cancellation),
     )
 
@@ -371,12 +378,17 @@ def _read_sse_lines(
     resp,
     api_fmt: str,
     *,
+    read_timeout: float | None = None,
     cancellation: StreamCancellation | None = None,
 ):
     yield from provider_streams.read_sse_lines(
         resp,
         api_fmt,
-        read_timeout=_READ_TIMEOUT,
+        read_timeout=(
+            read_timeout
+            if read_timeout is not None
+            else get_retry_policy().read_timeout_seconds
+        ),
         raise_if_interrupted=lambda: _raise_if_stream_interrupted(cancellation),
     )
 
@@ -420,6 +432,8 @@ def stream_request(
     )
 
     proxy = _detect_proxy()
+
+    maybe_warn_insecure_provider(base_url)
 
     # Load retry policy at request start.
     policy = get_retry_policy()
@@ -501,14 +515,22 @@ def stream_request(
                 return
 
             partial_terminal = False
-            for delta in _read_sse_lines(resp, api_fmt, cancellation=cancellation):
+            error_terminal = False
+            for delta in _read_sse_lines(
+                resp,
+                api_fmt,
+                read_timeout=policy.read_timeout_seconds,
+                cancellation=cancellation,
+            ):
                 if not any(key in delta for key in ("_retry", "_error")):
                     partial_emitted = True
                 if delta.get("_partial_end"):
                     partial_terminal = True
+                if "_error" in delta:
+                    error_terminal = True
                 yield delta
             _raise_if_stream_interrupted(cancellation)
-            if partial_terminal:
+            if partial_terminal or error_terminal:
                 _cb_record_failure(provider)
             else:
                 # A streaming response succeeds only after full consumption.
@@ -717,7 +739,9 @@ def call_once(
                 connect_timeout=int(policy.connect_timeout_seconds),
             )
         except Exception as e:
-            return "", format_transport_error(e, proxy=proxy, connect_timeout=_CONN_TIMEOUT)
+            return "", format_transport_error(
+                e, proxy=proxy, connect_timeout=int(policy.connect_timeout_seconds)
+            )
         finally:
             if conn:
                 try:

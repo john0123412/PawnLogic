@@ -144,6 +144,9 @@ def parse_anthropic_sse_event(
             partial = delta.get("partial_json", "")
             tb = state.get("tool_blocks", {}).get(idx, {})
             tb["args"] = tb.get("args", "") + partial
+            # Persist the slot even when the content_block_start was missed,
+            # so fragments still emit the accumulated id/name/args.
+            state.setdefault("tool_blocks", {})[idx] = tb
             return {
                 "choices": [{
                     "delta": {
