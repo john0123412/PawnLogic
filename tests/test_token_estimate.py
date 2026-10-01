@@ -124,6 +124,30 @@ class TestMigrateLegacyContextBudget:
         assert cfg["ctx_trim_tokens"] == 8_000
         assert "ctx_max_chars" not in cfg
 
+    def test_none_valued_token_keys_count_as_absent(self):
+        # None token keys follow the same convention resolve_context_budget
+        # applies (None == absent): the legacy conversion must fill them in
+        # instead of leaving None values that resolve to preset defaults.
+        cfg = {
+            "ctx_max_tokens": None,
+            "ctx_trim_tokens": None,
+            "ctx_max_chars": 90_000,
+            "ctx_trim_to": 60_000,
+        }
+        assert migrate_legacy_context_budget(cfg) is True
+        assert cfg == {"ctx_max_tokens": 30_000, "ctx_trim_tokens": 20_000}
+
+    def test_explicit_token_value_survives_alongside_none_sibling(self):
+        cfg = {
+            "ctx_max_tokens": 8_000,
+            "ctx_trim_tokens": None,
+            "ctx_max_chars": 90_000,
+            "ctx_trim_to": 60_000,
+        }
+        migrate_legacy_context_budget(cfg)
+        assert cfg["ctx_max_tokens"] == 8_000
+        assert cfg["ctx_trim_tokens"] == 8_000
+
     def test_trim_is_clamped_to_max_after_migration(self):
         cfg = {"ctx_max_chars": 30_000, "ctx_trim_to": 90_000}
         migrate_legacy_context_budget(cfg)

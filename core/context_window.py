@@ -94,7 +94,9 @@ def migrate_legacy_context_budget(cfg: dict) -> bool:
     Token keys are the authoritative surface: each legacy key only fills in
     the token key it predates, so a snapshot that already carries an
     explicit token value keeps it even when stale character keys ride
-    along. Legacy keys are removed either way, so a later ``/ctx`` token
+    along. A ``None`` token value counts as absent — the same convention
+    ``resolve_context_budget`` applies — and gets filled from the legacy
+    key. Legacy keys are removed either way, so a later ``/ctx`` token
     write can never be shadowed by them. Returns True when any key was
     converted or removed.
     """
@@ -103,11 +105,11 @@ def migrate_legacy_context_budget(cfg: dict) -> bool:
     if legacy_max is None and legacy_trim is None:
         return False
     try:
-        if legacy_max is not None and "ctx_max_tokens" not in cfg:
+        if legacy_max is not None and cfg.get("ctx_max_tokens") is None:
             cfg["ctx_max_tokens"] = max(
                 _MIN_TOKEN_BUDGET, int(legacy_max) // _LEGACY_CHARS_PER_TOKEN
             )
-        if legacy_trim is not None and "ctx_trim_tokens" not in cfg:
+        if legacy_trim is not None and cfg.get("ctx_trim_tokens") is None:
             cfg["ctx_trim_tokens"] = max(
                 _MIN_TOKEN_TRIM, int(legacy_trim) // _LEGACY_CHARS_PER_TOKEN
             )

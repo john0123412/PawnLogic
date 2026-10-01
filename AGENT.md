@@ -1131,7 +1131,8 @@ name at the end is the gate that fails if the invariant is broken.
   `test_count_turns_groups_retrieval_block_with_its_user`). Legacy
   character budgets (`ctx_max_chars`/`ctx_trim_to`) convert to token keys at
   snapshot load (`migrate_legacy_context_budget`) per key and never overwrite
-  an explicit token value, because the runtime preset already seeds token
+  an explicit (non-None) token value — a None token key counts as absent, the
+  same convention the resolver applies — because the runtime preset already seeds token
   defaults that would otherwise mask the saved budget —
   `test_load_snapshot_converts_legacy_character_budget` and
   `test_load_snapshot_keeps_explicit_token_budget_over_stale_legacy_keys`
