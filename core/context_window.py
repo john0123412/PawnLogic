@@ -1,17 +1,17 @@
-"""Context window sizing, compaction, and message cleanup helpers."""
+"""Context window sizing and message cleanup helpers.
+
+The single compaction path lives in ``core.context_manager.ContextManager``:
+it bounds the per-request provider view without mutating canonical history.
+There is deliberately no second, history-rewriting compaction path here —
+the previous ``_trim_and_compact_context`` (tool-output placeholders plus
+100-character truncation merged into canonical history) was dead code that
+silently disagreed with the live path and destroyed exact values (addresses,
+offsets) the summary path is required to preserve.
+"""
 
 from __future__ import annotations
 
-from config import DYNAMIC_CONFIG
-from core.state import runtime_config
 from core.message_history import repair_dangling_tool_calls
-
-
-def _dynamic_config() -> dict:
-    try:
-        return runtime_config()
-    except Exception:
-        return DYNAMIC_CONFIG
 
 
 def _ctx_chars(msgs: list) -> int:
@@ -20,92 +20,6 @@ def _ctx_chars(msgs: list) -> int:
         len(str(m.get("content") or "")) + len(str(m.get("reasoning_content") or ""))
         for m in msgs
     )
-
-
-def _bounded_summary_content(
-    summary_content: str,
-    *,
-    retained_messages: list,
-    cfg: dict,
-) -> str:
-    """Fit a compacted summary into a valid configured trim target."""
-    try:
-        max_chars = int(cfg["ctx_max_chars"])
-        trim_to = int(cfg["ctx_trim_to"])
-    except (KeyError, TypeError, ValueError):
-        return summary_content
-
-    if trim_to <= 0 or trim_to >= max_chars:
-        return summary_content
-
-    summary_budget = max(trim_to - _ctx_chars(retained_messages), 0)
-    if len(summary_content) <= summary_budget:
-        return summary_content
-    if summary_budget == 0:
-        return ""
-    if summary_budget == 1:
-        return "…"
-    return summary_content[: summary_budget - 1] + "…"
-
-
-def _trim_and_compact_context(msgs: list) -> int:
-    """
-    Context compaction (Tool Clearing).
-    When the token budget overflows, keep the system prompt and latest 10
-    messages. Older messages are not dropped directly:
-      - role=tool content is replaced by a placeholder
-      - role=user/assistant content is truncated to the first 100 characters
-    Then the compacted content is merged into one assistant summary inserted
-    after the system message.
-    """
-    cfg = _dynamic_config()
-    if _ctx_chars(msgs) <= cfg["ctx_max_chars"]:
-        return 0
-
-    keep_tail = 10
-    if len(msgs) <= keep_tail + 1:
-        return 0
-
-    cutoff = len(msgs) - keep_tail
-    old_msgs = msgs[1:cutoff]
-
-    compacted_lines: list[str] = []
-    for m in old_msgs:
-        role = m.get("role", "unknown")
-        content = m.get("content") or ""
-        if role == "tool":
-            compacted_lines.append(
-                f"[tool/{m.get('tool_call_id', '')}]: "
-                "(Tool output compacted to save context)"
-            )
-        elif role in ("user", "assistant"):
-            snippet = str(content)[:100]
-            ellipsis = "…" if len(str(content)) > 100 else ""
-            compacted_lines.append(f"[{role}]: {snippet}{ellipsis}")
-        if role == "assistant" and m.get("tool_calls"):
-            names = [
-                tc.get("function", {}).get("name", "?")
-                for tc in (m.get("tool_calls") or [])
-            ]
-            compacted_lines.append(f"  └─ tool_calls: {', '.join(names)}")
-
-    summary_content = "📝 [Context Compacted]:\n" + "\n".join(compacted_lines)
-    retained_messages = [msgs[0], *msgs[cutoff:]]
-    summary_content = _bounded_summary_content(
-        summary_content,
-        retained_messages=retained_messages,
-        cfg=cfg,
-    )
-    summary_msg = {
-        "role": "assistant",
-        "content": summary_content,
-        "_pinned": True,
-    }
-
-    del msgs[1:cutoff]
-    msgs.insert(1, summary_msg)
-
-    return len(old_msgs)
 
 
 def _drop_dangling_tool_call_messages(msgs: list) -> list:

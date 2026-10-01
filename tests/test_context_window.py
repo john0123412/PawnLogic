@@ -1,4 +1,8 @@
-"""Tests for context window helpers."""
+"""Tests for context window helpers.
+
+The only compaction path is ``core.context_manager.ContextManager`` (covered
+by ``tests/test_context_manager.py``). These tests pin the surviving helpers.
+"""
 
 import sys
 from pathlib import Path
@@ -7,10 +11,10 @@ ROOT = str(Path(__file__).resolve().parent.parent)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+import core.context_window as context_window
 from core.context_window import (
     _ctx_chars,
     _drop_dangling_tool_call_messages,
-    _trim_and_compact_context,
 )
 
 
@@ -30,73 +34,12 @@ def test_ctx_chars_counts_content_and_reasoning():
     assert _ctx_chars(msgs) == len("hello") + len("ok") + len("thinking")
 
 
-def test_trim_no_op_when_under_limit(monkeypatch):
-    from config import DYNAMIC_CONFIG
-
-    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_max_chars", 10_000)
-    msgs = [_msg("system", "sys"), _msg("user", "short")]
-    original = list(msgs)
-
-    assert _trim_and_compact_context(msgs) == 0
-    assert msgs == original
-
-
-def test_trim_compacts_old_messages_and_preserves_tail(monkeypatch):
-    from config import DYNAMIC_CONFIG
-
-    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_max_chars", 10)
-    msgs = [
-        _msg("system", "sys"),
-        _msg("user", "old user message " * 20),
-        _msg(
-            "assistant",
-            "",
-            tool_calls=[{"function": {"name": "run_shell"}}],
-        ),
-        _msg("tool", "large output", tool_call_id="call-1"),
-        *[_msg("user", f"tail-{i}") for i in range(10)],
-    ]
-
-    dropped = _trim_and_compact_context(msgs)
-
-    assert dropped == 3
-    assert msgs[0] == _msg("system", "sys")
-    assert msgs[1]["role"] == "assistant"
-    assert msgs[1]["_pinned"] is True
-    assert "Context Compacted" in msgs[1]["content"]
-    assert "tool_calls: run_shell" in msgs[1]["content"]
-    assert "Tool output compacted to save context" in msgs[1]["content"]
-    assert [m["content"] for m in msgs[-10:]] == [f"tail-{i}" for i in range(10)]
-
-
-def test_trim_applies_configured_target_without_changing_message_shapes(monkeypatch):
-    from config import DYNAMIC_CONFIG
-
-    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_max_chars", 1_000)
-    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_trim_to", 300)
-    tail = [_msg("user", f"t{i}") for i in range(10)]
-    msgs = [
-        _msg("system", "sys"),
-        *[_msg("user", f"old-{i}-" + ("x" * 500)) for i in range(12)],
-        *tail,
-    ]
-
-    dropped = _trim_and_compact_context(msgs)
-
-    assert dropped == 12
-    assert _ctx_chars(msgs) <= DYNAMIC_CONFIG["ctx_trim_to"]
-    assert set(msgs[1]) == {"role", "content", "_pinned"}
-    assert msgs[-10:] == tail
-
-
-def test_trim_returns_zero_when_too_few_messages(monkeypatch):
-    from config import DYNAMIC_CONFIG
-
-    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_max_chars", 1)
-    msgs = [_msg("system", "sys"), _msg("user", "large content")]
-
-    assert _trim_and_compact_context(msgs) == 0
-    assert len(msgs) == 2
+def test_no_history_rewriting_compaction_path_is_exported():
+    # The destructive compaction helper was removed on purpose: rewriting
+    # canonical history with truncated placeholders lost exact values
+    # (addresses, offsets) and diverged from the live ContextManager path.
+    assert not hasattr(context_window, "_trim_and_compact_context")
+    assert not hasattr(context_window, "_bounded_summary_content")
 
 
 def test_drop_dangling_tool_call_messages_removes_unmatched_calls():
