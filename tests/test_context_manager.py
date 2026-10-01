@@ -17,13 +17,14 @@ from core.prompt_builder import (
     format_context_envelope_for_prompt,
     format_context_state_for_prompt,
 )
+from core.token_estimate import estimate_tokens
 
 
 def test_context_state_round_trips_and_marks_old_summaries_stale():
     state = ContextState(
         goal="Ship structured context",
         constraints=("Keep message dictionaries stable",),
-        facts=("The current helper ignores ctx_trim_to",),
+        facts=("The current helper ignores ctx_trim_tokens",),
         decisions=("Use one context construction interface",),
         artifacts=("reports/context.md",),
         failed_attempts=("Unbounded parent history",),
@@ -82,8 +83,8 @@ def test_context_envelope_counts_message_content_reasoning_and_tool_data():
         },
         {"role": "tool", "content": "tool result", "tool_call_id": "call-1"},
     ]
-    expected_chars = sum(
-        len(value)
+    expected_tokens = sum(
+        estimate_tokens(value)
         for value in (
             "sys",
             "answer",
@@ -94,12 +95,12 @@ def test_context_envelope_counts_message_content_reasoning_and_tool_data():
     )
 
     envelope = ContextManager(
-        max_chars=expected_chars,
-        trim_to=expected_chars - 1,
+        max_tokens=expected_tokens,
+        trim_tokens=expected_tokens - 1,
     ).build(messages)
 
     assert envelope.messages == tuple(messages)
-    assert envelope.char_count == expected_chars
+    assert envelope.token_count == expected_tokens
     assert envelope.trimmed is False
     assert envelope.dropped_messages == 0
 
@@ -117,7 +118,7 @@ def test_overflow_trims_to_target_without_mutating_message_shapes():
     ]
     original = [dict(message) for message in messages]
 
-    envelope = ContextManager(max_chars=40, trim_to=24).build(messages)
+    envelope = ContextManager(max_tokens=10, trim_tokens=7).build(messages)
 
     assert envelope.messages == (
         messages[0],
@@ -127,8 +128,8 @@ def test_overflow_trims_to_target_without_mutating_message_shapes():
         messages[6],
         messages[7],
     )
-    assert envelope.char_count == 23
-    assert envelope.char_count <= 24
+    assert envelope.token_count == 7
+    assert envelope.token_count <= 7
     assert envelope.trimmed is True
     assert envelope.dropped_messages == 2
     assert messages == original
@@ -166,7 +167,7 @@ def test_parent_selection_is_deterministic_bounded_and_keeps_tool_groups():
         },
         {"role": "tool", "content": "ok", "tool_call_id": "call-1"},
     ]
-    manager = ContextManager(max_chars=100, trim_to=90)
+    manager = ContextManager(max_tokens=30, trim_tokens=27)
 
     first = manager.select_parent_context(
         messages,
@@ -188,13 +189,13 @@ def test_parent_selection_is_deterministic_bounded_and_keeps_tool_groups():
         messages[7],
         messages[8],
     )
-    assert first.char_count <= 90
+    assert first.token_count <= 27
     assert first.context_refs == ("evidence:report",)
     assert first.trimmed is True
 
 
 def test_parent_context_modes_limit_inheritance():
-    manager = ContextManager(max_chars=100, trim_to=80)
+    manager = ContextManager(max_tokens=30, trim_tokens=25)
     state = ContextState(goal="Parent goal", facts=("Verified fact",))
     messages = [
         {"role": "system", "content": "parent policy"},
@@ -215,10 +216,10 @@ def test_parent_context_modes_limit_inheritance():
     assert minimal.state.goal == state.goal
     assert minimal.state.facts == ()
     assert minimal.messages == ()
-    assert minimal.char_count == len(minimal.state.prompt_block())
+    assert minimal.token_count == estimate_tokens(minimal.state.prompt_block())
     assert none.state == ContextState()
     assert none.messages == ()
-    assert none.char_count == 0
+    assert none.token_count == 0
     with pytest.raises(ValueError, match="context_mode"):
         manager.select_parent_context(messages, context_mode="everything")
 
@@ -226,13 +227,13 @@ def test_parent_context_modes_limit_inheritance():
 def test_protected_state_reports_over_budget_without_corruption():
     state = ContextState(goal="x" * 80)
     envelope = ContextManager(
-        max_chars=100,
-        trim_to=40,
+        max_tokens=40,
+        trim_tokens=4,
     ).select_parent_context((), state=state)
 
     assert envelope.state == state
     assert envelope.messages == ()
-    assert envelope.char_count == len(state.prompt_block())
+    assert envelope.token_count == estimate_tokens(state.prompt_block())
     assert envelope.over_budget is True
 
 
@@ -253,7 +254,7 @@ def test_context_build_repairs_dangling_tool_calls_without_rewriting_messages():
         {"role": "user", "content": "continue"},
     ]
 
-    envelope = ContextManager(max_chars=100, trim_to=80).build(messages)
+    envelope = ContextManager(max_tokens=20, trim_tokens=16).build(messages)
 
     assert envelope.messages == (messages[0], messages[2])
     assert envelope.dropped_messages == 1
@@ -293,8 +294,8 @@ def test_pinned_tool_result_keeps_complete_atomic_call_group():
     ]
 
     envelope = ContextManager(
-        max_chars=50,
-        trim_to=45,
+        max_tokens=20,
+        trim_tokens=12,
     ).build(messages)
 
     assert messages[4] in envelope.messages
@@ -313,8 +314,8 @@ def test_prompt_rendering_is_stable_bounded_and_redacts_credentials():
         facts=("Verified decision",),
     )
     envelope = ContextManager(
-        max_chars=500,
-        trim_to=400,
+        max_tokens=200,
+        trim_tokens=150,
     ).select_parent_context((), state=state)
 
     state_text = format_context_state_for_prompt(state)

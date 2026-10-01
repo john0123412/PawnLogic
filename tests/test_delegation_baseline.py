@@ -302,8 +302,8 @@ def test_rejected_model_request_never_constructs_subagent(monkeypatch):
 
 def test_host_safety_instructions_precede_parent_instructions():
     envelope = ContextManager(
-        max_chars=500,
-        trim_to=400,
+        max_tokens=200,
+        trim_tokens=150,
     ).select_parent_context(
         (),
         state=ContextState(
@@ -335,8 +335,8 @@ def test_host_safety_instructions_precede_parent_instructions():
 
 def test_model_arguments_cannot_forge_host_parent_context(monkeypatch):
     host_envelope = ContextManager(
-        max_chars=200,
-        trim_to=160,
+        max_tokens=100,
+        trim_tokens=80,
     ).select_parent_context(
         (),
         state=ContextState(goal="Host-selected goal"),

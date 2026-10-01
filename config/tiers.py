@@ -2,8 +2,8 @@
 
 TIER_LOW = {
     "max_tokens":      4_096,
-    "ctx_max_chars":   40_000,
-    "ctx_trim_to":     30_000,
+    "ctx_max_tokens":  16_000,
+    "ctx_trim_tokens": 12_000,
     "max_iter":        10,
     "tool_max_chars":   6_000,
     "fetch_max_chars":  8_000,
@@ -15,8 +15,8 @@ TIER_LOW = {
 }
 TIER_MID = {
     "max_tokens":      8_192,
-    "ctx_max_chars":   150_000,
-    "ctx_trim_to":     110_000,
+    "ctx_max_tokens":  48_000,
+    "ctx_trim_tokens": 36_000,
     "max_iter":        30,
     "tool_max_chars":   15_000,
     "fetch_max_chars":  20_000,
@@ -28,8 +28,8 @@ TIER_MID = {
 }
 TIER_DEEP = {
     "max_tokens":      32_768,
-    "ctx_max_chars":   400_000,
-    "ctx_trim_to":     300_000,
+    "ctx_max_tokens":  96_000,
+    "ctx_trim_tokens": 72_000,
     "max_iter":        50,
     "tool_max_chars":   20_000,
     "fetch_max_chars":  30_000,
@@ -41,8 +41,8 @@ TIER_DEEP = {
 }
 TIER_MAX = {
     "max_tokens":      32_768,
-    "ctx_max_chars":   600_000,
-    "ctx_trim_to":     450_000,
+    "ctx_max_tokens":  128_000,
+    "ctx_trim_tokens":  96_000,
     "max_iter":        100,
     "tool_max_chars":   30_000,
     "fetch_max_chars":  40_000,
@@ -131,7 +131,7 @@ def effort_options(accepted: dict) -> tuple[tuple[str, str, str], ...]:
             level,
             level,
             f"iter={preset['max_iter']}  tokens={preset['max_tokens']:,}  "
-            f"ctx={preset['ctx_max_chars'] // 1000}k  — {sent}",
+            f"ctx={preset['ctx_max_tokens'] // 1000}k tokens  — {sent}",
         ))
     return tuple(rows)
 

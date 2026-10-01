@@ -67,7 +67,7 @@ from core.persistence import (
 )
 from core.queue_tui import open_queue_tui
 from core.interrupts import turn_interrupt_handler
-from core.session import _ctx_chars
+from core.context_window import _ctx_tokens
 from core.state import state as _runtime_state, set_output_mode
 from core.turn_scheduler import ControlAction, ControlKind, SubmissionKind
 from utils.ansi import (
@@ -617,10 +617,10 @@ async def cmd_compact(ctx: CommandContext) -> None:
             "content": f"📝 [Compact Summary]\n{_summary_buf}",
             "_pinned": True,
         })
-        _chars = _ctx_chars(session.messages)
+        _tokens = _ctx_tokens(session.messages)
         _print(c(GREEN,
             f"  ✓ Compacted | kept {len(pinned)} pinned messages + summary | "
-            f"context: {_chars//4:,} tokens"
+            f"context: ~{_tokens:,} tokens"
         ))
 
 

@@ -11,6 +11,7 @@ import re
 from typing import Any
 
 from core.context_manager import ContextEnvelope, ContextState
+from core.context_window import resolve_context_budget
 
 
 _CONTEXT_SECRET_RE = re.compile(
@@ -239,7 +240,7 @@ def build_session_prompt(
         f"Model       : {model_alias} ({model['id']})\n"
         f"Limits      : effort={cfg.get('effort_level', 'medium')}  "
         f"max_tokens={cfg['max_tokens']}  max_iter={cfg['max_iter']}  "
-        f"ctx={cfg['ctx_max_chars']//1000}k  tool_out={cfg['tool_max_chars']}\n\n"
+        f"ctx={resolve_context_budget(cfg)[0]//1000}k tokens  tool_out={cfg['tool_max_chars']}\n\n"
 
         "=== Execution Protocol (MANDATORY) ===\n"
 

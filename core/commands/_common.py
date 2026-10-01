@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from core.context_window import resolve_context_budget
 from core.state import runtime_config
 from utils.ansi import c, CYAN
 
@@ -35,7 +36,7 @@ def fmt_config() -> str:
     return (
         f"  effort          : {c(CYAN, str(cfg.get('effort_level', 'medium')))}  (reasoning effort; /effort)\n"
         f"  max_tokens      : {c(CYAN, str(cfg['max_tokens']))}  (per-API output limit)\n"
-        f"  ctx_max_chars   : {c(CYAN, str(cfg['ctx_max_chars']))}  (~{cfg['ctx_max_chars']//4:,} tokens)\n"
+        f"  ctx_max_tokens  : {c(CYAN, f'{resolve_context_budget(cfg)[0]:,}')}  (estimated; /ctx)\n"
         f"  max_iter        : {c(CYAN, str(cfg['max_iter']))}  (tool-call iteration limit)\n"
         f"  tool_max_chars  : {c(CYAN, str(cfg['tool_max_chars']))}\n"
         f"  fetch_max_chars : {c(CYAN, str(cfg['fetch_max_chars']))}\n"

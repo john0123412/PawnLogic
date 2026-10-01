@@ -13,9 +13,10 @@ if ROOT not in sys.path:
 
 import core.context_window as context_window
 from core.context_window import (
-    _ctx_chars,
+    _ctx_tokens,
     _drop_dangling_tool_call_messages,
 )
+from core.token_estimate import estimate_tokens
 
 
 def _msg(role, content="", **kw):
@@ -24,14 +25,16 @@ def _msg(role, content="", **kw):
     return msg
 
 
-def test_ctx_chars_counts_content_and_reasoning():
+def test_ctx_tokens_counts_content_and_reasoning():
     msgs = [
         _msg("user", "hello"),
         _msg("assistant", "ok", reasoning_content="thinking"),
         _msg("assistant", None),
     ]
 
-    assert _ctx_chars(msgs) == len("hello") + len("ok") + len("thinking")
+    assert _ctx_tokens(msgs) == (
+        estimate_tokens("hello") + estimate_tokens("ok") + estimate_tokens("thinking")
+    )
 
 
 def test_no_history_rewriting_compaction_path_is_exported():

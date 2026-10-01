@@ -2,7 +2,7 @@
 tests/test_session_utils.py — Unit tests for core/session.py utility functions
 
 Targets zero-dependency or minimal-dependency functions only:
-  - _ctx_chars
+  - _ctx_tokens
   - _is_plan_exempt
   - _PlanRenderer.feed / flush
   - AgentSession._count_turns
@@ -32,6 +32,8 @@ for _key in list(sys.modules):
 
 # ── Import real config first, then patch heavy session.py deps ───────
 import config  # noqa: E402 — force-cache real package
+
+from core.token_estimate import estimate_tokens  # noqa: E402
 assert config.VERSION
 from tests.helpers import fake_stream_request, fake_stream_response, fake_stream_sequence  # noqa: E402
 
@@ -113,7 +115,7 @@ if _mock_deps["core.skill_manager"] is not None:
 from core.session import (  # noqa: E402
     TurnInterrupted,
     _ThinkingSpinner,
-    _ctx_chars,
+    _ctx_tokens,
     _drop_dangling_tool_call_messages,
     _is_plan_exempt,
     _tool_call_missing_plan,
@@ -139,26 +141,28 @@ def _msg(role, content="", **kw):
 
 
 # ══════════════════════════════════════════════════════════
-# _ctx_chars
+# _ctx_tokens
 # ══════════════════════════════════════════════════════════
 
-def test_ctx_chars_basic():
+def test_ctx_tokens_basic():
     msgs = [_msg("user", "hello"), _msg("assistant", "world")]
-    assert _ctx_chars(msgs) == 10
+    assert _ctx_tokens(msgs) == (
+        estimate_tokens("hello") + estimate_tokens("world")
+    )
 
 
-def test_ctx_chars_includes_reasoning_content():
+def test_ctx_tokens_includes_reasoning_content():
     msgs = [{"role": "assistant", "content": "hi", "reasoning_content": "think"}]
-    assert _ctx_chars(msgs) == len("hi") + len("think")
+    assert _ctx_tokens(msgs) == estimate_tokens("hi") + estimate_tokens("think")
 
 
-def test_ctx_chars_none_content():
+def test_ctx_tokens_none_content():
     msgs = [{"role": "assistant", "content": None}]
-    assert _ctx_chars(msgs) == 0
+    assert _ctx_tokens(msgs) == 0
 
 
-def test_ctx_chars_empty():
-    assert _ctx_chars([]) == 0
+def test_ctx_tokens_empty():
+    assert _ctx_tokens([]) == 0
 
 
 def test_run_turn_hard_stops_after_soft_plan_corrections(monkeypatch, capsys):
@@ -631,7 +635,7 @@ def test_delegation_context_is_host_owned_bounded_and_excludes_raw_history():
     assert selected.messages == ()
     assert selected.state.goal == "parent goal"
     assert selected.state.facts == ("Verified parent summary",)
-    assert selected.char_count <= 2400
+    assert selected.token_count <= 600
     assert minimal.messages == ()
     assert minimal.state.goal == "parent goal"
     assert minimal.state.facts == ()

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from core.message_history import repair_dangling_tool_calls
+from core.token_estimate import estimate_tokens
 
 
 CONTEXT_STATE_VERSION = 1
@@ -47,29 +48,27 @@ def _positive_chars(value: object, field_name: str) -> int:
     return result
 
 
-def _value_chars(value: object) -> int:
+def _value_text(value: object) -> str:
     if value is None:
-        return 0
+        return ""
     if isinstance(value, str):
-        return len(value)
+        return value
     if isinstance(value, (dict, list, tuple)):
         try:
-            return len(
-                json.dumps(
-                    value,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
+            return json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
             )
         except (TypeError, ValueError):
             pass
-    return len(str(value))
+    return str(value)
 
 
-def _message_chars(message: Mapping[str, Any]) -> int:
-    total = _value_chars(message.get("content"))
-    total += _value_chars(message.get("reasoning_content"))
+def _message_tokens(message: Mapping[str, Any]) -> int:
+    total = estimate_tokens(_value_text(message.get("content")))
+    total += estimate_tokens(_value_text(message.get("reasoning_content")))
     calls = message.get("tool_calls") or ()
     if isinstance(calls, Sequence) and not isinstance(calls, (str, bytes)):
         for call in calls:
@@ -77,7 +76,7 @@ def _message_chars(message: Mapping[str, Any]) -> int:
                 continue
             function = call.get("function")
             if isinstance(function, Mapping):
-                total += _value_chars(function.get("arguments"))
+                total += estimate_tokens(_value_text(function.get("arguments")))
     return total
 
 
@@ -153,21 +152,21 @@ def _bounded_messages(
     messages: tuple[dict[str, Any], ...],
     *,
     budget: int,
-    state_chars: int,
+    state_tokens: int,
     include_system: bool = True,
     require_protected: bool = True,
     context_refs: tuple[str, ...] = (),
 ) -> tuple[dict[str, Any], ...]:
     selected: set[int] = set()
-    selected_chars = state_chars
+    selected_tokens = state_tokens
 
     def add(indexes: Sequence[int], *, required: bool) -> None:
-        nonlocal selected_chars
+        nonlocal selected_tokens
         new_indexes = tuple(index for index in indexes if index not in selected)
-        added_chars = sum(_message_chars(messages[index]) for index in new_indexes)
-        if required or selected_chars + added_chars <= budget:
+        added_tokens = sum(_message_tokens(messages[index]) for index in new_indexes)
+        if required or selected_tokens + added_tokens <= budget:
             selected.update(new_indexes)
-            selected_chars += added_chars
+            selected_tokens += added_tokens
 
     system_indexes = tuple(
         index
@@ -435,7 +434,7 @@ class ContextEnvelope:
 
     state: ContextState
     messages: tuple[dict[str, Any], ...]
-    char_count: int
+    token_count: int
     trimmed: bool = False
     over_budget: bool = False
     dropped_messages: int = 0
@@ -447,7 +446,7 @@ class ContextEnvelope:
             "version": self.version,
             "state": self.state.to_dict(),
             "messages": copy.deepcopy(list(self.messages)),
-            "char_count": self.char_count,
+            "token_count": self.token_count,
             "trimmed": self.trimmed,
             "over_budget": self.over_budget,
             "dropped_messages": self.dropped_messages,
@@ -458,11 +457,11 @@ class ContextEnvelope:
 class ContextManager:
     """Build bounded context through one side-effect-free Interface."""
 
-    def __init__(self, *, max_chars: int, trim_to: int) -> None:
-        self._max_chars = _positive_chars(max_chars, "max_chars")
-        self._trim_to = _positive_chars(trim_to, "trim_to")
-        if self._trim_to > self._max_chars:
-            raise ValueError("trim_to must not exceed max_chars")
+    def __init__(self, *, max_tokens: int, trim_tokens: int) -> None:
+        self._max_tokens = _positive_chars(max_tokens, "max_tokens")
+        self._trim_tokens = _positive_chars(trim_tokens, "trim_tokens")
+        if self._trim_tokens > self._max_tokens:
+            raise ValueError("trim_tokens must not exceed max_tokens")
 
     def build(
         self,
@@ -479,32 +478,32 @@ class ContextManager:
         copied_messages = _without_orphan_tools(
             [copy.deepcopy(dict(message)) for message in messages]
         )
-        state_chars = len(normalized_state.prompt_block())
-        char_count = state_chars + sum(
-            _message_chars(message) for message in copied_messages
+        state_tokens = estimate_tokens(normalized_state.prompt_block())
+        token_count = state_tokens + sum(
+            _message_tokens(message) for message in copied_messages
         )
-        if char_count > self._max_chars:
+        if token_count > self._max_tokens:
             copied_messages = _bounded_messages(
                 copied_messages,
-                budget=self._trim_to,
-                state_chars=state_chars,
+                budget=self._trim_tokens,
+                state_tokens=state_tokens,
             )
-            trimmed_char_count = state_chars + sum(
-                _message_chars(message) for message in copied_messages
+            trimmed_token_count = state_tokens + sum(
+                _message_tokens(message) for message in copied_messages
             )
             return ContextEnvelope(
                 state=normalized_state,
                 messages=copied_messages,
-                char_count=trimmed_char_count,
+                token_count=trimmed_token_count,
                 trimmed=True,
-                over_budget=trimmed_char_count > self._trim_to,
+                over_budget=trimmed_token_count > self._trim_tokens,
                 dropped_messages=original_count - len(copied_messages),
                 context_refs=normalized_refs,
             )
         return ContextEnvelope(
             state=normalized_state,
             messages=copied_messages,
-            char_count=char_count,
+            token_count=token_count,
             trimmed=len(copied_messages) < original_count,
             dropped_messages=original_count - len(copied_messages),
             context_refs=normalized_refs,
@@ -518,7 +517,7 @@ class ContextManager:
         context_mode: str = "selected",
         context_refs: Sequence[str] = (),
     ) -> ContextEnvelope:
-        """Select a child-safe parent projection within ``trim_to``."""
+        """Select a child-safe parent projection within ``trim_tokens``."""
         normalized_mode = _text(context_mode, "context_mode")
         if normalized_mode not in _CONTEXT_MODES:
             raise ValueError(f"unsupported context_mode: {normalized_mode}")
@@ -531,11 +530,11 @@ class ContextManager:
             return ContextEnvelope(
                 state=ContextState(),
                 messages=(),
-                char_count=0,
+                token_count=0,
                 trimmed=bool(copied_messages) or normalized_state != ContextState(),
                 dropped_messages=len(copied_messages),
             )
-        state_chars = len(normalized_state.prompt_block())
+        state_tokens = estimate_tokens(normalized_state.prompt_block())
         if normalized_mode == "minimal":
             normalized_state = ContextState(
                 goal=normalized_state.goal,
@@ -544,33 +543,33 @@ class ContextManager:
                 next_actions=normalized_state.next_actions,
                 summary_version=normalized_state.summary_version,
             )
-            state_chars = len(normalized_state.prompt_block())
+            state_tokens = estimate_tokens(normalized_state.prompt_block())
             return ContextEnvelope(
                 state=normalized_state,
                 messages=(),
-                char_count=state_chars,
+                token_count=state_tokens,
                 trimmed=bool(copied_messages),
-                over_budget=state_chars > self._trim_to,
+                over_budget=state_tokens > self._trim_tokens,
                 dropped_messages=len(copied_messages),
                 context_refs=normalized_refs,
             )
         selected_messages = _bounded_messages(
             copied_messages,
-            budget=self._trim_to,
-            state_chars=state_chars,
+            budget=self._trim_tokens,
+            state_tokens=state_tokens,
             include_system=False,
             require_protected=False,
             context_refs=normalized_refs,
         )
-        char_count = state_chars + sum(
-            _message_chars(message) for message in selected_messages
+        token_count = state_tokens + sum(
+            _message_tokens(message) for message in selected_messages
         )
         return ContextEnvelope(
             state=normalized_state,
             messages=selected_messages,
-            char_count=char_count,
+            token_count=token_count,
             trimmed=len(selected_messages) < len(copied_messages),
-            over_budget=char_count > self._trim_to,
+            over_budget=token_count > self._trim_tokens,
             dropped_messages=len(copied_messages) - len(selected_messages),
             context_refs=normalized_refs,
         )
@@ -604,15 +603,18 @@ def select_host_parent_context(
     *,
     state: ContextState,
     context_mode: str,
-    max_chars: int,
-    trim_to: int,
+    max_tokens: int,
+    trim_tokens: int,
 ) -> ContextEnvelope:
     """Build a host-owned child projection without copying raw parent history."""
-    bounded_max = max(1, min(int(max_chars), 4000))
-    bounded_trim = max(1, min(int(trim_to), 2400, bounded_max))
+    # The child envelope is a deliberately small fixed-size projection, not
+    # the model window budget; the clamps preserve the historical char-denominated
+    # ceilings (4000/2400) expressed in estimated tokens.
+    bounded_max = max(1, min(int(max_tokens), 1000))
+    bounded_trim = max(1, min(int(trim_tokens), 600, bounded_max))
     return ContextManager(
-        max_chars=bounded_max,
-        trim_to=bounded_trim,
+        max_tokens=bounded_max,
+        trim_tokens=bounded_trim,
     ).select_parent_context(
         (),
         state=state,

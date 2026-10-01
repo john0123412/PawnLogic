@@ -52,8 +52,9 @@ from core.context_manager import (
     without_context_state_messages,
 )
 from core.context_window import (
-    _ctx_chars as _ctx_chars,
+    _ctx_tokens as _ctx_tokens,
     _drop_dangling_tool_call_messages as _drop_dangling_tool_call_messages,
+    resolve_context_budget as resolve_context_budget,
 )
 from core.state import state as _runtime_state, runtime_config
 from core.runtime_context import RuntimeContext, current_runtime_context
@@ -1176,9 +1177,10 @@ class AgentSession:
     def _build_api_messages(self) -> list:
         """Build one bounded provider view without mutating canonical history."""
         cfg = _dynamic_config()
+        max_tokens, trim_tokens = resolve_context_budget(cfg)
         manager = ContextManager(
-            max_chars=int(cfg["ctx_max_chars"]),
-            trim_to=int(cfg["ctx_trim_to"]),
+            max_tokens=max_tokens,
+            trim_tokens=trim_tokens,
         )
         state = self._structured_context_state()
         envelope = manager.build(without_context_state_messages(self.messages), state=state)
@@ -1196,7 +1198,7 @@ class AgentSession:
                 },
             )
         bounded = _drop_dangling_tool_call_messages(result)
-        self._toolbar_context_chars = _ctx_chars(bounded)
+        self._toolbar_context_tokens = _ctx_tokens(bounded)
         return bounded
 
     def _structured_context_state(self) -> ContextState:
@@ -1208,11 +1210,12 @@ class AgentSession:
 
     def _select_delegation_context(self, context_mode: str):
         cfg = _dynamic_config()
+        max_tokens, trim_tokens = resolve_context_budget(cfg)
         return select_host_parent_context(
             state=self._structured_context_state(),
             context_mode=context_mode,
-            max_chars=int(cfg["ctx_max_chars"]),
-            trim_to=int(cfg["ctx_trim_to"]),
+            max_tokens=max_tokens,
+            trim_tokens=trim_tokens,
         )
 
     # ════════════════════════════════════════════════════

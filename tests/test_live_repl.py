@@ -324,14 +324,14 @@ def test_bottom_toolbar_reports_immutable_queue_snapshot():
         model_alias="model",
         total_prompt_tokens=0,
         total_completion_tokens=0,
-        _toolbar_context_chars=0,
+        _toolbar_context_tokens=0,
         cwd=".",
         current_phase="RECON",
     )
     try:
         toolbar = build_bottom_toolbar(
             session,
-            {"max_tokens": 8192, "max_iter": 100, "ctx_max_chars": 1000},
+            {"max_tokens": 8192, "max_iter": 100, "ctx_max_tokens": 1000},
             lambda text: text,
         )()
 
@@ -360,7 +360,7 @@ def _toolbar_session(*, cwd: str = ".") -> SimpleNamespace:
         model_alias="hy3",
         total_prompt_tokens=0,
         total_completion_tokens=0,
-        _toolbar_context_chars=0,
+        _toolbar_context_tokens=0,
         cwd=cwd,
         current_phase="RECON",
         queue_view=lambda: None,
@@ -375,7 +375,7 @@ def _toolbar_factory():
     cfg: Mapping[str, object] = {
         "max_tokens": 8192,
         "max_iter": 100,
-        "ctx_max_chars": 1000,
+        "ctx_max_tokens": 1000,
         "time_budget_sec": 0,
     }
     return build_bottom_toolbar(_toolbar_session(), cfg, lambda text: text)
@@ -410,7 +410,7 @@ def test_bottom_toolbar_adapts_to_80_column_live_terminal(monkeypatch):
     cfg: Mapping[str, object] = {
         "max_tokens": 8192,
         "max_iter": 100,
-        "ctx_max_chars": 1000,
+        "ctx_max_tokens": 1000,
         "time_budget_sec": 0,
     }
     toolbar = build_bottom_toolbar(session, cfg, lambda text: text)()
@@ -495,7 +495,7 @@ def test_bottom_toolbar_strips_dir_on_120_column_live_terminal(monkeypatch):
     cfg: Mapping[str, object] = {
         "max_tokens": 8192,
         "max_iter": 100,
-        "ctx_max_chars": 1000,
+        "ctx_max_tokens": 1000,
         "time_budget_sec": 0,
     }
     toolbar = build_bottom_toolbar(session, cfg, lambda text: text)()

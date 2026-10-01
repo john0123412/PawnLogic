@@ -694,7 +694,7 @@ mode.
 authoritative list.** A module is in the island only when CI passes its file
 to mypy; the matching `[[tool.mypy.overrides]]` entry in `pyproject.toml` is
 what actually turns on `disallow_untyped_defs` / `check_untyped_defs` for it.
-Both files, plus the list below, must name the same 47 modules;
+Both files, plus the list below, must name the same 48 modules;
 `tests/test_typed_island_sync.py` fails the build when they diverge.
 
 To add a module: annotate it until it passes
@@ -704,7 +704,7 @@ and the pyproject override, and add it to the list below.
 Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `core/tool_executor`, `core/runtime_context`, `core/provider_runtime`,
 `core/provider_models`, `core/api_errors`, `core/tool_calls`,
-`core/tool_registry`, `core/context_window`, `core/workspace_cleanup`,
+`core/tool_registry`, `core/token_estimate`, `core/context_window`, `core/workspace_cleanup`,
 `core/turn_state`, `core/session_tool_loop`, `core/session_snapshot`,
 `core/message_history`, `core/provider_streams`, `core/runtime_metrics`,
 `core/mcp_client_manager`, `core/path_policy`, `core/provider_transport`,
