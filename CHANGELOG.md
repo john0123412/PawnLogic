@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+- Third-party security audit fixes (PR #176, 47 findings across provider,
+  tool security, core, and UI/packaging): circuit breaker no longer records
+  success on error-stream deltas, insecure-HTTP provider warning, `git raw`
+  denies `clone`/`config`/`credential` subcommands, `-c` overrides and `::`
+  transports (closes `ext::` host-RCE), Docker read-only mounts deny
+  sensitive host paths in both directions, `run_code` AST-scans literal
+  filesystem access against the read blacklist, ANSI-injection stripping in
+  rendered output, and secret redaction in failure records and process
+  listings. Five items were deliberately left for maintainer design review:
+  MCP tool-result provenance, delegation budget ceiling, DNS-rebinding
+  TOCTOU, airlock egress, and Docker privilege flags (see issue #177).
+
 ## [0.4.0] - 2026-09-30
 
 ### Added
