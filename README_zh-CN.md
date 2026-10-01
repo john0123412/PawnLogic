@@ -42,7 +42,8 @@ pawn
 
 可选依赖：`pawnlogic[docker]`、`pawnlogic[browser]`、`pawnlogic[ctf]`。
 `[ctf]` 只装工具（pwntools、ROPgadget、ropper）；skill 包是独立的，用
-`/skills install <repo_url>` 显式安装。
+`/skills install <repo_url>` 显式安装，装到 `~/.pawnlogic/skills`；
+若从自带 `skills/` 目录的源码 checkout 运行，则装到该目录。
 
 首次运行会进入 API key 配置。运行时数据全部在 `~/.pawnlogic/` 下，不会
 写进项目目录。

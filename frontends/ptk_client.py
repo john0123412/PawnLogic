@@ -64,7 +64,7 @@ class ClientApp:
             elif stage in ("turn_completed", "turn_failed", "turn_interrupted"):
                 self._running = False
                 self._append(f"── turn {stage.split('_', 1)[1]} ──")
-            elif stage in ("interrupt_requested", "steer_queued"):
+            elif stage in ("interrupt_requested", "steer_accepted", "steer_ignored"):
                 self._append(f"· {stage}")
         elif kind == "stream":
             self._append_stream_text(event.get("text", ""))

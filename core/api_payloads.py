@@ -98,16 +98,33 @@ def _anthropic_convert_tools(tools_schema: list) -> list:
     return result
 
 
+def _anthropic_text(value: object) -> str:
+    """Extract plain text from an Anthropic/OpenAI message content value."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = []
+        for part in value:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+            elif isinstance(part, str):
+                parts.append(part)
+        return "".join(parts)
+    return ""
+
+
 def _anthropic_convert_messages(messages: list) -> tuple[list, str | None]:
     """Convert OpenAI messages to Anthropic messages and system prompt."""
-    system_prompt = None
+    system_prompts: list[str] = []
     converted = []
 
     for message in messages:
         role = message.get("role")
 
         if role == "system":
-            system_prompt = message.get("content", "")
+            text = _anthropic_text(message.get("content", ""))
+            if text:
+                system_prompts.append(text)
             continue
 
         if role == "tool":
@@ -154,6 +171,14 @@ def _anthropic_convert_messages(messages: list) -> tuple[list, str | None]:
                 converted.append(message)
             continue
 
+        # Any other role (e.g. "developer") has no Anthropic equivalent.
+        # Carry its content through as a user message rather than dropping
+        # it silently, matching the OpenAI and Responses paths.
+        converted.append({
+            "role": "user",
+            "content": message.get("content", ""),
+        })
+
     merged: list[dict] = []
     for message in converted:
         if merged and merged[-1]["role"] == message["role"]:
@@ -170,7 +195,7 @@ def _anthropic_convert_messages(messages: list) -> tuple[list, str | None]:
         else:
             merged.append(message)
 
-    return merged, system_prompt
+    return merged, "\n\n".join(system_prompts) if system_prompts else None
 
 
 def _anthropic_build_payload(

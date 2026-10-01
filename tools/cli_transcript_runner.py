@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -25,7 +26,8 @@ class TranscriptSink:
         self.parts.append(str(text) + "\n")
 
     def print_json(self, data: dict[str, Any]) -> None:
-        self.parts.append(str(data) + "\n")
+        # Match the real JsonSink (core/output.py): NDJSON, not Python repr.
+        self.parts.append(json.dumps(data, ensure_ascii=False) + "\n")
 
     def write(self, text: str) -> None:
         self.parts.append(str(text))

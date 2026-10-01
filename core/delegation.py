@@ -12,6 +12,7 @@ from typing import Any
 
 from core.file_store import atomic_write_text
 from core.agent_events import AgentEvent, AgentEventKind
+from core.logger import logger
 from core.runtime_context import current_runtime_context
 
 
@@ -587,7 +588,16 @@ class DelegationPolicyStore:
                 raise ValueError("policy payload must be an object")
             values = {name: payload[name] for name in _POLICY_FIELDS if name in payload}
             return DelegationModelPolicy(**values)
-        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            # Fail-open is deliberate (a contract test pins it), but a
+            # corrupted/truncated policy file previously disabled every cost
+            # limit without a trace, so corruptions stayed invisible forever.
+            logger.warning(
+                "delegation policy file unreadable ({}); "
+                "falling back to defaults with NO cost limits enforced | path={}",
+                exc,
+                self.path,
+            )
             return DelegationModelPolicy()
 
     def save(self, policy: DelegationModelPolicy) -> DelegationModelPolicy:

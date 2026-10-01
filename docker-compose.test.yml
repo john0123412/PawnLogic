@@ -29,7 +29,6 @@ x-common: &common
     MCP_ENABLED: "false"
     TERM: dumb
     NO_COLOR: "1"
-    PAWNLOGIC_DEFAULT_MODEL: mimo-v2.5
   volumes:
     - ./custom_providers.smoke.json:/data/pawnlogic/custom_providers.json:ro
     - ./.env.smoke:/data/pawnlogic/.env:ro
@@ -58,5 +57,6 @@ services:
       - |
         set -euo pipefail
         echo "── interactive smoke: scripted /help + /keys + one prompt ──"
-        # Drive the TUI with a stdin script; --quiet suppresses banner so output is parseable.
-        printf '/help\n/keys\nReply with exactly the word: pawnlogic-interactive-ok\n/exit\n' | pawn --quiet --model mimo-v2.5
+        # Drive the TUI with a stdin script; TERM=dumb and NO_COLOR=1 keep the
+        # banner parseable (the --quiet flag was removed).
+        printf '/help\n/keys\nReply with exactly the word: pawnlogic-interactive-ok\n/exit\n' | pawn --model mimo-v2.5

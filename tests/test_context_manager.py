@@ -362,9 +362,11 @@ def test_overflow_keeps_each_retrieval_block_with_its_own_turn():
 
 
 def test_overflow_budget_boundary_evicts_block_and_question_together():
-    # Critical boundary: the current turn (block + question + answer = 13
-    # tokens) fits the trim budget exactly at 26 and is evicted as ONE unit
-    # at 25. The question must never survive without its retrieval block.
+    # Boundary: the current turn (block + question + answer = 13 tokens) fits
+    # the trim budget exactly at 26. At 25 it can no longer fit — but the
+    # current turn is now protected alongside the first turn, so both survive
+    # and the envelope reports over_budget instead of silently dropping the
+    # live question (which previously went out with a stale turn only).
     messages = [
         {"role": "system", "content": "sys"},
         {"role": "assistant", "content": "[Retrieved Context one]", "_turn_context": True},
@@ -377,21 +379,24 @@ def test_overflow_budget_boundary_evicts_block_and_question_together():
         {"role": "assistant", "content": "answer-current"},
     ]
 
-    def _selected(trim_tokens: int):
-        envelope = ContextManager(max_tokens=40, trim_tokens=trim_tokens).build(messages)
-        return [str(m.get("content")) for m in envelope.messages]
+    def _build(trim_tokens: int):
+        return ContextManager(max_tokens=40, trim_tokens=trim_tokens).build(messages)
 
-    at_limit = _selected(26)
-    assert "question-current" in at_limit
-    assert "[Retrieved Context]" in at_limit
-    assert "m" * 160 not in at_limit
+    at_limit = _build(26)
+    at_contents = [str(m.get("content")) for m in at_limit.messages]
+    assert "question-current" in at_contents
+    assert "[Retrieved Context]" in at_contents
+    assert "m" * 160 not in at_contents
 
-    one_below = _selected(25)
-    assert "question-current" not in one_below
-    assert "[Retrieved Context]" not in one_below
-    # The protected first turn stays whole either way.
-    assert "[Retrieved Context one]" in one_below
-    assert "question-one" in one_below
+    one_below = _build(25)
+    one_contents = [str(m.get("content")) for m in one_below.messages]
+    # Both protected turns survive; the budget is blown and flagged.
+    assert "question-current" in one_contents
+    assert "[Retrieved Context]" in one_contents
+    assert "[Retrieved Context one]" in one_contents
+    assert "question-one" in one_contents
+    assert "m" * 160 not in one_contents
+    assert one_below.over_budget is True
 
 
 def test_structured_state_inserts_after_the_first_full_turn():

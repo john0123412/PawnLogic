@@ -54,6 +54,18 @@ def analyze_local_image(a: dict) -> str:
     if not p.is_file():
         return f"ERROR: path is not a file: {image_path}"
 
+    # Same read policy as read_file: resolve against the active context and
+    # deny credential-blacklisted paths before any bytes leave the host.
+    # (The bytes are sent to third-party vision APIs below.)
+    from tools.file_ops import _check_read, _resolve_read_path
+    resolved, path_error = _resolve_read_path(image_path)
+    if path_error:
+        return path_error
+    ok, reason = _check_read(str(resolved))
+    if not ok:
+        return reason
+    p = resolved
+
     suffix = p.suffix.lower()
     mime   = _MIME_MAP.get(suffix)
     if not mime:

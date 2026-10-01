@@ -171,16 +171,15 @@ _CODE_OUTPUT_HISTORY = 10    # Retained output signatures.
 
 
 def build_anti_loop_message(count: int) -> str:
-    """Bypass-hint injection for repeated identical shell command errors."""
+    """Re-evaluation injection for repeated identical shell command errors."""
     return (
         "[System] The current path appears blocked: detected "
         f"{count} consecutive identical command errors. "
-        "Re-evaluate the exploit logic and consider these bypass directions:\n"
-        "  1. Symlink bypass (ln -s)\n"
-        "  2. open_basedir bypass (php -d open_basedir=/)\n"
-        "  3. Path encoding bypass (../ ./ ..%2f)\n"
-        "  4. Switch tool or attack vector\n"
-        "  5. Ask the user to confirm target environment details"
+        "Stop and re-evaluate before continuing:\n"
+        "  1. Re-examine your assumptions about the target and environment\n"
+        "  2. Try a different tool or a different approach\n"
+        "  3. Ask the user to confirm the target environment details\n"
+        "Explain the new approach in <plan> before continuing."
     )
 
 

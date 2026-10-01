@@ -249,6 +249,12 @@ def _gen_id(seed: str = "") -> str:
 _last_saved_seq:  dict[str, int]             = {}
 _pinned_snapshot: dict[str, dict[int, int]]  = {}
 
+# Serializes the two message-table writers — save_messages' incremental path
+# and the scheduler checkpoint's full DELETE+INSERT rewrite — together with
+# the _last_saved_seq bookkeeping they share. Without this, a stale
+# incremental write landing after a newer full rewrite resurrects older rows.
+_message_write_lock = threading.RLock()
+
 def _build_rows(session_id: str, messages: list) -> list[tuple]:
     now = _now(); rows = []; seq = 0
     for m in messages:
@@ -533,7 +539,11 @@ def full_text_search(query: str, limit: int = 20) -> list[dict]:
 
     # Strategy 1: FTS5 full-text search.
     try:
-        fts_query = " AND ".join(f'"{kw}"' for kw in keywords)
+        # Mirror knowledge_sqlite._search_fts: double embedded quotes so a
+        # query containing `"` cannot break out of the FTS5 phrase syntax.
+        fts_query = " AND ".join(
+            f'"{kw.replace(chr(34), chr(34) * 2)}"' for kw in keywords
+        )
         with get_conn() as conn:
             rows = conn.execute("""
                 SELECT m.session_id, m.seq, m.role, m.content, m.created_at
@@ -651,6 +661,14 @@ def export_session_to_markdown(session_id: str) -> str:
 # ════════════════════════════════════════════════════════
 
 def save_messages(session_id: str, messages: list):
+    # The whole read-compute-write-bookkeeping sequence runs under the shared
+    # message write lock so it cannot interleave with a scheduler checkpoint's
+    # full rewrite of the same session's rows.
+    with _message_write_lock:
+        _save_messages_locked(session_id, messages)
+
+
+def _save_messages_locked(session_id: str, messages: list):
     all_rows      = _build_rows(session_id, messages)
     current_total = len(all_rows)
     last_seq      = _last_saved_seq.get(session_id, -1)
@@ -1094,8 +1112,14 @@ def write_failure(
 ) -> int:
     """
     Write one tool-call failure record.
+
+    ``args_summary`` is redacted before insert: the sqlite failure DB is a
+    durable store, so it gets the same secret redaction as the console and
+    audit sinks (previously only those sinks were redacted).
     """
     import hashlib
+    from core.operation_policy import redact_command
+    args_summary = redact_command(args_summary)
     args_hash = hashlib.md5(args_summary[:100].encode()).hexdigest()[:12]
 
     def _write() -> int:

@@ -347,6 +347,38 @@ def tool_fetch_url(a: dict) -> str:
 
 # ── Git ──────────────────────────────────────────────────
 
+# Subcommands that must never be reachable through the ``raw`` passthrough:
+# ``clone``/``config``/``credential`` enable transport or credential-store
+# abuse even with safe protocol flags in place.
+_GIT_RAW_DENIED_SUBCOMMANDS = frozenset({"clone", "config", "credential"})
+
+
+def _git_raw_argv(raw_cmd: str) -> tuple[list[str] | None, str]:
+    """Build a hardened argv for the ``git_op`` "raw" action.
+
+    The raw string is model-controlled, so it is filtered before execution:
+      - dangerous subcommands (clone/config/credential) are denied;
+      - ``-c``/``--config`` overrides are denied (later ``-c`` wins over the
+        safe protocol flags below);
+      - any ``::`` transport token (``ext::``, ``fd::``, ...) is denied.
+    Returns (argv, "") on success or (None, error_message) when blocked.
+    """
+    args = raw_cmd.split()
+    if not args:
+        return None, "ERROR: raw requires a 'raw_cmd' parameter"
+    first = args[0]
+    if first.startswith("-") or first in _GIT_RAW_DENIED_SUBCOMMANDS:
+        return None, f"SECURITY BLOCK: git raw forbids '{first}'"
+    for token in args[1:]:
+        if token in ("-c", "--config", "--config-env") or token.startswith(
+            ("--config=", "--config-env=")
+        ):
+            return None, "SECURITY BLOCK: git raw forbids -c/--config overrides"
+        if "::" in token:
+            return None, "SECURITY BLOCK: git raw forbids '::' transport URLs"
+    return git_with_safe_protocol_config(*args), ""
+
+
 def tool_git_op(a: dict) -> str:
     from tools.file_ops import _session_cwd
     action = a["action"]
@@ -388,7 +420,9 @@ def tool_git_op(a: dict) -> str:
     elif action == "raw":
         rc = a.get("raw_cmd", "")
         if not rc: return "ERROR: raw requires a 'raw_cmd' parameter"
-        argv = ["git"] + rc.split()
+        raw_argv, raw_block = _git_raw_argv(rc)
+        if raw_block: return raw_block
+        argv = raw_argv
     else:
         return f"ERROR: unknown action '{action}'"
 

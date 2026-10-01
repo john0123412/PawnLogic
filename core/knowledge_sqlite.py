@@ -208,6 +208,7 @@ class SQLiteKnowledgeAdapter:
                      source_type, source_id, source_revision, chunk_index,
                      metadata_json, created_at, updated_at)
                 VALUES (?, 'global', ?, ?, ?, ?, 'knowledge', ?, '1', 0, '{}', ?, ?)
+                ON CONFLICT(record_id) DO NOTHING
             """, (
                 record_id,
                 topic,
@@ -218,6 +219,21 @@ class SQLiteKnowledgeAdapter:
                 now,
                 now,
             ))
+            if cursor.rowcount == 0:
+                # Same-second duplicate: record_id is deterministic per
+                # (session, topic, second), so a concurrent /memorize already
+                # inserted it. Return the existing row instead of raising
+                # IntegrityError. (cursor.lastrowid is stale after
+                # DO NOTHING, so look the id up explicitly.)
+                existing = conn.execute(
+                    "SELECT id FROM knowledge WHERE record_id = ?",
+                    (record_id,),
+                ).fetchone()
+                if existing is None:
+                    raise RuntimeError(
+                        "knowledge insert was a no-op but no row exists"
+                    )
+                return int(existing[0])
             self._enqueue(
                 conn,
                 record_id,

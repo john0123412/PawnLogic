@@ -6,6 +6,7 @@ from collections.abc import Mapping
 import os
 from pathlib import Path
 import sys
+import urllib.parse
 import urllib.request
 
 
@@ -48,6 +49,25 @@ def install_proxy() -> str | None:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
     urllib.request.install_opener(opener)
     return https_proxy or http_proxy
+
+
+def redact_proxy_url(url: str | None) -> str | None:
+    """Redact a proxy URL's userinfo for display.
+
+    The installed proxy URL may carry credentials (``scheme://user:pass@host``);
+    printing it raw lands the credential in terminal scrollback/transcripts.
+    Return only scheme/host/port for banner display.
+    """
+    if not url:
+        return None
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname or ""
+        if parts.port:
+            host = f"{host}:{parts.port}"
+        return f"{parts.scheme}://{host}" if host else url
+    except Exception:
+        return None
 
 
 def ensure_runtime_dir_writable(path: Path) -> None:

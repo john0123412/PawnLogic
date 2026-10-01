@@ -65,7 +65,7 @@ jobs:
     name: "✅ Test before publish"
     needs: verify-release-source
     runs-on: ubuntu-latest
-    timeout-minutes: 10            # FIX #4
+    timeout-minutes: 20            # full suite; matches main_ci.yml test-full-matrix
 
     env:
       PAWNLOGIC_TEST_MODE: "true"

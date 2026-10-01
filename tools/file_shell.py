@@ -124,6 +124,7 @@ def run_interactive(
             cwd=work_dir,
             bufsize=0,
             env=get_shell_env(),
+            start_new_session=True,
         )
     except Exception as error:
         return f"ERROR: failed to start process: {error}"
@@ -153,13 +154,15 @@ def run_interactive(
         try:
             process.wait(timeout=2)
         except timeout_error:
-            process.terminate()
+            # Kill the whole process group: terminating only the direct
+            # child would orphan grandchildren (e.g. nc/gdb children).
+            _kill_process_group(process)
         output_chunks.append(_drain_queue(output_queue, 0.3, sleep=sleep))
     except Exception as error:
         output_chunks.append(f"\n[ERROR during interaction: {error}]")
     finally:
         with suppress(Exception):
-            process.terminate()
+            _kill_process_group(process)
 
     output = "".join(output_chunks)
     limit = max_chars()
@@ -211,6 +214,15 @@ def _signal_group(pgid: int, sig: int) -> None:
         os.killpg(pgid, sig)
     except Exception:
         return
+
+
+def _kill_process_group(process: Any) -> None:
+    """SIGKILL the whole process group; fall back to killing the child."""
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    except Exception:
+        with suppress(Exception):
+            process.kill()
 
 
 def _communicate_bounded(

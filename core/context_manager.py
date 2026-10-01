@@ -188,7 +188,12 @@ def _bounded_messages(
 
     turns = _turn_groups(messages)
     if turns:
+        # Protect the first turn (historical anchor: session-load restores a
+        # truncated history when only it survives) AND the last turn, which
+        # holds the live question being answered. add() skips already
+        # selected indexes, so a single-turn history is added exactly once.
         add(turns[0], required=require_protected)
+        add(turns[-1], required=require_protected)
 
     requested_refs = frozenset(context_refs)
     for index, message in enumerate(messages):

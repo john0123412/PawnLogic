@@ -61,6 +61,7 @@ import re, json, math
 from collections import Counter
 from datetime import datetime
 from config import GLOBAL_SKILLS_PATH
+from core.file_store import atomic_write_text
 from core.knowledge import (
     KnowledgeQuery,
     RetrievalBatch,
@@ -86,7 +87,7 @@ def _ensure_file() -> str:
     GLOBAL_SKILLS_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not GLOBAL_SKILLS_PATH.exists() or GLOBAL_SKILLS_PATH.stat().st_size == 0:
         stub = _STUB_TEMPLATE.format(ts=datetime.now().strftime("%Y-%m-%d %H:%M"))
-        GLOBAL_SKILLS_PATH.write_text(stub, encoding="utf-8")
+        atomic_write_text(GLOBAL_SKILLS_PATH, stub)
         return stub
     return GLOBAL_SKILLS_PATH.read_text(encoding="utf-8")
 
@@ -260,18 +261,22 @@ def _decay_days(last_used_str: str) -> int:
 def _final_score(similarity: float, meta: dict) -> float:
     """
     FinalScore = max(
-        (sim + Hits_Bonus) × R(t, S) × confidence,
+        sim × (1 + Hits_Bonus) × R(t, S) × confidence,
         sim × SCORE_FLOOR
     )
+
+    The usage bonus multiplies semantic similarity, so a skill with no
+    semantic match (sim=0) can never outrank a semantically relevant one
+    on hit count alone.
 
     The score floor ensures that semantically relevant skills (sim > 0) remain
     retrievable even after months offline.
 
     Example matrix (sim=0.8):
-      New skill today (hits=0, S≈20, t=0)       → 0.8×1.0×0.70 = 0.56
-      Active, hits=10, 7 days old, conf=0.95    → 1.2×0.96×0.95 ≈ 1.10
-      High-hit, idle 6 months, conf=1.0         → 1.3×0.82×1.0 ≈ 1.07
-      Zombie, idle 6 months, conf=0.70          → max(0.056, 0.04) = 0.056
+      New skill today (hits=0, t=0, conf=0.70)      → 0.8×1.0×1.00×0.70 = 0.56
+      Active, hits=10, 7 days old, conf=0.95       → 0.8×1.5×1.00×0.95 ≈ 1.14
+      High-hit, idle 6 months, conf=1.0            → 0.8×2.0×0.73×1.0 ≈ 1.16
+      Zombie, idle 6 months, conf=0.70             → max(0.39, 0.04) = 0.39
     """
     hits       = meta.get("hits", 0)
     confidence = meta.get("confidence", 0.70)
@@ -281,7 +286,7 @@ def _final_score(similarity: float, meta: dict) -> float:
     R           = _retrieval_strength(days, S)
     hits_bonus  = min(hits / _HITS_SCALE, _HITS_CAP)
 
-    raw_score   = (similarity + hits_bonus) * R * confidence
+    raw_score   = similarity * (1.0 + hits_bonus) * R * confidence
     floor_score = similarity * _SCORE_FLOOR
     return max(raw_score, floor_score)
 
@@ -590,7 +595,7 @@ def bump_skill(skill_name: str) -> tuple[bool, str]:
     new_content = content[:block_start] + new_block + content[block_end:]
 
     try:
-        GLOBAL_SKILLS_PATH.write_text(new_content, encoding="utf-8")
+        atomic_write_text(GLOBAL_SKILLS_PATH, new_content)
     except Exception as e:
         return False, f"Write failed: {e}"
 
@@ -656,7 +661,7 @@ def prune_zombie_skills(
 
     if pruned:
         try:
-            GLOBAL_SKILLS_PATH.write_text("".join(kept), encoding="utf-8")
+            atomic_write_text(GLOBAL_SKILLS_PATH, "".join(kept))
         except Exception:
             return 0, []   # IO failure: return conservatively.
 
@@ -752,8 +757,7 @@ def sink_failure_to_gsa(
                 anchor_idx = i
         if anchor_idx is None:
             # The section is the last block; append to the tail.
-            content += f"\n{skill_block}\n"
-            GLOBAL_SKILLS_PATH.write_text(content, encoding="utf-8")
+            atomic_write_text(GLOBAL_SKILLS_PATH, content + f"\n{skill_block}\n")
             return True, f"✓ Failure pattern recorded: ## {skill_name}"
 
         anchor_line = lines[anchor_idx].rstrip("\n")
@@ -764,9 +768,15 @@ def sink_failure_to_gsa(
         result_msg = _apply_patch_blocks(str(GLOBAL_SKILLS_PATH), patch)
         if result_msg.startswith("OK"):
             return True, f"✓ Failure pattern recorded: ## {skill_name}"
-        # Patch failed; degrade to append.
-        with open(GLOBAL_SKILLS_PATH, "a", encoding="utf-8") as f:
-            f.write(f"\n{skill_block}\n")
+        # Patch failed; degrade to append. Re-read the latest content and
+        # write atomically — a raw O_APPEND cannot interleave safely with
+        # the concurrent writers this module otherwise tolerates.
+        latest = (
+            GLOBAL_SKILLS_PATH.read_text(encoding="utf-8")
+            if GLOBAL_SKILLS_PATH.exists()
+            else ""
+        )
+        atomic_write_text(GLOBAL_SKILLS_PATH, latest + f"\n{skill_block}\n")
         return True, f"⚠ Fallback append: ## {skill_name}"
     except Exception as e:
         return False, f"Write failed: {e}"
@@ -1022,11 +1032,16 @@ def write_skill(
     patch_blocks = _build_patch(file_content, category, skill_block, is_new)
 
     if patch_blocks is None:
-        # Extreme case: empty file or no anchor; append directly.
+        # Extreme case: empty file or no anchor; append directly. Re-read
+        # the latest content and write atomically instead of a raw O_APPEND.
         try:
             new_section = f"\n# {category}\n\n{skill_block}\n"
-            with open(GLOBAL_SKILLS_PATH, "a", encoding="utf-8") as f:
-                f.write(new_section)
+            latest = (
+                GLOBAL_SKILLS_PATH.read_text(encoding="utf-8")
+                if GLOBAL_SKILLS_PATH.exists()
+                else ""
+            )
+            atomic_write_text(GLOBAL_SKILLS_PATH, latest + new_section)
             return True, f"✓ Appended new category '# {category}' -> '{skill_name}'"
         except Exception as e:
             return False, f"Write failed: {e}"
@@ -1044,10 +1059,17 @@ def write_skill(
                 f"  Path: {GLOBAL_SKILLS_PATH}"
             )
         else:
-            # Patch failed; degrade to append so data is not lost.
+            # Patch failed; degrade to append so data is not lost. Re-read
+            # the latest content and write atomically instead of a raw
+            # O_APPEND, which cannot interleave safely with concurrent
+            # writers.
             new_section = f"\n# {category}\n\n{skill_block}\n" if is_new else f"\n{skill_block}\n"
-            with open(GLOBAL_SKILLS_PATH, "a", encoding="utf-8") as f:
-                f.write(new_section)
+            latest = (
+                GLOBAL_SKILLS_PATH.read_text(encoding="utf-8")
+                if GLOBAL_SKILLS_PATH.exists()
+                else ""
+            )
+            atomic_write_text(GLOBAL_SKILLS_PATH, latest + new_section)
             return True, (
                 f"⚠ SEARCH/REPLACE failed ({result_msg[:60]}); fell back to append.\n"
                 f"  Skill: ## {skill_name}  ->  {GLOBAL_SKILLS_PATH}"

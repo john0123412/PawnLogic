@@ -4,7 +4,7 @@ core/provider_tui.py — Interactive TUI for Provider Management
 All UI text in English. API Keys never displayed in plain text.
 """
 from __future__ import annotations
-import asyncio, json, os
+import asyncio, json, os, re
 from collections.abc import Callable
 from typing import Any, ClassVar, Optional
 
@@ -103,7 +103,7 @@ TUI_STYLE = Style.from_dict({
 def _mask_key(key: str) -> str:
     if not key:
         return "— Not Configured"
-    return f"{key[:4]}{'•' * 8}{key[-4:]}" if len(key) > 8 else "••••••••"
+    return f"{'•' * 8}{key[-4:]}" if len(key) > 8 else "••••••••"
 
 
 def _provider_snapshot() -> dict[str, dict]:
@@ -1251,6 +1251,10 @@ class ProviderTUI:
         key = self._wiz_fields[rows_mod.ROW_KEY]
         if not name:
             self._wiz_error = "Name is required."; self._app and self._app.invalidate(); return
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _.-]*", name):
+            self._wiz_error = ("Name must start with a letter or digit and contain only "
+                               "letters, digits, spaces, '_', '.', '-'.")
+            self._app and self._app.invalidate(); return
         if name in PROVIDERS:
             self._wiz_error = "Name already exists."; self._app and self._app.invalidate(); return
         if not url:

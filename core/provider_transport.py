@@ -10,6 +10,7 @@ hand: a new protocol registers once and every call site picks it up.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -64,6 +65,15 @@ def validate_provider_definition(
     """
     if not name or not name.strip():
         raise ValueError("Provider name cannot be empty.")
+
+    # The name is interpolated into a derived ``<NAME>_API_KEY`` env var and
+    # written raw into .env, so characters like '=' or newlines would corrupt
+    # the file or hijack other entries.
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _.-]*", name.strip()):
+        raise ValueError(
+            "Provider name must start with a letter or digit and contain only "
+            "letters, digits, spaces, '_', '.', or '-'."
+        )
 
     base_url = str(config.get("base_url", "")).strip()
     if not base_url:

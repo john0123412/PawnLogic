@@ -59,9 +59,11 @@ pawn resume <session>                    # load a session without running it
 pawn --debug                             # full diagnostics
 ```
 
-Default output hides tool-call internals. Model reasoning appears as a dim
-`🧠 [thinking]` stream, so a slow first token is distinguishable from a dead
-connection. `--debug` (or `/mode`) shows everything.
+Optional extras: `pawnlogic[docker]`, `pawnlogic[browser]`, `pawnlogic[ctf]`.
+The `[ctf]` extra installs tooling only (pwntools, ROPgadget, ropper); skill
+packs stay separate and are installed explicitly with
+`/skills install <repo_url>` into `~/.pawnlogic/skills` (or the checkout's own
+`skills/` directory when running from a source checkout that contains one).
 
 ## Models and Providers
 

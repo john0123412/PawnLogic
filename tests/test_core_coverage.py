@@ -706,7 +706,7 @@ def test_api_client_retry_max_can_be_configured_for_streaming(monkeypatch):
         def close(self):
             pass
 
-    assert api_client._RETRY_MAX == 5
+    assert api_client.get_retry_policy().max_attempts == 5
     monkeypatch.setattr(
         api_client,
         "_open_connection",
@@ -725,7 +725,7 @@ def test_api_client_retry_max_invalid_env_falls_back(monkeypatch):
     _drop_project_modules("core.api_client", force=True)
     from core import api_client
 
-    assert api_client._RETRY_MAX == 3
+    assert api_client.get_retry_policy().max_attempts == 3
 
 
 def test_api_client_retry_max_env_is_clamped(monkeypatch):
@@ -734,14 +734,14 @@ def test_api_client_retry_max_env_is_clamped(monkeypatch):
     _drop_project_modules("core.api_client", force=True)
     from core import api_client
 
-    assert api_client._RETRY_MAX == 8
+    assert api_client.get_retry_policy().max_attempts == 8
 
     monkeypatch.setenv("PAWNLOGIC_API_RETRY_MAX", "0")
     _drop_project_modules("config")
     _drop_project_modules("core.api_client", force=True)
     from core import api_client as api_client_low
 
-    assert api_client_low._RETRY_MAX == 1
+    assert api_client_low.get_retry_policy().max_attempts == 1
 
 
 def test_api_client_stream_request_honors_retry_after(monkeypatch):

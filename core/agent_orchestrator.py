@@ -568,6 +568,23 @@ class SerialAgentOrchestrator:
                 cost=usage.cost,
             )
         except ValueError:
+            # The executor reported usage above its reservation. Settle the
+            # actuals clamped to the reservation so the real spend is recorded
+            # in the ledger instead of vanishing via a zero-usage release,
+            # then report the result as budget_exhausted.
+            usage = result.usage
+            claim = scheduled.claim
+            claim.settle(
+                tokens=min(
+                    usage.prompt_tokens + usage.completion_tokens, claim.tokens
+                ),
+                tool_calls=min(usage.tool_calls, claim.tool_calls),
+                cost=(
+                    min(usage.cost, claim.cost)
+                    if claim.cost is not None
+                    else usage.cost
+                ),
+            )
             result = self._terminal(
                 task,
                 "budget_exhausted",
