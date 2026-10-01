@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime
 import json
 import re
 from typing import Any
@@ -86,6 +85,97 @@ def format_context_envelope_for_prompt(
 class PromptBuildResult:
     prompt: str
     loaded_skill_packs: list[Any] | None
+
+
+@dataclass(frozen=True)
+class TurnContextResult:
+    """Per-turn retrieved context plus the skill packs it matched."""
+
+    block: str
+    loaded_skill_packs: list[Any] | None
+
+
+def build_turn_context_block(
+    *,
+    knowledge_query: str,
+    search_knowledge: Callable[..., Any],
+    format_knowledge_for_prompt: Callable[[Any], str],
+    load_relevant_skills: Callable[..., tuple[str, str]],
+    skill_scanner: Any,
+    retrieve_knowledge: Callable[..., Any] | None = None,
+    format_retrieval_hits: Callable[..., str] | None = None,
+) -> TurnContextResult:
+    """Retrieve this turn's knowledge hits, GSA skills, and local skill packs.
+
+    The result is injected as a standalone message right before the turn's
+    user message. Retrieval content lives at the conversation TAIL rather
+    than in the system prompt: the system prompt then stays byte-stable
+    across turns, which is what lets the provider's prompt cache keep
+    hitting the stable prefix (a rewritten system prompt invalidates the
+    cache from position zero on every request).
+    """
+    knowledge_block = ""
+    if retrieve_knowledge is not None and format_retrieval_hits is not None:
+        hits = retrieve_knowledge(
+            knowledge_query,
+            top_k=3,
+            max_chars=3_000,
+        )
+        knowledge_block = format_retrieval_hits(hits, max_chars=4_000)
+    else:
+        rows = search_knowledge(knowledge_query, limit=3)
+        knowledge_block = format_knowledge_for_prompt(rows)
+
+    relevant_skills_md = ""
+    conflict_warning = ""
+    with suppress(Exception):
+        relevant_skills_md, conflict_warning = load_relevant_skills(
+            knowledge_query, top_k=3
+        )
+
+    local_skills_md = ""
+    loaded_skill_packs: list[Any] | None = None
+    with suppress(Exception):
+        matched_packs = skill_scanner.match(knowledge_query, top_k=3)
+        local_skills_md = skill_scanner.format_for_prompt(matched_packs)
+        loaded_skill_packs = matched_packs
+
+    sections: list[str] = []
+    if knowledge_block:
+        sections.append(knowledge_block)
+    if relevant_skills_md:
+        sections.append(
+            "=== GSA Relevant Skills (ranked by recency × usage × similarity) ===\n"  # noqa: RUF001
+            f"{relevant_skills_md}\n"
+            "(Above skills were auto-retrieved for this query. "
+            "If one solves your problem, call bump_skill(skill_name=...) after <verify> passes.)"
+        )
+    if local_skills_md:
+        sections.append(
+            "=== Local Skills (from ./skills/ directory) ===\n"
+            f"{local_skills_md}\n"
+            "(Above skills were auto-retrieved from local skill files. "
+            "Follow their instructions if relevant to the current task.)"
+        )
+    if conflict_warning:
+        sections.append(conflict_warning)
+
+    if not sections:
+        return TurnContextResult(
+            block="",
+            loaded_skill_packs=loaded_skill_packs or [],
+        )
+
+    block = (
+        "[Retrieved Context — auto-injected for this request; "
+        "not part of the conversation]\n"
+        + "\n\n".join(sections)
+        + "\n[/Retrieved Context]"
+    )
+    return TurnContextResult(
+        block=block,
+        loaded_skill_packs=loaded_skill_packs or [],
+    )
 
 
 def build_session_prompt(
@@ -236,7 +326,8 @@ def build_session_prompt(
         "       Example: write_file(path='exploit.py', content=...) writes to ~/.pawnlogic/workspace/exploit.py\n\n"
 
         f"Working dir : {cwd}\n"
-        f"Time        : {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+        # No wall-clock line here: the system prompt must stay byte-stable
+        # for the whole session so provider prompt caches keep the prefix.
         f"Model       : {model_alias} ({model['id']})\n"
         f"Limits      : effort={cfg.get('effort_level', 'medium')}  "
         f"max_tokens={cfg['max_tokens']}  max_iter={cfg['max_iter']}  "

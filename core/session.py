@@ -62,6 +62,7 @@ from core.output import runtime_print as print
 from core.runtime_metrics import RuntimeMetrics, RuntimeMetricsSnapshot
 from core.prompt_builder import (
     build_session_prompt,
+    build_turn_context_block,
     format_context_state_for_prompt,
 )
 from core.tool_calls import extract_tool_calls
@@ -805,6 +806,11 @@ class AgentSession:
             live_turns=self._live_turns_enabled,
         )
         self.runtime_context.context_provider = self._select_delegation_context
+        # Prompt-rebuild tracking: the system prompt is rebuilt only when one
+        # of these changes, so it stays byte-stable across turns (provider
+        # prompt caches key on the stable prefix).
+        self._prompt_phase: str | None = None
+        self._prompt_urgent: bool | None = None
         # Call last because it depends on all attributes above.
         self._reset_system_prompt()
 
@@ -838,6 +844,13 @@ class AgentSession:
         elapsed = time.monotonic() - self._turn_start_time
         return max(0.0, self._time_budget_sec - elapsed)
 
+    def _pop_orphan_turn_context_block(self) -> bool:
+        """Pop a trailing turn-context block whose user message was removed."""
+        if self.messages and self.messages[-1].get("_turn_context"):
+            self.messages.pop()
+            return True
+        return False
+
     def undo(self, n: int = 1) -> tuple[int, str]:
         """Physically remove trailing user/assistant message pairs, preserving pinned messages.
 
@@ -857,6 +870,8 @@ class AgentSession:
                     last_user_text = str(tail.get("content") or "")
                 self.messages.pop()
                 removed += 1
+                if self._pop_orphan_turn_context_block():
+                    removed += 1
                 # If an assistant was removed, also remove the matching user message.
                 if tail.get("role") == "assistant":
                     while self.messages:
@@ -867,6 +882,7 @@ class AgentSession:
                             last_user_text = str(prev.get("content") or "")
                             self.messages.pop()
                             removed += 1
+                            self._pop_orphan_turn_context_block()
                             break
                         elif prev.get("role") == "assistant":
                             # Consecutive assistant messages can happen across tool loops.
@@ -1036,10 +1052,27 @@ class AgentSession:
         if result.loaded_skill_packs is not None:
             self._loaded_skill_packs = result.loaded_skill_packs
 
+        self._prompt_phase = str(self.current_phase)
+        self._prompt_urgent = bool(self._urgent_mode)
+
         if self.messages and self.messages[0]["role"] == "system":
             self.messages[0]["content"] = result.prompt
         else:
             self.messages.insert(0, {"role": "system", "content": result.prompt})
+
+    def _build_turn_context(self, knowledge_query: str):
+        """Retrieve this turn's knowledge/skill context for tail injection."""
+        return build_turn_context_block(
+            knowledge_query=knowledge_query,
+            search_knowledge=search_knowledge,
+            format_knowledge_for_prompt=format_knowledge_for_prompt,
+            load_relevant_skills=load_relevant_skills,
+            skill_scanner=_skill_scanner,
+            retrieve_knowledge=self._event_emitter().retrieval_adapter(
+                search_knowledge_records
+            ),
+            format_retrieval_hits=format_retrieval_hits_for_prompt,
+        )
 
     # ════════════════════════════════════════════════════
     # Sliding window context construction with history summary.
@@ -1539,7 +1572,28 @@ class AgentSession:
         self._turn_tool_calls = 0
         self._runtime_metrics.reset_turn()
         self._event_emitter().start_turn(self.model_alias, self.current_phase)
-        self._reset_system_prompt(knowledge_query=user_input)
+        # Rebuild the system prompt only when its inputs changed; a rewritten
+        # system prompt invalidates the provider prompt cache from position
+        # zero on every request. getattr defaults cover sessions restored
+        # from snapshots that predate prompt-rebuild tracking.
+        if (
+            getattr(self, "_prompt_phase", None) != str(self.current_phase)
+            or getattr(self, "_prompt_urgent", None) != bool(self._urgent_mode)
+        ):
+            self._reset_system_prompt()
+        # Per-turn retrieval lives at the conversation tail, where it cannot
+        # disturb the stable system-prompt prefix. The _turn_context flag
+        # lets every user-message rollback path remove the block with its
+        # turn, restoring pre-turn history exactly.
+        turn_context = self._build_turn_context(user_input)
+        if turn_context.block:
+            self.messages.append({
+                "role": "assistant",
+                "content": turn_context.block,
+                "_turn_context": True,
+            })
+        if turn_context.loaded_skill_packs is not None:
+            self._loaded_skill_packs = turn_context.loaded_skill_packs
         self.messages.append({"role": "user", "content": user_input})
 
         # Sliding window: compute turn count and update history summary when needed.
@@ -1597,6 +1651,7 @@ class AgentSession:
             )
             if _api_result.error:
                 self.messages.pop()
+                self._pop_orphan_turn_context_block()
                 return None
 
             text_buf, tc_buf, reasoning_buf = self._finalize_api_stream_result(
@@ -2295,6 +2350,7 @@ class AgentSession:
                     # Hard stop after soft intercepts are exhausted.
                     if self.messages and self.messages[-1]["role"] == "user":
                         self.messages.pop()  # Remove the latest user message to keep context clean.
+                        self._pop_orphan_turn_context_block()
                     return "failed"
 
                 # Module 1B: concurrent call truncation.

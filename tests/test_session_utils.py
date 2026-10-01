@@ -1713,7 +1713,12 @@ def test_run_turn_metrics_do_not_change_message_shape(monkeypatch):
 
     s.run_turn("list files")
 
-    allowed_keys = {"role", "content", "tool_calls", "tool_call_id", "reasoning_content"}
+    # _turn_context marks the injected per-turn retrieval block — an
+    # internal routing flag like _pinned, not a metrics leak.
+    allowed_keys = {
+        "role", "content", "tool_calls", "tool_call_id", "reasoning_content",
+        "_turn_context",
+    }
     assert s._runtime_metrics_snapshot().turn_tool_calls == 1
     for message in s.messages:
         assert set(message) <= allowed_keys
@@ -2186,3 +2191,95 @@ def test_sandbox_timeout_falls_back_to_parent_kill(monkeypatch, tmp_path):
     assert rc == 1
     assert calls.count("killpg") == 1
     assert calls.count("kill") == 1
+
+
+# ══════════════════════════════════════════════════════════
+# Prompt prefix stability (provider prompt caching)
+# ══════════════════════════════════════════════════════════
+
+def _stable_prompt_session(monkeypatch):
+    """A run_turn-style session whose real prompt build runs with stubbed retrieval."""
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    # The helper mocks _reset_system_prompt; restore the real one so the
+    # stability test exercises the actual build path.
+    monkeypatch.setattr(
+        s,
+        "_reset_system_prompt",
+        types.MethodType(session_mod.AgentSession._reset_system_prompt, s),
+    )
+    monkeypatch.setattr(session_mod, "search_knowledge", lambda *a, **k: [])
+    monkeypatch.setattr(
+        session_mod, "search_knowledge_records", lambda *a, **k: []
+    )
+    monkeypatch.setattr(
+        session_mod, "format_knowledge_for_prompt", lambda rows: ""
+    )
+    monkeypatch.setattr(
+        session_mod,
+        "load_relevant_skills",
+        lambda query, top_k=3: ("## Pwn Stack Skills\nuse pwntools", ""),
+    )
+
+    class _FakeScanner:
+        def match(self, query, top_k=3):
+            return []
+
+        def format_for_prompt(self, packs):
+            return ""
+
+    monkeypatch.setattr(session_mod, "_skill_scanner", _FakeScanner())
+    # A non-empty TOC makes the urgent-mode suppression observable: with
+    # urgent_mode the system prompt drops this section entirely.
+    monkeypatch.setattr(session_mod, "_load_skills_toc", lambda: "# Pwn\n# Python")
+    return s, session_mod
+
+
+def test_prepare_turn_keeps_system_prompt_byte_identical_across_turns(monkeypatch):
+    s, _session_mod = _stable_prompt_session(monkeypatch)
+
+    s._prepare_turn("first question")
+    system_after_first = s.messages[0]["content"]
+    retrieval_blocks = [
+        m for m in s.messages if "Retrieved Context" in str(m.get("content", ""))
+    ]
+
+    s._prepare_turn("second question")
+    system_after_second = s.messages[0]["content"]
+
+    assert s.messages[0]["role"] == "system"
+    assert system_after_first == system_after_second
+    assert len(retrieval_blocks) == 1
+    block = retrieval_blocks[0]
+    assert block["role"] == "assistant"
+    assert "Pwn Stack Skills" in block["content"]
+    # The retrieval block sits immediately before its own user message.
+    index = s.messages.index(block)
+    assert s.messages[index + 1]["content"] == "first question"
+
+
+def test_prepare_turn_rebuilds_system_prompt_when_phase_changes(monkeypatch):
+    s, _session_mod = _stable_prompt_session(monkeypatch)
+
+    s._prepare_turn("first question")
+    system_before = s.messages[0]["content"]
+
+    s.current_phase = "EXPLOIT"
+    s._prepare_turn("second question")
+
+    assert s.messages[0]["content"] != system_before
+    assert s._prompt_phase == "EXPLOIT"
+
+
+def test_prepare_turn_rebuilds_system_prompt_when_urgent_mode_changes(monkeypatch):
+    s, _session_mod = _stable_prompt_session(monkeypatch)
+
+    s._prepare_turn("first question")
+    system_before = s.messages[0]["content"]
+    assert s._prompt_urgent is False
+
+    # Urgent mode activates mid-turn; the next turn must observe it.
+    s._urgent_mode = True
+    s._prepare_turn("second question")
+
+    assert s.messages[0]["content"] != system_before
+    assert s._prompt_urgent is True

@@ -1103,6 +1103,22 @@ name at the end is the gate that fails if the invariant is broken.
   spinner, for the same reason `_ThinkingSpinner` is disabled in live mode.
 - **`/abort` clears queued input but cannot cancel a provider request already
   handed to a synchronous stream**; Ctrl+C remains the in-flight path.
+- **The system prompt is a cache prefix, not a scratchpad.** It is rebuilt
+  only when its inputs change (`_prompt_phase` / `_prompt_urgent`), and it
+  must stay byte-stable across turns: rewriting it invalidates the provider
+  prompt cache from position zero, so every request pays full prefill again.
+  Per-turn retrieval (knowledge hits, GSA skills, local packs) is injected
+  at the conversation TAIL as an assistant message marked `_turn_context`,
+  immediately before its user message — and every user-message rollback
+  path (`undo`, API-error pop, hard plan-guard stop) must remove that block
+  together with its user message, or history stops round-tripping to its
+  pre-turn shape.
+  `test_prepare_turn_keeps_system_prompt_byte_identical_across_turns`
+  and `test_run_turn_api_error_terminates_turn_without_hanging` gate the two
+  halves. Moving retrieval back into `build_session_prompt`'s query path, or
+  adding a wall-clock line to the prompt, silently reintroduces the cache
+  bust; deleting the `_turn_context` flag from `_prepare_turn` without
+  extending every rollback site strands the block in history.
 
 ### Execution and policy boundaries
 

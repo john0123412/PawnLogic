@@ -24,18 +24,20 @@ class TestEstimateTokens:
         assert estimate_tokens("abcde") == 2
 
     def test_cjk_counts_one_token_per_char(self):
-        assert estimate_tokens("上下文窗口") == 5
+        # "\u4e0a\u4e0b\u6587\u7a97\u53e3" is a five-character CJK string.
+        assert estimate_tokens("\u4e0a\u4e0b\u6587\u7a97\u53e3") == 5
 
     def test_mixed_text_combines_both_scales(self):
         # 5 CJK chars (5 tokens) + 8 ASCII chars (2 tokens)
-        assert estimate_tokens("上下文窗口abcdefgh") == 7
+        assert estimate_tokens("\u4e0a\u4e0b\u6587\u7a97\u53e3abcdefgh") == 7
 
     def test_monotonically_orders_languages_within_one_budget(self):
         # The estimator exists because a char budget drifts across languages:
         # the same char count must map to clearly different token counts.
         english = "a" * 300
-        chinese = "上" * 300
-        assert estimate_tokens(english) < estimate_tokens(chinese)
+        # "\u4e0a" is a single CJK ideograph.
+        cjk = "\u4e0a" * 300
+        assert estimate_tokens(english) < estimate_tokens(cjk)
 
 
 class TestResolveContextBudget:
