@@ -2,8 +2,8 @@
 
 > **Status:** Implemented and released in `0.4.0` (PR #165, then the
 > `test/release-0.4.0` candidate and `test/release-0.4.0-finalize`
-> finalization PRs). The tag is not pushed yet, so `0.4.0` is staged
-> rather than published.
+> finalization PRs). Tagged `v0.4.0` and published on GitHub and PyPI on
+> 2026-10-01; completed in `docs/plans/INDEX.md`.
 > Design rationale: [ADR 0012](../adr/0012-reasoning-effort-control.md).
 >
 > **Owner decision on the version bump (required by the AGENT.md
