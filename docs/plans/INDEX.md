@@ -5,17 +5,14 @@
 
 ## Active Plan
 
-- [reasoning-effort-unification.md](reasoning-effort-unification.md) — one
-  reasoning-effort level selected inside `/model`, driving both the provider
-  wire value and the runtime limits, replacing the six tier commands. See
-  [ADR 0012](../adr/0012-reasoning-effort-control.md). Merged by PR #165 and
-  shipping in the `0.4.0` release candidate; it moves to Completed Plans once
-  the `v0.4.0` tag exists, per the rule below.
+None. [reasoning-effort-unification.md](reasoning-effort-unification.md)
+moved to Completed Plans once the `v0.4.0` tag existed, per the rule below.
 
 ## Completed Plans
 
 | Version | Plan | Release |
 |---------|------|---------| 
+| 0.4.0 | [reasoning-effort-unification.md](reasoning-effort-unification.md) | [v0.4.0](https://github.com/john0123412/PawnLogic/releases/tag/v0.4.0) |
 | 0.3.12 | [0.3.12-confirmation-modal-lifecycle.md](0.3.12-confirmation-modal-lifecycle.md) | [v0.3.12](https://github.com/john0123412/PawnLogic/releases/tag/v0.3.12) |
 | 0.3.11 | released from `CHANGELOG.md` `[0.3.11]` (no plan file) | [v0.3.11](https://github.com/john0123412/PawnLogic/releases/tag/v0.3.11) |
 | 0.3.10 | [0.3.10-terminal-and-release-hardening.md](0.3.10-terminal-and-release-hardening.md) | [v0.3.10](https://github.com/john0123412/PawnLogic/releases/tag/v0.3.10) |
