@@ -7,7 +7,7 @@ from pathlib import Path
 import os
 
 # Single source of truth for the package version.
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 
 def _safe_home() -> Path:
     try:
