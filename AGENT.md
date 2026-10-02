@@ -623,7 +623,7 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.4.0`, **published.** Tagged `v0.4.0` from the
+- Current published release: `0.4.1`, **published.** Tagged `v0.4.0` from the
   `main` merge commit `c57ccea`; `Publish to PyPI` run
   [36815117017](https://github.com/john0123412/PawnLogic/actions/runs/36815117017)
   concluded `success`. PyPI: <https://pypi.org/project/pawnlogic/0.4.0/>.
