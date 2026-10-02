@@ -623,35 +623,20 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.4.1`, **published.** Tagged `v0.4.0` from the
-  `main` merge commit `c57ccea`; `Publish to PyPI` run
-  [36815117017](https://github.com/john0123412/PawnLogic/actions/runs/36815117017)
-  concluded `success`. PyPI: <https://pypi.org/project/pawnlogic/0.4.0/>.
-  GitHub Release: <https://github.com/john0123412/PawnLogic/releases/tag/v0.4.0>.
-  Wheel sha256 `8db69f9308b0692dc21717c8142bef5b30e15080ec625349e7665a2ca2d14f83`.
+- Current published release: `0.4.1`, **published.** Tagged `v0.4.1` from the
+  `main` merge commit `956c02d`; `Publish to PyPI` run
+  [37026953053](https://github.com/john0123412/PawnLogic/actions/runs/37026953053)
+  concluded `success`. PyPI: <https://pypi.org/project/pawnlogic/0.4.1/>.
+  GitHub Release: <https://github.com/john0123412/PawnLogic/releases/tag/v0.4.1>.
+  Wheel sha256 to be confirmed from the publish workflow artifacts.
   After a publish, confirm each of these against PyPI, the Release page, and
   the remote tag rather than against the local one — the PyPI JSON API's
   `info.version` also lags the upload by minutes, so a per-version URL is the
   reliable check.
-  `0.4.0` carries the reasoning-effort unification (PR #165, ADR 0012),
-  the immediate Turn feedback and completion-menu layout work (PR #163), and
-  the idle Ctrl+C teardown fix (PR #164). It also carries three fixes found
-  while preparing the release notes. Two were in the effort work: `/max`
-  pointed at the `max` rung instead of `xhigh`, which silently gave it the
-  limits `/ultra` used to set and left `xhigh` unreachable from any legacy
-  alias, and the CLI help and slash-description table advertised that same
-  wrong rung. The third is release-blocking and came from an independent
-  audit: `/provider effort <built-in> on` wrote a bare
-  `{"reasoning_effort": true}` into `custom_providers.json`, and because
-  every entry in that file must carry a `base_url` and an `api_key_env`, the
-  next start rejected the whole file — every custom provider, model, and
-  persisted activation state gone, after the command had reported success
-  (PR #168). All three are now pinned by tests, each mutation-verified.
-  The release also carries the third provider protocol and the
-  auth/format decoupling (PR #169), plus the README "What's New" correction
-  that had to land first because PyPI freezes the long description embedded
-  at build time (PR #170). Per-release narrative belongs in `CHANGELOG.md`,
-  not here.
+  `0.4.1` carries the token-budget rewrite and skill retrieval improvements
+  (PR #172), test isolation fix for `session_utils` (PR #174), the third-party
+  security audit fixes (PR #176), and the README trim (PR #175).
+  Per-release narrative belongs in `CHANGELOG.md`, not here.
 - Runtime version source of truth: `config/paths.py:VERSION`.
 - **Do not edit this section as a release log.** Per-release narrative
   belongs in `CHANGELOG.md`; design narrative belongs in `docs/plans/` and
