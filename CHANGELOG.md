@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-02
+
 ### Added
 - Context budgets are now denominated in estimated tokens via a
   dependency-free CJK-aware estimator (`core/token_estimate.py`), so the
