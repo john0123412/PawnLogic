@@ -34,7 +34,7 @@
 | `core/tool_registry.py` | Capability Interface | `ToolRegistry.register()` / `visible_specs()` | `test_tool_registry.py` | Handler, schema, phase, trust, capabilities registered atomically. No tool without handler. |
 | `core/extension_contracts.py` | Extension Interface | Frozen Extension values and lifecycle Protocols | `test_extensions.py` | Contracts import no discovery/startup logic. Contributions are typed and owner-attributed. |
 | `core/extensions.py` | Extension Runtime | `ExtensionManager` | `test_extensions.py` | Discovery never loads entry points. Enablement is explicit, transactional, persisted, and failure-isolated. |
-| `core/mcp_client_manager.py` | MCP process Adapter | `MCPClientManager`, `init_external_mcp()` | `test_mcp_client_manager.py`, `test_mcp_config.py`, `test_network_adapter_baseline.py` | Startup is failure-isolated. Legacy `uvx mcp-server-fetch` requires capability-only network-install authorization. |
+| `core/mcp_client_manager.py` | MCP process Adapter | `MCPClientManager`, `init_external_mcp()` | `test_mcp_client_manager.py`, `test_mcp_config.py`, `test_mcp_provenance.py`, `test_network_adapter_baseline.py` | Startup is failure-isolated. Legacy `uvx mcp-server-fetch` requires capability-only network-install authorization. Tool results carry provenance (server/transport/call id/content hash). |
 | `core/tool_executor.py` | Tool dispatch | `ToolExecutor` class | `test_tool_executor.py` | Dispatches to handler, records outcome, respects trust boundary. |
 | `core/tool_result.py` | Outcome shape | `ToolResult` dataclass | `test_tool_result.py` | Explicit status, content, error_type, side_effect flag. |
 
@@ -73,10 +73,10 @@
 |--------|------|-----------|-------|------------|
 | `tools/file_ops.py` | File operations | Tool handlers | `test_security.py` | Workspace-relative writes. Path containment enforced. |
 | `tools/shell_ops.py` | Shell orchestration | `run_shell()` | `test_run_shell_policy.py` | Delegates to shared `HostProcessRunner`. |
-| `tools/network_adapter.py` | Network host Adapter | `evaluate_network_url()`, `open_url_with_policy()`, `navigate_with_policy()` | `test_network_policy_baseline.py` | DNS and redirect checks enter the pure Network Policy; model arguments cannot self-authorize private targets. |
+| `tools/network_adapter.py` | Network host Adapter | `evaluate_network_url()`, `open_url_with_policy()`, `navigate_with_policy()` | `test_network_policy_baseline.py`, `test_network_dns_pinning.py` | DNS and redirect checks enter the pure Network Policy; model arguments cannot self-authorize private targets. DNS is pinned at check time and connections only dial pinned addresses (no connect-time re-resolution). |
 | `tools/web_ops.py` | HTTP fetch Adapter | `tool_fetch_url()` | `test_network_policy_baseline.py`, `test_network_adapter_baseline.py` | Initial and redirect targets pass through `NetworkPolicy`; confirmed private targets bypass remote readers. |
 | `tools/text_patch.py` | Text patching | `apply_text_patch()` | `test_security.py` | Fuzzy SEARCH/REPLACE matching. |
-| `tools/docker_sandbox.py` | Docker operations | Tool handlers | `test_docker_policy.py`, `test_network_adapter_baseline.py` | Network=none by default. Bridge/host require capability-only authorization. Labelled resources. No unscoped prune. |
+| `tools/docker_sandbox.py` | Docker operations | Tool handlers | `test_docker_policy.py`, `test_network_adapter_baseline.py` | Network=none by default. Bridge/host require capability-only authorization, including airlock package installs. Labelled resources. No unscoped prune. Privileged/capability flags are denied by explicit policy. |
 | `tools/docker_plan.py` | Docker plans | `build_docker_plan()` | `test_docker_policy.py` | Plan validation separated from SDK calls. |
 | `tools/pwn_chain.py` | CTF chain | Tool handlers | `test_ctf_workflow.py` | Binary paths quoted. GDB init filtered. |
 | `tools/pwn_binary.py` | Binary analysis | `ElfAnalysisCache` | `test_ctf_workflow.py` | Pure binary/ROP/cyclic helpers. |
