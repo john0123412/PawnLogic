@@ -8,6 +8,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Security
+- DNS-rebinding TOCTOU closed for policy-gated fetches (issue #177): the
+  network adapter now resolves a URL's host exactly once at policy-check
+  time and the urllib connection layer only dials those pinned addresses —
+  a DNS record that changes between the check and the connection can no
+  longer steer the socket (e.g. to a cloud-metadata address). Connections
+  without a pin record fail closed instead of re-resolving; pinned TLS
+  keeps SNI and certificate validation on the original hostname. Proxied
+  requests are unchanged (the proxy performs the connection).
 - Docker privilege flags are now denied by explicit policy (issue #177):
   `privileged`, `cap_add`, `cap_drop` and `security_opt` are rejected in
   tool arguments with a SECURITY BLOCK, and every container creation
