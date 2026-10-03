@@ -27,7 +27,7 @@ BUDGETS: dict[str, tuple[int, int]] = {
     "core/provider_tui.py": (1110, 195),
     "core/memory.py": (1000, 170),
     "tools/file_ops.py": (650, 105),
-    "tools/docker_sandbox.py": (800, 120),
+    "tools/docker_sandbox.py": (820, 125),
     "tools/pwn_chain.py": (650, 90),
     "tools/browser_ops.py": (500, 80),
     "tools/web_ops.py": (500, 90),

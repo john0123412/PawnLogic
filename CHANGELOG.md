@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+- Docker privilege flags are now denied by explicit policy (issue #177):
+  `privileged`, `cap_add`, `cap_drop` and `security_opt` are rejected in
+  tool arguments with a SECURITY BLOCK, and every container creation
+  funnels through `_spawn_container()`, which asserts none of these kwargs
+  can reach the Docker SDK.
+
 ## [0.4.1] - 2026-10-02
 
 ### Added

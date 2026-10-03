@@ -165,6 +165,28 @@ DEFAULT_DOCKER_IMAGES = {
 _TRUTHY_POLICY_VALUES = {"1", "true", "yes", "on"}
 _RISKY_NETWORK_MODES = {"bridge", "host"}
 
+# Issue #177.5: PawnLogic containers are NEVER privileged and NEVER gain
+# extra Linux capabilities — deny-by-policy, not deny-by-omission.  All
+# container creation funnels through _spawn_container(), which enforces it.
+_FORBIDDEN_CONTAINER_KWARGS = frozenset({"privileged", "cap_add", "cap_drop", "security_opt"})
+
+
+def _check_privilege_flags(a: dict) -> str | None:
+    """Reject tool arguments requesting container privilege escalation."""
+    hit = sorted({str(k) for k in a if str(k).lower() in _FORBIDDEN_CONTAINER_KWARGS})
+    if not hit:
+        return None
+    return (
+        "SECURITY BLOCK: privileged/capability flags are never permitted in "
+        f"PawnLogic containers (rejected: {', '.join(hit)})."
+    )
+
+
+def _spawn_container(client, **kwargs):
+    """Container creation choke point: privilege-escalation kwargs are forbidden."""
+    assert not (set(kwargs) & _FORBIDDEN_CONTAINER_KWARGS), "privileged flags forbidden"
+    return client.containers.run(**kwargs)
+
 
 def _policy_truthy(value: object) -> bool:
     if isinstance(value, bool):
@@ -278,6 +300,9 @@ def tool_run_code_docker(a: dict) -> str:
     )
     if error or plan is None:
         return error or "ERROR: invalid Docker execution plan"
+    err = _check_privilege_flags(a)
+    if err:
+        return err
     language = plan.language
     timeout = plan.timeout_seconds
     network = plan.network
@@ -360,7 +385,8 @@ def tool_run_code_docker(a: dict) -> str:
         # Create and run container.
         container = None
         try:
-            container = client.containers.run(
+            container = _spawn_container(
+                client,
                 image=image_name,
                 command=["bash", "-c", full_cmd],
                 volumes=volumes,
@@ -460,6 +486,9 @@ def tool_pwn_container(a: dict) -> str:
         err = _check_network_policy(a, network)
         if err:
             return err
+        err = _check_privilege_flags(a)
+        if err:
+            return err
 
     client = _get_docker_client()
     if not client:
@@ -523,7 +552,8 @@ def tool_pwn_container(a: dict) -> str:
             if os.path.exists(real_hp):
                 volumes[real_hp] = {"bind": bind_spec["bind"], "mode": mount_mode}
 
-        container = client.containers.run(
+        container = _spawn_container(
+            client,
             image=image,
             command="sleep infinity",
             network_mode=network,
