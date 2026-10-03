@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from config import DEFAULT_MODEL, user_friendly_error
-from core.agent_orchestrator import CancellationToken
+from core.agent_orchestrator import BudgetLedger, CancellationToken
 from core.api_client import StreamCancellationError, ensure_tool_call_id, stream_request
 from core.context_manager import ContextEnvelope
 from core.agent_events import AgentEventKind
@@ -906,6 +906,7 @@ def run_delegated_tasks(
     on_started: Callable[[str], None] | None = None,
     parent_runtime_context: Any = None,
     orchestrator_factory: Callable[..., Any] | None = None,
+    ledger: BudgetLedger | None = None,
 ):
     """Run a supported homogeneous delegation batch through one safe seam.
 
@@ -913,6 +914,9 @@ def run_delegated_tasks(
     its historical behavior.  A future host-owned batch caller may pass two
     tasks and its persisted policy width; the executor rejects that path unless
     a forkable parent RuntimeContext is available.
+
+    When ``ledger`` is given it is shared with the orchestrator, so nested
+    delegations draw from one tree-wide budget ceiling (issue #177.2).
     """
     if orchestrator_factory is None:
         from core.agent_orchestrator import SerialAgentOrchestrator
@@ -933,6 +937,9 @@ def run_delegated_tasks(
         tasks,
         budget=budget,
         cancellation=cancellation,
+        # Only pass the shared tree ledger when one is given, so custom
+        # orchestrator factories keep the historical run() contract.
+        **({"ledger": ledger} if ledger is not None else {}),
     )
     return executor, orchestration
 

@@ -423,13 +423,14 @@ def test_public_delegate_task_runs_through_serial_orchestration(monkeypatch):
         def __init__(self, executor, **kwargs):
             self._delegate = SerialAgentOrchestrator(executor, **kwargs)
 
-        def run(self, tasks, *, budget, cancellation=None):
+        def run(self, tasks, *, budget, cancellation=None, ledger=None):
             observed["tasks"] = tuple(tasks)
             observed["budget"] = budget
             result = self._delegate.run(
                 tasks,
                 budget=budget,
                 cancellation=cancellation,
+                ledger=ledger,
             )
             observed["result"] = result
             return result

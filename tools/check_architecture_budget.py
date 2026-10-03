@@ -32,7 +32,7 @@ BUDGETS: dict[str, tuple[int, int]] = {
     "tools/browser_ops.py": (500, 80),
     "tools/web_ops.py": (500, 90),
     "tools/sandbox.py": (400, 65),
-    "tools/delegate_tool.py": (400, 40),
+    "tools/delegate_tool.py": (425, 40),
     "core/commands/provider.py": (850, 130),
     "core/provider_runtime.py": (400, 70),
     "core/api_client.py": (610, 105),

@@ -33,6 +33,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   per-call id, content/config/command sha256), and the structured
   `MCPToolProvenance` is recorded in the tool result envelope metadata,
   so a result can be tied back to the MCP server that produced it.
+- Delegation now enforces a tree-wide budget ceiling: the outermost
+  `delegate_task` in a context creates a shared `BudgetLedger` from its own
+  budget and nested delegations draw from the same pool, so a delegation
+  tree can no longer mint a fresh full budget at every level (#177).
 
 ## [0.4.1] - 2026-10-02
 

@@ -1170,6 +1170,13 @@ name at the end is the gate that fails if the invariant is broken.
   sandbox.
 - **Delegated-agent requests must not bypass Provider visibility, allowlists,
   budgets, or capability filtering.**
+- **A delegation tree shares one budget ceiling.** The outermost
+  `delegate_task` in a context creates the tree `BudgetLedger` from its own
+  budget and nested delegations reuse it; a new `BudgetLedger(budget)` per
+  `run()` call would let every tree level mint a fresh full budget.
+  `tests/test_delegation_tree_budget.py::test_shared_ledger_rejects_second_branch_when_exhausted`
+  is the gate. Depth and tree state are ContextVars (not threading.local)
+  so they propagate into the orchestrator's pool workers.
 - **The tool watchdog abandons wedged tool threads instead of blocking the
   session**; abandoned threads keep running until process exit and their
   results are lost.

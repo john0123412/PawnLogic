@@ -25,8 +25,8 @@ Import cycle avoidance:
   - Tool registry snapshots are lazily imported when the tool is called.
 """
 
+import contextvars
 import json
-import threading
 from dataclasses import replace
 from config import (
     DEFAULT_MODEL, MODELS, validate_api_key, is_fast_model, find_fast_peer,
@@ -40,7 +40,7 @@ from core.delegation import (
     default_delegation_policy_store,
 )
 from core import delegation as delegation_events
-from core.agent_orchestrator import SerialAgentOrchestrator
+from core.agent_orchestrator import BudgetLedger, SerialAgentOrchestrator
 from core.delegation_runtime import (
     CAPABILITY_PROFILES,
     SubAgentSession as _SubAgentSession,
@@ -72,9 +72,38 @@ __all__ = [
     "tool_delegate_task",
 ]
 
-# Recursion depth guard.
-_delegate_ctx = threading.local()   # .depth tracks delegation depth per thread.
-_MAX_DEPTH    = 2                   # Maximum nested sub-agent depth.
+# Recursion depth guard and tree-wide budget ceiling (issue #177.2).
+#
+# Both are ContextVars (not threading.local) so they propagate with
+# contextvars.copy_context() into the orchestrator's pool worker threads.
+# The outermost delegate_task call in a context creates the tree ledger
+# from its own budget; nested delegations reuse it, so the whole
+# delegation tree shares one budget ceiling instead of each level
+# minting a fresh full budget.
+_delegation_depth: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "pawnlogic_delegation_depth", default=0
+)
+_delegation_tree_ledger: contextvars.ContextVar[BudgetLedger | None] = contextvars.ContextVar(
+    "pawnlogic_delegation_tree_ledger", default=None
+)
+_MAX_DEPTH = 2  # Maximum nested sub-agent depth.
+
+
+def _acquire_tree_ledger(
+    effective_budget: AgentBudget,
+) -> tuple[BudgetLedger, contextvars.Token[BudgetLedger | None] | None]:
+    """Return the delegation-tree ledger and its reset token.
+
+    The outermost ``delegate_task`` in a context creates the shared ledger
+    from its own budget; nested delegations reuse the existing one (in
+    which case the token is None and no reset is needed).
+    """
+    tree_ledger = _delegation_tree_ledger.get()
+    if tree_ledger is None:
+        tree_ledger = BudgetLedger(effective_budget)
+        return tree_ledger, _delegation_tree_ledger.set(tree_ledger)
+    return tree_ledger, None
+
 
 # Worker candidate priority list for dual-model routing.
 _WORKER_MODEL_CANDIDATES = [
@@ -240,8 +269,9 @@ def tool_delegate_task(a: dict) -> str:
     else:
         print(c(YELLOW, f"  [Delegate] worker model: [{worker_model}]"))
 
-    # Recursion depth guard.
-    current_depth = getattr(_delegate_ctx, "depth", 0)
+    # Recursion depth guard (issue #177.2: ContextVar so it propagates
+    # into the orchestrator's pool worker threads).
+    current_depth = _delegation_depth.get()
     if current_depth >= _MAX_DEPTH:
         delegation_events.publish_delegation_rejected("depth_limit")
         return (
@@ -285,7 +315,12 @@ def tool_delegate_task(a: dict) -> str:
             effective_tokens=effective_tokens,
         )
 
-    _delegate_ctx.depth = current_depth + 1
+    # Tree-wide budget ceiling (issue #177.2): the outermost delegation in
+    # this context creates the shared ledger from its own budget; nested
+    # delegations reuse it, so the whole tree draws from one pool instead
+    # of each level minting a fresh full budget.
+    tree_ledger, ledger_token = _acquire_tree_ledger(effective_budget)
+    depth_token = _delegation_depth.set(current_depth + 1)
     try:
         executor, orchestration = run_delegated_tasks(
             (effective_task,),
@@ -298,9 +333,12 @@ def tool_delegate_task(a: dict) -> str:
             on_started=_started,
             parent_runtime_context=parent_runtime_context,
             orchestrator_factory=SerialAgentOrchestrator,
+            ledger=tree_ledger,
         )
     finally:
-        _delegate_ctx.depth = current_depth
+        _delegation_depth.reset(depth_token)
+        if ledger_token is not None:
+            _delegation_tree_ledger.reset(ledger_token)
     agent_result = replace(
         orchestration.results[0],
         model_alias=orchestration.results[0].model_alias or worker_model,
