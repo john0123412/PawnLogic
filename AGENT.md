@@ -825,6 +825,29 @@ name at the end is the gate that fails if the invariant is broken.
 - Provider visibility must agree across CLI, TUI, completions, and runtime fetch.
 - Trust/Operation/Network Policy drift across host, Docker, browser, MCP, and
   CTF paths; URL adapters must re-evaluate DNS and redirects.
+- **DNS is resolved once per URL, at policy-check time, and the connection
+  layer must never re-resolve.** `tools/network_adapter.py` pins the
+  check-time addresses (`_pinned_addresses_for_url`) and the urllib handlers
+  only dial those pins (`_PinnedHTTP(S)Connection`); a missing pin record
+  fails closed instead of falling back to a fresh lookup, which is what
+  closes the DNS-rebinding TOCTOU gap (issue #177). A new fetch path that
+  opens sockets must go through `open_url_with_policy` (or carry the same
+  pin table); resolving again at connect time silently reopens the hole.
+  Proxied requests are the deliberate exception — the proxy performs the
+  connection there (`_proxy_for_url`). `tests/test_network_dns_pinning.py`
+  gates the invariant, including the single-resolution assertion.
+- **PawnLogic containers must never be privileged or gain Linux
+  capabilities.** `tools/docker_sandbox.py` rejects `privileged`,
+  `cap_add`, `cap_drop` and `security_opt` in tool arguments with a
+  SECURITY BLOCK, and `_spawn_container()` is the single choke point that
+  asserts these kwargs never reach the Docker SDK. A new container tool
+  that calls `client.containers.run` directly instead of going through
+  `_spawn_container` silently drops this guarantee — keep the funnel.
+- **Any tool path that grants a container network access must go through
+  `_check_network_policy`.** The airlock (`tool_install_package`) used to
+  attach bridge egress without the `allow_network` authorization the other
+  container tools require — that bypass is now closed. A new tool that
+  connects a container to a network must call the same gate.
 - **MCP tool results must stay attributable to their server.** Results go
   out as `_ProvenancedStr` carrying `MCPToolProvenance` (server,
   transport, call id, content/config/command hashes); the executor

@@ -8,6 +8,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Security
+- DNS-rebinding TOCTOU closed for policy-gated fetches (issue #177): the
+  network adapter now resolves a URL's host exactly once at policy-check
+  time and the urllib connection layer only dials those pinned addresses —
+  a DNS record that changes between the check and the connection can no
+  longer steer the socket (e.g. to a cloud-metadata address). Connections
+  without a pin record fail closed instead of re-resolving; pinned TLS
+  keeps SNI and certificate validation on the original hostname. Proxied
+  requests are unchanged (the proxy performs the connection).
+- Docker privilege flags are now denied by explicit policy (issue #177):
+  `privileged`, `cap_add`, `cap_drop` and `security_opt` are rejected in
+  tool arguments with a SECURITY BLOCK, and every container creation
+  funnels through `_spawn_container()`, which asserts none of these kwargs
+  can reach the Docker SDK.
+- Airlock package installation now requires explicit network authorization
+  (issue #177): `tool_install_package` grants temporary bridge egress, so
+  it now goes through the same `_check_network_policy` gate as the other
+  container tools — `allow_network=true` or
+  `PAWNLOGIC_DOCKER_ALLOW_NETWORK=true` is required for every install call,
+  because apt/pip itself causes outbound traffic even when the container
+  is already attached to bridge.
 - MCP tool results now carry provenance (issue #177): every result is
   prepended with a model-visible attestation header (server, transport,
   per-call id, content/config/command sha256), and the structured
