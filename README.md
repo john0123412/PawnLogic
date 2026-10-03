@@ -68,13 +68,25 @@ packs stay separate and are installed explicitly with
 
 ## Models and Providers
 
-Built-in aliases (only providers with a configured key appear in `/model`):
+Built-in aliases (only providers with a configured key appear in `/model`).
+Each alias points at a real model ID; aliases move when providers ship new
+models, so run `/provider fetch <name>` after adding a key to pick up the
+current list.
 
-| Provider | Aliases |
-|----------|---------|
-| DeepSeek | `ds-v4-flash`, `ds-v4-pro` |
-| OpenAI | `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-4o`, `gpt-4.1`, `o3` |
-| Anthropic | `claude-opus`, `claude-sonnet`, `claude-haiku` |
+| Alias | Model | Provider |
+|-------|-------|----------|
+| `ds-v4-flash` | `deepseek-v4-flash` | DeepSeek |
+| `ds-v4-pro` | `deepseek-v4-pro` | DeepSeek |
+| `gpt-5.5` | `gpt-5.5` | OpenAI |
+| `gpt-5.4` | `gpt-5.4` | OpenAI |
+| `gpt-5.4-mini` | `gpt-5.4-mini` | OpenAI |
+| `gpt-5.4-nano` | `gpt-5.4-nano` | OpenAI |
+| `gpt-4o` | `gpt-4o` | OpenAI |
+| `gpt-4.1` | `gpt-4.1` | OpenAI |
+| `o3` | `o3` | OpenAI |
+| `claude-opus` | `claude-opus-4-6` | Anthropic |
+| `claude-sonnet` | `claude-sonnet-4-6` | Anthropic |
+| `claude-haiku` | `claude-haiku-4-5-20251001` | Anthropic |
 
 ```bash
 /provider                              # provider TUI
