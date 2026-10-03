@@ -425,7 +425,15 @@ class SerialAgentOrchestrator:
         *,
         budget: AgentBudget,
         cancellation: CancellationToken | None = None,
+        ledger: BudgetLedger | None = None,
     ) -> OrchestrationResult:
+        """Execute tasks, optionally sharing a delegation-tree budget ledger.
+
+        When ``ledger`` is given, task admission draws from it instead of a
+        fresh per-call ledger, so a whole delegation tree shares one budget
+        ceiling (issue #177.2).  Callers that want the historical behavior
+        omit it.
+        """
         normalized = tuple(tasks)
         if not all(isinstance(task, AgentTask) for task in normalized):
             raise TypeError("tasks must contain only AgentTask values")
@@ -433,7 +441,10 @@ class SerialAgentOrchestrator:
         if len(set(task_ids)) != len(task_ids):
             raise ValueError("task IDs must be unique")
         token = cancellation or CancellationToken()
-        ledger = BudgetLedger(budget)
+        # A shared tree ledger caps the whole delegation tree; otherwise each
+        # run() gets its own fresh ledger (historical behavior).
+        if ledger is None:
+            ledger = BudgetLedger(budget)
         results: list[AgentResult | None] = [None] * len(normalized)
         inflight: dict[Future[AgentResult], _InFlightTask] = {}
         next_index = 0
