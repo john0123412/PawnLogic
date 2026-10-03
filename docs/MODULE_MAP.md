@@ -73,7 +73,7 @@
 |--------|------|-----------|-------|------------|
 | `tools/file_ops.py` | File operations | Tool handlers | `test_security.py` | Workspace-relative writes. Path containment enforced. |
 | `tools/shell_ops.py` | Shell orchestration | `run_shell()` | `test_run_shell_policy.py` | Delegates to shared `HostProcessRunner`. |
-| `tools/network_adapter.py` | Network host Adapter | `evaluate_network_url()`, `open_url_with_policy()`, `navigate_with_policy()` | `test_network_policy_baseline.py` | DNS and redirect checks enter the pure Network Policy; model arguments cannot self-authorize private targets. |
+| `tools/network_adapter.py` | Network host Adapter | `evaluate_network_url()`, `open_url_with_policy()`, `navigate_with_policy()` | `test_network_policy_baseline.py`, `test_network_dns_pinning.py` | DNS and redirect checks enter the pure Network Policy; model arguments cannot self-authorize private targets. DNS is pinned at check time and connections only dial pinned addresses (no connect-time re-resolution). |
 | `tools/web_ops.py` | HTTP fetch Adapter | `tool_fetch_url()` | `test_network_policy_baseline.py`, `test_network_adapter_baseline.py` | Initial and redirect targets pass through `NetworkPolicy`; confirmed private targets bypass remote readers. |
 | `tools/text_patch.py` | Text patching | `apply_text_patch()` | `test_security.py` | Fuzzy SEARCH/REPLACE matching. |
 | `tools/docker_sandbox.py` | Docker operations | Tool handlers | `test_docker_policy.py`, `test_network_adapter_baseline.py` | Network=none by default. Bridge/host require capability-only authorization. Labelled resources. No unscoped prune. |
