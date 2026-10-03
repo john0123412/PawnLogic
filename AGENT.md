@@ -623,19 +623,15 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.4.1`, **published.** Tagged `v0.4.1` from the
-  `main` merge commit `956c02d`; `Publish to PyPI` run
-  [37026953053](https://github.com/john0123412/PawnLogic/actions/runs/37026953053)
-  concluded `success`. PyPI: <https://pypi.org/project/pawnlogic/0.4.1/>.
-  GitHub Release: <https://github.com/john0123412/PawnLogic/releases/tag/v0.4.1>.
-  Wheel sha256 to be confirmed from the publish workflow artifacts.
+- Current published release: `0.4.2`. Release tag: `v0.4.2`. Artifacts must
+  originate from the reviewed `main` merge commit through the GitHub Actions
+  workflow using Trusted Publishing / OIDC. PyPI:
+  <https://pypi.org/project/pawnlogic/0.4.2/>. GitHub Release:
+  <https://github.com/john0123412/PawnLogic/releases/tag/v0.4.2>.
   After a publish, confirm each of these against PyPI, the Release page, and
   the remote tag rather than against the local one — the PyPI JSON API's
   `info.version` also lags the upload by minutes, so a per-version URL is the
   reliable check.
-  `0.4.1` carries the token-budget rewrite and skill retrieval improvements
-  (PR #172), test isolation fix for `session_utils` (PR #174), the third-party
-  security audit fixes (PR #176), and the README trim (PR #175).
   Per-release narrative belongs in `CHANGELOG.md`, not here.
 - Runtime version source of truth: `config/paths.py:VERSION`.
 - **Do not edit this section as a release log.** Per-release narrative
@@ -1264,6 +1260,13 @@ name at the end is the gate that fails if the invariant is broken.
   it into "Esc → banner" vs "Esc → worker settles within N s".
 - **The language-policy test scans tracked files only.** Re-run it after
   staging; a green pre-commit run misses new untracked files.
+- **A project-local pytest basetemp under `.agent-work/` must set
+  `GIT_CEILING_DIRECTORIES` to the scratch boundary.** Otherwise Git-based
+  fixtures inherit the main repository's tags and root, producing misleading
+  failures. The
+  packaging `_worktree_build_copy` helper does not exclude `.agent-work`, so
+  never put basetemp inside a checkout that will be copied; validate from a
+  clean worktree with the temporary directory as its sibling.
 
 ### Repository hygiene
 
