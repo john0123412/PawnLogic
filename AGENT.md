@@ -836,6 +836,13 @@ name at the end is the gate that fails if the invariant is broken.
   Proxied requests are the deliberate exception — the proxy performs the
   connection there (`_proxy_for_url`). `tests/test_network_dns_pinning.py`
   gates the invariant, including the single-resolution assertion.
+- **PawnLogic containers must never be privileged or gain Linux
+  capabilities.** `tools/docker_sandbox.py` rejects `privileged`,
+  `cap_add`, `cap_drop` and `security_opt` in tool arguments with a
+  SECURITY BLOCK, and `_spawn_container()` is the single choke point that
+  asserts these kwargs never reach the Docker SDK. A new container tool
+  that calls `client.containers.run` directly instead of going through
+  `_spawn_container` silently drops this guarantee — keep the funnel.
 - Extension discovery must not import or enable third-party code during startup.
 - User-friendly mode must not leak debug internals; `/mode` remains the switch.
 - Stream adapters must not change public delta dict keys or ordering.

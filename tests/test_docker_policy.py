@@ -151,3 +151,87 @@ def test_docker_mount_blocks_docker_socket(monkeypatch, tmp_path):
             "ro",
             allow_host_read_mount=True,
         )
+
+
+def test_privilege_flags_rejected_in_tool_args():
+    assert docker_sandbox._check_privilege_flags({}) is None
+    assert docker_sandbox._check_privilege_flags({"language": "python"}) is None
+    for flag in (
+        "privileged",
+        "--privileged",
+        "cap_add",
+        "cap-add",
+        "--cap-add",
+        "cap_drop",
+        "--cap-drop",
+        "security_opt",
+        "security-opt",
+        "--security-opt",
+        "Privileged",
+    ):
+        err = docker_sandbox._check_privilege_flags({flag: True})
+        assert err is not None
+        assert err.startswith("SECURITY BLOCK")
+        assert "never permitted" in err
+
+
+def test_run_code_docker_blocks_privilege_flags_before_docker(monkeypatch):
+    monkeypatch.setattr(
+        docker_sandbox,
+        "_get_docker_client",
+        lambda: (_ for _ in ()).throw(AssertionError("Docker should not be touched")),
+    )
+
+    result = docker_sandbox.tool_run_code_docker(
+        {"language": "python", "code": "print(1)", "privileged": True}
+    )
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "never permitted" in result
+
+
+def test_pwn_container_create_blocks_privilege_flags_before_docker(monkeypatch):
+    monkeypatch.setattr(
+        docker_sandbox,
+        "_get_docker_client",
+        lambda: (_ for _ in ()).throw(AssertionError("Docker should not be touched")),
+    )
+
+    result = docker_sandbox.tool_pwn_container(
+        {"action": "create", "name": "lab", "cap_add": ["NET_ADMIN"]}
+    )
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "never permitted" in result
+
+
+class _RecordingContainers:
+    def __init__(self):
+        self.calls = []
+
+    def run(self, **kwargs):
+        self.calls.append(kwargs)
+        return object()
+
+
+class _RecordingClient:
+    def __init__(self):
+        self.containers = _RecordingContainers()
+
+
+def test_spawn_container_never_passes_privilege_kwargs():
+    client = _RecordingClient()
+    docker_sandbox._spawn_container(client, image="img", network_mode="none")
+    assert client.containers.calls, "expected one containers.run call"
+    assert not (
+        set(client.containers.calls[0]) & docker_sandbox._FORBIDDEN_CONTAINER_KWARGS
+    )
+
+    with pytest.raises(PermissionError, match="privileged flags forbidden"):
+        docker_sandbox._spawn_container(client, image="img", privileged=True)
+    with pytest.raises(PermissionError, match="privileged flags forbidden"):
+        docker_sandbox._spawn_container(client, image="img", cap_add=["SYS_PTRACE"])
+    # CLI-style aliases must not dodge the choke point either.
+    with pytest.raises(PermissionError, match="privileged flags forbidden"):
+        docker_sandbox._spawn_container(client, **{"cap-add": ["SYS_PTRACE"]})
+    assert len(client.containers.calls) == 1, "blocked spawns must not reach the SDK"

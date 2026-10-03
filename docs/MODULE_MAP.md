@@ -76,7 +76,7 @@
 | `tools/network_adapter.py` | Network host Adapter | `evaluate_network_url()`, `open_url_with_policy()`, `navigate_with_policy()` | `test_network_policy_baseline.py`, `test_network_dns_pinning.py` | DNS and redirect checks enter the pure Network Policy; model arguments cannot self-authorize private targets. DNS is pinned at check time and connections only dial pinned addresses (no connect-time re-resolution). |
 | `tools/web_ops.py` | HTTP fetch Adapter | `tool_fetch_url()` | `test_network_policy_baseline.py`, `test_network_adapter_baseline.py` | Initial and redirect targets pass through `NetworkPolicy`; confirmed private targets bypass remote readers. |
 | `tools/text_patch.py` | Text patching | `apply_text_patch()` | `test_security.py` | Fuzzy SEARCH/REPLACE matching. |
-| `tools/docker_sandbox.py` | Docker operations | Tool handlers | `test_docker_policy.py`, `test_network_adapter_baseline.py` | Network=none by default. Bridge/host require capability-only authorization. Labelled resources. No unscoped prune. |
+| `tools/docker_sandbox.py` | Docker operations | Tool handlers | `test_docker_policy.py`, `test_network_adapter_baseline.py` | Network=none by default. Bridge/host require capability-only authorization. Labelled resources. No unscoped prune. Privileged/capability flags are denied by explicit policy. |
 | `tools/docker_plan.py` | Docker plans | `build_docker_plan()` | `test_docker_policy.py` | Plan validation separated from SDK calls. |
 | `tools/pwn_chain.py` | CTF chain | Tool handlers | `test_ctf_workflow.py` | Binary paths quoted. GDB init filtered. |
 | `tools/pwn_binary.py` | Binary analysis | `ElfAnalysisCache` | `test_ctf_workflow.py` | Pure binary/ROP/cyclic helpers. |
