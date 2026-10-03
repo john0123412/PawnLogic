@@ -235,3 +235,101 @@ def test_spawn_container_never_passes_privilege_kwargs():
     with pytest.raises(PermissionError, match="privileged flags forbidden"):
         docker_sandbox._spawn_container(client, **{"cap-add": ["SYS_PTRACE"]})
     assert len(client.containers.calls) == 1, "blocked spawns must not reach the SDK"
+class _FakeBridgeNet:
+    def __init__(self):
+        self.connected = []
+        self.disconnected = []
+        self.attrs = {"Containers": {}}
+
+    def connect(self, container):
+        self.connected.append(container)
+
+    def disconnect(self, container, force=False):
+        self.disconnected.append(container)
+
+
+class _FakeAirlockContainer:
+    def __init__(self):
+        self.id = "cid123"
+
+    def exec_run(self, cmd, stdout=True, stderr=True, demux=False):
+        return 0, b"ok"
+
+
+class _FakeGetter:
+    def __init__(self, mapping):
+        self._mapping = mapping
+
+    def get(self, name):
+        return self._mapping[name]
+
+
+class _FakeAirlockClient:
+    def __init__(self):
+        self.bridge = _FakeBridgeNet()
+        self.container = _FakeAirlockContainer()
+        self.networks = _FakeGetter({"bridge": self.bridge})
+        self.containers = _FakeGetter({"cid123": self.container})
+
+
+def _install_airlock_client(monkeypatch):
+    monkeypatch.delenv("PAWNLOGIC_DOCKER_ALLOW_NETWORK", raising=False)
+    client = _FakeAirlockClient()
+    monkeypatch.setattr(docker_sandbox, "_get_docker_client", lambda: client)
+    monkeypatch.setitem(docker_sandbox._active_containers, "c1", "cid123")
+    return client
+
+
+def test_airlock_install_blocks_bridge_egress_without_authorization(monkeypatch):
+    client = _install_airlock_client(monkeypatch)
+
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["requests"]}
+    )
+
+    assert result.startswith("SECURITY BLOCK")
+    assert client.bridge.connected == []
+
+
+def test_airlock_install_allows_bridge_egress_with_explicit_arg(monkeypatch):
+    client = _install_airlock_client(monkeypatch)
+
+    result = docker_sandbox.tool_install_package(
+        {
+            "container_name": "c1",
+            "pkg_manager": "pip",
+            "packages": ["requests"],
+            "allow_network": True,
+        }
+    )
+
+    assert result.startswith("[Airlock")
+    assert client.bridge.connected == [client.container]
+    assert client.bridge.disconnected == [client.container]
+
+
+def test_airlock_install_requires_authorization_even_when_already_on_bridge(
+    monkeypatch,
+):
+    # apt/pip itself causes outbound traffic, so the policy gate applies
+    # even when user-managed networking already attached the container.
+    client = _install_airlock_client(monkeypatch)
+    client.bridge.attrs = {"Containers": {"cid123": {}}}
+
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["requests"]}
+    )
+    assert result.startswith("SECURITY BLOCK")
+
+    result = docker_sandbox.tool_install_package(
+        {
+            "container_name": "c1",
+            "pkg_manager": "pip",
+            "packages": ["requests"],
+            "allow_network": True,
+        }
+    )
+    assert result.startswith("[Airlock")
+    # Already on bridge: the airlock authorizes but does not touch networking.
+    assert client.bridge.connected == []
+    assert client.bridge.disconnected == []

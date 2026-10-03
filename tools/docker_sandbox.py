@@ -746,6 +746,15 @@ def tool_install_package(a: dict) -> str:
         except Exception:
             pass
 
+        # Issue #177.4: installing packages always causes outbound traffic,
+        # so every call needs explicit network authorization — even when the
+        # container is already on bridge via user-managed networking. The
+        # already_on_bridge check below only decides whether the airlock
+        # itself must connect/disconnect.
+        err = _check_network_policy(a, "bridge")
+        if err:
+            return err
+
         if already_on_bridge:
             print(c(GRAY, f"  [Airlock] container '{container_name}' is already on bridge; skipping connect"))
         else:
@@ -982,6 +991,7 @@ DOCKER_SCHEMAS = [
                 "Airlock package installation tool.\n"
                 "Temporarily connects a persistent container to install apt/pip packages, then forces network disconnect.\n"
                 "Package names are strictly regex-validated to prevent command injection.\n"
+                "Temporarily granting bridge egress requires explicit authorization: pass allow_network=true or set PAWNLOGIC_DOCKER_ALLOW_NETWORK=true.\n"
                 "Works only for containers created through pwn_container create."
             ),
             "parameters": {
@@ -1000,6 +1010,10 @@ DOCKER_SCHEMAS = [
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Package names to install; each package may contain only [a-zA-Z0-9_\\-\\.]+.",
+                    },
+                    "allow_network": {
+                        "type": "boolean",
+                        "description": "Explicitly authorize the temporary bridge egress used for installation.",
                     },
                 },
                 "required": ["container_name", "pkg_manager", "packages"],
