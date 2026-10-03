@@ -171,9 +171,19 @@ _RISKY_NETWORK_MODES = {"bridge", "host"}
 _FORBIDDEN_CONTAINER_KWARGS = frozenset({"privileged", "cap_add", "cap_drop", "security_opt"})
 
 
+def _normalize_container_kwarg(key: object) -> str:
+    """Normalize SDK and CLI spellings to one canonical kwarg name.
+
+    Covers ``privileged`` / ``--privileged``, ``cap_add`` / ``cap-add`` /
+    ``--cap-add``, and the same for ``cap_drop`` / ``security_opt``, so a
+    caller cannot dodge the deny-list with an alternate spelling.
+    """
+    return str(key).strip().lower().lstrip("-").replace("-", "_")
+
+
 def _check_privilege_flags(a: dict) -> str | None:
     """Reject tool arguments requesting container privilege escalation."""
-    hit = sorted({str(k) for k in a if str(k).lower() in _FORBIDDEN_CONTAINER_KWARGS})
+    hit = sorted({_normalize_container_kwarg(k) for k in a} & _FORBIDDEN_CONTAINER_KWARGS)
     if not hit:
         return None
     return (
@@ -183,8 +193,16 @@ def _check_privilege_flags(a: dict) -> str | None:
 
 
 def _spawn_container(client, **kwargs):
-    """Container creation choke point: privilege-escalation kwargs are forbidden."""
-    assert not (set(kwargs) & _FORBIDDEN_CONTAINER_KWARGS), "privileged flags forbidden"
+    """Container creation choke point: privilege-escalation kwargs are forbidden.
+
+    Raises unconditionally (never ``assert``) so the invariant holds even
+    under ``python -O``.
+    """
+    bad = sorted({_normalize_container_kwarg(k) for k in kwargs} & _FORBIDDEN_CONTAINER_KWARGS)
+    if bad:
+        raise PermissionError(
+            "privileged flags forbidden in PawnLogic containers: " + ", ".join(bad)
+        )
     return client.containers.run(**kwargs)
 
 

@@ -156,7 +156,19 @@ def test_docker_mount_blocks_docker_socket(monkeypatch, tmp_path):
 def test_privilege_flags_rejected_in_tool_args():
     assert docker_sandbox._check_privilege_flags({}) is None
     assert docker_sandbox._check_privilege_flags({"language": "python"}) is None
-    for flag in ("privileged", "cap_add", "cap_drop", "security_opt", "Privileged"):
+    for flag in (
+        "privileged",
+        "--privileged",
+        "cap_add",
+        "cap-add",
+        "--cap-add",
+        "cap_drop",
+        "--cap-drop",
+        "security_opt",
+        "security-opt",
+        "--security-opt",
+        "Privileged",
+    ):
         err = docker_sandbox._check_privilege_flags({flag: True})
         assert err is not None
         assert err.startswith("SECURITY BLOCK")
@@ -215,8 +227,11 @@ def test_spawn_container_never_passes_privilege_kwargs():
         set(client.containers.calls[0]) & docker_sandbox._FORBIDDEN_CONTAINER_KWARGS
     )
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(PermissionError, match="privileged flags forbidden"):
         docker_sandbox._spawn_container(client, image="img", privileged=True)
-    with pytest.raises(AssertionError):
+    with pytest.raises(PermissionError, match="privileged flags forbidden"):
         docker_sandbox._spawn_container(client, image="img", cap_add=["SYS_PTRACE"])
+    # CLI-style aliases must not dodge the choke point either.
+    with pytest.raises(PermissionError, match="privileged flags forbidden"):
+        docker_sandbox._spawn_container(client, **{"cap-add": ["SYS_PTRACE"]})
     assert len(client.containers.calls) == 1, "blocked spawns must not reach the SDK"
