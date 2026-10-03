@@ -12,15 +12,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   network adapter now resolves a URL's host exactly once at policy-check
   time and the urllib connection layer only dials those pinned addresses —
   a DNS record that changes between the check and the connection can no
-  longer steer the socket (e.g. to a cloud-metadata address). Connections
-  without a pin record fail closed instead of re-resolving; pinned TLS
-  keeps SNI and certificate validation on the original hostname. Proxied
-  requests are unchanged (the proxy performs the connection).
+  longer steer the socket (e.g. to a cloud-metadata address). Syntax and
+  unconditional target denials happen before DNS, and a failed lookup is not
+  retried at connect time. Connections without a pin record fail closed;
+  pinned TLS keeps SNI and certificate validation on the original hostname.
+  Proxy-routed redirect hops use the proxy path, while every direct redirect
+  hop gets its own policy-time pins.
 - Docker privilege flags are now denied by explicit policy (issue #177):
   `privileged`, `cap_add`, `cap_drop` and `security_opt` are rejected in
   tool arguments with a SECURITY BLOCK, and every container creation
-  funnels through `_spawn_container()`, which asserts none of these kwargs
-  can reach the Docker SDK.
+  funnels through `_spawn_container()`, which raises `PermissionError` when a
+  forbidden kwarg is present, so none of these kwargs can reach the Docker SDK,
+  including under `python -O`.
 - Airlock package installation now requires explicit network authorization
   (issue #177): `tool_install_package` grants temporary bridge egress, so
   it now goes through the same `_check_network_policy` gate as the other

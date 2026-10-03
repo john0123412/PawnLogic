@@ -52,6 +52,18 @@ class _FakeSocket:
         pass
 
 
+class _SequencedFakeSocket(_FakeSocket):
+    """Socket double returning one canned response per ``makefile`` call."""
+
+    def __init__(self, responses: tuple[bytes, ...]) -> None:
+        super().__init__(responses[0])
+        self._responses = iter(responses)
+
+    def makefile(self, mode: str, *args, **kwargs):
+        assert "b" in mode
+        return io.BytesIO(next(self._responses))
+
+
 def _ok_response(body: bytes = b"hello") -> bytes:
     return (
         b"HTTP/1.1 200 OK\r\n"
@@ -94,6 +106,33 @@ def _install_fake_tcp(monkeypatch, responses: dict[str, bytes]):
 
     monkeypatch.setattr(socket, "create_connection", fake_create_connection)
     return dialed, sockets
+
+
+def _install_fake_tcp_sequences(monkeypatch, responses: dict[str, tuple[bytes, ...]]):
+    """Record dials and return scripted responses for proxy CONNECT flows."""
+    dialed: list[tuple[str, int]] = []
+    sockets: list[_SequencedFakeSocket] = []
+
+    def fake_create_connection(address, timeout=None, source_address=None):
+        dialed.append((address[0], address[1]))
+        sock = _SequencedFakeSocket(responses[address[0]])
+        sockets.append(sock)
+        return sock
+
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+    return dialed, sockets
+
+
+def _proxy_connect_response() -> bytes:
+    return b"HTTP/1.1 200 Connection Established\r\nContent-Length: 0\r\n\r\n"
+
+
+def _set_proxy(monkeypatch, scheme: str, proxy: str, no_proxy: str) -> None:
+    """Set both env spellings so urllib's platform lookup is deterministic."""
+    monkeypatch.setenv(f"{scheme}_proxy", proxy)
+    monkeypatch.setenv(f"{scheme.upper()}_PROXY", proxy)
+    monkeypatch.setenv("no_proxy", no_proxy)
+    monkeypatch.setenv("NO_PROXY", no_proxy)
 
 
 @pytest.fixture(autouse=True)
@@ -261,6 +300,171 @@ def test_proxy_for_url_detects_env_proxy(monkeypatch):
     # no_proxy bypass: direct.
     monkeypatch.setenv("no_proxy", "example.test")
     assert network_adapter._proxy_for_url("http://example.test/") is None
+
+
+@pytest.mark.parametrize(
+    ("url", "rule"),
+    [
+        ("http://bad host/", "malformed_url"),
+        ("http://user:pass@example.test/", "url_credentials"),
+        ("http://example.test:notaport/", "invalid_port"),
+        ("http://localhost/", "loopback"),
+        ("http://service.internal/", "cloud_metadata"),
+    ],
+)
+def test_denied_urls_do_not_touch_dns(monkeypatch, url, rule):
+    """Syntax and unconditional target denials happen before DNS."""
+    calls: list[str] = []
+
+    def fake_resolve(host: str) -> tuple[str, ...]:
+        calls.append(host)
+        return ("93.184.216.34",)
+
+    monkeypatch.setattr(network_adapter, "_resolve_host_addresses", fake_resolve)
+    decision = network_adapter.evaluate_network_url(url, confirmation_available=False)
+
+    assert decision.action == NetworkAction.DENY
+    assert decision.rule == rule
+    assert calls == []
+
+
+def test_dns_error_is_checked_once_and_fails_closed(monkeypatch):
+    """A resolver failure keeps the policy's non-interactive deny semantics."""
+    calls: list[str] = []
+
+    def failing_resolve(host: str) -> tuple[str, ...]:
+        calls.append(host)
+        raise socket.gaierror("synthetic DNS failure")
+
+    monkeypatch.setattr(network_adapter, "_resolve_host_addresses", failing_resolve)
+    decision = network_adapter.evaluate_network_url(
+        "http://dns-error.test/",
+        confirmation_available=False,
+    )
+
+    assert decision.action == NetworkAction.DENY
+    assert decision.rule == "dns_result_invalid"
+    assert calls == ["dns-error.test"]
+
+
+def test_proxy_redirect_to_no_proxy_http_hop_uses_direct_pin(monkeypatch):
+    """A proxy-to-direct HTTP redirect must not reopen hostname resolution."""
+    _set_proxy(monkeypatch, "http", "http://proxy.test:3128", "direct.test")
+    dns_calls = _install_fake_dns(
+        monkeypatch,
+        {
+            "start.test": ("93.184.216.34",),
+            "direct.test": ("142.250.72.14",),
+        },
+    )
+    dialed, _ = _install_fake_tcp(
+        monkeypatch,
+        {
+            "proxy.test": _redirect_response("http://direct.test/"),
+            "142.250.72.14": _ok_response(b"direct-http"),
+        },
+    )
+
+    request = urllib.request.Request("http://start.test/")
+    with network_adapter.open_url_with_policy(request, timeout=5) as response:
+        assert response.read() == b"direct-http"
+
+    assert dialed == [("proxy.test", 3128), ("142.250.72.14", 80)]
+    assert dns_calls == ["start.test", "direct.test"]
+
+
+def test_proxy_redirect_to_no_proxy_https_hop_uses_direct_pin(monkeypatch):
+    """A proxy-to-direct HTTPS redirect must pin the direct TLS socket."""
+    _set_proxy(monkeypatch, "https", "http://proxy.test:3128", "direct.test")
+    dns_calls = _install_fake_dns(
+        monkeypatch,
+        {
+            "start.test": ("93.184.216.34",),
+            "direct.test": ("142.250.72.14",),
+        },
+    )
+    dialed, _ = _install_fake_tcp_sequences(
+        monkeypatch,
+        {
+            "proxy.test": (
+                _proxy_connect_response(),
+                _redirect_response("https://direct.test/"),
+            ),
+            "142.250.72.14": (_ok_response(b"direct-https"),),
+        },
+    )
+    monkeypatch.setattr(
+        ssl.SSLContext,
+        "wrap_socket",
+        lambda _self, sock, server_hostname=None, **kwargs: sock,
+    )
+
+    request = urllib.request.Request("https://start.test/")
+    with network_adapter.open_url_with_policy(request, timeout=5) as response:
+        assert response.read() == b"direct-https"
+
+    assert dialed == [("proxy.test", 3128), ("142.250.72.14", 443)]
+    assert dns_calls == ["start.test", "direct.test"]
+
+
+def test_direct_redirect_to_proxy_http_uses_proxy_resolution(monkeypatch):
+    """A direct-to-proxy HTTP redirect keeps the proxy outside target pinning."""
+    _set_proxy(monkeypatch, "http", "http://proxy.test:3128", "start.test")
+    dns_calls = _install_fake_dns(
+        monkeypatch,
+        {
+            "start.test": ("93.184.216.34",),
+            "proxied.test": ("142.250.72.14",),
+        },
+    )
+    dialed, _ = _install_fake_tcp(
+        monkeypatch,
+        {
+            "93.184.216.34": _redirect_response("http://proxied.test/"),
+            "proxy.test": _ok_response(b"proxied-http"),
+        },
+    )
+
+    request = urllib.request.Request("http://start.test/")
+    with network_adapter.open_url_with_policy(request, timeout=5) as response:
+        assert response.read() == b"proxied-http"
+
+    assert dialed == [("93.184.216.34", 80), ("proxy.test", 3128)]
+    assert dns_calls == ["start.test", "proxied.test"]
+
+
+def test_direct_redirect_to_proxy_https_uses_proxy_resolution(monkeypatch):
+    """A direct-to-proxy HTTPS redirect keeps CONNECT on the proxy path."""
+    _set_proxy(monkeypatch, "https", "http://proxy.test:3128", "start.test")
+    dns_calls = _install_fake_dns(
+        monkeypatch,
+        {
+            "start.test": ("93.184.216.34",),
+            "proxied.test": ("142.250.72.14",),
+        },
+    )
+    dialed, _ = _install_fake_tcp_sequences(
+        monkeypatch,
+        {
+            "93.184.216.34": (_redirect_response("https://proxied.test/"),),
+            "proxy.test": (
+                _proxy_connect_response(),
+                _ok_response(b"proxied-https"),
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        ssl.SSLContext,
+        "wrap_socket",
+        lambda _self, sock, server_hostname=None, **kwargs: sock,
+    )
+
+    request = urllib.request.Request("https://start.test/")
+    with network_adapter.open_url_with_policy(request, timeout=5) as response:
+        assert response.read() == b"proxied-https"
+
+    assert dialed == [("93.184.216.34", 443), ("proxy.test", 3128)]
+    assert dns_calls == ["start.test", "proxied.test"]
 
 
 def test_proxied_url_skips_pinning_but_keeps_policy_gate(monkeypatch):

@@ -67,20 +67,15 @@ def _pin_key(host: str) -> str:
 
 
 def _pinned_addresses_for_url(url: str) -> tuple[str, ...]:
-    """Resolve a URL's host exactly once, at policy-check time.
+    """Return a literal-IP pin without performing DNS resolution.
 
-    Returns the addresses the policy evaluated.  An empty tuple means the
-    pre-resolution failed or was skipped; the policy then falls back to its
-    own resolver, preserving the existing DNS-failure behavior.
-
-    Hosts are only resolved for http(s) URLs: unsupported schemes are denied
-    by the policy without DNS, and must stay that way.
+    Hostname resolution is owned by the policy resolver closure so syntax and
+    unconditional target denials happen before DNS, and the resulting address
+    list can be shared with the connection layer without a second lookup.
     """
     try:
         parts = urllib.parse.urlsplit(str(url))
     except ValueError:
-        # Malformed URL (e.g. unmatched IPv6 bracket): leave DNS alone;
-        # the policy denies the URL without resolving.
         return ()
     if parts.scheme not in ("http", "https"):
         return ()
@@ -93,15 +88,10 @@ def _pinned_addresses_for_url(url: str) -> tuple[str, ...]:
     try:
         ipaddress.ip_address(host)
     except ValueError:
-        pass
-    else:
-        # Literal IP: nothing to resolve, and the policy short-circuits on
-        # ``target.address`` anyway.  Pin it so the connect path is uniform.
-        return (host,)
-    try:
-        return _resolve_host_addresses(host)
-    except OSError:
         return ()
+    # Literal IP: nothing to resolve, and the policy short-circuits on
+    # ``target.address``.  Pin it so the connect path is uniform.
+    return (host,)
 
 
 def _evaluate_network_url_pinned(
@@ -121,6 +111,28 @@ def _evaluate_network_url_pinned(
         confirmation_available=confirmation_available,
     )
     pins = _pinned_addresses_for_url(url)
+
+    # Let NetworkPolicy perform the first hostname lookup only after its
+    # syntax and unconditional-target checks.  Capture that exact result for
+    # the transport so a DNS failure is not retried and a successful lookup
+    # cannot be replaced by a later connect-time resolution.
+    resolution_started = bool(pins)
+    initial_pins = pins
+    resolved_by_host: dict[str, tuple[str, ...]] = {}
+
+    def resolve_once(host: str) -> tuple[str, ...]:
+        nonlocal resolution_started, initial_pins
+        cached = resolved_by_host.get(host)
+        if cached is not None:
+            return cached
+        is_initial_resolution = not resolution_started
+        resolution_started = True
+        values = tuple(_resolve_host_addresses(host))
+        resolved_by_host[host] = values
+        if is_initial_resolution:
+            initial_pins = values
+        return values
+
     operation = NetworkOperation(
         url=str(url),
         tool_name="web_fetch",
@@ -131,8 +143,8 @@ def _evaluate_network_url_pinned(
         authorized_targets=options["authorized_targets"],  # type: ignore[arg-type]
         resolved_addresses=pins,
     )
-    decision = NetworkPolicy(resolver=_resolve_host_addresses).evaluate(operation)
-    return decision, pins
+    decision = NetworkPolicy(resolver=resolve_once).evaluate(operation)
+    return decision, initial_pins
 
 
 def evaluate_network_url(
@@ -297,6 +309,16 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         self.sock = self._context.wrap_socket(raw_sock, server_hostname=self.host)
 
 
+def _request_uses_proxy(request: urllib.request.Request) -> bool:
+    """Return whether urllib has routed this request through a proxy."""
+    has_proxy = getattr(request, "has_proxy", None)
+    if callable(has_proxy) and has_proxy():
+        return True
+    # HTTPS proxying keeps the original URL selector but records the tunnel
+    # target separately, so ``Request.has_proxy()`` alone misses CONNECT.
+    return bool(getattr(request, "_tunnel_host", None))
+
+
 class _PinnedHTTPHandler(urllib.request.HTTPHandler):
     """HTTPHandler wiring pinned connections into urllib."""
 
@@ -309,6 +331,9 @@ class _PinnedHTTPHandler(urllib.request.HTTPHandler):
         self._host_pins = host_pins if host_pins is not None else {}
 
     def http_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        if _request_uses_proxy(req):
+            # The operator-trusted proxy owns DNS and the socket for this hop.
+            return urllib.request.HTTPHandler.http_open(self, req)
         return self.do_open(_PinnedHTTPConnection, req, host_pins=self._host_pins)
 
 
@@ -326,6 +351,9 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
         self._host_pins = host_pins if host_pins is not None else {}
 
     def https_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        if _request_uses_proxy(req):
+            # Keep CONNECT and proxy-side resolution on urllib's stdlib path.
+            return urllib.request.HTTPSHandler.https_open(self, req)
         return self.do_open(
             _PinnedHTTPSConnection,
             req,
@@ -397,14 +425,15 @@ def open_url_with_policy(
     if not confirm_network_decision(decision, arguments):
         raise NetworkPolicyBlocked(decision)
     host_pins[_pin_key(urllib.parse.urlsplit(url).hostname or "")] = pins
-    if _proxy_for_url(url) is None:
-        opener = urllib.request.build_opener(
-            NetworkRedirectHandler(arguments, host_pins),
-            _PinnedHTTPHandler(host_pins),
-            _PinnedHTTPSHandler(host_pins),
-        )
-    else:
-        opener = urllib.request.build_opener(NetworkRedirectHandler(arguments))
+    # Install both transport handlers for every opener.  Each handler chooses
+    # the pinned direct path or stdlib proxy path from the current request, so
+    # redirects can safely change proxy policy without inheriting the initial
+    # URL's transport choice.
+    opener = urllib.request.build_opener(
+        NetworkRedirectHandler(arguments, host_pins),
+        _PinnedHTTPHandler(host_pins),
+        _PinnedHTTPSHandler(host_pins),
+    )
     return opener.open(request, timeout=timeout)
 
 

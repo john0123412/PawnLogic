@@ -169,6 +169,18 @@ runs fail closed instead. Plaintext `http://` providers and cross-boundary
 tool use print explicit warnings. Pattern filters and Docker boundaries
 reduce accidents but do not contain a determined attacker.
 
+The source `main` branch currently carries five additional security hardening
+changes under `CHANGELOG.md`'s `[Unreleased]` section: HTTP fetches through
+the network adapter dial only addresses pinned during
+policy checks (and fail closed without a pin;
+proxy-routed hops use the proxy, while redirects to direct hops are pinned
+separately); Docker privilege and capability flags are denied; Airlock package
+installation requires explicit network authorization even when a container is
+already on bridge; MCP results carry a model-visible attestation and structured
+provenance metadata; and nested delegated work shares one tree-wide budget
+ceiling. These post-0.4.1 changes are in source `main` only; the published
+PyPI 0.4.1 package does not include them.
+
 ## Data Layout
 
 ```text
