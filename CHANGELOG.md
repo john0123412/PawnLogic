@@ -13,6 +13,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   tool arguments with a SECURITY BLOCK, and every container creation
   funnels through `_spawn_container()`, which asserts none of these kwargs
   can reach the Docker SDK.
+- Airlock package installation now requires explicit network authorization
+  (issue #177): `tool_install_package` grants temporary bridge egress, so
+  it now goes through the same `_check_network_policy` gate as the other
+  container tools — `allow_network=true` or
+  `PAWNLOGIC_DOCKER_ALLOW_NETWORK=true` is required before the container
+  is connected to bridge.
 
 ## [0.4.1] - 2026-10-02
 

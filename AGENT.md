@@ -832,6 +832,11 @@ name at the end is the gate that fails if the invariant is broken.
   asserts these kwargs never reach the Docker SDK. A new container tool
   that calls `client.containers.run` directly instead of going through
   `_spawn_container` silently drops this guarantee — keep the funnel.
+- **Any tool path that grants a container network access must go through
+  `_check_network_policy`.** The airlock (`tool_install_package`) used to
+  attach bridge egress without the `allow_network` authorization the other
+  container tools require — that bypass is now closed. A new tool that
+  connects a container to a network must call the same gate.
 - Extension discovery must not import or enable third-party code during startup.
 - User-friendly mode must not leak debug internals; `/mode` remains the switch.
 - Stream adapters must not change public delta dict keys or ordering.
