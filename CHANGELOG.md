@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+- Delegation now enforces a tree-wide budget ceiling: the outermost
+  `delegate_task` in a context creates a shared `BudgetLedger` from its own
+  budget and nested delegations draw from the same pool, so a delegation
+  tree can no longer mint a fresh full budget at every level (#177).
+
 ## [0.4.1] - 2026-10-02
 
 ### Added
