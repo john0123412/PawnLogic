@@ -28,6 +28,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `PAWNLOGIC_DOCKER_ALLOW_NETWORK=true` is required for every install call,
   because apt/pip itself causes outbound traffic even when the container
   is already attached to bridge.
+- MCP tool results now carry provenance (issue #177): every result is
+  prepended with a model-visible attestation header (server, transport,
+  per-call id, content/config/command sha256), and the structured
+  `MCPToolProvenance` is recorded in the tool result envelope metadata,
+  so a result can be tied back to the MCP server that produced it.
 
 ## [0.4.1] - 2026-10-02
 

@@ -21,6 +21,7 @@ Design notes:
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import re
@@ -28,7 +29,9 @@ import sys
 import threading
 import time
 import traceback
+import uuid
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -331,6 +334,71 @@ def _flatten_mcp_content(content_blocks: list, server: str) -> str:
     return "\n".join(parts) if parts else "(empty result)"
 
 
+# The only transport this manager implements.  Kept as a constant so the
+# provenance header stays truthful if more transports are added later.
+_MCP_TRANSPORT = "stdio"
+
+
+@dataclass(frozen=True, slots=True)
+class MCPToolProvenance:
+    """Structured attestation for one MCP tool-call result (issue #177.1).
+
+    Binds the flattened result text to the server identity that produced
+    it: the configured server name, the transport, a per-call id, the
+    sha256 of the exact text handed to the model, the sha256 of the MCP
+    config file in effect, and the sha256 of the server's command line.
+    """
+
+    server: str
+    tool_name: str
+    transport: str
+    call_id: str
+    content_sha256: str
+    config_sha256: str
+    server_command_sha256: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "server": self.server,
+            "tool_name": self.tool_name,
+            "transport": self.transport,
+            "call_id": self.call_id,
+            "content_sha256": self.content_sha256,
+            "config_sha256": self.config_sha256,
+            "server_command_sha256": self.server_command_sha256,
+        }
+
+    def header(self) -> str:
+        """Compact model-visible attestation line prepended to the result."""
+        return (
+            f"[MCP provenance: server={self.server} transport={self.transport} "
+            f"call_id={self.call_id} "
+            f"content_sha256={self.content_sha256[:16]} "
+            f"config_sha256={self.config_sha256[:16]} "
+            f"server_cmd_sha256={self.server_command_sha256[:16]}]"
+        )
+
+
+class _ProvenancedStr(str):
+    """A str that carries its MCPToolProvenance through str() flattening.
+
+    Tool handlers contractually return ``str`` and the executor stringifies
+    results, so provenance rides along as an attribute instead of changing
+    the contract.  Use ``getattr(content, "provenance", None)`` to read it.
+    """
+
+    _provenance: MCPToolProvenance
+
+    def __new__(cls, text: str, provenance: MCPToolProvenance) -> "_ProvenancedStr":
+        obj = super().__new__(cls, text)
+        obj._provenance = provenance
+        return obj
+
+    @property
+    def provenance(self) -> MCPToolProvenance:
+        return self._provenance
+
+
 # ════════════════════════════════════════════════════════
 # Manager
 # ════════════════════════════════════════════════════════
@@ -578,6 +646,10 @@ class MCPClientManager:
                 "input_schema":  tool.inputSchema or {"type": "object", "properties": {}},
                 "timeout":       timeout,
                 "phase":         phase,
+                # Binds the tool to the exact server invocation (issue #177.1).
+                "server_command_sha256": hashlib.sha256(
+                    json.dumps([cmd, args], sort_keys=True).encode("utf-8")
+                ).hexdigest(),
             }
             kept += 1
 
@@ -611,6 +683,27 @@ class MCPClientManager:
         handler.__name__ = f"mcp_handler_{prefixed_name}"
         return handler
 
+    def _config_digest(self) -> str:
+        """sha256 of the MCP config file in effect, or 'unavailable'."""
+        try:
+            return hashlib.sha256(self.config_path.read_bytes()).hexdigest()
+        except OSError:
+            return "unavailable"
+
+    def _attest_result(self, server: str, tool_name: str, text: str) -> _ProvenancedStr:
+        """Attach provenance to a flattened MCP tool result (issue #177.1)."""
+        info = self.discovered_tools.get(f"{server}{NAME_SEPARATOR}{tool_name}", {})
+        provenance = MCPToolProvenance(
+            server=server,
+            tool_name=tool_name,
+            transport=_MCP_TRANSPORT,
+            call_id=uuid.uuid4().hex[:16],
+            content_sha256=hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest(),
+            config_sha256=self._config_digest(),
+            server_command_sha256=str(info.get("server_command_sha256") or "unavailable"),
+        )
+        return _ProvenancedStr(f"{provenance.header()}\n{text}", provenance)
+
     async def _call_async(self, server: str, tool_name: str, args: dict) -> str:
         session = self._sessions.get(server)
         if session is None:
@@ -639,8 +732,8 @@ class MCPClientManager:
 
             text = _flatten_mcp_content(result.content, server)
             if getattr(result, "isError", False):
-                return f"[MCP tool error from {server}] {text}"
-            return text
+                text = f"[MCP tool error from {server}] {text}"
+            return self._attest_result(server, tool_name, text)
 
         return f"[MCP] {server}/{tool_name} failed after 3 attempts: {type(last_err).__name__}: {last_err}"
 

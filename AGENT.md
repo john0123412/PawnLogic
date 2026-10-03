@@ -848,6 +848,12 @@ name at the end is the gate that fails if the invariant is broken.
   attach bridge egress without the `allow_network` authorization the other
   container tools require — that bypass is now closed. A new tool that
   connects a container to a network must call the same gate.
+- **MCP tool results must stay attributable to their server.** Results go
+  out as `_ProvenancedStr` carrying `MCPToolProvenance` (server,
+  transport, call id, content/config/command hashes); the executor
+  preserves it into `ToolExecutionResult.metadata["mcp_provenance"]` and
+  the attestation header stays in the model-visible text. A new result
+  path that stringifies MCP output must not drop the provenance.
 - Extension discovery must not import or enable third-party code during startup.
 - User-friendly mode must not leak debug internals; `/mode` remains the switch.
 - Stream adapters must not change public delta dict keys or ordering.
