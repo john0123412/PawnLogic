@@ -11,8 +11,6 @@
 PawnLogic 是一个 terminal-first 的自主 AI agent：多 provider 模型路由、
 持久记忆、真实的本地工具执行、MCP 集成，以及面向 CTF 的工具链。当前公开发布版本是 **0.4.1**。
 
-版本 **0.4.1** 是尚未发布的候选版本，目前尚未上传 PyPI。
-
 ## 快速开始
 
 环境要求：Linux 或 WSL2、Python 3.10+、`pip`。只有源码安装和 git skill
@@ -64,13 +62,24 @@ pawn --debug                             # 完整诊断输出
 
 ## 模型与 Provider
 
-内置别名（只有配置了 key 的 provider 才会出现在 `/model` 里）：
+内置别名（只有配置了 key 的 provider 才会出现在 `/model` 里）。
+每个别名都指向一个真实模型 ID；provider 发布新模型时别名会跟着走，
+添加 key 后跑一遍 `/provider fetch <name>` 即可同步最新列表。
 
-| Provider | 别名 |
-|----------|------|
-| DeepSeek | `ds-v4-flash`、`ds-v4-pro` |
-| OpenAI | `gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini`、`gpt-5.4-nano`、`gpt-4o`、`gpt-4.1`、`o3` |
-| Anthropic | `claude-opus`、`claude-sonnet`、`claude-haiku` |
+| 别名 | 模型 | Provider |
+|------|------|----------|
+| `ds-v4-flash` | `deepseek-v4-flash` | DeepSeek |
+| `ds-v4-pro` | `deepseek-v4-pro` | DeepSeek |
+| `gpt-5.5` | `gpt-5.5` | OpenAI |
+| `gpt-5.4` | `gpt-5.4` | OpenAI |
+| `gpt-5.4-mini` | `gpt-5.4-mini` | OpenAI |
+| `gpt-5.4-nano` | `gpt-5.4-nano` | OpenAI |
+| `gpt-4o` | `gpt-4o` | OpenAI |
+| `gpt-4.1` | `gpt-4.1` | OpenAI |
+| `o3` | `o3` | OpenAI |
+| `claude-opus` | `claude-opus-4-6` | Anthropic |
+| `claude-sonnet` | `claude-sonnet-4-6` | Anthropic |
+| `claude-haiku` | `claude-haiku-4-5-20251001` | Anthropic |
 
 ```bash
 /provider                              # provider TUI
