@@ -825,22 +825,25 @@ name at the end is the gate that fails if the invariant is broken.
 - Provider visibility must agree across CLI, TUI, completions, and runtime fetch.
 - Trust/Operation/Network Policy drift across host, Docker, browser, MCP, and
   CTF paths; URL adapters must re-evaluate DNS and redirects.
-- **DNS is resolved once per URL, at policy-check time, and the connection
-  layer must never re-resolve.** `tools/network_adapter.py` pins the
-  check-time addresses (`_pinned_addresses_for_url`) and the urllib handlers
-  only dial those pins (`_PinnedHTTP(S)Connection`); a missing pin record
-  fails closed instead of falling back to a fresh lookup, which is what
-  closes the DNS-rebinding TOCTOU gap (issue #177). A new fetch path that
-  opens sockets must go through `open_url_with_policy` (or carry the same
-  pin table); resolving again at connect time silently reopens the hole.
-  Proxied requests are the deliberate exception — the proxy performs the
-  connection there (`_proxy_for_url`). `tests/test_network_dns_pinning.py`
+- **DNS is resolved once per URL after syntax and unconditional target denials,
+  and the connection layer must never re-resolve.** In
+  `tools/network_adapter.py`, `_pinned_addresses_for_url` only pins literal
+  IPs; the `NetworkPolicy` resolver closure performs the single hostname
+  lookup and captures its result, while direct urllib handlers only dial those
+  pins (`_PinnedHTTP(S)Connection`). Each direct redirect hop is pinned
+  independently. A missing pin record or failed lookup fails closed instead of
+  falling back to a fresh lookup, which is what closes the DNS-rebinding TOCTOU
+  gap (issue #177). Proxy-routed hops deliberately use the stdlib proxy path;
+  when a redirect changes proxy routing, every direct hop still uses its own
+  policy-time pins. A new fetch path that opens sockets must go through
+  `open_url_with_policy` (or carry the same pin table). `tests/test_network_dns_pinning.py`
   gates the invariant, including the single-resolution assertion.
 - **PawnLogic containers must never be privileged or gain Linux
   capabilities.** `tools/docker_sandbox.py` rejects `privileged`,
   `cap_add`, `cap_drop` and `security_opt` in tool arguments with a
   SECURITY BLOCK, and `_spawn_container()` is the single choke point that
-  asserts these kwargs never reach the Docker SDK. A new container tool
+  raises `PermissionError` whenever a forbidden kwarg is present, so these
+  kwargs never reach the Docker SDK, even under `python -O`. A new container tool
   that calls `client.containers.run` directly instead of going through
   `_spawn_container` silently drops this guarantee — keep the funnel.
 - **Any tool path that grants a container network access must go through

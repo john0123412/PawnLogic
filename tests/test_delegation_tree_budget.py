@@ -27,6 +27,29 @@ class _StubExecutor:
         return AgentResult(status="completed", summary="ok", usage=self.usage)
 
 
+@dataclass
+class _ContextProbeExecutor:
+    seen_depth: list[int] = field(default_factory=list)
+    seen_ledgers: list[BudgetLedger | None] = field(default_factory=list)
+    acquired_ledgers: list[BudgetLedger] = field(default_factory=list)
+    acquired_tokens: list[object] = field(default_factory=list)
+    worker_thread_ids: list[int] = field(default_factory=list)
+
+    def execute(
+        self,
+        task: AgentTask,
+        cancellation: CancellationToken,
+    ) -> AgentResult:
+        self.seen_depth.append(delegate_tool._delegation_depth.get())
+        inherited_ledger = delegate_tool._delegation_tree_ledger.get()
+        self.seen_ledgers.append(inherited_ledger)
+        nested_ledger, nested_token = delegate_tool._acquire_tree_ledger(task.budget)
+        self.acquired_ledgers.append(nested_ledger)
+        self.acquired_tokens.append(nested_token)
+        self.worker_thread_ids.append(threading.get_ident())
+        return AgentResult(status="completed", summary="ok")
+
+
 def _task(task_id: str, *, max_tokens: int = 10, max_tool_calls: int = 2) -> AgentTask:
     return AgentTask(
         task_id=task_id,
@@ -109,3 +132,31 @@ def test_depth_propagates_into_worker_thread_via_copied_context():
     finally:
         delegate_tool._delegation_depth.reset(depth_token)
     assert delegate_tool._delegation_depth.get() == 0
+
+
+def test_serial_orchestrator_pool_preserves_tree_context_and_nested_reuse():
+    budget = AgentBudget(max_tokens=10, max_tool_calls=2)
+    ledger, ledger_token = delegate_tool._acquire_tree_ledger(budget)
+    depth_token = delegate_tool._delegation_depth.set(1)
+    parent_thread_id = threading.get_ident()
+    executor = _ContextProbeExecutor()
+    try:
+        outcome = SerialAgentOrchestrator(executor).run(
+            [_task("nested-context")],
+            budget=budget,
+            cancellation=CancellationToken(),
+            ledger=ledger,
+        )
+        assert outcome.results[0].status == "completed"
+        assert executor.seen_depth == [1]
+        assert executor.seen_ledgers == [ledger]
+        assert executor.acquired_ledgers == [ledger]
+        assert executor.acquired_tokens == [None]
+        assert executor.worker_thread_ids
+        assert all(thread_id != parent_thread_id for thread_id in executor.worker_thread_ids)
+    finally:
+        delegate_tool._delegation_depth.reset(depth_token)
+        delegate_tool._delegation_tree_ledger.reset(ledger_token)
+
+    assert delegate_tool._delegation_depth.get() == 0
+    assert delegate_tool._delegation_tree_ledger.get() is None

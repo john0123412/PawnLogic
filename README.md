@@ -11,6 +11,8 @@
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
 CTF-oriented toolchain. The current public release is **0.4.1**.
+Version **0.4.2** is an unreleased release candidate containing security
+hardening changes.
 
 
 ## Quick Start
@@ -168,6 +170,16 @@ explicit confirmation (the dialog defaults to **Deny**); non-interactive
 runs fail closed instead. Plaintext `http://` providers and cross-boundary
 tool use print explicit warnings. Pattern filters and Docker boundaries
 reduce accidents but do not contain a determined attacker.
+
+The 0.4.2 release candidate includes five security hardening changes in the
+code: HTTP fetches through the network adapter dial only addresses pinned
+during policy checks (and fail closed without a pin; proxy-routed hops use the
+proxy, while redirects to direct hops are pinned separately); Docker privilege
+and capability flags are denied; Airlock package installation requires
+explicit network authorization even when a container is already on bridge;
+MCP results carry a model-visible attestation and structured provenance
+metadata; and nested delegated work shares one tree-wide budget ceiling. The
+published PyPI 0.4.1 package does not include this candidate hardening.
 
 ## Data Layout
 
