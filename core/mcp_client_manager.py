@@ -387,6 +387,8 @@ class _ProvenancedStr(str):
     the contract.  Use ``getattr(content, "provenance", None)`` to read it.
     """
 
+    _provenance: MCPToolProvenance
+
     def __new__(cls, text: str, provenance: MCPToolProvenance) -> "_ProvenancedStr":
         obj = super().__new__(cls, text)
         obj._provenance = provenance

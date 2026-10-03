@@ -281,7 +281,7 @@ def _run_handler_with_watchdog(
     fn_args: dict,
     tool_name: str,
     timeout_seconds: float,
-) -> str:
+) -> object:
     """Run one sync handler on a daemon thread under a hard deadline.
 
     A wedged handler must never freeze the agent loop. Python threads cannot
