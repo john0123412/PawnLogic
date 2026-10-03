@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+- MCP tool results now carry provenance (issue #177): every result is
+  prepended with a model-visible attestation header (server, transport,
+  per-call id, content/config/command sha256), and the structured
+  `MCPToolProvenance` is recorded in the tool result envelope metadata,
+  so a result can be tied back to the MCP server that produced it.
+
 ## [0.4.1] - 2026-10-02
 
 ### Added

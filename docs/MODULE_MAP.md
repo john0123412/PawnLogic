@@ -34,7 +34,7 @@
 | `core/tool_registry.py` | Capability Interface | `ToolRegistry.register()` / `visible_specs()` | `test_tool_registry.py` | Handler, schema, phase, trust, capabilities registered atomically. No tool without handler. |
 | `core/extension_contracts.py` | Extension Interface | Frozen Extension values and lifecycle Protocols | `test_extensions.py` | Contracts import no discovery/startup logic. Contributions are typed and owner-attributed. |
 | `core/extensions.py` | Extension Runtime | `ExtensionManager` | `test_extensions.py` | Discovery never loads entry points. Enablement is explicit, transactional, persisted, and failure-isolated. |
-| `core/mcp_client_manager.py` | MCP process Adapter | `MCPClientManager`, `init_external_mcp()` | `test_mcp_client_manager.py`, `test_mcp_config.py`, `test_network_adapter_baseline.py` | Startup is failure-isolated. Legacy `uvx mcp-server-fetch` requires capability-only network-install authorization. |
+| `core/mcp_client_manager.py` | MCP process Adapter | `MCPClientManager`, `init_external_mcp()` | `test_mcp_client_manager.py`, `test_mcp_config.py`, `test_mcp_provenance.py`, `test_network_adapter_baseline.py` | Startup is failure-isolated. Legacy `uvx mcp-server-fetch` requires capability-only network-install authorization. Tool results carry provenance (server/transport/call id/content hash). |
 | `core/tool_executor.py` | Tool dispatch | `ToolExecutor` class | `test_tool_executor.py` | Dispatches to handler, records outcome, respects trust boundary. |
 | `core/tool_result.py` | Outcome shape | `ToolResult` dataclass | `test_tool_result.py` | Explicit status, content, error_type, side_effect flag. |
 

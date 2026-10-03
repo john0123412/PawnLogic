@@ -325,7 +325,9 @@ def _run_handler_with_watchdog(
         )
     if error_holder:
         raise error_holder[0]
-    return str(result_holder[0]) if result_holder else ""
+    # Return the raw object: execute_tool_handler() stringifies it after
+    # extracting provenance carried by str subclasses (issue #177.1).
+    return result_holder[0] if result_holder else ""
 
 
 def execute_tool_handler(
@@ -370,7 +372,14 @@ def execute_tool_handler(
         audit_ok = False
 
     elapsed_ms = int((clock() - started_at) * 1000)
+    # Provenance rides on str subclasses (e.g. MCP tool results); extract it
+    # before stringifying so it survives into the envelope (issue #177.1).
+    provenance = getattr(content, "provenance", None)
     content_text = str(content)
+    metadata: dict[str, Any] = {}
+    if provenance is not None:
+        as_dict = getattr(provenance, "as_dict", None)
+        metadata["mcp_provenance"] = as_dict() if callable(as_dict) else repr(provenance)
     return ToolExecutionResult(
         tool_call_id=tool_call_id,
         tool_name=tool_name,
@@ -378,6 +387,7 @@ def execute_tool_handler(
         audit_ok=audit_ok,
         elapsed_ms=elapsed_ms,
         args_preview=args_preview,
+        metadata=metadata,
     )
 
 

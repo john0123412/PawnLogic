@@ -825,6 +825,12 @@ name at the end is the gate that fails if the invariant is broken.
 - Provider visibility must agree across CLI, TUI, completions, and runtime fetch.
 - Trust/Operation/Network Policy drift across host, Docker, browser, MCP, and
   CTF paths; URL adapters must re-evaluate DNS and redirects.
+- **MCP tool results must stay attributable to their server.** Results go
+  out as `_ProvenancedStr` carrying `MCPToolProvenance` (server,
+  transport, call id, content/config/command hashes); the executor
+  preserves it into `ToolExecutionResult.metadata["mcp_provenance"]` and
+  the attestation header stays in the model-visible text. A new result
+  path that stringifies MCP output must not drop the provenance.
 - Extension discovery must not import or enable third-party code during startup.
 - User-friendly mode must not leak debug internals; `/mode` remains the switch.
 - Stream adapters must not change public delta dict keys or ordering.
