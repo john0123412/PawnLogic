@@ -746,14 +746,18 @@ def tool_install_package(a: dict) -> str:
         except Exception:
             pass
 
+        # Issue #177.4: installing packages always causes outbound traffic,
+        # so every call needs explicit network authorization — even when the
+        # container is already on bridge via user-managed networking. The
+        # already_on_bridge check below only decides whether the airlock
+        # itself must connect/disconnect.
+        err = _check_network_policy(a, "bridge")
+        if err:
+            return err
+
         if already_on_bridge:
             print(c(GRAY, f"  [Airlock] container '{container_name}' is already on bridge; skipping connect"))
         else:
-            # Issue #177.4: the airlock granting bridge egress is a
-            # network-policy decision, like the other container tools.
-            err = _check_network_policy(a, "bridge")
-            if err:
-                return err
             try:
                 bridge_net.connect(container)
                 _airlock_connected = True

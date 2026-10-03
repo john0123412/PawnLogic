@@ -306,3 +306,30 @@ def test_airlock_install_allows_bridge_egress_with_explicit_arg(monkeypatch):
     assert result.startswith("[Airlock")
     assert client.bridge.connected == [client.container]
     assert client.bridge.disconnected == [client.container]
+
+
+def test_airlock_install_requires_authorization_even_when_already_on_bridge(
+    monkeypatch,
+):
+    # apt/pip itself causes outbound traffic, so the policy gate applies
+    # even when user-managed networking already attached the container.
+    client = _install_airlock_client(monkeypatch)
+    client.bridge.attrs = {"Containers": {"cid123": {}}}
+
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["requests"]}
+    )
+    assert result.startswith("SECURITY BLOCK")
+
+    result = docker_sandbox.tool_install_package(
+        {
+            "container_name": "c1",
+            "pkg_manager": "pip",
+            "packages": ["requests"],
+            "allow_network": True,
+        }
+    )
+    assert result.startswith("[Airlock")
+    # Already on bridge: the airlock authorizes but does not touch networking.
+    assert client.bridge.connected == []
+    assert client.bridge.disconnected == []

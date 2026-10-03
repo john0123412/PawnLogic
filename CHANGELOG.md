@@ -17,8 +17,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (issue #177): `tool_install_package` grants temporary bridge egress, so
   it now goes through the same `_check_network_policy` gate as the other
   container tools — `allow_network=true` or
-  `PAWNLOGIC_DOCKER_ALLOW_NETWORK=true` is required before the container
-  is connected to bridge.
+  `PAWNLOGIC_DOCKER_ALLOW_NETWORK=true` is required for every install call,
+  because apt/pip itself causes outbound traffic even when the container
+  is already attached to bridge.
 
 ## [0.4.1] - 2026-10-02
 
