@@ -825,6 +825,17 @@ name at the end is the gate that fails if the invariant is broken.
 - Provider visibility must agree across CLI, TUI, completions, and runtime fetch.
 - Trust/Operation/Network Policy drift across host, Docker, browser, MCP, and
   CTF paths; URL adapters must re-evaluate DNS and redirects.
+- **DNS is resolved once per URL, at policy-check time, and the connection
+  layer must never re-resolve.** `tools/network_adapter.py` pins the
+  check-time addresses (`_pinned_addresses_for_url`) and the urllib handlers
+  only dial those pins (`_PinnedHTTP(S)Connection`); a missing pin record
+  fails closed instead of falling back to a fresh lookup, which is what
+  closes the DNS-rebinding TOCTOU gap (issue #177). A new fetch path that
+  opens sockets must go through `open_url_with_policy` (or carry the same
+  pin table); resolving again at connect time silently reopens the hole.
+  Proxied requests are the deliberate exception — the proxy performs the
+  connection there (`_proxy_for_url`). `tests/test_network_dns_pinning.py`
+  gates the invariant, including the single-resolution assertion.
 - Extension discovery must not import or enable third-party code during startup.
 - User-friendly mode must not leak debug internals; `/mode` remains the switch.
 - Stream adapters must not change public delta dict keys or ordering.
