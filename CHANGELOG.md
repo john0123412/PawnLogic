@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-03
+
+### Changed
+- Built-in model documentation now lists each alias alongside its real model
+  ID and provider.
+
+### Fixed
+- Closed the remaining DNS-pinning audit gaps: policy-time pins survive proxy
+  redirects, and denied URLs do not trigger DNS lookups or repeat resolution.
+
 ### Security
 - DNS-rebinding TOCTOU closed for policy-gated fetches (issue #177): the
   network adapter now resolves a URL's host exactly once at policy-check
