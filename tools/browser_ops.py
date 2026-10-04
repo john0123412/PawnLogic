@@ -12,8 +12,10 @@ Core capabilities:
   - web_navigate: page navigation.
 
 Architecture:
-  - web_fetch uses StealthyFetcher/Camoufox without a browser window.
-  - screenshot/click/select/type/navigate use Patchright.
+  - web_fetch uses Scrapling StealthyFetcher, forced through the loopback
+    enforcement proxy (tools/policy_proxy.py) with a per-attempt request guard.
+  - screenshot/click/select/type/navigate use Patchright, launched through
+    the same enforcement proxy with a context-lifetime request guard.
   - _current_url bridges both engines so fetch can sync later screenshots.
 
 Safety constraints:
@@ -26,8 +28,8 @@ Dependencies:
 """
 
 import os
-import time
 import threading
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -42,10 +44,19 @@ from core.trust import (
     trust_notice_for_boundary,
 )
 from tools.network_adapter import (
+    BrowserRequestGuard,
     ensure_page_url,
+    install_browser_route_guard,
     navigate_with_policy as _navigate_with_policy,
     response_url_with_policy,
     validate_browser_url as _validate_browser_url,
+)
+from tools.policy_proxy import (
+    browser_launch_arguments,
+    retry_fetch_with_enforcement,
+    scrapling_version_gate,
+    shared_policy_proxy,
+    start_shared_policy_proxy,
 )
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN
 
@@ -60,10 +71,14 @@ _current_url = None
 
 # Global Patchright browser context, created lazily.
 _browser_lock = threading.Lock()
+_playwright = None    # patchright driver lifecycle
 _browser = None       # patchright Browser
 _context = None        # patchright BrowserContext
 _page = None           # active patchright Page
 _browser_error = None  # error message
+# Context-lifetime guard checks requests surfaced by the engine. Redirects
+# can bypass routing; the mandatory proxy enforces their destinations.
+_network_guard: BrowserRequestGuard | None = None
 
 # StealthyFetcher instance, created lazily.
 _stealthy_fetcher = None
@@ -76,14 +91,6 @@ def _user_mode() -> bool:
     return bool(_runtime_state.user_mode)
 
 
-def _browser_launch_args() -> list[str]:
-    args = ["--disable-blink-features=AutomationControlled"]
-    allow_no_sandbox = bool(BROWSER_CONFIG.get("allow_no_sandbox", False))
-    if allow_no_sandbox:
-        args.insert(0, "--no-sandbox")
-    return args
-
-
 def _emit_browser_trust_warning() -> None:
     global _browser_warning_emitted
     if _browser_warning_emitted or not _user_mode():
@@ -94,9 +101,21 @@ def _emit_browser_trust_warning() -> None:
         print(c(YELLOW, trust_notice(BROWSER_SANDBOX_DISABLED)))
 
 
+def _teardown_browser_state() -> None:
+    """Close any partially started browser objects and reset the globals."""
+    global _browser, _context, _page, _network_guard, _playwright
+    resources = ((_context, "close"), (_browser, "close"), (_playwright, "stop"))
+    _page = _context = _browser = _network_guard = _playwright = None
+    for resource, method in resources:
+        cleanup = getattr(resource, method, None)
+        if callable(cleanup):
+            with suppress(Exception):
+                cleanup()
+
+
 def _get_page() -> Any | None:
     """Get or create a Patchright browser page lazily."""
-    global _browser, _context, _page, _browser_error
+    global _browser, _context, _page, _browser_error, _network_guard, _playwright
 
     with _browser_lock:
         if _page and not _page.is_closed():
@@ -111,22 +130,35 @@ def _get_page() -> Any | None:
             return None
 
         try:
-            pw = sync_playwright().start()
+            # The enforcement proxy is the browser transport boundary: launch
+            # fails closed when it cannot start, so the engine is never
+            # reachable without it.
+            proxy = start_shared_policy_proxy()
+            pw = _playwright = sync_playwright().start()
             _emit_browser_trust_warning()
             _browser = pw.chromium.launch(
                 headless=True,
-                args=_browser_launch_args(),
+                args=browser_launch_arguments(),
+                proxy={"server": proxy.url, "bypass": "<-loopback>"},
             )
             _context = _browser.new_context(
                 viewport={"width": 1920, "height": 1080},
                 locale="en-US",
+                # Request SDK blocking; the proxy still enforces Worker
+                # egress if the engine ignores this setting.
+                service_workers="block",
             )
+            guard, guard_error = install_browser_route_guard(_context, None, proxy=proxy)
+            if guard is None:
+                raise RuntimeError(guard_error)
+            _network_guard = guard
             _page = _context.new_page()
             _browser_error = None
             return _page
 
         except Exception as e:
             _browser_error = f"browser startup failed: {type(e).__name__}: {e}"
+            _teardown_browser_state()
             return None
 
 
@@ -134,63 +166,32 @@ def _ensure_page_url(url: str, arguments: dict | None = None) -> str | None:
     """Ensure the Patchright page has navigated to the target URL."""
     global _current_url
     error, _current_url = ensure_page_url(
-        url,
-        arguments=arguments,
-        current_url=_current_url,
-        get_page=_get_page,
-        timeout_ms=BROWSER_CONFIG["timeout"] * 1000,
+        url, arguments=arguments, current_url=_current_url,
+        get_page=_get_page, timeout_ms=BROWSER_CONFIG["timeout"] * 1000,
         emit_warnings=_user_mode(),
         warning_sink=lambda warning: print(c(YELLOW, trust_notice(warning))),
+        get_guard=lambda: _network_guard, get_proxy=shared_policy_proxy,
     )
     return error
 
 
 def _get_stealthy_fetcher() -> Any | None:
-    """Get or create a StealthyFetcher instance.
-    StealthyFetcher.configure() warms global Camoufox state to avoid first-fetch cold-start timeouts.
-    """
+    """Get or create a StealthyFetcher instance."""
     global _stealthy_fetcher, _fetcher_error
     with _fetcher_lock:
         if _stealthy_fetcher is None:
             try:
                 from scrapling import StealthyFetcher
-                # Global warm-up; later fetch() calls reuse the preloaded engine configuration.
-                StealthyFetcher.configure()
+                # Parser defaults are fine: Scrapling 0.4.15 rejects a bare
+                # configure() call, and each enforced fetch starts its own
+                # Chromium session anyway.
                 _stealthy_fetcher = StealthyFetcher()
                 _fetcher_error = None
             except Exception as e:
-                if isinstance(e, ImportError):
-                    _fetcher_error = "ERROR: browser dependencies are not installed. Fix: pip install 'pawnlogic[browser]'"
-                    return None
-                _fetcher_error = f"ERROR: {e}"
+                _fetcher_error = ("ERROR: browser dependencies are not installed. Fix: pip install 'pawnlogic[browser]'"
+                                  if isinstance(e, ImportError) else f"ERROR: {e}")
                 return None
         return _stealthy_fetcher
-
-
-def _retry_fetch(
-    fetcher: Any, url: str, timeout_ms: int, max_retries: int = 3
-) -> Any:
-    """Retry fetches with increasing delays for timeout failures.
-    Delay sequence: 2s, 5s, 10s.
-    """
-    delays = [2, 5, 10]
-    last_exc = None
-    for attempt in range(max_retries):
-        try:
-            return fetcher.fetch(url, headless=True, timeout=timeout_ms)
-        except Exception as e:
-            last_exc = e
-            err_name = type(e).__name__
-            is_timeout = "timeout" in str(e).lower() or "Timeout" in err_name
-            if not is_timeout or attempt == max_retries - 1:
-                raise
-            delay = delays[min(attempt, len(delays) - 1)]
-            print(c(YELLOW,
-                f"  [Retry {attempt+1}/{max_retries}] {err_name}, "
-                f"retrying after {delay}s..."
-            ))
-            time.sleep(delay)
-    raise RuntimeError("fetch retry loop exhausted") from last_exc
 
 
 def _safe_path(filename: str) -> str:
@@ -230,6 +231,9 @@ def tool_web_fetch(a: dict) -> str:
     url = a["url"]
     timeout = int(a.get("timeout", BROWSER_CONFIG["timeout"]))
     print(c(CYAN, f"  🌐 [Scrapling/Fetch] {url[:80]}"))
+    gate_error = scrapling_version_gate()
+    if gate_error:
+        return gate_error
     err, warnings = _validate_browser_url(url, a)
     if err:
         return err
@@ -242,9 +246,18 @@ def tool_web_fetch(a: dict) -> str:
         if fetcher is None:
             return _fetcher_error or "ERROR: browser initialization failed"
 
-        # StealthyFetcher is Camoufox-backed; timeout is in milliseconds.
+        # The transport boundary is the loopback enforcement proxy plus the
+        # per-attempt page_setup guard (retry_fetch_with_enforcement): the
+        # engine follows redirects and Service-Worker fetches itself, and
+        # Scrapling swallows page_setup exceptions, so verification happens
+        # after every attempt instead of trusting the callback.
+        proxy = start_shared_policy_proxy()
         # Timeout retry delays are 2s -> 5s -> 10s.
-        resp = _retry_fetch(fetcher, url, timeout * 1000, max_retries=3)
+        resp, enforcement_error = retry_fetch_with_enforcement(
+            fetcher, url, timeout * 1000, arguments=a, proxy=proxy,
+        )
+        if enforcement_error or resp is None:
+            return enforcement_error or "ERROR: fetch retry loop exhausted"
 
         final_err, _current_url = response_url_with_policy(
             resp,
@@ -280,6 +293,10 @@ def tool_web_fetch(a: dict) -> str:
 
         return result
 
+    except RuntimeError as e:
+        if "SECURITY BLOCK" in str(e):
+            return str(e)
+        return _format_browser_error("Scrapling fetch failed", e)
     except Exception as e:
         return _format_browser_error("Scrapling fetch failed", e)
 
@@ -408,10 +425,8 @@ def tool_web_navigate(a: dict) -> str:
     try:
         timeout = int(a.get("timeout", BROWSER_CONFIG["timeout"]))
         navigation_error, final_url = _navigate_with_policy(
-            page,
-            url,
-            timeout_ms=timeout * 1000,
-            arguments=a,
+            page, url, timeout_ms=timeout * 1000,
+            arguments=a, guard=_network_guard, proxy=shared_policy_proxy(),
         )
         if navigation_error:
             _current_url = None

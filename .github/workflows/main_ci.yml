@@ -192,6 +192,8 @@ jobs:
             tools/check_release_consistency.py \
             tools/merge_ctf_skills.py \
             tools/browser_ops.py \
+            tools/policy_proxy.py \
+            tools/proxy_protocol.py \
             tools/lsp_lite.py \
             tools/text_patch.py \
             tools/shell_ops.py \

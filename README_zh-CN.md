@@ -169,6 +169,15 @@ metadata；嵌套委派共享整棵树的预算上限。
 未发布代码中的进一步加固：Docker 网络模式只允许 `none`、`bridge`、`host`。
 `container:<id>` 这类共享其他容器网络的模式和未知模式会在调用 Docker SDK
 之前被拒绝，即使设置了 `allow_network=true`。Bridge 和 host 仍需显式网络授权。
+浏览器工具（Patchright 与 Scrapling）的 HTTP/HTTPS 连接强制经过本地回环代理，
+只拨打策略检查时固定的 IP。两条 Chromium 路径都禁用 HTTP/2 与 QUIC，显式
+让 loopback 经过代理，请求禁用 Service Worker，并限制 WebRTC 的非代理 UDP。
+context 级 route guard 对可拦截的请求做二次检查，安装失败会关闭上下文。
+已确认的私有目标只在当前操作中使用确认时的 IP，操作结束会关闭既有连接。
+明文 HTTP 每个连接只处理一个请求，不支持 chunked 上传、协议升级、`Expect`
+和超过 8 MiB 的请求体。HTTPS 内容保持端到端加密；该目标访问边界不是操作系统
+沙箱。当前 Patchright 的 Service Worker 注册屏蔽可从原型方法绕过；即使注册成功，
+其出站连接仍由代理检查。不支持所需 setup 契约的 Scrapling 版本会在抓取前被拒绝。
 
 ## 数据目录
 

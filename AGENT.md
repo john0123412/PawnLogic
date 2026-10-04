@@ -675,7 +675,7 @@ mode.
 authoritative list.** A module is in the island only when CI passes its file
 to mypy; the matching `[[tool.mypy.overrides]]` entry in `pyproject.toml` is
 what actually turns on `disallow_untyped_defs` / `check_untyped_defs` for it.
-Both files, plus the list below, must name the same 48 modules;
+Both files, plus the list below, must name the same 50 modules;
 `tests/test_typed_island_sync.py` fails the build when they diverge.
 
 To add a module: annotate it until it passes
@@ -697,8 +697,8 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `pawnlogic/confirm_selector`, `pawnlogic/terminal_transcript`,
 `pawnlogic/restart_recovery`, `tools/check_doc_structure`,
 `tools/check_release_consistency`, `tools/merge_ctf_skills`, `tools/browser_ops`,
-`tools/lsp_lite`, `tools/text_patch`, `tools/shell_ops`, `tools/docker_plan`,
-`tools/pwn_binary`, `tools/pwn_debugger`.
+`tools/policy_proxy`, `tools/proxy_protocol`, `tools/lsp_lite`, `tools/text_patch`, `tools/shell_ops`,
+`tools/docker_plan`, `tools/pwn_binary`, `tools/pwn_debugger`.
 
 `core/delegation` and `core/agent_orchestrator` are **not** in the island.
 `core/agent_orchestrator` has an unannotated parameter at line 402 and would
@@ -854,6 +854,27 @@ name at the end is the gate that fails if the invariant is broken.
   mode must not inherit another container's network without an authorization
   gate of its own. The tool schemas carry the matching `enum`, so keep the
   schema, plan validator, and gate in agreement when touching network modes.
+- **Browser transports require the loopback policy proxy.** Chromium skips
+  redirect route callbacks, so context guards alone cannot enforce destinations.
+  Both Patchright paths (including Scrapling >= 0.4.15) disable HTTP/2/QUIC,
+  explicitly proxy loopback, request Service Worker blocking, and restrict non-proxied
+  WebRTC UDP. Each CONNECT authority or single plain-HTTP request is evaluated
+  non-interactively and dials only policy-time pins. Only a host-confirmed
+  private decision can mint a grant: retain its exact pins and operation token,
+  never override hard denials, and never grant background requests. Scope exit
+  and stop close existing client/upstream sockets, including dial races; reject
+  overlapping scopes and bound handlers. Plain HTTP cannot raw-splice later
+  requests: validate Host/body framing, strip proxy/hop headers, force close,
+  and reject unsupported streaming/upgrades. Preserve CONNECT pre-read bytes.
+  A missing proxy fails navigation; lazy guard/proxy providers are resolved
+  after bootstrap and exceptions must not return stale success. Failed setup
+  closes the context, and Scrapling verifies the hook on every retry.
+  `tests/test_policy_proxy.py`, `tests/test_proxy_protocol.py`, and the optional
+  real Chromium `tests/test_browser_proxy_integration.py` gate these boundaries.
+  Patchright 1.63 implements Service Worker blocking with a JavaScript shim;
+  the native prototype method bypasses it. The mandatory proxy
+  must enforce real Service Worker egress even with registration allowed.
+  CONNECT enforces destinations, not TLS contents or an OS process sandbox.
 - **MCP tool results must stay attributable to their server.** Results go
   out as `_ProvenancedStr` carrying `MCPToolProvenance` (server,
   transport, call id, content/config/command hashes); the executor
@@ -1254,7 +1275,7 @@ name at the end is the gate that fails if the invariant is broken.
 - **The typed-island module list is stated in three places** (CI mypy step,
   pyproject overrides, Typed Island section). `tests/test_typed_island_sync.py`
   fails the build when they diverge — treat that failure as the gate, not as a
-  test to relax. All three name the same **48 library modules**; the CI step
+  test to relax. All three name the same **50 library modules**; the CI step
   passes no `tests/` file to mypy, and `tests/test_e2e.py` appears only on the
   pytest command line.
 - **`test_live_bare_escape_interrupts_one_turn_without_another_keypress` has a

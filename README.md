@@ -182,7 +182,19 @@ Further hardening in unreleased code: Docker network modes are restricted to
 `none`, `bridge`, and `host`. Container-sharing modes such as `container:<id>`
 and unknown modes are rejected before the Docker SDK is called, even with
 `allow_network=true`. Bridge and host still require explicit network
-authorization.
+authorization. Browser tools (Patchright and Scrapling) enforce HTTP/HTTPS
+connections through a mandatory loopback proxy that dials policy-time pinned
+addresses. Both Chromium paths disable HTTP/2 and QUIC, force loopback through
+that proxy, request Service Worker blocking, and restrict non-proxied WebRTC UDP. Context
+route guards provide a second check where interception is available; failed
+installation closes the context. Confirmed private targets retain their exact
+pins only for the current operation, whose sockets are closed on exit.
+Plain HTTP accepts one request per connection and rejects chunked uploads,
+upgrades, `Expect`, and bodies over 8 MiB. HTTPS remains end-to-end opaque;
+this destination boundary is not an OS sandbox. Service Worker blocking is
+requested from the SDK; the proxy enforces their egress even if registration
+is not blocked. Scrapling versions without
+the required setup contract are denied before fetching.
 
 ## Data Layout
 
