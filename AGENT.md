@@ -675,7 +675,7 @@ mode.
 authoritative list.** A module is in the island only when CI passes its file
 to mypy; the matching `[[tool.mypy.overrides]]` entry in `pyproject.toml` is
 what actually turns on `disallow_untyped_defs` / `check_untyped_defs` for it.
-Both files, plus the list below, must name the same 48 modules;
+Both files, plus the list below, must name the same 49 modules;
 `tests/test_typed_island_sync.py` fails the build when they diverge.
 
 To add a module: annotate it until it passes
@@ -697,8 +697,8 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `pawnlogic/confirm_selector`, `pawnlogic/terminal_transcript`,
 `pawnlogic/restart_recovery`, `tools/check_doc_structure`,
 `tools/check_release_consistency`, `tools/merge_ctf_skills`, `tools/browser_ops`,
-`tools/lsp_lite`, `tools/text_patch`, `tools/shell_ops`, `tools/docker_plan`,
-`tools/pwn_binary`, `tools/pwn_debugger`.
+`tools/policy_proxy`, `tools/lsp_lite`, `tools/text_patch`, `tools/shell_ops`,
+`tools/docker_plan`, `tools/pwn_binary`, `tools/pwn_debugger`.
 
 `core/delegation` and `core/agent_orchestrator` are **not** in the island.
 `core/agent_orchestrator` has an unannotated parameter at line 402 and would
@@ -854,6 +854,23 @@ name at the end is the gate that fails if the invariant is broken.
   mode must not inherit another container's network without an authorization
   gate of its own. The tool schemas carry the matching `enum`, so keep the
   schema, plan validator, and gate in agreement when touching network modes.
+- **Browser transports enforce the network policy per connection through the
+  loopback proxy, not per intercepted request.** Chromium continues redirect
+  hops and Service-Worker fetches without surfacing them to route
+  interception, so route guards alone cannot close the boundary
+  (`tools/policy_proxy.py`). Every engine is launched with
+  `proxy={"server": <loopback policy proxy>}`; the proxy evaluates each
+  CONNECT tunnel and plain-HTTP request non-interactively and dials only the
+  policy-resolved addresses, so a failed proxy start must fail the launch.
+  The context-lifetime route guard (`BrowserRequestGuard`) is the second
+  layer, Service Workers are blocked at context creation
+  (`service_workers="block"`, plus `block_webrtc` on Scrapling fetches), and
+  Scrapling fetches require `page_setup`/`additional_args` support (>=
+  0.4.15, denied before fetching) because Scrapling swallows `page_setup`
+  exceptions — a failed guard install closes the context, and the verified
+  flag is re-checked after every retry. Interactive confirmations authorize
+  one authority for one operation scope only (`PolicyProxy.scoped`);
+  page-level routes are never a substitute for context-level interception.
 - **MCP tool results must stay attributable to their server.** Results go
   out as `_ProvenancedStr` carrying `MCPToolProvenance` (server,
   transport, call id, content/config/command hashes); the executor
@@ -1254,7 +1271,7 @@ name at the end is the gate that fails if the invariant is broken.
 - **The typed-island module list is stated in three places** (CI mypy step,
   pyproject overrides, Typed Island section). `tests/test_typed_island_sync.py`
   fails the build when they diverge — treat that failure as the gate, not as a
-  test to relax. All three name the same **48 library modules**; the CI step
+  test to relax. All three name the same **49 library modules**; the CI step
   passes no `tests/` file to mypy, and `tests/test_e2e.py` appears only on the
   pytest command line.
 - **`test_live_bare_escape_interrupts_one_turn_without_another_keypress` has a

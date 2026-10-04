@@ -182,7 +182,15 @@ Further hardening in unreleased code: Docker network modes are restricted to
 `none`, `bridge`, and `host`. Container-sharing modes such as `container:<id>`
 and unknown modes are rejected before the Docker SDK is called, even with
 `allow_network=true`. Bridge and host still require explicit network
-authorization.
+authorization. Browser tools (Patchright and Scrapling) route all engine
+traffic — every redirect hop, subresource, and Service-Worker fetch — through
+a loopback enforcement proxy that evaluates each connection against the
+network policy and dials only policy-resolved addresses, so a browser engine
+cannot resolve or connect anywhere the policy denies. Service Workers are
+blocked at context creation, a context-lifetime route guard re-checks the
+requests interception does surface, failed guard installation closes the
+browser context, and Scrapling versions without the required setup contract
+are denied before fetching.
 
 ## Data Layout
 

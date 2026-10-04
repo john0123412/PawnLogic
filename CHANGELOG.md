@@ -13,6 +13,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   before the Docker SDK is called, regardless of `allow_network`, by both the
   execution-plan validator and the tool-level gate; the tool schemas carry the
   matching enum.
+- Browser transports enforce the network policy per connection through a
+  loopback enforcement proxy: Chromium continues redirect hops and
+  Service-Worker fetches outside route interception, so every engine now
+  routes all traffic (CONNECT tunnels and plain HTTP) through the proxy,
+  which evaluates each connection against the shared Network Policy and dials
+  only policy-resolved addresses. Patchright contexts additionally block
+  Service Workers and carry a context-lifetime route guard as a second layer;
+  Scrapling fetches bind to the proxy, block WebRTC leaks, register the guard
+  through `page_setup` on the browser context (closing the context when
+  installation fails, since Scrapling swallows the exception), re-verify the
+  guard after every retry, and deny Scrapling versions without the required
+  setup contract before fetching. A proxy that cannot start fails the
+  browser launch.
 
 ## [0.4.2] - 2026-10-03
 

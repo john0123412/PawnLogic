@@ -169,6 +169,12 @@ metadata；嵌套委派共享整棵树的预算上限。
 未发布代码中的进一步加固：Docker 网络模式只允许 `none`、`bridge`、`host`。
 `container:<id>` 这类共享其他容器网络的模式和未知模式会在调用 Docker SDK
 之前被拒绝，即使设置了 `allow_network=true`。Bridge 和 host 仍需显式网络授权。
+浏览器工具（Patchright 与 Scrapling）把引擎的全部流量——每个重定向跳、子
+资源和 Service Worker 请求——都强制经过本地回环执行代理；代理对每个连接
+执行网络策略检查，并只拨打策略解析出的地址，浏览器引擎因此无法自行解析或
+连接任何策略拒绝的目标。上下文创建时禁用 Service Worker，context 级
+route guard 对拦截到的请求做二次检查，guard 安装失败会关闭浏览器上下文，
+不支持所需 setup 契约的 Scrapling 版本会在抓取前被拒绝。
 
 ## 数据目录
 

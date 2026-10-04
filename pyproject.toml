@@ -220,6 +220,7 @@ module = [
     "tools.check_release_consistency",
     "tools.merge_ctf_skills",
     "tools.browser_ops",
+    "tools.policy_proxy",
     "tools.lsp_lite",
 ]
 disallow_untyped_defs = true

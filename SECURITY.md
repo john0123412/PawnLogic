@@ -67,7 +67,20 @@ Areas of particular concern for this project:
 - **CTF workflow boundaries** — CTF tools and skill packs are intended for legal CTFs, authorized labs, and systems you own or have permission to test
 - **Network targets** — built-in HTTP(S) adapters evaluate normalized targets,
   DNS answers, and every redirect through the shared Network Policy; special
-  address ranges are denied and private targets require explicit authorization
+  address ranges are denied and private targets require explicit authorization.
+  The direct `urllib` transport pins DNS answers at policy-check time and fails
+  closed without a pin; a configured upstream proxy owns its hop's DNS and
+  socket. Browser transports (Patchright and Scrapling) enforce the policy per
+  connection through the loopback enforcement proxy: Chromium continues
+  redirect hops and Service-Worker fetches outside route interception, so
+  every engine connection (CONNECT tunnel or plain HTTP) is evaluated before
+  any byte is forwarded and only policy-resolved addresses are dialed. Service
+  Workers are blocked at context creation, the context-lifetime route guard
+  re-checks requests interception does surface, failed guard installation
+  closes the browser context, and Scrapling versions without the required
+  setup contract are denied before fetching. WebRTC is forced through the
+  proxy (`disable_non_proxied_udp` / `block_webrtc`); a proxy that cannot
+  start fails the browser launch.
 - **Extension activation** — installed Extensions remain disabled until explicit
   enablement; compatibility and contribution names are validated before code is
   allowed to register capabilities

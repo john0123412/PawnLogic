@@ -15,9 +15,12 @@ import ipaddress
 import socket
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
-from contextlib import suppress
-from typing import Any
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from tools.policy_proxy import PolicyProxy
 
 from core.network_policy import (
     NetworkAction,
@@ -162,6 +165,27 @@ def evaluate_network_url(
         confirmation_available=confirmation_available,
     )
     return decision
+
+
+def evaluate_network_url_pinned(
+    url: str,
+    *,
+    arguments: dict | None = None,
+    redirect_chain: tuple[str, ...] = (),
+    confirmation_available: bool | None = None,
+) -> tuple[NetworkDecision, tuple[str, ...]]:
+    """Evaluate a URL and return the decision plus its policy-time DNS pins.
+
+    Connect-time transports (the browser enforcement proxy) dial only these
+    pinned addresses, so a DNS record that changes after evaluation cannot
+    steer the socket elsewhere.
+    """
+    return _evaluate_network_url_pinned(
+        url,
+        arguments=arguments,
+        redirect_chain=redirect_chain,
+        confirmation_available=confirmation_available,
+    )
 
 
 def decision_message(decision: NetworkDecision) -> str:
@@ -452,40 +476,106 @@ def validate_browser_url(
     return None, warnings
 
 
-def _navigation_guard(page: Any, arguments: dict | None):
-    route = getattr(page, "route", None)
-    unroute = getattr(page, "unroute", None)
-    if not callable(route) or not callable(unroute):
-        return None, []
+_NO_INTERCEPTION_MESSAGE = (
+    "SECURITY BLOCK: browser transport cannot enforce the network policy "
+    "(no request interception support); operation denied."
+)
 
-    blocked: list[NetworkDecision] = []
 
-    def guard(route_obj: Any, request: Any) -> None:
+class BrowserRequestGuard:
+    """Route-interception handler enforcing the network policy per request.
+
+    This guard is the second layer behind the loopback enforcement proxy
+    (:mod:`tools.policy_proxy`): the engine's own requests are re-checked
+    where interception surfaces them and aborted when the policy denies them.
+    A confirmed target is registered with the proxy so the proxy — which must
+    never prompt — admits the connection the user already confirmed.
+    """
+
+    def __init__(
+        self,
+        arguments: dict | None = None,
+        proxy: PolicyProxy | None = None,
+    ) -> None:
+        self._arguments = arguments
+        self._proxy = proxy
+        self._blocked: list[NetworkDecision] = []
+
+    @property
+    def blocked(self) -> list[NetworkDecision]:
+        return list(self._blocked)
+
+    @contextmanager
+    def scoped(self, arguments: dict | None) -> Iterator[None]:
+        """Evaluate requests issued inside the block with these arguments."""
+        previous = self._arguments
+        self._arguments = arguments
+        self._blocked = []
+        try:
+            yield
+        finally:
+            self._arguments = previous
+
+    def __call__(self, route_obj: Any, request: Any) -> None:
         target = str(getattr(request, "url", "") or "")
-        decision = evaluate_network_url(target, arguments=arguments)
-        if not confirm_network_decision(decision, arguments):
-            blocked.append(decision)
+        decision = evaluate_network_url(target, arguments=self._arguments)
+        if not confirm_network_decision(decision, self._arguments):
+            self._blocked.append(decision)
             route_obj.abort()
             return
+        if self._proxy is not None and target:
+            self._proxy.authorize(target)
         route_obj.continue_()
 
+
+def install_browser_route_guard(
+    target: Any,
+    arguments: dict | None,
+    proxy: PolicyProxy | None = None,
+) -> tuple[BrowserRequestGuard | None, str]:
+    """Install a :class:`BrowserRequestGuard` on a browser context.
+
+    Returns ``(guard, "")`` on success, or ``(None, denial message)`` when the
+    transport cannot enforce the boundary — callers must fail closed. Page
+    objects are deliberately not accepted as a fallback: a page-level route
+    misses the requests issued before it was installed.
+    """
+    route = getattr(target, "route", None)
+    unroute = getattr(target, "unroute", None)
+    if not callable(route) or not callable(unroute):
+        return None, _NO_INTERCEPTION_MESSAGE
+    guard = BrowserRequestGuard(arguments, proxy=proxy)
     try:
         route("**/*", guard)
-    except Exception:
-        return None, []
-    return guard, blocked
+    except Exception as exc:
+        return None, (
+            "SECURITY BLOCK: browser transport cannot enforce the network "
+            f"policy (route registration failed: {type(exc).__name__}); "
+            "operation denied."
+        )
+    return guard, ""
 
 
-def _remove_navigation_guard(page: Any, guard: Any) -> None:
+def remove_browser_route_guard(target: Any, guard: BrowserRequestGuard | None) -> None:
     if guard is None:
         return
     try:
-        page.unroute("**/*", guard)
+        target.unroute("**/*", guard)
     except TypeError:
         with suppress(Exception):
-            page.unroute("**/*")
+            target.unroute("**/*")
     except Exception:
         pass
+
+
+def _interception_target(page: Any) -> Any:
+    """The browser context — the only acceptable interception target.
+
+    A page-level route is never acceptable: requests issued before the page
+    route was installed (and, on Chromium, redirect hops) escape it. Callers
+    whose context cannot route must fail closed instead.
+    """
+    return getattr(page, "context", None)
 
 
 def navigate_with_policy(
@@ -494,17 +584,44 @@ def navigate_with_policy(
     *,
     timeout_ms: int,
     arguments: dict | None = None,
+    guard: BrowserRequestGuard | None = None,
+    proxy: PolicyProxy | None = None,
 ) -> tuple[str | None, str]:
-    """Navigate with request interception and a final-URL defense."""
-    guard, blocked = _navigation_guard(page, arguments)
+    """Navigate with request interception, a final-URL defense, and the proxy.
+
+    ``guard`` is a caller-owned guard that is already routed (e.g. the
+    context-lifetime guard); it is evaluated with ``arguments`` for the
+    duration of the navigation. Without one, a temporary context-level guard
+    is installed for this navigation and removed afterwards — failing closed
+    when the transport offers no context interception. ``proxy`` scopes the
+    enforcement proxy to this operation and pre-authorizes the initial URL's
+    authority, which the caller has already validated and confirmed.
+    """
+    temporary_guard: BrowserRequestGuard | None = None
+    if guard is None:
+        temporary_guard, install_error = install_browser_route_guard(
+            _interception_target(page), arguments, proxy=proxy
+        )
+        if temporary_guard is None:
+            return install_error, ""
+    active_guard = guard if guard is not None else temporary_guard
+    assert active_guard is not None
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        with active_guard.scoped(arguments):
+            if proxy is None:
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            else:
+                with proxy.scoped(arguments):
+                    proxy.authorize(url)
+                    page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
     except Exception:
+        blocked = active_guard.blocked
         if blocked:
-            return decision_message(blocked[0]), ""
+            return decision_message(blocked[-1]), ""
         raise
     finally:
-        _remove_navigation_guard(page, guard)
+        if temporary_guard is not None:
+            remove_browser_route_guard(_interception_target(page), temporary_guard)
 
     final_url = str(getattr(page, "url", "") or url)
     final_decision = evaluate_network_url(final_url, arguments=arguments)
@@ -522,6 +639,8 @@ def ensure_page_url(
     timeout_ms: int,
     emit_warnings: bool,
     warning_sink: Callable[[str], None],
+    guard: BrowserRequestGuard | None = None,
+    proxy: PolicyProxy | None = None,
 ) -> tuple[str | None, str | None]:
     """Synchronize a lazy browser page without leaking policy branches upstream."""
     error, warnings = validate_browser_url(url, arguments)
@@ -541,6 +660,8 @@ def ensure_page_url(
                 url,
                 timeout_ms=timeout_ms,
                 arguments=arguments,
+                guard=guard,
+                proxy=proxy,
             )
             if error:
                 return error, None

@@ -33,7 +33,7 @@ for _key in list(sys.modules):
         if ROOT not in _f:
             del sys.modules[_key]
 
-from tools import browser_ops, file_ops, recon_ops, web_ops  # noqa: E402
+from tools import browser_ops, file_ops, policy_proxy, recon_ops, web_ops  # noqa: E402
 from config import PAWNLOGIC_HOME  # noqa: E402
 from config.security import (  # noqa: E402
     DANGEROUS_PATTERNS,
@@ -273,15 +273,17 @@ def test_fetch_url_warns_for_private_network(monkeypatch):
 
 
 def test_browser_launch_args_default_to_sandbox():
-    assert "--no-sandbox" not in browser_ops._browser_launch_args()
+    args = policy_proxy.browser_launch_arguments()
+    assert "--no-sandbox" not in args
+    assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in args
 
 
 def test_browser_launch_args_allows_explicit_no_sandbox(monkeypatch):
-    monkeypatch.setitem(browser_ops.BROWSER_CONFIG, "allow_no_sandbox", True)
+    monkeypatch.setitem(policy_proxy.BROWSER_CONFIG, "allow_no_sandbox", True)
     try:
-        assert "--no-sandbox" in browser_ops._browser_launch_args()
+        assert "--no-sandbox" in policy_proxy.browser_launch_arguments()
     finally:
-        monkeypatch.setitem(browser_ops.BROWSER_CONFIG, "allow_no_sandbox", False)
+        monkeypatch.setitem(policy_proxy.BROWSER_CONFIG, "allow_no_sandbox", False)
 
 
 def test_list_dir_blocks_sensitive_directory(tmp_path, monkeypatch):
