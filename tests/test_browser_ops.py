@@ -5,7 +5,17 @@ from __future__ import annotations
 from contextlib import suppress
 import importlib.metadata
 
+import pytest
+
 from tools import browser_ops, policy_proxy
+
+
+@pytest.fixture(autouse=True)
+def _reset_shared_policy_proxy():
+    """Keep browser fakes from retaining a listener across test cases."""
+    policy_proxy.reset_shared_policy_proxy()
+    yield
+    policy_proxy.reset_shared_policy_proxy()
 
 
 class _RoutingContext:
@@ -41,6 +51,12 @@ class _ReadinessFailurePage:
 
 def test_web_navigate_timeout_returns_user_facing_error(monkeypatch):
     monkeypatch.setattr(browser_ops, "_get_page", lambda: _TimeoutPage())
+    monkeypatch.setattr(browser_ops, "_network_guard", None)
+    monkeypatch.setattr(
+        browser_ops,
+        "shared_policy_proxy",
+        lambda: policy_proxy.PolicyProxy(),
+    )
     monkeypatch.setattr(
         browser_ops,
         "_validate_browser_url",
@@ -227,6 +243,14 @@ def test_web_fetch_uses_context_route_and_blocks_service_workers(monkeypatch):
 
     assert "synthetic page body" in result
     assert captured_kwargs["additional_args"] == {"service_workers": "block"}
+    assert captured_kwargs["block_webrtc"] is True
+    assert captured_kwargs["proxy"].startswith("http://127.0.0.1:")
+    assert {
+        "--disable-http2",
+        "--disable-quic",
+        "--proxy-bypass-list=<-loopback>",
+        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    }.issubset(set(captured_kwargs["extra_flags"]))
     assert [pattern for pattern, _handler in context_routes] == ["**/*"]
     assert page_route_calls == []
 
@@ -521,9 +545,13 @@ def test_browser_bootstrap_installs_context_lifetime_guard(monkeypatch):
     # through the loopback enforcement proxy, and WebRTC cannot bypass it
     # with non-proxied UDP.
     assert launch_kwargs["proxy"]["server"].startswith("http://127.0.0.1:")
-    assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in (
-        launch_kwargs["args"]
-    )
+    assert launch_kwargs["proxy"]["bypass"] == "<-loopback>"
+    assert {
+        "--disable-http2",
+        "--disable-quic",
+        "--proxy-bypass-list=<-loopback>",
+        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    }.issubset(set(launch_kwargs["args"]))
 
 
 def test_browser_bootstrap_fails_closed_without_request_interception(monkeypatch):
@@ -561,7 +589,12 @@ def test_browser_bootstrap_fails_closed_without_request_interception(monkeypatch
 
     browser_type = FakeBrowserType()
 
+    stopped = []
+
     class FakePlaywright:
+        def stop(self):
+            stopped.append(True)
+
         def start(self):
             return self
 
@@ -587,3 +620,4 @@ def test_browser_bootstrap_fails_closed_without_request_interception(monkeypatch
     assert "cannot enforce" in browser_ops._browser_error
     assert fake_context.closed is True
     assert browser_type.browser.closed is True
+    assert stopped == [True]

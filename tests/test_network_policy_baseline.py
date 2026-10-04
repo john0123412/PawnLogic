@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from tools import browser_ops, network_adapter, web_ops
+from tools import browser_ops, network_adapter, policy_proxy, web_ops
 
 
 @pytest.fixture(autouse=True)
@@ -332,6 +332,11 @@ def test_browser_navigate_allows_private_literal_after_host_confirmation(monkeyp
     page = FakePage()
     monkeypatch.setattr(browser_ops, "_get_page", lambda: page)
     monkeypatch.setattr(
+        browser_ops,
+        "shared_policy_proxy",
+        lambda: policy_proxy.PolicyProxy(),
+    )
+    monkeypatch.setattr(
         network_adapter,
         "is_confirmation_available",
         lambda: True,
@@ -427,6 +432,11 @@ def test_browser_navigate_fails_closed_when_route_api_is_missing(monkeypatch):
     page = RedirectingPage()
     monkeypatch.setattr(browser_ops, "_get_page", lambda: page)
     monkeypatch.setattr(
+        browser_ops,
+        "shared_policy_proxy",
+        lambda: policy_proxy.PolicyProxy(),
+    )
+    monkeypatch.setattr(
         web_ops.socket,
         "getaddrinfo",
         lambda *_args, **_kwargs: _addrinfo_for("93.184.216.34"),
@@ -489,6 +499,11 @@ def test_browser_route_guard_aborts_redirect_request_when_api_is_available(monke
 
     page = RoutedPage()
     monkeypatch.setattr(browser_ops, "_get_page", lambda: page)
+    monkeypatch.setattr(
+        browser_ops,
+        "shared_policy_proxy",
+        lambda: policy_proxy.PolicyProxy(),
+    )
     monkeypatch.setattr(
         web_ops.socket,
         "getaddrinfo",
@@ -569,6 +584,69 @@ def test_browser_request_guard_blocks_denied_redirect_and_subresource(monkeypatc
     assert len(guard.blocked) == 2
 
 
+def test_browser_request_guard_records_only_confirmed_targets_in_active_scope(monkeypatch):
+    monkeypatch.setattr(
+        network_adapter.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: _addrinfo_for("93.184.216.34"),
+    )
+    monkeypatch.setattr(network_adapter, "is_confirmation_available", lambda: True)
+    prompts: list[str] = []
+
+    def confirm(decision):
+        prompts.append(decision.matched_rule)
+        return True
+
+    monkeypatch.setattr(network_adapter, "prompt_for_confirmation", confirm)
+
+    class Route:
+        def __init__(self) -> None:
+            self.aborted = False
+            self.continued = False
+
+        def abort(self):
+            self.aborted = True
+
+        def continue_(self):
+            self.continued = True
+
+    class Request:
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+    proxy = policy_proxy.PolicyProxy()
+    guard = network_adapter.BrowserRequestGuard(None, proxy=proxy)
+    authorized: list[tuple[str, object, tuple[str, ...]]] = []
+    real_authorize = proxy.authorize
+
+    def record_authorization(url, decision, pins, *, scope=None):
+        authorized.append((url, decision, pins))
+        return real_authorize(url, decision, pins, scope=scope)
+
+    monkeypatch.setattr(proxy, "authorize", record_authorization)
+    with proxy.scoped(None), guard.scoped({"interactive": True}):
+        public = Route()
+        guard(public, Request("https://public.example.test/"))
+        assert public.continued is True
+
+        private = Route()
+        guard(private, Request("http://192.168.1.5:8080/"))
+        assert private.continued is True
+
+    assert len(authorized) == 1
+    assert authorized[0][0] == "http://192.168.1.5:8080/"
+    assert authorized[0][1].action == network_adapter.NetworkAction.CONFIRM
+    assert authorized[0][2] == ("192.168.1.5",)
+
+    # Clearing the scope must turn a background private request into a hard
+    # deny. The proxy-backed guard must not prompt outside an active scope.
+    background = Route()
+    guard(background, Request("http://192.168.1.5:8080/background"))
+    assert background.aborted is True
+    assert background.continued is False
+    assert len(prompts) == 1
+
+
 def test_browser_request_guard_scope_resets_arguments_and_blocked(monkeypatch):
     monkeypatch.setattr(
         network_adapter.socket,
@@ -576,13 +654,13 @@ def test_browser_request_guard_scope_resets_arguments_and_blocked(monkeypatch):
         lambda *_args, **_kwargs: _addrinfo_for("93.184.216.34"),
     )
     seen_arguments: list[dict | None] = []
-    real_evaluate = network_adapter.evaluate_network_url
+    real_evaluate = network_adapter.evaluate_network_url_pinned
 
     def spy(url, *, arguments=None, **kwargs):
         seen_arguments.append(arguments)
         return real_evaluate(url, arguments=arguments, **kwargs)
 
-    monkeypatch.setattr(network_adapter, "evaluate_network_url", spy)
+    monkeypatch.setattr(network_adapter, "evaluate_network_url_pinned", spy)
 
     class Route:
         def abort(self): raise AssertionError("allowed request must not abort")
@@ -653,8 +731,10 @@ def test_navigate_installs_temporary_guard_on_context_and_removes_it(monkeypatch
             return "synthetic"
 
     page = FakePage()
+    proxy = policy_proxy.PolicyProxy()
     error, final_url = network_adapter.navigate_with_policy(
-        page, "https://public.example.test/landing", timeout_ms=1000
+        page, "https://public.example.test/landing", timeout_ms=1000,
+        proxy=proxy,
     )
 
     assert error is None
@@ -662,6 +742,28 @@ def test_navigate_installs_temporary_guard_on_context_and_removes_it(monkeypatch
     assert page.context.routed == 1
     assert page.context.unrouted == 1
     assert page.context.handler is None
+
+
+def test_navigate_requires_the_enforcement_proxy(monkeypatch):
+    class FakePage:
+        url = "about:blank"
+
+        def __init__(self) -> None:
+            self.goto_calls = 0
+
+        def goto(self, *_args, **_kwargs):
+            self.goto_calls += 1
+
+    page = FakePage()
+    error, final_url = network_adapter.navigate_with_policy(
+        page, "https://public.example.test/landing", timeout_ms=1000,
+    )
+
+    assert error == (
+        "SECURITY BLOCK: browser enforcement proxy is unavailable; navigation denied."
+    )
+    assert final_url == ""
+    assert page.goto_calls == 0
 
 
 def test_navigate_rejects_page_only_temporary_interception(monkeypatch):
@@ -682,8 +784,10 @@ def test_navigate_rejects_page_only_temporary_interception(monkeypatch):
             raise AssertionError("page-only navigation must be rejected")
 
     page = FakePage()
+    proxy = policy_proxy.PolicyProxy()
     error, final_url = network_adapter.navigate_with_policy(
-        page, "https://public.example.test/landing", timeout_ms=1000
+        page, "https://public.example.test/landing", timeout_ms=1000,
+        proxy=proxy,
     )
 
     assert error is not None
@@ -691,3 +795,86 @@ def test_navigate_rejects_page_only_temporary_interception(monkeypatch):
     assert "interception" in error
     assert final_url == ""
     assert page.page_route_calls == 0
+
+
+def test_ensure_page_url_uses_guard_and_proxy_after_lazy_bootstrap(monkeypatch):
+    monkeypatch.setattr(
+        network_adapter.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: _addrinfo_for("93.184.216.34"),
+    )
+
+    class FakeContext:
+        def __init__(self) -> None:
+            self.handler = None
+
+        def route(self, _pattern, handler):
+            self.handler = handler
+
+        def unroute(self, *_args):
+            self.handler = None
+
+    class FakePage:
+        url = "about:blank"
+
+        def __init__(self) -> None:
+            self.context = FakeContext()
+
+        def goto(self, url, **_kwargs):
+            assert self.context.handler is guard
+            self.url = url
+
+    proxy = policy_proxy.PolicyProxy()
+    page = FakePage()
+    guard, error = network_adapter.install_browser_route_guard(
+        page.context, None, proxy=proxy,
+    )
+    assert error == ""
+    assert guard is not None
+
+    events: list[str] = []
+
+    def get_page():
+        events.append("page")
+        return page
+
+    def get_guard():
+        events.append("guard")
+        return guard
+
+    def get_proxy():
+        events.append("proxy")
+        return proxy
+
+    navigation_error, final_url = network_adapter.ensure_page_url(
+        "https://public.example.test/landing",
+        arguments={"interactive": False},
+        current_url=None,
+        get_page=get_page,
+        timeout_ms=1000,
+        emit_warnings=False,
+        warning_sink=lambda _warning: None,
+        get_guard=get_guard,
+        get_proxy=get_proxy,
+    )
+
+    assert navigation_error is None
+    assert final_url == "https://public.example.test/landing"
+    assert events == ["page", "guard", "proxy"]
+
+
+@pytest.mark.parametrize("failed_provider", ["page", "proxy"])
+def test_lazy_proxy_provider_failure_cannot_return_stale_success(monkeypatch, failed_provider):
+    monkeypatch.setattr(network_adapter, "validate_browser_url", lambda *_a: (None, []))
+    class Page:
+        url = "https://public.example.test/old"
+    def broken():
+        raise RuntimeError("proxy failed")
+    error, current = network_adapter.ensure_page_url(
+        "https://public.example.test/new", arguments=None,
+        current_url=Page.url, get_page=broken if failed_provider == "page" else Page,
+        timeout_ms=1000, emit_warnings=False, warning_sink=lambda _: None,
+        get_proxy=broken if failed_provider == "proxy" else lambda: None,
+    )
+    assert error.startswith("SECURITY BLOCK")
+    assert current is None

@@ -13,19 +13,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   before the Docker SDK is called, regardless of `allow_network`, by both the
   execution-plan validator and the tool-level gate; the tool schemas carry the
   matching enum.
-- Browser transports enforce the network policy per connection through a
-  loopback enforcement proxy: Chromium continues redirect hops and
-  Service-Worker fetches outside route interception, so every engine now
-  routes all traffic (CONNECT tunnels and plain HTTP) through the proxy,
-  which evaluates each connection against the shared Network Policy and dials
-  only policy-resolved addresses. Patchright contexts additionally block
-  Service Workers and carry a context-lifetime route guard as a second layer;
-  Scrapling fetches bind to the proxy, block WebRTC leaks, register the guard
-  through `page_setup` on the browser context (closing the context when
-  installation fails, since Scrapling swallows the exception), re-verify the
-  guard after every retry, and deny Scrapling versions without the required
-  setup contract before fetching. A proxy that cannot start fails the
-  browser launch.
+- Browser HTTP/HTTPS transports use a mandatory loopback policy proxy with
+  policy-time DNS pins. Both Chromium paths disable HTTP/2 and QUIC, force
+  loopback through the proxy, request Service Worker blocking, and restrict non-proxied
+  WebRTC UDP. Context guards are a second layer; missing proxies or failed
+  setup fail closed, including swallowed Scrapling setup exceptions and every
+  retry. Private grants preserve confirmed pins and operation tokens, and
+  scope exit/stop revoke established sockets. Plain HTTP forwards one framed
+  request, strips proxy/hop-by-hop headers, and rejects chunked uploads,
+  upgrades, `Expect`, and bodies over 8 MiB. CONNECT preserves TLS bytes and
+  checks destination authorities; it does not inspect encrypted content.
 
 ## [0.4.2] - 2026-10-03
 

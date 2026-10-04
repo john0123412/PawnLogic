@@ -71,13 +71,13 @@ _current_url = None
 
 # Global Patchright browser context, created lazily.
 _browser_lock = threading.Lock()
+_playwright = None    # patchright driver lifecycle
 _browser = None       # patchright Browser
 _context = None        # patchright BrowserContext
 _page = None           # active patchright Page
 _browser_error = None  # error message
-# Context-lifetime request guard: every request the engine issues — click and
-# form-triggered navigations, redirects, subresources, background JS — is
-# policy-checked and aborted when denied, even between tool calls.
+# Context-lifetime guard checks requests surfaced by the engine. Redirects
+# can bypass routing; the mandatory proxy enforces their destinations.
 _network_guard: BrowserRequestGuard | None = None
 
 # StealthyFetcher instance, created lazily.
@@ -103,20 +103,19 @@ def _emit_browser_trust_warning() -> None:
 
 def _teardown_browser_state() -> None:
     """Close any partially started browser objects and reset the globals."""
-    global _browser, _context, _page, _network_guard
-    context, browser = _context, _browser
-    _page = _context = _browser = _network_guard = None
-    if context is not None:
-        with suppress(Exception):
-            context.close()
-    if browser is not None:
-        with suppress(Exception):
-            browser.close()
+    global _browser, _context, _page, _network_guard, _playwright
+    resources = ((_context, "close"), (_browser, "close"), (_playwright, "stop"))
+    _page = _context = _browser = _network_guard = _playwright = None
+    for resource, method in resources:
+        cleanup = getattr(resource, method, None)
+        if callable(cleanup):
+            with suppress(Exception):
+                cleanup()
 
 
 def _get_page() -> Any | None:
     """Get or create a Patchright browser page lazily."""
-    global _browser, _context, _page, _browser_error, _network_guard
+    global _browser, _context, _page, _browser_error, _network_guard, _playwright
 
     with _browser_lock:
         if _page and not _page.is_closed():
@@ -135,18 +134,18 @@ def _get_page() -> Any | None:
             # fails closed when it cannot start, so the engine is never
             # reachable without it.
             proxy = start_shared_policy_proxy()
-            pw = sync_playwright().start()
+            pw = _playwright = sync_playwright().start()
             _emit_browser_trust_warning()
             _browser = pw.chromium.launch(
                 headless=True,
                 args=browser_launch_arguments(),
-                proxy={"server": proxy.url},
+                proxy={"server": proxy.url, "bypass": "<-loopback>"},
             )
             _context = _browser.new_context(
                 viewport={"width": 1920, "height": 1080},
                 locale="en-US",
-                # Service-Worker fetches bypass route interception; blocking
-                # registration at creation keeps them out of the context.
+                # Request SDK blocking; the proxy still enforces Worker
+                # egress if the engine ignores this setting.
                 service_workers="block",
             )
             guard, guard_error = install_browser_route_guard(_context, None, proxy=proxy)
@@ -171,22 +170,21 @@ def _ensure_page_url(url: str, arguments: dict | None = None) -> str | None:
         get_page=_get_page, timeout_ms=BROWSER_CONFIG["timeout"] * 1000,
         emit_warnings=_user_mode(),
         warning_sink=lambda warning: print(c(YELLOW, trust_notice(warning))),
-        guard=_network_guard, proxy=shared_policy_proxy(),
+        get_guard=lambda: _network_guard, get_proxy=shared_policy_proxy,
     )
     return error
 
 
 def _get_stealthy_fetcher() -> Any | None:
-    """Get or create a StealthyFetcher instance.
-    StealthyFetcher.configure() warms global Camoufox state to avoid first-fetch cold-start timeouts.
-    """
+    """Get or create a StealthyFetcher instance."""
     global _stealthy_fetcher, _fetcher_error
     with _fetcher_lock:
         if _stealthy_fetcher is None:
             try:
                 from scrapling import StealthyFetcher
-                # Global warm-up; later fetch() calls reuse the preloaded engine configuration.
-                StealthyFetcher.configure()
+                # Parser defaults are fine: Scrapling 0.4.15 rejects a bare
+                # configure() call, and each enforced fetch starts its own
+                # Chromium session anyway.
                 _stealthy_fetcher = StealthyFetcher()
                 _fetcher_error = None
             except Exception as e:

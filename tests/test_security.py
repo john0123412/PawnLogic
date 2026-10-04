@@ -33,7 +33,7 @@ for _key in list(sys.modules):
         if ROOT not in _f:
             del sys.modules[_key]
 
-from tools import browser_ops, file_ops, policy_proxy, recon_ops, web_ops  # noqa: E402
+from tools import file_ops, policy_proxy, recon_ops, web_ops  # noqa: E402
 from config import PAWNLOGIC_HOME  # noqa: E402
 from config.security import (  # noqa: E402
     DANGEROUS_PATTERNS,

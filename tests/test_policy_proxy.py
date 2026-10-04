@@ -9,6 +9,7 @@ import threading
 
 import pytest
 
+from core.network_policy import NetworkOperation, NetworkPolicy
 from tools import policy_proxy
 from tools.policy_proxy import PolicyProxy, scrapling_version_gate
 
@@ -69,6 +70,13 @@ def _patch_dns(monkeypatch: pytest.MonkeyPatch, addresses: list[str]):
     return calls
 
 
+def _authorize(proxy, url, pin):
+    decision = NetworkPolicy().evaluate(NetworkOperation(
+        url=url, resolved_addresses=(pin,), interactive=True,
+    ))
+    proxy.authorize(url, decision, (pin,), scope=proxy.authorization_scope)
+
+
 def test_connect_denies_private_target_before_dialing(monkeypatch):
     calls = _patch_dns(monkeypatch, ["93.184.216.34"])
     dialed: list[tuple[str, int]] = []
@@ -78,7 +86,7 @@ def test_connect_denies_private_target_before_dialing(monkeypatch):
         raise AssertionError("denied CONNECT must not open an upstream socket")
 
     monkeypatch.setattr(policy_proxy.socket, "create_connection", fake_create_connection)
-    client = FakeSock(b"CONNECT 192.168.1.5:443 HTTP/1.1\r\nHost: x\r\n\r\n")
+    client = FakeSock(b"CONNECT 192.168.1.5:443 HTTP/1.1\r\nHost: 192.168.1.5:443\r\n\r\n")
 
     PolicyProxy().handle_connection(client)
 
@@ -123,7 +131,7 @@ def test_authorized_private_authority_is_admitted_inside_scope_only(monkeypatch)
     client_inside = FakeSock(b"CONNECT 192.168.1.5:8443 HTTP/1.1\r\n\r\n")
 
     with proxy.scoped(None):
-        proxy.authorize("https://192.168.1.5:8443/app")
+        _authorize(proxy, "https://192.168.1.5:8443/app", "192.168.1.5")
         proxy.handle_connection(client_inside)
     assert client_inside.sent == policy_proxy._TUNNEL_ACCEPTED
     assert dialed == [("192.168.1.5", 8443)]
@@ -139,7 +147,7 @@ def test_authorized_private_authority_is_admitted_inside_scope_only(monkeypatch)
 def test_authorizing_one_target_does_not_admit_a_redirect_target():
     proxy = PolicyProxy()
     with proxy.scoped(None):
-        proxy.authorize("https://public.example.test/landing")
+        _authorize(proxy, "https://192.168.1.5/landing", "192.168.1.5")
         # A redirect hop connects to a different authority: every connection
         # is evaluated on its own, so the redirect target is still denied.
         client = FakeSock(b"CONNECT 10.0.0.7:443 HTTP/1.1\r\n\r\n")
@@ -165,9 +173,9 @@ def test_plain_http_request_is_rewritten_and_forwarded(monkeypatch, no_splice):
 
     assert dialed == [("93.184.216.34", 80)]
     assert upstream.sent == (
-        b"GET /path?q=1 HTTP/1.1\r\nHost: example.com\r\n\r\n"
+        b"GET /path?q=1 HTTP/1.1\r\nHost: example.com:80\r\nConnection: close\r\n\r\n"
     )
-    assert no_splice == [(client, upstream)]
+    assert no_splice == []  # HTTP forwards one framed request, not a tunnel.
 
 
 def test_plain_http_loopback_target_is_denied(monkeypatch):
@@ -177,7 +185,7 @@ def test_plain_http_loopback_target_is_denied(monkeypatch):
         raise AssertionError("denied request must not open an upstream socket")
 
     monkeypatch.setattr(policy_proxy.socket, "create_connection", fake_create_connection)
-    client = FakeSock(b"GET http://127.0.0.1:9000/metadata HTTP/1.1\r\n\r\n")
+    client = FakeSock(b"GET http://127.0.0.1:9000/metadata HTTP/1.1\r\nHost: 127.0.0.1:9000\r\n\r\n")
 
     PolicyProxy().handle_connection(client)
 
@@ -285,3 +293,145 @@ def test_scrapling_version_gate(monkeypatch):
 
     monkeypatch.setattr(importlib.metadata, "version", missing)
     assert scrapling_version_gate() is None
+
+
+def test_authorized_hostname_cannot_rebind_to_loopback(monkeypatch, no_splice):
+    _patch_dns(monkeypatch, ["127.0.0.1"])
+    dialed = []
+    monkeypatch.setattr(
+        policy_proxy.socket, "create_connection",
+        lambda address, timeout: dialed.append(address) or FakeSock(),
+    )
+    proxy = PolicyProxy()
+    with proxy.scoped(None):
+        with pytest.raises(ValueError):
+            _authorize(proxy, "https://public.example.test/", "127.0.0.1")
+        client = FakeSock(b"CONNECT public.example.test:443 HTTP/1.1\r\n\r\n")
+        proxy.handle_connection(client)
+    assert dialed == []
+    assert client.sent == policy_proxy._DENY_RESPONSE
+
+
+@pytest.mark.parametrize("finish", ["scope", "stop"])
+def test_finishing_operation_revokes_established_tunnel(monkeypatch, finish):
+    proxy = PolicyProxy()
+    client, client_peer = socket.socketpair()
+    upstream, upstream_peer = socket.socketpair()
+    for sock in (client, client_peer, upstream, upstream_peer):
+        sock.settimeout(2)
+    monkeypatch.setattr(policy_proxy.socket, "create_connection", lambda *_a: upstream)
+    done = threading.Event()
+
+    def handle():
+        proxy.handle_connection(client)
+        done.set()
+
+    try:
+        with proxy.scoped(None):
+            _authorize(proxy, "https://192.168.1.5/", "192.168.1.5")
+            worker = threading.Thread(target=handle, daemon=True)
+            worker.start()
+            client_peer.sendall(b"CONNECT 192.168.1.5:443 HTTP/1.1\r\n\r\n")
+            assert b"200" in client_peer.recv(4096)
+            if finish == "stop":
+                proxy.stop()
+        assert done.wait(1), "operation left its established tunnel alive"
+        assert client_peer.recv(1) == b""
+    finally:
+        for sock in (client, client_peer, upstream, upstream_peer):
+            with contextlib.suppress(OSError):
+                sock.close()
+        proxy.stop()
+
+
+
+def test_confirmed_private_hostname_uses_confirmation_pins(monkeypatch, no_splice):
+    calls = _patch_dns(monkeypatch, ["192.168.1.5", "127.0.0.1"])
+    url = "https://private.example.test/"
+    decision, pins = policy_proxy.evaluate_network_url_pinned(url, confirmation_available=True)
+    dialed = []
+    monkeypatch.setattr(policy_proxy.socket, "create_connection", lambda address, timeout: dialed.append(address) or FakeSock())
+    proxy = PolicyProxy()
+    with proxy.scoped(None):
+        proxy.authorize(url, decision, pins, scope=proxy.authorization_scope)
+        client = FakeSock(b"CONNECT private.example.test:443 HTTP/1.1\r\n\r\n")
+        proxy.handle_connection(client)
+    assert client.sent == policy_proxy._TUNNEL_ACCEPTED
+    assert dialed == [("192.168.1.5", 443)]
+    assert calls == ["private.example.test"]
+
+
+def test_background_route_cannot_mint_a_private_grant():
+    proxy = PolicyProxy()
+    with pytest.raises(RuntimeError, match="active scope"):
+        _authorize(proxy, "https://192.168.1.5/", "192.168.1.5")
+
+
+def test_overlapping_scopes_fail_closed():
+    proxy = PolicyProxy()
+    with proxy.scoped(None), pytest.raises(RuntimeError, match="busy"), proxy.scoped(None):
+        pytest.fail("overlapping operation replaced the active grants")
+
+
+def test_stale_scope_cannot_authorize_a_later_operation():
+    proxy = PolicyProxy()
+    url = "https://192.168.1.5/"
+    decision = NetworkPolicy().evaluate(NetworkOperation(url=url, interactive=True))
+    with proxy.scoped(None):
+        stale = proxy.authorization_scope
+    with proxy.scoped(None), pytest.raises(RuntimeError, match="active scope"):
+        proxy.authorize(url, decision, ("192.168.1.5",), scope=stale)
+
+
+def test_plain_http_pipeline_never_reaches_upstream(monkeypatch):
+    _patch_dns(monkeypatch, ["93.184.216.34"])
+    upstream = FakeSock()
+    monkeypatch.setattr(policy_proxy.socket, "create_connection", lambda *_a: upstream)
+    first = b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n"
+    second = b"GET http://169.254.169.254/latest HTTP/1.1\r\nHost: 169.254.169.254\r\n\r\n"
+    client = FakeSock(first + second)
+    PolicyProxy().handle_connection(client)
+    assert upstream.sent == b""
+    assert upstream.closed and client.closed
+
+
+def test_connect_preserves_preread_tls_payload(monkeypatch, no_splice):
+    _patch_dns(monkeypatch, ["93.184.216.34"])
+    upstream = FakeSock()
+    monkeypatch.setattr(policy_proxy.socket, "create_connection", lambda *_a: upstream)
+    hello = b"\x16\x03\x01test-client-hello"
+    client = FakeSock(b"CONNECT example.com:443 HTTP/1.1\r\n\r\n" + hello)
+    PolicyProxy().handle_connection(client)
+    assert client.sent == policy_proxy._TUNNEL_ACCEPTED
+    assert upstream.sent == hello
+    assert no_splice == [(client, upstream)]
+
+
+def test_stop_restart_cannot_resurrect_or_clear_another_scope():
+    proxy = PolicyProxy()
+    old = proxy.scoped(None)
+    old.__enter__()
+    token = proxy.authorization_scope
+    proxy.stop()
+    proxy.start()
+    try:
+        assert proxy.authorization_scope is None
+        with proxy.scoped(None):
+            current = proxy.authorization_scope
+            old.__exit__(None, None, None)
+            assert proxy.authorization_scope is current
+            url = "https://192.168.1.5/"
+            decision = NetworkPolicy().evaluate(NetworkOperation(url=url, interactive=True))
+            with pytest.raises(RuntimeError, match="active scope"):
+                proxy.authorize(url, decision, ("192.168.1.5",), scope=token)
+    finally:
+        proxy.stop()
+
+
+@pytest.mark.parametrize("pin", ["127.0.0.1", "169.254.169.254", "192.168.1.7", "93.184.216.34"])
+def test_literal_grant_cannot_substitute_a_different_pin(pin):
+    proxy = PolicyProxy()
+    url = "https://192.168.1.5/"
+    decision = NetworkPolicy().evaluate(NetworkOperation(url=url, interactive=True))
+    with proxy.scoped(None), pytest.raises(ValueError, match="denial"):
+        proxy.authorize(url, decision, (pin,), scope=proxy.authorization_scope)

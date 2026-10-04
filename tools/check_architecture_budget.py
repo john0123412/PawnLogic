@@ -31,6 +31,7 @@ BUDGETS: dict[str, tuple[int, int]] = {
     "tools/pwn_chain.py": (650, 90),
     "tools/browser_ops.py": (500, 80),
     "tools/policy_proxy.py": (430, 70),
+    "tools/proxy_protocol.py": (280, 45),
     "tools/web_ops.py": (500, 90),
     "tools/sandbox.py": (400, 65),
     "tools/delegate_tool.py": (425, 40),

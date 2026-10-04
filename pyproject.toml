@@ -51,7 +51,7 @@ dev = [
     "PyYAML>=6.0",
 ]
 docker = ["docker>=6.0"]
-browser = ["scrapling>=0.2", "patchright>=1.40"]
+browser = ["scrapling>=0.4.15", "patchright>=1.40"]
 # Dependency extra only. Skill packs are user-installed assets, not conditional
 # wheel contents.
 ctf = [
@@ -221,6 +221,7 @@ module = [
     "tools.merge_ctf_skills",
     "tools.browser_ops",
     "tools.policy_proxy",
+    "tools.proxy_protocol",
     "tools.lsp_lite",
 ]
 disallow_untyped_defs = true

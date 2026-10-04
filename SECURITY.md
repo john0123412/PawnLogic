@@ -70,17 +70,25 @@ Areas of particular concern for this project:
   address ranges are denied and private targets require explicit authorization.
   The direct `urllib` transport pins DNS answers at policy-check time and fails
   closed without a pin; a configured upstream proxy owns its hop's DNS and
-  socket. Browser transports (Patchright and Scrapling) enforce the policy per
-  connection through the loopback enforcement proxy: Chromium continues
-  redirect hops and Service-Worker fetches outside route interception, so
-  every engine connection (CONNECT tunnel or plain HTTP) is evaluated before
-  any byte is forwarded and only policy-resolved addresses are dialed. Service
-  Workers are blocked at context creation, the context-lifetime route guard
-  re-checks requests interception does surface, failed guard installation
-  closes the browser context, and Scrapling versions without the required
-  setup contract are denied before fetching. WebRTC is forced through the
-  proxy (`disable_non_proxied_udp` / `block_webrtc`); a proxy that cannot
-  start fails the browser launch.
+  socket. Browser transports (Patchright and Scrapling) use a mandatory
+  loopback proxy. Each CONNECT authority and each single plain-HTTP request
+  is checked before forwarding, and only policy-time pinned addresses are
+  dialed. Both Chromium paths disable HTTP/2 and QUIC to prevent cross-origin
+  connection pooling, explicitly proxy loopback destinations, request Service
+  Worker blocking, and apply the WebRTC non-proxied UDP restriction. Context route
+  guards remain defense in depth; Chromium does not surface redirect hops to
+  them. Patchright 1.63 implements `service_workers="block"` with a JavaScript
+  shim that the native prototype method bypasses; Worker connections remain subject
+  to the proxy independently of routing. Failed guard installation closes the context, and Scrapling setup is
+  verified on every retry. Confirmed private grants preserve the confirmation
+  pins and operation token; scope exit and proxy stop close existing sockets.
+  Outside an operation, private background requests cannot prompt or acquire
+  grants. Overlapping operations and unavailable proxies fail closed.
+  Plain HTTP uses `Connection: close`, strips proxy/hop-by-hop headers, and
+  rejects chunked uploads, upgrades, `Expect`, and bodies over 8 MiB. CONNECT
+  preserves end-to-end TLS and enforces destinations, not encrypted content;
+  this is not an OS sandbox. Active handlers are bounded to 16 with a 10-second
+  idle/read/write timeout.
 - **Extension activation** — installed Extensions remain disabled until explicit
   enablement; compatibility and contribution names are validated before code is
   allowed to register capabilities

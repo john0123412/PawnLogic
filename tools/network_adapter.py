@@ -188,6 +188,21 @@ def evaluate_network_url_pinned(
     )
 
 
+def evaluate_pinned_browser_authorization(
+    url: str, pins: tuple[str, ...],
+) -> NetworkDecision:
+    """Recheck a host-confirmed pin snapshot without DNS or literal-IP drift."""
+    literal = _pinned_addresses_for_url(url)
+    if literal and pins != literal:
+        return NetworkDecision(
+            NetworkAction.DENY, "literal target does not match its pins",
+            "dns_result_invalid", url,
+        )
+    return NetworkPolicy().evaluate(NetworkOperation(
+        url=url, resolved_addresses=pins, explicit_authorization=True, interactive=False,
+    ))
+
+
 def decision_message(decision: NetworkDecision) -> str:
     """Render a stable, credential-safe policy denial."""
     target = decision.normalized_target or "(network capability)"
@@ -518,13 +533,22 @@ class BrowserRequestGuard:
 
     def __call__(self, route_obj: Any, request: Any) -> None:
         target = str(getattr(request, "url", "") or "")
-        decision = evaluate_network_url(target, arguments=self._arguments)
+        scope = self._proxy.authorization_scope if self._proxy is not None else None
+        decision, pins = evaluate_network_url_pinned(
+            target, arguments=self._arguments,
+            confirmation_available=False if self._proxy is not None and scope is None else None,
+        )
         if not confirm_network_decision(decision, self._arguments):
             self._blocked.append(decision)
             route_obj.abort()
             return
-        if self._proxy is not None and target:
-            self._proxy.authorize(target)
+        if self._proxy is not None and decision.action == NetworkAction.CONFIRM:
+            try:
+                self._proxy.authorize(target, decision, pins, scope=scope)
+            except (RuntimeError, ValueError):
+                self._blocked.append(decision)
+                route_obj.abort()
+                return
         route_obj.continue_()
 
 
@@ -597,6 +621,8 @@ def navigate_with_policy(
     enforcement proxy to this operation and pre-authorizes the initial URL's
     authority, which the caller has already validated and confirmed.
     """
+    if proxy is None:
+        return "SECURITY BLOCK: browser enforcement proxy is unavailable; navigation denied.", ""
     temporary_guard: BrowserRequestGuard | None = None
     if guard is None:
         temporary_guard, install_error = install_browser_route_guard(
@@ -607,13 +633,8 @@ def navigate_with_policy(
     active_guard = guard if guard is not None else temporary_guard
     assert active_guard is not None
     try:
-        with active_guard.scoped(arguments):
-            if proxy is None:
-                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-            else:
-                with proxy.scoped(arguments):
-                    proxy.authorize(url)
-                    page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        with active_guard.scoped(arguments), proxy.scoped(arguments):
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
     except Exception:
         blocked = active_guard.blocked
         if blocked:
@@ -641,15 +662,21 @@ def ensure_page_url(
     warning_sink: Callable[[str], None],
     guard: BrowserRequestGuard | None = None,
     proxy: PolicyProxy | None = None,
+    get_guard: Callable[[], BrowserRequestGuard | None] | None = None,
+    get_proxy: Callable[[], PolicyProxy | None] | None = None,
 ) -> tuple[str | None, str | None]:
     """Synchronize a lazy browser page without leaking policy branches upstream."""
     error, warnings = validate_browser_url(url, arguments)
     if error:
         return error, None
-    page = get_page()
-    if page is None:
-        return None, current_url
     try:
+        page = get_page()
+        if page is None:
+            return "SECURITY BLOCK: browser is unavailable; navigation denied.", None
+        if get_guard is not None:
+            guard = get_guard()
+        if get_proxy is not None:
+            proxy = get_proxy()
         if emit_warnings:
             for warning in warnings:
                 warning_sink(warning)
@@ -666,8 +693,8 @@ def ensure_page_url(
             if error:
                 return error, None
             return None, final_url
-    except Exception:
-        return None, current_url
+    except Exception as exc:
+        return f"SECURITY BLOCK: browser navigation failed ({type(exc).__name__}).", None
     return None, current_url
 
 
