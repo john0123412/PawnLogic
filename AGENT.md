@@ -623,11 +623,11 @@ are source-checkout or user-installed assets; pip/curl installations should use
 
 ## Current Release State
 
-- Current published release: `0.4.2`. Release tag: `v0.4.2`. Artifacts must
+- Current published release: `0.4.3`. Release tag: `v0.4.3`. Artifacts must
   originate from the reviewed `main` merge commit through the GitHub Actions
   workflow using Trusted Publishing / OIDC. PyPI:
-  <https://pypi.org/project/pawnlogic/0.4.2/>. GitHub Release:
-  <https://github.com/john0123412/PawnLogic/releases/tag/v0.4.2>.
+  <https://pypi.org/project/pawnlogic/0.4.3/>. GitHub Release:
+  <https://github.com/john0123412/PawnLogic/releases/tag/v0.4.3>.
   After a publish, confirm each of these against PyPI, the Release page, and
   the remote tag rather than against the local one — the PyPI JSON API's
   `info.version` also lags the upload by minutes, so a per-version URL is the
