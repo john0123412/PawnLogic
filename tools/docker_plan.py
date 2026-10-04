@@ -19,6 +19,23 @@ LANGUAGE_COMMANDS: dict[str, tuple[str, str, str]] = {
 }
 PACKAGE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:\[[A-Za-z0-9_,.-]+\])?(?:[<>=!~]=?[A-Za-z0-9_.+-]+)?$")
 
+# Container-sharing modes such as "container:<id>" inherit another container's
+# network without an authorization gate of their own and must never form a plan.
+SUPPORTED_NETWORK_MODES = ("none", "bridge", "host")
+
+
+def validate_network_mode(network: object) -> tuple[str, str | None]:
+    """Normalize a Docker network mode and return a policy error, if any."""
+    mode = str(network or "none").strip().lower()
+    if mode in SUPPORTED_NETWORK_MODES:
+        return mode, None
+    return mode, (
+        f"SECURITY BLOCK: Docker network='{mode}' is not a supported mode. "
+        "Only none, bridge, and host are allowed; container-sharing modes "
+        "(network='container:<id>') and unknown modes are rejected before "
+        "the Docker SDK is called, regardless of allow_network."
+    )
+
 
 @dataclass(frozen=True, slots=True)
 class DockerExecutionPlan:
@@ -49,7 +66,9 @@ def build_docker_execution_plan(
             f"ERROR: unsupported language '{language}'. Supported: "
             + ", ".join(LANGUAGE_COMMANDS)
         )
-    network = str(args.get("network", "none") or "none").strip().lower()
+    network, error = validate_network_mode(args.get("network", "none"))
+    if error:
+        return None, error
     unsafe = network_error(args, network)
     if unsafe:
         return None, unsafe
@@ -72,4 +91,9 @@ def build_docker_execution_plan(
     ), None
 
 
-__all__ = ["DockerExecutionPlan", "build_docker_execution_plan"]
+__all__ = [
+    "SUPPORTED_NETWORK_MODES",
+    "DockerExecutionPlan",
+    "build_docker_execution_plan",
+    "validate_network_mode",
+]

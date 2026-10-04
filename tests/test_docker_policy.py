@@ -333,3 +333,65 @@ def test_airlock_install_requires_authorization_even_when_already_on_bridge(
     # Already on bridge: the airlock authorizes but does not touch networking.
     assert client.bridge.connected == []
     assert client.bridge.disconnected == []
+
+
+def test_docker_network_policy_rejects_container_and_unknown_modes():
+    for mode in ("container:victim", "container", "weird", "host:evil"):
+        result = docker_sandbox._check_network_policy({"allow_network": True}, mode)
+        assert result is not None
+        assert result.startswith("SECURITY BLOCK: Docker network=")
+        assert "not a supported mode" in result
+
+
+def test_run_code_docker_blocks_container_network_before_docker(monkeypatch):
+    monkeypatch.setattr(
+        docker_sandbox,
+        "_get_docker_client",
+        lambda: (_ for _ in ()).throw(AssertionError("Docker should not be touched")),
+    )
+
+    result = docker_sandbox.tool_run_code_docker(
+        {"language": "python", "code": "print(1)", "network": "container:victim",
+         "allow_network": True}
+    )
+
+    assert result.startswith("SECURITY BLOCK: Docker network='container:victim'")
+
+
+def test_pwn_container_blocks_container_network_before_docker(monkeypatch):
+    monkeypatch.setattr(
+        docker_sandbox,
+        "_get_docker_client",
+        lambda: (_ for _ in ()).throw(AssertionError("Docker should not be touched")),
+    )
+
+    result = docker_sandbox.tool_pwn_container(
+        {"action": "create", "name": "lab", "network": "container:victim",
+         "allow_network": True}
+    )
+
+    assert result.startswith("SECURITY BLOCK: Docker network='container:victim'")
+
+
+def test_docker_plan_rejects_unsupported_network_mode_even_when_authorized():
+    from tools.docker_plan import build_docker_execution_plan
+
+    plan, error = build_docker_execution_plan(
+        {"language": "python", "code": "print(1)", "network": "container:victim",
+         "allow_network": True},
+        resolve_image=lambda name: name,
+        network_error=docker_sandbox._check_network_policy,
+        command_error=lambda _code: None,
+    )
+
+    assert plan is None
+    assert error is not None
+    assert error.startswith("SECURITY BLOCK: Docker network='container:victim'")
+
+
+def test_docker_schemas_enum_matches_supported_network_modes():
+    for schema in docker_sandbox.DOCKER_SCHEMAS:
+        properties = schema["function"].get("parameters", {}).get("properties", {})
+        if "network" not in properties:
+            continue
+        assert properties["network"]["enum"] == list(docker_sandbox.SUPPORTED_NETWORK_MODES)

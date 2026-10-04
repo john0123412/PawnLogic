@@ -847,6 +847,13 @@ name at the end is the gate that fails if the invariant is broken.
   attach bridge egress without the `allow_network` authorization the other
   container tools require — that bypass is now closed. A new tool that
   connects a container to a network must call the same gate.
+- **Docker network modes are a closed set: `none`, `bridge`, `host`.**
+  `_check_network_policy` and the pure `build_docker_execution_plan`
+  validator reject `container:<id>` sharing and unknown modes before the
+  Docker SDK is called, regardless of `allow_network` — a shared-namespace
+  mode must not inherit another container's network without an authorization
+  gate of its own. The tool schemas carry the matching `enum`, so keep the
+  schema, plan validator, and gate in agreement when touching network modes.
 - **MCP tool results must stay attributable to their server.** Results go
   out as `_ProvenancedStr` carrying `MCPToolProvenance` (server,
   transport, call id, content/config/command hashes); the executor
