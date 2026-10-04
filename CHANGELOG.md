@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-05
+
 ### Security
 - Docker network modes are restricted to `none`, `bridge`, and `host`:
   container-sharing modes (`container:<id>`) and unknown modes are rejected

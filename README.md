@@ -11,6 +11,8 @@
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
 CTF-oriented toolchain. The current public release is **0.4.2**.
+Version **0.4.3** is an unreleased release candidate containing security
+hardening changes.
 
 
 ## Quick Start
@@ -178,10 +180,10 @@ network authorization even when a container is already on bridge; MCP results
 carry a model-visible attestation and structured provenance metadata; and
 nested delegated work shares one tree-wide budget ceiling.
 
-Further hardening in unreleased code: Docker network modes are restricted to
-`none`, `bridge`, and `host`. Container-sharing modes such as `container:<id>`
-and unknown modes are rejected before the Docker SDK is called, even with
-`allow_network=true`. Bridge and host still require explicit network
+The 0.4.3 release candidate hardens outbound boundaries: Docker network modes
+are restricted to `none`, `bridge`, and `host`. Container-sharing modes such as
+`container:<id>` and unknown modes are rejected before the Docker SDK is called,
+even with `allow_network=true`. Bridge and host still require explicit network
 authorization. Browser tools (Patchright and Scrapling) enforce HTTP/HTTPS
 connections through a mandatory loopback proxy that dials policy-time pinned
 addresses. Both Chromium paths disable HTTP/2 and QUIC, force loopback through
