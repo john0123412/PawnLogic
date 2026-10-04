@@ -10,6 +10,7 @@
 
 PawnLogic 是一个 terminal-first 的自主 AI agent：多 provider 模型路由、
 持久记忆、真实的本地工具执行、MCP 集成，以及面向 CTF 的工具链。当前公开发布版本是 **0.4.2**。
+版本 **0.4.3** 是尚未发布的候选版本，包含安全加固变更。
 
 ## 快速开始
 
@@ -166,7 +167,7 @@ capability 参数会被拒绝；即使容器已经连接 bridge，Airlock 安装
 必须显式授权网络；MCP 结果带有模型可见的 attestation 和结构化 provenance
 metadata；嵌套委派共享整棵树的预算上限。
 
-未发布代码中的进一步加固：Docker 网络模式只允许 `none`、`bridge`、`host`。
+0.4.3 候选版本收紧出站边界：Docker 网络模式只允许 `none`、`bridge`、`host`。
 `container:<id>` 这类共享其他容器网络的模式和未知模式会在调用 Docker SDK
 之前被拒绝，即使设置了 `allow_network=true`。Bridge 和 host 仍需显式网络授权。
 浏览器工具（Patchright 与 Scrapling）的 HTTP/HTTPS 连接强制经过本地回环代理，
