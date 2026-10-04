@@ -19,6 +19,11 @@ LANGUAGE_COMMANDS: dict[str, tuple[str, str, str]] = {
 }
 PACKAGE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:\[[A-Za-z0-9_,.-]+\])?(?:[<>=!~]=?[A-Za-z0-9_.+-]+)?$")
 
+# Mirrors tools/docker_sandbox.SUPPORTED_NETWORK_MODES: container-sharing modes
+# such as "container:<id>" inherit another container's network without an
+# authorization gate of their own and must never form an execution plan.
+SUPPORTED_NETWORK_MODES = ("none", "bridge", "host")
+
 
 @dataclass(frozen=True, slots=True)
 class DockerExecutionPlan:
@@ -50,6 +55,13 @@ def build_docker_execution_plan(
             + ", ".join(LANGUAGE_COMMANDS)
         )
     network = str(args.get("network", "none") or "none").strip().lower()
+    if network not in SUPPORTED_NETWORK_MODES:
+        return None, (
+            f"SECURITY BLOCK: Docker network='{network}' is not a supported mode. "
+            "Only none, bridge, and host are allowed; container-sharing modes "
+            "(network='container:<id>') and unknown modes are rejected before "
+            "the Docker SDK is called, regardless of allow_network."
+        )
     unsafe = network_error(args, network)
     if unsafe:
         return None, unsafe

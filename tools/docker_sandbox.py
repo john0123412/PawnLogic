@@ -164,6 +164,11 @@ DEFAULT_DOCKER_IMAGES = {
 
 _TRUTHY_POLICY_VALUES = {"1", "true", "yes", "on"}
 _RISKY_NETWORK_MODES = {"bridge", "host"}
+# Only these Docker network modes exist in the tool contract. Anything else —
+# including container-sharing modes such as "container:<id>", which would let a
+# container inherit another container's network without an authorization gate
+# of its own — is rejected before the Docker SDK is called.
+SUPPORTED_NETWORK_MODES = ("none", "bridge", "host")
 
 # Issue #177.5: PawnLogic containers are NEVER privileged and NEVER gain
 # extra Linux capabilities — deny-by-policy, not deny-by-omission.  All
@@ -220,6 +225,13 @@ def _docker_policy_enabled(arg_value: object, env_name: str) -> bool:
 
 def _check_network_policy(a: dict, network: str) -> str | None:
     mode = (network or "none").strip().lower()
+    if mode not in SUPPORTED_NETWORK_MODES:
+        return (
+            f"SECURITY BLOCK: Docker network='{mode}' is not a supported mode. "
+            "Only none, bridge, and host are allowed; container-sharing modes "
+            "(network='container:<id>') and unknown modes are rejected before "
+            "the Docker SDK is called, regardless of allow_network."
+        )
     if mode not in _RISKY_NETWORK_MODES:
         return None
     explicit_authorization = _docker_policy_enabled(
@@ -891,9 +903,11 @@ DOCKER_SCHEMAS = [
                     },
                     "network": {
                         "type": "string",
+                        "enum": list(SUPPORTED_NETWORK_MODES),
                         "description": (
                             "Network mode: none (default no network) / bridge / host. "
-                            "bridge/host requires allow_network=true or an environment policy override."
+                            "bridge/host requires allow_network=true or an environment policy override. "
+                            "Container-sharing modes (container:<id>) and unknown modes are rejected."
                         ),
                     },
                     "allow_network": {
@@ -960,9 +974,11 @@ DOCKER_SCHEMAS = [
                     },
                     "network": {
                         "type": "string",
+                        "enum": list(SUPPORTED_NETWORK_MODES),
                         "description": (
                             "Network mode for create (default none). "
-                            "bridge/host requires allow_network=true or an environment policy override."
+                            "bridge/host requires allow_network=true or an environment policy override. "
+                            "Container-sharing modes (container:<id>) and unknown modes are rejected."
                         ),
                     },
                     "allow_network": {
