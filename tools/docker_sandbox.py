@@ -23,7 +23,7 @@ from core.network_policy import NetworkOperation, NetworkPolicy
 from core.operation_policy import OperationAction
 from core.state import state as _runtime_state, runtime_config
 from core.trust import TrustBoundaryKind, trust_notice_for_boundary
-from tools.docker_plan import build_docker_execution_plan
+from tools.docker_plan import SUPPORTED_NETWORK_MODES, build_docker_execution_plan, validate_network_mode
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN, MAGENTA, BOLD
 
 # ════════════════════════════════════════════════════════
@@ -163,12 +163,6 @@ DEFAULT_DOCKER_IMAGES = {
 }
 
 _TRUTHY_POLICY_VALUES = {"1", "true", "yes", "on"}
-_RISKY_NETWORK_MODES = {"bridge", "host"}
-# Only these Docker network modes exist in the tool contract. Anything else —
-# including container-sharing modes such as "container:<id>", which would let a
-# container inherit another container's network without an authorization gate
-# of its own — is rejected before the Docker SDK is called.
-SUPPORTED_NETWORK_MODES = ("none", "bridge", "host")
 
 # Issue #177.5: PawnLogic containers are NEVER privileged and NEVER gain
 # extra Linux capabilities — deny-by-policy, not deny-by-omission.  All
@@ -224,16 +218,9 @@ def _docker_policy_enabled(arg_value: object, env_name: str) -> bool:
 
 
 def _check_network_policy(a: dict, network: str) -> str | None:
-    mode = (network or "none").strip().lower()
-    if mode not in SUPPORTED_NETWORK_MODES:
-        return (
-            f"SECURITY BLOCK: Docker network='{mode}' is not a supported mode. "
-            "Only none, bridge, and host are allowed; container-sharing modes "
-            "(network='container:<id>') and unknown modes are rejected before "
-            "the Docker SDK is called, regardless of allow_network."
-        )
-    if mode not in _RISKY_NETWORK_MODES:
-        return None
+    mode, error = validate_network_mode(network)
+    if error or mode == "none":
+        return error
     explicit_authorization = _docker_policy_enabled(
         a.get("allow_network"), "PAWNLOGIC_DOCKER_ALLOW_NETWORK"
     )

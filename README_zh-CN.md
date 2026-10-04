@@ -166,6 +166,10 @@ capability 参数会被拒绝；即使容器已经连接 bridge，Airlock 安装
 必须显式授权网络；MCP 结果带有模型可见的 attestation 和结构化 provenance
 metadata；嵌套委派共享整棵树的预算上限。
 
+未发布代码中的进一步加固：Docker 网络模式只允许 `none`、`bridge`、`host`。
+`container:<id>` 这类共享其他容器网络的模式和未知模式会在调用 Docker SDK
+之前被拒绝，即使设置了 `allow_network=true`。Bridge 和 host 仍需显式网络授权。
+
 ## 数据目录
 
 ```text

@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+- Docker network modes are restricted to `none`, `bridge`, and `host`:
+  container-sharing modes (`container:<id>`) and unknown modes are rejected
+  before the Docker SDK is called, regardless of `allow_network`, by both the
+  execution-plan validator and the tool-level gate; the tool schemas carry the
+  matching enum.
+
 ## [0.4.2] - 2026-10-03
 
 ### Changed

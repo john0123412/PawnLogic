@@ -178,6 +178,12 @@ network authorization even when a container is already on bridge; MCP results
 carry a model-visible attestation and structured provenance metadata; and
 nested delegated work shares one tree-wide budget ceiling.
 
+Further hardening in unreleased code: Docker network modes are restricted to
+`none`, `bridge`, and `host`. Container-sharing modes such as `container:<id>`
+and unknown modes are rejected before the Docker SDK is called, even with
+`allow_network=true`. Bridge and host still require explicit network
+authorization.
+
 ## Data Layout
 
 ```text
