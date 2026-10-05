@@ -187,6 +187,20 @@ requested from the SDK; the proxy enforces their egress even if registration
 is not blocked. Scrapling versions without
 the required setup contract are denied before fetching.
 
+Plaintext HTTP is allowed for authorized CTF labs. Run HTTP client code with
+`run_code_docker`, `network="bridge"`, and `allow_network=true` after explicit
+network authorization; use the local `python` image and omit host file mounts
+and dependency installation when the standard library is sufficient. The
+disposable container retains its 512 MiB memory, 0.5 CPU, and 256 PID limits.
+Its HTTP client is not subject to the browser proxy's upload/framing limits.
+Docker bridge authorization grants network access, not a destination allowlist:
+keep requests within the agreed lab scope. Do not use host networking or disable
+the browser proxy as a workaround.
+Resource limits do not force a non-root user, a read-only root filesystem, or
+removal of Docker's default capabilities. The local Python image runs as root
+by default. Additional workspace mounts can be supplied within the mount policy;
+the generated code directory is not the only mount the tool can accept.
+
 ## Data Layout
 
 ```text

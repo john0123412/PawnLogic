@@ -66,6 +66,14 @@ Areas of particular concern for this project:
   Unknown modes, including `container:<id>` sharing, are rejected before the
   Docker SDK is called. Memory, CPU, and PID limits remain enforced.
 - **CTF workflow boundaries** — CTF tools and skill packs are intended for legal CTFs, authorized labs, and systems you own or have permission to test
+  Authorized plaintext HTTP clients may run through `run_code_docker` with
+  explicitly authorized bridge networking and the existing resource limits.
+  Browser proxy framing limits do not apply inside that container. Bridge
+  authorization is not a per-target allowlist; keep requests within the agreed
+  lab scope, without host networking or credential mounts.
+  Resource limits do not force non-root execution, read-only root filesystems,
+  or removal of Docker's default capabilities. Additional workspace mounts
+  remain subject to the mount policy; the code mount is not the only allowed one.
 - **Network targets** — built-in HTTP(S) adapters evaluate normalized targets,
   DNS answers, and every redirect through the shared Network Policy; special
   address ranges are denied and private targets require explicit authorization.

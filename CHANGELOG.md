@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- Clarified the authorized CTF plaintext HTTP workflow in tool guidance and
+  bilingual documentation: use disposable, resource-limited Docker containers
+  with explicitly authorized bridge networking, without relaxing the browser
+  proxy. Bridge authorization does not imply a per-target allowlist.
+
 ## [0.4.3] - 2026-10-05
 
 ### Security

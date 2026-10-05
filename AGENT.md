@@ -854,6 +854,17 @@ name at the end is the gate that fails if the invariant is broken.
   mode must not inherit another container's network without an authorization
   gate of its own. The tool schemas carry the matching `enum`, so keep the
   schema, plan validator, and gate in agreement when touching network modes.
+- **Authorized CTF plaintext HTTP remains supported in disposable containers.**
+  Use `run_code_docker` with explicitly authorized bridge networking, existing
+  memory/CPU/PID limits, and no credential mounts. Container HTTP clients do
+  not inherit browser proxy framing limits. Bridge authorization is not a
+  destination allowlist; retain the agreed lab scope and never suggest host
+  networking or disabling browser enforcement as a workaround.
+  Resource limits do not force non-root execution, read-only root filesystems,
+  or removal of default Docker capabilities; those defaults come from the
+  image/runtime. Extra workspace mounts remain possible under the mount policy.
+  `tests/test_docker_policy.py::test_run_code_docker_blocks_risky_network_before_docker`
+  covers the network authorization gate.
 - **Browser transports require the loopback policy proxy.** Chromium skips
   redirect route callbacks, so context guards alone cannot enforce destinations.
   Both Patchright paths (including Scrapling >= 0.4.15) disable HTTP/2/QUIC,
