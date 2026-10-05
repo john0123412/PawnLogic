@@ -172,6 +172,16 @@ context 级 route guard 对可拦截的请求做二次检查，安装失败会�
 沙箱。当前 Patchright 的 Service Worker 注册屏蔽可从原型方法绕过；即使注册成功，
 其出站连接仍由代理检查。不支持所需 setup 契约的 Scrapling 版本会在抓取前被拒绝。
 
+授权 CTF 靶场允许使用明文 HTTP。获得明确联网授权后，通过 `run_code_docker`
+运行 HTTP 客户端代码，设置 `network="bridge"`、`allow_network=true`；优先使用
+本地 `python` 镜像，标准库足够时不挂载宿主文件、不安装依赖。一次性容器仍受
+512 MiB 内存、0.5 CPU 和 256 PID 限制；容器内客户端不受浏览器代理的上传和
+请求封帧限制。Docker bridge 授权代表允许联网，不是目标地址白名单：请求必须
+保持在约定靶场范围内。不要通过 host 网络或关闭浏览器代理绕过限制。
+资源限制不会强制非 root 用户、只读根文件系统或移除 Docker 默认 capabilities；
+本地 Python 镜像默认以 root 运行。工具还接受符合挂载策略的额外工作区挂载，
+并非只能挂载生成的代码目录。
+
 ## 数据目录
 
 ```text

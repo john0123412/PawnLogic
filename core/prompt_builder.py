@@ -454,6 +454,10 @@ def build_session_prompt(
         "  pwn_env → inspect_binary → pwn_cyclic gen → pwn_debug (find offset) "
         "→ pwn_rop (gadgets) → pwn_libc → write exploit (run_code, use_venv=true) → test\n"
         "  NX enabled path: skip shellcode → use pwn_rop + pwn_one_gadget instead.\n\n"
+        "  Authorized CTF plaintext HTTP: use run_code_docker with network='bridge' "
+        "and allow_network=true only after the user authorized network access. "
+        "Keep requests within the agreed target scope; do not use host networking, "
+        "credential mounts, or disable the browser proxy to work around framing limits.\n\n"
 
         "Research:\n"
         "  web_search → fetch_url (full page) → synthesize → write_file\n\n"

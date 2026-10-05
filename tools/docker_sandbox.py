@@ -855,7 +855,7 @@ DOCKER_SCHEMAS = [
             "name": "run_code_docker",
             "description": (
                 "Run code inside a disposable Docker container.\n"
-                "Use for Pwn exploit testing, multi-libc environment checks, and isolated sandbox execution.\n"
+                "Use for Pwn exploit testing, multi-libc environment checks, isolated sandbox execution, and authorized CTF plaintext HTTP clients; for CTF HTTP use bridge with explicit allow_network, without host mode or credential mounts.\n"
                 "Defaults to no network (network=none) to prevent CTF flag leakage.\n"
                 "Resource limits: 512 MB memory, 0.5 CPU, 256 PIDs.\n"
                 "Supported languages: python / c / cpp / bash / javascript / rust / go / java.\n"
