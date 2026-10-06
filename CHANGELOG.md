@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Security
+- Network Policy classifies IPv4-mapped IPv6 by its effective IPv4 address
+  before metadata/special-address checks, so explicit scope authorization
+  cannot allow a mapped cloud metadata endpoint. Original address forms remain
+  available for scope matching. Literal and DNS-snapshot regressions cover
+  policy denial before the scoped proxy can dial.
 - Airlock package installation validates the operator egress declaration before
   running, including already-bridged containers. A failed temporary disconnect
   now overrides installation success, revokes tool access, and kills the
@@ -15,8 +20,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   explicitly reports that the container may remain running and needs manual
   cleanup. Attachment failures also trigger cleanup because a daemon response
   can be lost after connecting; confirmed offline containers are preserved.
-  Existing hosts-file mappings are unchanged; this is not destination
-  enforcement.
+  This lifecycle cleanup is separate from destination enforcement; configured
+  operator scopes now deny Airlock installs.
 - One-shot `run_code_docker` containers are hardened by default: read-only
   root filesystem (relaxed only when `install_deps` must write site-packages),
   tmpfs `/tmp` and `/run`, `cap_drop=ALL`, and a user matching the host uid:gid
@@ -28,16 +33,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   after the caller-kwarg deny check, so tool arguments can never inject or
   supply raw hardening kwargs. Trusted Python callers may explicitly override
   read-only/tmpfs defaults, as dependency installation requires.
-- Bridge authorization now supports an operator-declared egress scope:
-  setting `PAWNLOGIC_DOCKER_EGRESS_ALLOW` (hosts, IPs, CIDRs) resolves declared
-  hostnames once and attaches hosts-file mappings to bridge containers via
-  `extra_hosts`, and labels the container with the scope fingerprint for
-  audit. Invalid or unresolvable scope entries fail closed. The declared
-  scope provides metadata and hosts-file mappings, not transport-level DNS
-  pins or CIDR enforcement. Direct connections and custom DNS can bypass it;
-  socket-level destination
-  filtering remains a host-level control (DOCKER-USER iptables or a proxy
-  sidecar), not something tool code improvises.
+- Operator-scoped disposable Python HTTP/CONNECT runs now enforce targets:
+  `PAWNLOGIC_DOCKER_EGRESS_ALLOW` makes an authorized bridge request use
+  `network=none` with a read-only Unix relay to a host proxy. Explicit hosts
+  resolve once; numeric IP/CIDR scope and Network Policy hard denials are
+  checked before numeric-only dial. Direct network sockets have no route.
+  Fixed/chunked uploads stream up to 64 MiB per request; headers/trailers,
+  concurrency and operation duration are bounded. CONNECT permits opaque
+  TCP to approved targets/ports. Setup fails closed, expiry/cleanup revokes
+  sockets before removal, and cleanup errors are explicit SECURITY BLOCKs.
+  Scoped networking requires Unix, built-in Python, non-root numeric UID:GID,
+  no additional mounts/dependencies and timeout 1–300 seconds; host, persistent
+  exec/connected create and Airlock are denied under scope. Offline runs and
+  unmounted offline creation remain available. Unscoped bridge/host grants
+  remain capability-only; transparent TCP/UDP enforcement is a separate phase.
 
 ### Changed
 - Phase whitelists now expose five registered tools aligned with the documented
@@ -48,13 +57,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   replay harnesses, `acceptance_post429`, `ptk_client`), dead config surface
   (`DOCKER_IMAGES`, `NORMAL_CONFIG`, `WEB_STRATEGY`,
   `PAWNLOGIC_DEFAULT_MODEL`), and two unreferenced provider-stream fixtures;
-  the typed island is now 49 modules.
+  the typed island is now 53 modules.
 - Clarified the authorized CTF plaintext HTTP workflow in tool guidance and
   bilingual documentation: use disposable, resource-limited Docker containers
   with explicitly authorized bridge networking, without relaxing the browser
-  proxy. Bridge authorization remains capability-level; the operator may
-  record a declared scope with `PAWNLOGIC_DOCKER_EGRESS_ALLOW`, which does not
-  enforce destination restrictions.
+  proxy. Unscoped bridge authorization remains capability-level; configured
+  operator scopes use the offline HTTP/CONNECT transport described above.
 
 ## [0.4.3] - 2026-10-05
 

@@ -1,19 +1,11 @@
-"""Operator-declared bridge egress scope for Docker containers.
+"""Operator-declared Docker scope and per-operation DNS snapshots.
 
-Host-side configuration, never a tool argument: the model cannot scope its
-own network grant (mirrors "never from model authorization" in the network
-adapter). ``PAWNLOGIC_DOCKER_EGRESS_ALLOW`` takes hosts, bare IPs, or CIDR
-networks, comma/space separated. Approved hostnames are resolved once at
-policy time and written into bridge containers' hosts files via ``extra_hosts``.
-These mappings do not filter destinations or prevent custom DNS lookups and
-direct IP connections; they are not transport-level DNS pins. The grant is
-labelled with a scope fingerprint so scoped containers are auditable after
-the fact. Any invalid or unresolvable entry fails closed.
-
-Extracted from tools/docker_sandbox.py as a pure policy module (no Docker
-SDK import): the only I/O is the injected ``egress_resolver``.
+Host configuration accepts hosts, IPs and CIDRs. A hostname resolves once into
+all numeric addresses; scoped HTTP consumes that snapshot and enforces target
+selection at the socket boundary. The legacy hosts-file view remains available
+for policy tests but is not itself a destination filter. Never let a tool arg
+supply or override the operator configuration.
 """
-
 from __future__ import annotations
 
 import hashlib
@@ -22,7 +14,6 @@ import os
 import re
 import socket
 
-from utils.ansi import YELLOW, c
 
 EGRESS_SCOPE_ENV = "PAWNLOGIC_DOCKER_EGRESS_ALLOW"
 
@@ -48,7 +39,7 @@ def parse_egress_scope(raw: str) -> tuple[tuple[str, ...], str | None]:
     """Split and validate a comma/space-separated host/IP/CIDR scope list."""
     entries: list[str] = []
     for chunk in raw.replace(",", " ").split():
-        entry = chunk.strip().lower()
+        entry = chunk.strip().lower().rstrip(".")
         if not entry:
             continue
         try:
@@ -61,14 +52,13 @@ def parse_egress_scope(raw: str) -> tuple[tuple[str, ...], str | None]:
     return tuple(entries), None
 
 
-def resolve_egress_scope() -> tuple[dict[str, str], str | None, str | None]:
-    """Return (hostname -> hosts-file mapping, scope fingerprint, error).
+def resolve_egress_addresses(raw_scope: str | None = None) -> tuple[dict[str, tuple[str, ...]], str | None, str | None]:
+    """Return the complete per-operation hostname address snapshot.
 
-    CIDR and bare-IP entries are structural scope declarations and produce no
-    host mapping; hostname entries are resolved once here. These mappings
-    do not restrict socket destinations. Any resolution failure fails closed.
+    CIDR and bare-IP entries need no DNS lookup. Hostnames resolve once;
+    the scoped HTTP proxy validates and dials these numeric snapshots.
     """
-    raw = os.environ.get(EGRESS_SCOPE_ENV, "").strip()
+    raw = (os.environ.get(EGRESS_SCOPE_ENV, "") if raw_scope is None else raw_scope).strip()
     if not raw:
         return {}, None, None
     entries, error = parse_egress_scope(raw)
@@ -76,7 +66,7 @@ def resolve_egress_scope() -> tuple[dict[str, str], str | None, str | None]:
         return {}, None, (
             f"SECURITY BLOCK: {EGRESS_SCOPE_ENV} is set but invalid: {error}"
         )
-    host_mappings: dict[str, str] = {}
+    host_addresses: dict[str, tuple[str, ...]] = {}
     for entry in entries:
         try:
             ipaddress.ip_network(entry, strict=False)
@@ -94,9 +84,15 @@ def resolve_egress_scope() -> tuple[dict[str, str], str | None, str | None]:
             return {}, None, (
                 f"SECURITY BLOCK: egress scope host '{entry}' resolved to no addresses."
             )
-        host_mappings[entry] = addresses[0]
+        host_addresses[entry.rstrip(".")] = tuple(addresses)
     fingerprint = hashlib.sha256(raw.encode()).hexdigest()[:12]
-    return host_mappings, fingerprint, None
+    return host_addresses, fingerprint, None
+
+
+def resolve_egress_scope() -> tuple[dict[str, str], str | None, str | None]:
+    """Legacy hosts-file view of the address snapshot; not a destination filter."""
+    addresses, fingerprint, error = resolve_egress_addresses()
+    return {host: values[0] for host, values in addresses.items()}, fingerprint, error
 
 
 def resolve_scope_for_network(network: str) -> tuple[dict[str, str], str | None, str | None]:
@@ -108,5 +104,5 @@ def resolve_scope_for_network(network: str) -> tuple[dict[str, str], str | None,
     if network == "bridge":
         return resolve_egress_scope()
     if network == "host" and os.environ.get(EGRESS_SCOPE_ENV, "").strip():
-        print(c(YELLOW, "  Note: PAWNLOGIC_DOCKER_EGRESS_ALLOW cannot constrain host networking."))
+        return {}, None, "SECURITY BLOCK: host networking cannot enforce the Docker egress scope."
     return {}, None, None

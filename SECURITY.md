@@ -63,31 +63,40 @@ Areas of particular concern for this project:
 - **Docker escape and egress** — containers default to `network_mode=none`. The
   tool contract accepts only `none`, `bridge`, and `host`; `bridge`/`host` and
   airlock package installs require explicit capability-only authorization.
-  Airlock validates declared scopes but leaves existing hosts-file mappings
-  unchanged and does not filter destinations. Failed temporary disconnects
-  revoke tool access and kill the container, with forced removal as fallback;
-  failure of both cleanup actions reports a possible live container requiring
-  manual Docker cleanup, and never reports installation success.
+  An operator scope denies Airlock and connected persistent operations.
+  Without a scope, failed temporary Airlock disconnects revoke tool access
+  and kill/remove the container; unresolved cleanup reports a possible live
+  container requiring manual cleanup, never installation success.
   Unknown modes, including `container:<id>` sharing, are rejected before the
   Docker SDK is called. Memory, CPU, and PID limits remain enforced.
 - **CTF workflow boundaries** — CTF tools and skill packs are intended for legal CTFs, authorized labs, and systems you own or have permission to test
   Authorized plaintext HTTP clients may run through `run_code_docker` with
   explicitly authorized bridge networking and the existing resource limits.
-  Browser proxy framing limits do not apply inside that container. Bridge
-  authorization is not a per-target allowlist; keep requests within the agreed
-  lab scope, without host networking or credential mounts.
-  One-shot clients drop all capabilities and use tmpfs scratch space plus a
-  read-only root filesystem, except Python dependency installation requires
-  a writable root filesystem. Their default user matches the host UID:GID;
-  a root host UID or unavailable host IDs do not guarantee non-root execution.
-  Dependency installs and persistent containers retain the image user by
-  default; an explicit `container_user` selects the requested user.
-  Additional workspace mounts remain subject to the mount policy.
-  `PAWNLOGIC_DOCKER_EGRESS_ALLOW` records hosts/IPs/CIDRs; only hostname entries
-  add hosts-file mappings, while bare IPs/CIDRs contribute to the fingerprint.
-  It does not filter destinations or enforce a CIDR allowlist.
-  Direct IP connections, custom DNS and redirects can bypass those mappings;
-  they are not connection-level DNS pins.
+  Browser proxy framing limits do not apply inside that container. Without
+  an operator scope, bridge authorization is capability-only. One-shot
+  clients drop capabilities, use tmpfs and a read-only root filesystem
+  (dependency installs relax rootfs); host UID:GID defaults may still be root.
+  Persistent containers retain image defaults outside scoped networking.
+  With `PAWNLOGIC_DOCKER_EGRESS_ALLOW`, scoped bridge requests instead use
+  `network=none` and a read-only-mounted Unix relay to a host-enforced proxy.
+  Only explicitly declared hostnames and literal IP/CIDR targets are accepted;
+  DNS snapshots are fixed before startup and numeric sockets never re-resolve.
+  Network Policy hard denials remain in force. Raw direct sockets have no
+  external route, even if code bypasses proxy variables or opens the mounted
+  Unix socket directly. CONNECT permits opaque TCP to approved targets/ports;
+  it does not inspect TLS or provide transparent arbitrary TCP/UDP access.
+  Scoped runs require built-in Python, non-root numeric UID:GID, no extra
+  mounts/dependencies and a 1–300 second timeout. Streamed HTTP uploads accept
+  fixed/chunked framing up to 64 MiB; headers/trailers and concurrency are
+  bounded, and Expect/Upgrade are denied. Expiry/cleanup closes upstream
+  sockets before removal; failed setup denies execution, failed cleanup
+  reports SECURITY BLOCK. Scope-enabled host networking, persistent exec,
+  connected persistent create and Airlock are rejected; offline runs and
+  unmounted offline creation remain available. Transparent TCP/UDP filtering
+  requires a separately authorized host-managed boundary. A nonzero UID is
+  mandatory; the numeric GID may be zero. Enabling scope does not quarantine
+  already-running connected containers: stop/destroy them first, and change
+  operator declarations only between operations.
 - **Network targets** — built-in HTTP(S) adapters evaluate normalized targets,
   DNS answers, and every redirect through the shared Network Policy; special
   address ranges are denied and private targets require explicit authorization.

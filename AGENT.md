@@ -675,7 +675,7 @@ mode.
 authoritative list.** A module is in the island only when CI passes its file
 to mypy; the matching `[[tool.mypy.overrides]]` entry in `pyproject.toml` is
 what actually turns on `disallow_untyped_defs` / `check_untyped_defs` for it.
-Both files, plus the list below, must name the same 49 modules;
+Both files, plus the list below, must name the same 53 modules;
 `tests/test_typed_island_sync.py` fails the build when they diverge.
 
 To add a module: annotate it until it passes
@@ -698,7 +698,8 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `pawnlogic/restart_recovery`, `tools/check_doc_structure`,
 `tools/check_release_consistency`, `tools/merge_ctf_skills`, `tools/browser_ops`,
 `tools/policy_proxy`, `tools/proxy_protocol`, `tools/text_patch`, `tools/shell_ops`,
-`tools/docker_plan`, `tools/pwn_binary`, `tools/pwn_debugger`.
+`tools/docker_plan`, `tools/container_http_proxy`, `tools/container_http_protocol`,
+`tools/container_http_relay`, `tools/docker_http`, `tools/pwn_binary`, `tools/pwn_debugger`.
 
 `core/delegation` and `core/agent_orchestrator` are **not** in the island.
 `core/agent_orchestrator` has an unannotated parameter at line 402 and would
@@ -855,9 +856,9 @@ name at the end is the gate that fails if the invariant is broken.
   `_check_network_policy`.** The airlock (`tool_install_package`) used to
   attach bridge egress without the `allow_network` authorization the other
   container tools require — that bypass is now closed. A new tool that
-  connects a container to a network must call the same gate. Airlock also
-  validates any operator scope before installing, without changing existing
-  hosts-file mappings or filtering destinations. If its temporary disconnect
+  connects a container to a network must call the same gate. Airlock rejects
+  installs while an operator scope is configured; without a scope its legacy
+  capability gate remains mandatory. If its temporary disconnect
   fails, revoke tool access and kill the container, falling back to forced
   removal; if both fail, report the live-container risk and manual cleanup.
   An attachment error must still trigger cleanup: a daemon can attach before
@@ -875,30 +876,45 @@ name at the end is the gate that fails if the invariant is broken.
   Use `run_code_docker` with explicitly authorized bridge networking, existing
   memory/CPU/PID limits, and no credential mounts. Container HTTP clients do
   not inherit browser proxy framing limits. Bridge authorization carries an
-  **operator-declared egress scope** when `PAWNLOGIC_DOCKER_EGRESS_ALLOW` is
-  set (hosts, IPs, CIDRs): declared hostnames are resolved once and written
-  into the container hosts file via `extra_hosts`; the container is labelled
-  with the scope fingerprint. These are metadata and name-resolution hints,
-  not a destination filter or transport-level DNS pins. Direct IP connections,
-  custom DNS and redirects remain unrestricted by this setting. Bridge grants
-  remain capability-only either way — socket-level enforcement still needs a
-  control (DOCKER-USER iptables or a proxy sidecar) and must not be improvised
-  in tool code. Never suggest host networking or disabling browser enforcement
-  as a workaround. One-shot `run_code_docker` containers run hardened by
-  default: read-only root filesystem (relaxed only when `install_deps` must
-  write site-packages), tmpfs `/tmp` and `/run`, `cap_drop=ALL`, and a
-  user matching the host uid:gid (non-root only for a nonzero host uid).
-  Missing host IDs and dependency installs retain the image user unless
-  explicitly overridden; `container_user='root'` selects root. Persistent
-  `pwn_container` containers keep the image
-  default user and capabilities because in-container debugging and apt/pip
-  installs expect them; their network and privilege posture is unchanged.
-  Extra workspace mounts remain possible under the mount policy.
-  `tests/test_docker_policy.py::test_run_code_docker_blocks_risky_network_before_docker`
-  covers the network authorization gate, and
-  `test_run_code_docker_applies_hardening_and_nonroot_default` /
-  `test_run_code_docker_bridge_scope_maps_extra_hosts_and_labels` cover the
-  hardening defaults and the scoped grant.
+  operator scope when `PAWNLOGIC_DOCKER_EGRESS_ALLOW` is set: an authorized
+  bridge request runs with `network=none` and a read-only-mounted Unix relay
+  to the host HTTP/CONNECT proxy. `tools/docker_http.py` owns setup/cleanup;
+  `tools/container_http_proxy.py` enforces the explicit host/IP/CIDR scope,
+  and `tools/container_http_protocol.py` owns bounded streaming/framing.
+  Hostnames resolve once into a frozen all-address snapshot. CIDRs match
+  literal IPs only; unknown hostnames fail without DNS. Network Policy hard
+  denials still apply. The container can open the relay socket directly, so
+  every host proxy request must enforce scope before forwarding; environment
+  variables and Unix permissions are not the enforcement boundary.
+  Numeric sockets never re-resolve. Operation expiry/cleanup closes pending
+  dials and active sockets before container removal; setup/cleanup failures
+  are SECURITY BLOCK. Scoped runs require built-in Python, a non-root numeric
+  UID:GID, no extra mounts or dependencies, and timeout 1–300 seconds.
+  Fixed/chunked uploads stream up to 64 MiB per request with bounded headers,
+  trailers and concurrency; Expect/Upgrade are rejected. CONNECT is opaque
+  TCP to approved target/port, not TLS-only or arbitrary transparent TCP/UDP.
+  Under scope, host networking, connected persistent create, all persistent
+  exec, extra mounts and Airlock are denied. Offline runs and unmounted
+  offline persistent creation are allowed; list/destroy remain available.
+  Nonzero UID is mandatory; numeric GID may be zero. Scope does not quarantine
+  previously running connected containers: destroy/stop them first, and change
+  declarations only between operations.
+  The creation funnel rejects alternate network kwargs and non-none mode.
+  Without a scope, bridge/host authorization remains capability-only.
+  Never suggest host networking or disabling browser enforcement as a workaround.
+  Outside scoped bridge runs, one-shot hardening retains the host UID:GID
+  (possibly root) and permits dependency installs with writable rootfs;
+  persistent containers keep image defaults. Transparent arbitrary TCP/UDP
+  enforcement is a separate host-managed phase; no sudo/firewall changes are
+  made by tool code. `tests/test_docker_http_integration.py`,
+  `tests/test_container_http_proxy.py`, `tests/test_container_http_protocol.py`
+  and `tests/test_container_http_relay.py` gate these boundaries.
+- **IPv4-mapped IPv6 must retain IPv4 hard denials.** Network Policy classifies
+  the effective IPv4 before metadata, special-address and private-network checks;
+  original address forms remain available for scope matching. Explicit scope
+  authorization must never admit mapped metadata. Literal and hostname-snapshot
+  regressions in `tests/test_network_policy.py` and
+  `tests/test_container_http_proxy.py` fail before any dial.
 - **Browser transports require the loopback policy proxy.** Chromium skips
   redirect route callbacks, so context guards alone cannot enforce destinations.
   Both Patchright paths (including Scrapling >= 0.4.15) disable HTTP/2/QUIC,

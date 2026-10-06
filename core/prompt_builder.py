@@ -456,6 +456,9 @@ def build_session_prompt(
         "  NX enabled path: skip shellcode → use pwn_rop + pwn_one_gadget instead.\n\n"
         "  Authorized CTF plaintext HTTP: use run_code_docker with network='bridge' "
         "and allow_network=true only after the user authorized network access. "
+        "For operator-scoped runs use built-in Python, urllib.request (proxy-aware), "
+        "non-root numeric UID:GID, and no mounts/install_deps; requested bridge is "
+        "enforced as offline HTTP/CONNECT. http.client needs explicit proxy support. "
         "Keep requests within the agreed target scope; do not use host networking, "
         "credential mounts, or disable the browser proxy to work around framing limits.\n\n"
 

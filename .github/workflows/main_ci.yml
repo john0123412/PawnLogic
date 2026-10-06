@@ -197,6 +197,10 @@ jobs:
             tools/text_patch.py \
             tools/shell_ops.py \
             tools/docker_plan.py \
+            tools/container_http_proxy.py \
+            tools/container_http_protocol.py \
+            tools/container_http_relay.py \
+            tools/docker_http.py \
             tools/pwn_binary.py \
             tools/pwn_debugger.py
 

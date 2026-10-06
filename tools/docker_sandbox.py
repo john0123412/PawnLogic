@@ -13,9 +13,8 @@ Design notes:
   - One-shot containers run hardened by default: read-only root filesystem,
     tmpfs scratch space, all Linux capabilities dropped, host uid:gid when
     available. Dependency installs retain the image user and a writable rootfs.
-  - Operators may declare a bridge egress scope (PAWNLOGIC_DOCKER_EGRESS_ALLOW);
-    hostname mappings and a fingerprint are recorded. This does not enforce
-    socket destinations, CIDRs, or transport-level DNS pins.
+  - Operator-scoped disposable HTTP runs use network=none and a Unix relay;
+    each proxy destination is authorized against a frozen scope and DNS snapshot.
 
 Dependencies:
   - pip install docker (optional).
@@ -30,6 +29,10 @@ from core.operation_policy import OperationAction
 from core.state import state as _runtime_state, runtime_config
 from core.trust import TrustBoundaryKind, trust_notice_for_boundary
 from tools.docker_egress import EGRESS_SCOPE_ENV, resolve_scope_for_network
+from tools.docker_http import (
+    code_directory, finish_transport, persistent_scope_error, prepare_transport,
+    scoped_addresses, scoped_mode_error, start_transport,
+)
 from tools.docker_mounts import check_path_safety
 from tools.docker_plan import build_docker_execution_plan, validate_network_mode
 from tools.docker_schemas import DOCKER_SCHEMAS as DOCKER_SCHEMAS
@@ -211,8 +214,8 @@ def tool_run_code_docker(a: dict) -> str:
     install_deps must write site-packages), tmpfs /tmp and /run, all Linux
     capabilities dropped, and host uid:gid when available (which may be root).
     Dependency installation retains the image user unless explicitly set.
-    Bridge-attached runs record a declared scope using extra_hosts mappings
-    and a label; this does not enforce socket destinations or CIDRs.
+    Scoped bridge requests use network=none and a trusted HTTP/CONNECT relay;
+    without an operator scope, bridge access remains capability-only.
     """
     code         = a.get("code", "")
     mount_files  = a.get("mount_files", {})
@@ -231,7 +234,13 @@ def tool_run_code_docker(a: dict) -> str:
     container_user, err = resolve_container_user(a, allow_default=not plan.installs_packages)
     if err:
         return err
-    egress_host_mappings, scope_fingerprint, err = resolve_scope_for_network(plan.network)
+    raw_scope = os.environ.get(EGRESS_SCOPE_ENV, '').strip()
+    err = scoped_mode_error(a, network=plan.network, language=plan.language, image=plan.image,
+                           user=container_user, installs_packages=plan.installs_packages,
+                           timeout=plan.timeout_seconds, raw_scope=raw_scope)
+    if err:
+        return err
+    egress_addresses, scope_fingerprint, err = scoped_addresses(plan.network, raw_scope)
     if err:
         return err
     language = plan.language
@@ -240,6 +249,8 @@ def tool_run_code_docker(a: dict) -> str:
     ext = plan.extension
     run_cmd = plan.command
     image_name = plan.image
+    scoped_http = network == 'bridge' and bool(raw_scope)
+    actual_network = 'none' if scoped_http else network
 
     client = _get_docker_client()
     if not client:
@@ -251,13 +262,14 @@ def tool_run_code_docker(a: dict) -> str:
 
     # Prepare temp directory and write code.
     with tempfile.TemporaryDirectory(prefix="pawn_docker_") as tmpdir:
-        code_file = os.path.join(tmpdir, f"main{ext}")
+        code_dir = code_directory(tmpdir, scoped_http)
+        code_file = os.path.join(code_dir, f"main{ext}")
         with open(code_file, "w", encoding="utf-8") as f:
             f.write(code)
 
         # Build mount volumes.
         volumes = {
-            tmpdir: {"bind": "/code", "mode": "rw"},
+            code_dir: {"bind": "/code", "mode": "rw"},
         }
         # User-defined mounts (P4.1).
         # mount_files format: {"./vuln": {"bind": "/target", "mode": "ro"}}
@@ -283,7 +295,7 @@ def tool_run_code_docker(a: dict) -> str:
         # stdin file.
         stdin_file = None
         if stdin_data:
-            stdin_file = os.path.join(tmpdir, "stdin.txt")
+            stdin_file = os.path.join(code_dir, "stdin.txt")
             with open(stdin_file, "w", encoding="utf-8") as f:
                 f.write(stdin_data)
 
@@ -293,9 +305,9 @@ def tool_run_code_docker(a: dict) -> str:
             full_cmd = f"cd /code && {run_cmd} < /code/stdin.txt"
 
         print(c(MAGENTA, f"  [docker] {image_name} -> {language}"))
-        print(c(GRAY,    f"  Network: {network}  Timeout: {timeout}s  Image: {image_name}"))
+        print(c(GRAY,    f"  Network: {network} -> {actual_network}  Timeout: {timeout}s  Image: {image_name}"))
         if scope_fingerprint:
-            print(c(GRAY,    f"  Egress scope: {len(egress_host_mappings)} declared host mapping(s), "
+            print(c(GRAY,    f"  Egress scope: {len(egress_addresses)} pinned hostname(s), "
                              f"fingerprint {scope_fingerprint}"))
 
         # Pull image if it is not available locally.
@@ -318,15 +330,19 @@ def tool_run_code_docker(a: dict) -> str:
 
         # Create and run container.
         container = None
+        http_proxy = None
+        execution_error = None
         try:
+            http_proxy, container_command = prepare_transport(
+                tmpdir, scoped_http, raw_scope, egress_addresses, timeout, full_cmd, volumes, start_transport)
             spawn_labels = {"pawn": "true", "pawn_name": "run_code_docker"}
             if scope_fingerprint:
                 spawn_labels["pawn_egress_scope"] = scope_fingerprint
             spawn_kwargs: dict = dict(
                 image=image_name,
-                command=["bash", "-c", full_cmd],
+                command=container_command,
                 volumes=volumes,
-                network_mode=network,
+                network_mode=actual_network,
                 mem_limit="512m",
                 cpu_period=100000,
                 cpu_quota=50000,
@@ -340,8 +356,6 @@ def tool_run_code_docker(a: dict) -> str:
             )
             if container_user:
                 spawn_kwargs["user"] = container_user
-            if egress_host_mappings:
-                spawn_kwargs["extra_hosts"] = egress_host_mappings
             container = spawn_container(client, harden=True, **spawn_kwargs)
 
             # Wait for completion with timeout.
@@ -353,21 +367,20 @@ def tool_run_code_docker(a: dict) -> str:
             stderr = container.logs(stdout=False, stderr=True).decode("utf-8", errors="ignore")
             output = stdout + stderr
 
+        except PermissionError as e:
+            execution_error = str(e)
         except Exception as e:
+            execution_error = f"ERROR: container execution failed: {type(e).__name__}: {e}"
             if "timed out" in str(e).lower() or "timeout" in str(e).lower():
                 try:
                     container.kill()
                 except Exception:
                     pass
-                return f"[execution timed out after {timeout}s] container destroyed"
-            return f"ERROR: container execution failed: {type(e).__name__}: {e}"
+                execution_error = f"[execution timed out after {timeout}s] container cleanup attempted"
         finally:
-            # Ensure container cleanup.
-            if container:
-                try:
-                    container.remove(force=True)
-                except Exception:
-                    pass
+            cleanup_error = finish_transport(http_proxy, container, scoped_http)
+        if cleanup_error or execution_error:
+            return cleanup_error or execution_error
 
         # Format output.
         limit = runtime_config()["tool_max_chars"]
@@ -376,9 +389,9 @@ def tool_run_code_docker(a: dict) -> str:
             output = output[:half] + f"\n...[truncated to {limit} chars]...\n" + output[-half // 4:]
 
         status = "OK" if exit_code == 0 else f"FAILED (exit {exit_code})"
-        scope_tag = " | egress: declared (not enforced)" if scope_fingerprint else ""
+        scope_tag = " | egress: enforced HTTP/CONNECT" if scoped_http else ""
         header = (
-            f"[run_code_docker - {status} | image: {image_name} | network: {network}{scope_tag}]\n"
+            f"[run_code_docker - {status} | image: {image_name} | network: {actual_network}{scope_tag}]\n"
         )
         return header + (output or "(no output)")
 
@@ -426,6 +439,9 @@ def tool_pwn_container(a: dict) -> str:
     command = a.get("command", "").strip()
     network    = (a.get("network", "none") or "none").strip().lower()
     mount_files = a.get("mount_files", {})
+    err = persistent_scope_error(a, operation=action, network=network)
+    if err:
+        return err
 
     if action == "create":
         err = _check_network_policy(a, network)
@@ -640,6 +656,9 @@ def tool_install_package(a: dict) -> str:
     - Disconnects only bridge attachments made by this run; existing ones remain.
     - Failed temporary disconnect revokes access and kills/removes the container.
     """
+    err = persistent_scope_error(a, operation='airlock')
+    if err:
+        return err
     client = _get_docker_client()
     if not client:
         return f"ERROR: Docker unavailable - {_docker_error}"
