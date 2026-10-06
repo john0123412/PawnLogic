@@ -2,7 +2,7 @@
 
 AGENT_PHASES: dict[str, list[str]] = {
     "RECON": [
-        "pwn_env", "list_dir", "find_files", "read_file", "inspect_binary",
+        "pwn_env", "list_dir", "find_files", "read_file", "read_file_lines", "inspect_binary",
         "pwn_timed_debug",
         "search_skills",
         "check_service",
@@ -19,19 +19,22 @@ AGENT_PHASES: dict[str, list[str]] = {
         "docker_prune_resources",
     ],
     "GENERAL": [
-        "read_file", "write_file", "patch_file", "run_shell", "web_search", "fetch_url",
+        "read_file", "read_file_lines", "write_file", "patch_file", "run_shell", "git_op",
+        "web_search", "fetch_url",
+        "analyze_local_image", "delegate_task",
         "pwn_timed_debug",
         "run_code_docker", "pwn_container",
         "tool_install_package",
         "docker_prune_resources",
-        "bump_skill",
+        "bump_skill", "audit_payload",
         "search_skills",
         "check_service",
     ],
     "WEB_PEN": [
         "web_fetch", "web_click", "web_screenshot", "web_select", "web_type", "web_navigate",
         "web_search", "fetch_url",
-        "read_file", "write_file",
+        "read_file", "read_file_lines", "write_file",
+        "analyze_local_image", "delegate_task", "audit_payload",
         "run_shell",
         "bump_skill",
         "search_skills",
