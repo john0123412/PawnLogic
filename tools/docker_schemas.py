@@ -56,8 +56,9 @@ DOCKER_SCHEMAS = [
                         "description": (
                             "Network mode: none (default no network) / bridge / host. "
                             "bridge/host requires allow_network=true or an environment policy override. "
-                            "The operator may declare scope metadata via "
-                            "PAWNLOGIC_DOCKER_EGRESS_ALLOW (hosts-file mappings only; no destination filtering). "
+                            "With operator PAWNLOGIC_DOCKER_EGRESS_ALLOW, bridge uses offline HTTP/CONNECT "
+                            "enforcement: built-in Python, non-root numeric UID:GID, no mounts/install_deps, "
+                            "timeout 1-300s; host is denied. Use proxy-aware urllib.request. "
                             "Container-sharing modes (container:<id>) and unknown modes are rejected."
                         ),
                     },
@@ -137,8 +138,8 @@ DOCKER_SCHEMAS = [
                         "description": (
                             "Network mode for create (default none). "
                             "bridge/host requires allow_network=true or an environment policy override. "
-                            "The operator may declare scope metadata via "
-                            "PAWNLOGIC_DOCKER_EGRESS_ALLOW (hosts-file mappings only; no destination filtering). "
+                            "With operator PAWNLOGIC_DOCKER_EGRESS_ALLOW, only unmounted offline create "
+                            "is supported; connected create and all exec are denied. "
                             "Container-sharing modes (container:<id>) and unknown modes are rejected."
                         ),
                     },
@@ -175,7 +176,7 @@ DOCKER_SCHEMAS = [
                 "Airlock package installation tool.\n"
                 "Installs apt/pip packages in a persistent container. Only connections made by this Airlock operation are disconnected; an existing bridge attachment stays unchanged.\n"
                 "Failed temporary disconnect revokes tool access and kills/removes the container; daemon cleanup failure explicitly requires manual cleanup.\n"
-                "Configured egress declarations are validated, but existing hosts-file mappings are unchanged and destinations are not filtered.\n"
+                "An operator egress scope denies Airlock installs; unscoped installs retain the explicit network gate.\n"
                 "Package names are strictly regex-validated to prevent command injection.\n"
                 "Temporarily granting bridge egress requires explicit authorization: pass allow_network=true or set PAWNLOGIC_DOCKER_ALLOW_NETWORK=true.\n"
                 "Works only for containers created through pwn_container create."

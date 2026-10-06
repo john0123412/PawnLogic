@@ -62,6 +62,12 @@ def spawn_container(client, *args, harden: bool = False, **kwargs):
         raise PermissionError(
             "privileged flags forbidden in PawnLogic containers: " + ", ".join(bad)
         )
+    if os.environ.get('PAWNLOGIC_DOCKER_EGRESS_ALLOW', '').strip() and (
+        kwargs.get('network_mode') != 'none' or
+        any(normalize_container_kwarg(key) in {'network', 'networking_config', 'links',
+            'network_mode', 'host_config'} and key != 'network_mode' for key in kwargs)
+    ):
+        raise PermissionError('scoped networking requires network_mode=none with no alternate Docker networks')
     if harden:
         kwargs.setdefault("cap_drop", ["ALL"])
         kwargs.setdefault("read_only", True)

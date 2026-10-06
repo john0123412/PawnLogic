@@ -695,11 +695,11 @@ def test_resolve_scope_for_network_only_applies_to_bridge(monkeypatch, capsys):
     assert (host_mappings, fingerprint, error) == ({}, None, None)
 
     host_mappings, fingerprint, error = docker_egress.resolve_scope_for_network("host")
-    assert (host_mappings, fingerprint, error) == ({}, None, None)
-    assert "cannot constrain host networking" in capsys.readouterr().out
+    assert host_mappings == {} and fingerprint is None
+    assert error.startswith("SECURITY BLOCK: host networking")
 
 
-def test_run_code_docker_bridge_scope_maps_extra_hosts_and_labels(monkeypatch):
+def test_run_code_docker_scope_forces_offline_proxy_and_labels(monkeypatch):
     monkeypatch.delenv("PAWNLOGIC_DOCKER_ALLOW_NETWORK", raising=False)
     monkeypatch.setenv(
         "PAWNLOGIC_DOCKER_EGRESS_ALLOW", "pwn.example.com,203.0.113.5,10.0.0.0/8"
@@ -709,6 +709,12 @@ def test_run_code_docker_bridge_scope_maps_extra_hosts_and_labels(monkeypatch):
     )
     client = _FullRecordingClient()
     monkeypatch.setattr(docker_sandbox, "_get_docker_client", lambda: client)
+
+    class Proxy:
+        def stop(self):
+            pass
+    monkeypatch.setattr(docker_sandbox, "start_transport", lambda *args: Proxy())
+    monkeypatch.setattr(docker_spawn, "host_uid_gid", lambda: "1000:1000")
 
     result = docker_sandbox.tool_run_code_docker(
         {
@@ -720,9 +726,10 @@ def test_run_code_docker_bridge_scope_maps_extra_hosts_and_labels(monkeypatch):
     )
 
     assert result.startswith("[run_code_docker - OK")
-    assert "| egress: declared (not enforced)]" in result
+    assert "| egress: enforced HTTP/CONNECT]" in result
     kwargs = client.containers.calls[0]
-    assert kwargs["extra_hosts"] == {"pwn.example.com": "203.0.113.7"}
+    assert kwargs["network_mode"] == "none"
+    assert "extra_hosts" not in kwargs
     assert len(kwargs["labels"]["pawn_egress_scope"]) == 12
 
 
@@ -764,22 +771,14 @@ def test_pwn_container_create_scope_user_and_label(monkeypatch):
         }
     )
 
-    assert result.startswith("OK: container 'lab' created")
-    assert "Egress scope: 1 declared host mapping(s)" in result
-    kwargs = client.containers.calls[0]
-    assert kwargs["extra_hosts"] == {"pwn.example.com": "203.0.113.7"}
-    assert kwargs["user"] == "1000:1000"
-    assert len(kwargs["labels"]["pawn_egress_scope"]) == 12
-    # Persistent containers keep the image default hardening posture.
-    assert "read_only" not in kwargs
-    assert "cap_drop" not in kwargs
-
+    assert result.startswith("SECURITY BLOCK:")
+    assert client.containers.calls == []
     # Without the scope env, create stays unchanged (no host mappings, no label).
     monkeypatch.delenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", raising=False)
     docker_sandbox.tool_pwn_container(
         {"action": "create", "name": "lab2", "network": "bridge",
          "allow_network": True}
     )
-    kwargs = client.containers.calls[1]
+    kwargs = client.containers.calls[0]
     assert "extra_hosts" not in kwargs
     assert "pawn_egress_scope" not in kwargs["labels"]

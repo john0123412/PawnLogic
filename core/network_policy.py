@@ -421,14 +421,16 @@ class NetworkPolicy:
             except ValueError as exc:
                 return self._deny(NetworkRule.DNS_RESULT_INVALID, str(exc), target.url)
 
-        if any(address in _METADATA_IPS for address in addresses):
+        # Classify the effective destination, including IPv4 carried by IPv6.
+        # Preserve the original address forms for explicit scope matching below.
+        policy_addresses = tuple(getattr(address, "ipv4_mapped", None) or address for address in addresses)
+        if any(address in _METADATA_IPS for address in policy_addresses):
             return self._deny(NetworkRule.CLOUD_METADATA, "target resolves to a cloud metadata address", target.url)
-        special = next((_special_rule(address) for address in addresses if _special_rule(address)), None)
+        special = next((_special_rule(address) for address in policy_addresses if _special_rule(address)), None)
         if special is not None:
             return self._deny(special, f"target resolves to a {special.value.replace('_', ' ')} address", target.url)
 
-        private = target.address is not None and target.address.is_private
-        private = private or any(address.is_private for address in addresses)
+        private = any(address.is_private for address in policy_addresses)
         authorized = _target_authorized(target, operation, addresses)
         if operation.active_probe and (
             not operation.engagement_scope or not operation.scope_valid

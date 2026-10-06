@@ -176,8 +176,8 @@ context 级 route guard 对可拦截的请求做二次检查，安装失败会�
 运行 HTTP 客户端代码，设置 `network="bridge"`、`allow_network=true`；优先使用
 本地 `python` 镜像，标准库足够时不挂载宿主文件、不安装依赖。一次性容器仍受
 512 MiB 内存、0.5 CPU 和 256 PID 限制；容器内客户端不受浏览器代理的上传和
-请求封帧限制。Docker bridge 授权代表允许联网，不是目标地址白名单：请求必须
-保持在约定靶场范围内。不要通过 host 网络或关闭浏览器代理绕过限制。
+请求封帧限制。未配置目标范围时，bridge 授权仅代表允许联网；请求仍须保持在
+约定靶场范围内。不要通过 host 网络或关闭浏览器代理绕过限制。
 一次性 `run_code_docker` 容器现在移除全部 Linux capabilities，为 `/tmp` 和 `/run`
 挂载 tmpfs，并采用只读根文件系统。Python `install_deps` 会使用可写根文件系统；
 未指定 `container_user` 时保留镜像默认用户。其他情况默认匹配宿主 UID:GID，
@@ -185,12 +185,32 @@ context 级 route guard 对可拦截的请求做二次检查，安装失败会�
 `container_user="root"` 显式选择 root。持久 `pwn_container` 保留镜像默认配置。
 额外工作区挂载仍须满足挂载策略。
 
-Airlock 安装包前也会验证操作者声明的范围，保留既有 bridge 连接，只清理本次建立的临时连接。临时断网失败时，工具会撤销容器访问并终止容器，失败后尝试强制删除；若 Docker 仍无法清理，会明确报告容器可能继续运行、需要人工处理，不会报告安装成功。Airlock 不修改既有 hosts 文件映射，也不执行目标过滤。
+以下范围过滤属于 Unreleased 源码改动，尚未包含在已发布的 0.4.3 包中。
 
-可选宿主配置 `PAWNLOGIC_DOCKER_EGRESS_ALLOW` 接受域名、IP 和 CIDR，仅记录声明范围，
-并将解析后的域名映射写入容器 hosts 文件。它不进行 socket 过滤、强制 CIDR 限制，
-也不阻止范围外的直接 IP 连接、自定义 DNS 查询或 HTTP 重定向。hosts 映射不是传输层
-DNS pinning；目标级出站强制控制仍需额外的网络边界。
+可选操作者配置 `PAWNLOGIC_DOCKER_EGRESS_ALLOW` 接受显式域名、IP 和 CIDR。
+设置后，已授权的 `network="bridge"` 请求实际使用 `network=none` 一次性容器，
+经挂载的 Unix socket 中继连接宿主可信 HTTP/CONNECT 代理。每个代理目标都必须
+匹配范围；声明的域名在启动前只解析一次，代理仅拨这些数值 IP。CIDR 仅授权
+直接使用的 IP；未声明域名不再解析，直接拒绝。Network Policy 禁止的特殊地址
+仍然禁止。容器没有外部路由，忽略代理变量的直接 socket 请求同样无法出站；
+重定向到未授权域名或 IP 会在下一次代理请求时被拒绝。模型不能自授权。
+
+此模式目前要求 Unix Docker 宿主、内置 Python 镜像、非 root 的数值 UID:GID，
+不支持额外宿主挂载或 `install_deps`，超时须在 1–300 秒之间。
+建议使用自动读取代理环境的 `urllib.request`；`http.client` 需要显式配置代理或
+CONNECT。中继支持流式定长和 chunked 上传，每请求最多 64 MiB，限制头部和
+trailer，每个 HTTP 连接仅处理一个请求；拒绝 `Expect` 和协议升级。CONNECT 是
+到获准目标及端口的透明 TCP 隧道，不解密 TLS，也不提供任意 TCP/UDP 透明网络。
+操作到期或清理时先撤销活动连接，再删除容器。UID 必须非零，数值 GID 可以为零。
+
+设置范围后，host 网络、持久容器 exec、联网持久容器 create、Airlock 安装及
+额外宿主挂载会被拒绝。离线执行和无额外挂载的离线持久容器创建仍可用，
+持久容器 list/destroy 仍可用。未设置范围时，已授权 bridge/host 保留原有的
+能力级授权，没有目标白名单；Airlock 保留既有 bridge 连接，只清理临时连接。
+临时断网失败会撤销工具访问并终止或删除容器；Docker 清理失败会明确报告
+可能仍在运行、需人工处理。此配置不会隔离此前已运行的 bridge/host 容器；依赖范围
+限制前须先停止或删除它们，只在两次操作之间修改操作者声明。任意 TCP/UDP 的透明
+过滤留待宿主托管的第二期。
 
 ## 数据目录
 

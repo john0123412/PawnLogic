@@ -193,16 +193,6 @@ network authorization; use the local `python` image and omit host file mounts
 and dependency installation when the standard library is sufficient. The
 disposable container retains its 512 MiB memory, 0.5 CPU, and 256 PID limits.
 Its HTTP client is not subject to the browser proxy's upload/framing limits.
-Airlock package installs validate any operator scope before running and preserve
-existing bridge attachments. If temporary
-network disconnect fails, the tool revokes container access and kills it, falling
-back to forced removal. A daemon cleanup failure is reported as a live-container
-risk requiring manual cleanup, never as a successful installation. Airlock does
-not change existing hosts-file mappings or filter destinations.
-
-Docker bridge authorization grants network access, not a destination allowlist:
-keep requests within the agreed lab scope. Do not use host networking or disable
-the browser proxy as a workaround.
 One-shot `run_code_docker` containers now drop all Linux capabilities, use
 tmpfs for `/tmp` and `/run`, and have a read-only root filesystem. Python
 `install_deps` uses a writable root filesystem and the image's default user
@@ -212,12 +202,43 @@ without host IDs the image default is used. `container_user="root"` explicitly
 selects root. Persistent `pwn_container` workloads retain their image defaults.
 Additional workspace mounts remain subject to the mount policy.
 
-The optional host setting `PAWNLOGIC_DOCKER_EGRESS_ALLOW` accepts hosts, IPs,
-and CIDRs. It records a declared scope and adds resolved hostname mappings to
-the container's hosts file. It does not filter sockets, enforce CIDRs, or stop
-direct IP connections, custom DNS queries, or HTTP redirects outside that scope.
-Hosts-file mappings are not transport-level DNS pinning. Target-level egress
-enforcement still requires an additional network boundary.
+The scoped transport below is an Unreleased source change; it is not included
+in the published 0.4.3 package.
+
+The optional operator setting `PAWNLOGIC_DOCKER_EGRESS_ALLOW` accepts explicit
+hostnames, IPs, and CIDRs. With this setting, an authorized `network="bridge"`
+request uses an offline (`network=none`) disposable container and a mounted
+Unix-socket relay to a trusted host HTTP/CONNECT proxy. Every proxy destination
+must match the scope; declared hostnames resolve once before startup and the
+proxy dials only those numeric addresses. CIDRs authorize literal IP targets;
+an unlisted hostname is denied without a DNS lookup. Special addresses denied
+by Network Policy remain denied. Direct network sockets have no external route,
+including requests that ignore proxy variables. Redirects to an unapproved
+host/IP fail at the next proxy request. The container cannot authorize itself.
+
+Scoped networking currently requires a Unix Docker host, the built-in Python
+image, a non-root numeric UID:GID, no additional host mounts or `install_deps`,
+and a 1–300 second timeout. Use `urllib.request`, which honors the configured
+proxy environment; `http.client` requires explicit proxy/CONNECT handling.
+The relay supports streamed fixed-length and chunked uploads up to 64 MiB per
+request, bounded headers/trailers, and one request per HTTP connection; `Expect`
+and protocol upgrades are rejected. CONNECT is an opaque TCP tunnel to an
+approved target/port, not TLS inspection or transparent TCP/UDP networking.
+Operation expiry/cleanup revokes active sockets before container removal.
+The UID must be nonzero; the numeric GID may be zero.
+
+When a scope is set, host networking, persistent exec, connected persistent
+create, Airlock installs, and extra host mounts are denied. Offline runs and
+unmounted offline persistent creation remain available; persistent list/destroy
+remain available. Without this setting, authorized bridge/host access retains
+its capability-only behavior and has no destination allowlist. Airlock then
+preserves existing bridge attachments and disconnects only its temporary
+attachment; failed disconnects revoke access and kill/remove the container,
+reporting unresolved daemon cleanup as a possible live-container risk.
+This setting does not quarantine previously running bridge/host containers;
+stop/destroy them before relying on the scope. Change the operator declaration
+only between operations. Transparent arbitrary TCP/UDP filtering remains a
+separate host-managed phase.
 
 ## Data Layout
 

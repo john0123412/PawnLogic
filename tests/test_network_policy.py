@@ -95,6 +95,19 @@ def test_cloud_metadata_and_internal_hosts_deny(host):
     assert decision.rule == NetworkRule.CLOUD_METADATA.value
 
 
+@pytest.mark.parametrize('hostname', [False, True])
+def test_mapped_ipv6_metadata_denied_even_with_explicit_scope(hostname):
+    mapped = '::ffff:100.100.100.200'
+    host = 'ctf.example.com' if hostname else mapped
+    policy = _policy({'ctf.example.com': (mapped,)})
+    decision = policy.evaluate(NetworkOperation(
+        scheme='http', host=host, explicit_authorization=True,
+        authorized_targets=(host,), interactive=False,
+    ))
+    assert decision.action == NetworkAction.DENY
+    assert decision.rule == NetworkRule.CLOUD_METADATA.value
+
+
 def test_private_literal_requires_authorization_and_noninteractive_fails_closed():
     policy = NetworkPolicy()
     operation = NetworkOperation(url="http://192.168.1.10:8080", interactive=True)
