@@ -11,10 +11,11 @@ Design notes:
   - Resource limits: 512 MB memory, 0.5 CPU, 256 PIDs.
   - Supports host/container file mounts.
   - One-shot containers run hardened by default: read-only root filesystem,
-    tmpfs scratch space, all Linux capabilities dropped, non-root user.
+    tmpfs scratch space, all Linux capabilities dropped, host uid:gid when
+    available. Dependency installs retain the image user and a writable rootfs.
   - Operators may declare a bridge egress scope (PAWNLOGIC_DOCKER_EGRESS_ALLOW);
-    approved hostnames are resolved once at policy time and pinned into the
-    container, and the grant is labelled with the scope fingerprint.
+    hostname mappings and a fingerprint are recorded. This does not enforce
+    socket destinations, CIDRs, or transport-level DNS pins.
 
 Dependencies:
   - pip install docker (optional).
@@ -194,7 +195,7 @@ def tool_run_code_docker(a: dict) -> str:
         Network mode: none (default) / bridge / host.
     container_user : str
         Run the container as this user (name or uid[:gid]). Default: a user
-        matching the host uid:gid; 'root' restores the image default.
+        matching host ids when available; 'root' explicitly selects root.
     stdin : str
         Standard input passed to the program.
     install_deps : str
@@ -208,10 +209,10 @@ def tool_run_code_docker(a: dict) -> str:
     -----
     One-shot containers run hardened: read-only root filesystem (relaxed when
     install_deps must write site-packages), tmpfs /tmp and /run, all Linux
-    capabilities dropped, and a non-root user by default. Bridge-attached
-    runs honor an operator-declared egress scope: approved hostnames are
-    resolved once at policy time and pinned via extra_hosts, and the
-    container is labelled with the scope fingerprint.
+    capabilities dropped, and host uid:gid when available (which may be root).
+    Dependency installation retains the image user unless explicitly set.
+    Bridge-attached runs record a declared scope using extra_hosts mappings
+    and a label; this does not enforce socket destinations or CIDRs.
     """
     code         = a.get("code", "")
     mount_files  = a.get("mount_files", {})
@@ -230,7 +231,7 @@ def tool_run_code_docker(a: dict) -> str:
     container_user, err = resolve_container_user(a, allow_default=not plan.installs_packages)
     if err:
         return err
-    egress_pins, scope_fingerprint, err = resolve_scope_for_network(plan.network)
+    egress_host_mappings, scope_fingerprint, err = resolve_scope_for_network(plan.network)
     if err:
         return err
     language = plan.language
@@ -294,7 +295,7 @@ def tool_run_code_docker(a: dict) -> str:
         print(c(MAGENTA, f"  [docker] {image_name} -> {language}"))
         print(c(GRAY,    f"  Network: {network}  Timeout: {timeout}s  Image: {image_name}"))
         if scope_fingerprint:
-            print(c(GRAY,    f"  Egress scope: {len(egress_pins)} pinned host(s), "
+            print(c(GRAY,    f"  Egress scope: {len(egress_host_mappings)} declared host mapping(s), "
                              f"fingerprint {scope_fingerprint}"))
 
         # Pull image if it is not available locally.
@@ -339,8 +340,8 @@ def tool_run_code_docker(a: dict) -> str:
             )
             if container_user:
                 spawn_kwargs["user"] = container_user
-            if egress_pins:
-                spawn_kwargs["extra_hosts"] = egress_pins
+            if egress_host_mappings:
+                spawn_kwargs["extra_hosts"] = egress_host_mappings
             container = spawn_container(client, harden=True, **spawn_kwargs)
 
             # Wait for completion with timeout.
@@ -375,7 +376,7 @@ def tool_run_code_docker(a: dict) -> str:
             output = output[:half] + f"\n...[truncated to {limit} chars]...\n" + output[-half // 4:]
 
         status = "OK" if exit_code == 0 else f"FAILED (exit {exit_code})"
-        scope_tag = " | egress: scoped" if scope_fingerprint else ""
+        scope_tag = " | egress: declared (not enforced)" if scope_fingerprint else ""
         header = (
             f"[run_code_docker - {status} | image: {image_name} | network: {network}{scope_tag}]\n"
         )
@@ -436,7 +437,7 @@ def tool_pwn_container(a: dict) -> str:
         container_user, err = resolve_container_user(a, allow_default=False)
         if err:
             return err
-        egress_pins, scope_fingerprint, err = resolve_scope_for_network(network)
+        egress_host_mappings, scope_fingerprint, err = resolve_scope_for_network(network)
         if err:
             return err
 
@@ -520,13 +521,13 @@ def tool_pwn_container(a: dict) -> str:
         )
         if container_user:
             spawn_kwargs["user"] = container_user
-        if egress_pins:
-            spawn_kwargs["extra_hosts"] = egress_pins
+        if egress_host_mappings:
+            spawn_kwargs["extra_hosts"] = egress_host_mappings
         container = spawn_container(client, **spawn_kwargs)
 
         _active_containers[name] = container.id
         scope_line = (
-            f"\n  Egress scope: {len(egress_pins)} pinned host(s), fingerprint {scope_fingerprint}"
+            f"\n  Egress scope: {len(egress_host_mappings)} declared host mapping(s), fingerprint {scope_fingerprint}"
             if scope_fingerprint
             else ""
         )
@@ -636,7 +637,8 @@ def tool_install_package(a: dict) -> str:
     Install packages inside a persistent container in Airlock mode.
     - Supports apt and pip only.
     - Strict package-name validation prevents command injection.
-    - Temporarily connects to bridge for installation, then disconnects in finally.
+    - Disconnects only bridge attachments made by this run; existing ones remain.
+    - Failed temporary disconnect revokes access and kills/removes the container.
     """
     client = _get_docker_client()
     if not client:
@@ -698,16 +700,28 @@ def tool_install_package(a: dict) -> str:
         err = _check_network_policy(a, "bridge")
         if err:
             return err
+        _, scope_id, err = resolve_scope_for_network("bridge")
+        if err:
+            return err
+        if scope_id:
+            print(c(YELLOW, "  [Airlock] egress declaration validated; existing host mappings unchanged; destinations not filtered"))
 
         if already_on_bridge:
             print(c(GRAY, f"  [Airlock] container '{container_name}' is already on bridge; skipping connect"))
         else:
+            # A lost daemon response can follow a successful attachment.
+            # Attempt cleanup even when connect() raises.
+            _airlock_connected = True
             try:
                 bridge_net.connect(container)
-                _airlock_connected = True
-                print(c(YELLOW, f"  [Airlock] temporarily connected container '{container_name}' to bridge"))
-            except Exception as conn_err:
-                return f"ERROR: bridge network connection failed: {type(conn_err).__name__}: {conn_err}"
+            except Exception:
+                try:
+                    bridge_net.reload()
+                    _airlock_connected = container.id in bridge_net.attrs["Containers"]
+                except Exception:
+                    pass  # Unknown daemon state must still trigger cleanup.
+                raise
+            print(c(YELLOW, f"  [Airlock] temporarily connected container '{container_name}' to bridge"))
 
         exit_code, output = container.exec_run(
             cmd=["bash", "-c", install_cmd],
@@ -715,13 +729,13 @@ def tool_install_package(a: dict) -> str:
         )
         result = output.decode("utf-8", errors="ignore") if output else ""
         status = "✓" if exit_code == 0 else f"✗ (exit {exit_code})"
-        return (
+        result = (
             f"[Airlock {status}] {pkg_manager} install {pkg_str}\n"
             f"{result or '(no output)'}"
         )
 
     except Exception as e:
-        return f"ERROR: install process failed: {type(e).__name__}: {e}"
+        result = f"ERROR: install process failed: {type(e).__name__}: {e}"
 
     finally:
         # Only disconnect network connections made by this Airlock run.
@@ -730,7 +744,20 @@ def tool_install_package(a: dict) -> str:
                 bridge_net.disconnect(container, force=True)
                 print(c(GREEN, f"  [Airlock] container '{container_name}' forcibly disconnected from network"))
             except Exception as disc_err:
-                print(c(RED, f"  [Airlock] network disconnect failed; please check manually: {disc_err}"))
+                # Revoke tool access even if the daemon cannot terminate the
+                # container. Never report installation success after a leak.
+                _active_containers.pop(container_name, None)
+                containment = "container killed; tool access revoked"
+                try:
+                    container.kill()
+                except Exception:
+                    try:
+                        container.remove(force=True)
+                        containment = "container removed; tool access revoked"
+                    except Exception as cleanup_err:
+                        containment = f"container may still be running; tool access revoked; manual Docker cleanup required: {cleanup_err}"
+                result = f"SECURITY BLOCK: Airlock network disconnect failed: {disc_err}; {containment}"
+    return result
 
 
 # ════════════════════════════════════════════════════════
@@ -787,5 +814,3 @@ def docker_prune_resources() -> str:
         f"  Image layers deleted: {len(deleted_images)}\n"
         f"  Space reclaimed: {freed_mb:.2f} MB"
     )
-
-

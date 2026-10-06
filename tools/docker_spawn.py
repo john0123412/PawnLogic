@@ -4,7 +4,9 @@ PawnLogic containers are never privileged and never gain extra Linux
 capabilities — deny-by-policy, not deny-by-omission. Every container creation
 funnels through ``spawn_container()``, which rejects the forbidden kwargs and
 then merges the one-shot hardening defaults, so tool arguments can neither
-inject privilege flags nor strip the defaults. Extracted from
+inject privilege flags nor supply raw hardening kwargs. Trusted Python
+callers can explicitly override read_only and tmpfs; dependency installation
+uses the read_only exception. Extracted from
 tools/docker_sandbox.py so the funnel stays small, pure, and auditable.
 """
 
@@ -19,7 +21,7 @@ FORBIDDEN_CONTAINER_KWARGS = frozenset({"privileged", "cap_add", "cap_drop", "se
 
 # Hardening defaults merged by the funnel itself when a caller opts in with
 # ``harden=True``. They are applied AFTER the caller-kwarg deny check, so tool
-# arguments can never inject or remove them: model-supplied privileged /
+# arguments cannot supply raw hardening kwargs: model-supplied privileged /
 # cap_add / cap_drop / security_opt stay blocked, while one-shot containers
 # still get capabilities dropped, a read-only rootfs, and tmpfs scratch.
 HARDENING_TMPFS = {"/tmp": "rw,nosuid,size=256m", "/run": "rw,nosuid,size=64m"}
@@ -68,7 +70,7 @@ def spawn_container(client, *args, harden: bool = False, **kwargs):
 
 
 def host_uid_gid() -> str | None:
-    """Return the host ``uid:gid`` string, or None on platforms without ids."""
+    """Return host ids, including root, or None when host ids are unavailable."""
     uid = getattr(os, "getuid", None)
     gid = getattr(os, "getgid", None)
     if uid is None or gid is None:

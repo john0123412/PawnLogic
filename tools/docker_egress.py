@@ -4,8 +4,9 @@ Host-side configuration, never a tool argument: the model cannot scope its
 own network grant (mirrors "never from model authorization" in the network
 adapter). ``PAWNLOGIC_DOCKER_EGRESS_ALLOW`` takes hosts, bare IPs, or CIDR
 networks, comma/space separated. Approved hostnames are resolved once at
-policy time and pinned into bridge-attached containers via ``extra_hosts``,
-closing in-container DNS rebinding for the approved names; the grant is
+policy time and written into bridge containers' hosts files via ``extra_hosts``.
+These mappings do not filter destinations or prevent custom DNS lookups and
+direct IP connections; they are not transport-level DNS pins. The grant is
 labelled with a scope fingerprint so scoped containers are auditable after
 the fact. Any invalid or unresolvable entry fails closed.
 
@@ -61,11 +62,11 @@ def parse_egress_scope(raw: str) -> tuple[tuple[str, ...], str | None]:
 
 
 def resolve_egress_scope() -> tuple[dict[str, str], str | None, str | None]:
-    """Return (hostname -> pinned IP map, scope fingerprint, error).
+    """Return (hostname -> hosts-file mapping, scope fingerprint, error).
 
     CIDR and bare-IP entries are structural scope declarations and produce no
-    host pin; hostname entries are resolved once here so a later DNS change
-    cannot rebind an approved name. Any resolution failure fails closed.
+    host mapping; hostname entries are resolved once here. These mappings
+    do not restrict socket destinations. Any resolution failure fails closed.
     """
     raw = os.environ.get(EGRESS_SCOPE_ENV, "").strip()
     if not raw:
@@ -75,11 +76,11 @@ def resolve_egress_scope() -> tuple[dict[str, str], str | None, str | None]:
         return {}, None, (
             f"SECURITY BLOCK: {EGRESS_SCOPE_ENV} is set but invalid: {error}"
         )
-    pins: dict[str, str] = {}
+    host_mappings: dict[str, str] = {}
     for entry in entries:
         try:
             ipaddress.ip_network(entry, strict=False)
-            continue  # bare IP or CIDR: no hostname pin to make
+            continue  # bare IP or CIDR: no hostname mapping to add
         except ValueError:
             pass
         try:
@@ -93,9 +94,9 @@ def resolve_egress_scope() -> tuple[dict[str, str], str | None, str | None]:
             return {}, None, (
                 f"SECURITY BLOCK: egress scope host '{entry}' resolved to no addresses."
             )
-        pins[entry] = addresses[0]
+        host_mappings[entry] = addresses[0]
     fingerprint = hashlib.sha256(raw.encode()).hexdigest()[:12]
-    return pins, fingerprint, None
+    return host_mappings, fingerprint, None
 
 
 def resolve_scope_for_network(network: str) -> tuple[dict[str, str], str | None, str | None]:

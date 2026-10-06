@@ -178,9 +178,19 @@ context 级 route guard 对可拦截的请求做二次检查，安装失败会�
 512 MiB 内存、0.5 CPU 和 256 PID 限制；容器内客户端不受浏览器代理的上传和
 请求封帧限制。Docker bridge 授权代表允许联网，不是目标地址白名单：请求必须
 保持在约定靶场范围内。不要通过 host 网络或关闭浏览器代理绕过限制。
-资源限制不会强制非 root 用户、只读根文件系统或移除 Docker 默认 capabilities；
-本地 Python 镜像默认以 root 运行。工具还接受符合挂载策略的额外工作区挂载，
-并非只能挂载生成的代码目录。
+一次性 `run_code_docker` 容器现在移除全部 Linux capabilities，为 `/tmp` 和 `/run`
+挂载 tmpfs，并采用只读根文件系统。Python `install_deps` 会使用可写根文件系统；
+未指定 `container_user` 时保留镜像默认用户。其他情况默认匹配宿主 UID:GID，
+仅在宿主 UID 非零时是非 root；无法获取宿主 ID 的平台使用镜像默认用户。
+`container_user="root"` 显式选择 root。持久 `pwn_container` 保留镜像默认配置。
+额外工作区挂载仍须满足挂载策略。
+
+Airlock 安装包前也会验证操作者声明的范围，保留既有 bridge 连接，只清理本次建立的临时连接。临时断网失败时，工具会撤销容器访问并终止容器，失败后尝试强制删除；若 Docker 仍无法清理，会明确报告容器可能继续运行、需要人工处理，不会报告安装成功。Airlock 不修改既有 hosts 文件映射，也不执行目标过滤。
+
+可选宿主配置 `PAWNLOGIC_DOCKER_EGRESS_ALLOW` 接受域名、IP 和 CIDR，仅记录声明范围，
+并将解析后的域名映射写入容器 hosts 文件。它不进行 socket 过滤、强制 CIDR 限制，
+也不阻止范围外的直接 IP 连接、自定义 DNS 查询或 HTTP 重定向。hosts 映射不是传输层
+DNS pinning；目标级出站强制控制仍需额外的网络边界。
 
 ## 数据目录
 

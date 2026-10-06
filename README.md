@@ -193,13 +193,31 @@ network authorization; use the local `python` image and omit host file mounts
 and dependency installation when the standard library is sufficient. The
 disposable container retains its 512 MiB memory, 0.5 CPU, and 256 PID limits.
 Its HTTP client is not subject to the browser proxy's upload/framing limits.
+Airlock package installs validate any operator scope before running and preserve
+existing bridge attachments. If temporary
+network disconnect fails, the tool revokes container access and kills it, falling
+back to forced removal. A daemon cleanup failure is reported as a live-container
+risk requiring manual cleanup, never as a successful installation. Airlock does
+not change existing hosts-file mappings or filter destinations.
+
 Docker bridge authorization grants network access, not a destination allowlist:
 keep requests within the agreed lab scope. Do not use host networking or disable
 the browser proxy as a workaround.
-Resource limits do not force a non-root user, a read-only root filesystem, or
-removal of Docker's default capabilities. The local Python image runs as root
-by default. Additional workspace mounts can be supplied within the mount policy;
-the generated code directory is not the only mount the tool can accept.
+One-shot `run_code_docker` containers now drop all Linux capabilities, use
+tmpfs for `/tmp` and `/run`, and have a read-only root filesystem. Python
+`install_deps` uses a writable root filesystem and the image's default user
+unless `container_user` is supplied. Otherwise the default user matches the
+host UID:GID; this is non-root only when the host UID is nonzero. On platforms
+without host IDs the image default is used. `container_user="root"` explicitly
+selects root. Persistent `pwn_container` workloads retain their image defaults.
+Additional workspace mounts remain subject to the mount policy.
+
+The optional host setting `PAWNLOGIC_DOCKER_EGRESS_ALLOW` accepts hosts, IPs,
+and CIDRs. It records a declared scope and adds resolved hostname mappings to
+the container's hosts file. It does not filter sockets, enforce CIDRs, or stop
+direct IP connections, custom DNS queries, or HTTP redirects outside that scope.
+Hosts-file mappings are not transport-level DNS pinning. Target-level egress
+enforcement still requires an additional network boundary.
 
 ## Data Layout
 

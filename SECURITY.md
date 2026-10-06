@@ -63,6 +63,11 @@ Areas of particular concern for this project:
 - **Docker escape and egress** — containers default to `network_mode=none`. The
   tool contract accepts only `none`, `bridge`, and `host`; `bridge`/`host` and
   airlock package installs require explicit capability-only authorization.
+  Airlock validates declared scopes but leaves existing hosts-file mappings
+  unchanged and does not filter destinations. Failed temporary disconnects
+  revoke tool access and kill the container, with forced removal as fallback;
+  failure of both cleanup actions reports a possible live container requiring
+  manual Docker cleanup, and never reports installation success.
   Unknown modes, including `container:<id>` sharing, are rejected before the
   Docker SDK is called. Memory, CPU, and PID limits remain enforced.
 - **CTF workflow boundaries** — CTF tools and skill packs are intended for legal CTFs, authorized labs, and systems you own or have permission to test
@@ -71,9 +76,18 @@ Areas of particular concern for this project:
   Browser proxy framing limits do not apply inside that container. Bridge
   authorization is not a per-target allowlist; keep requests within the agreed
   lab scope, without host networking or credential mounts.
-  Resource limits do not force non-root execution, read-only root filesystems,
-  or removal of Docker's default capabilities. Additional workspace mounts
-  remain subject to the mount policy; the code mount is not the only allowed one.
+  One-shot clients drop all capabilities and use tmpfs scratch space plus a
+  read-only root filesystem, except Python dependency installation requires
+  a writable root filesystem. Their default user matches the host UID:GID;
+  a root host UID or unavailable host IDs do not guarantee non-root execution.
+  Dependency installs and persistent containers retain the image user by
+  default; an explicit `container_user` selects the requested user.
+  Additional workspace mounts remain subject to the mount policy.
+  `PAWNLOGIC_DOCKER_EGRESS_ALLOW` records hosts/IPs/CIDRs; only hostname entries
+  add hosts-file mappings, while bare IPs/CIDRs contribute to the fingerprint.
+  It does not filter destinations or enforce a CIDR allowlist.
+  Direct IP connections, custom DNS and redirects can bypass those mappings;
+  they are not connection-level DNS pins.
 - **Network targets** — built-in HTTP(S) adapters evaluate normalized targets,
   DNS answers, and every redirect through the shared Network Policy; special
   address ranges are denied and private targets require explicit authorization.

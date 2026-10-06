@@ -106,7 +106,7 @@ def test_docker_spawn_funnel_denies_privileges_and_merges_hardening():
     assert check_privilege_flags({"language": "python"}) is None
 
 
-def test_docker_egress_scope_parses_and_pins_without_docker(monkeypatch):
+def test_docker_egress_scope_parses_and_maps_without_docker(monkeypatch):
     entries, error = parse_egress_scope("pwn.example.com, 10.0.0.0/8")
     assert error is None
     assert entries == ("pwn.example.com", "10.0.0.0/8")
@@ -115,9 +115,9 @@ def test_docker_egress_scope_parses_and_pins_without_docker(monkeypatch):
     monkeypatch.setattr(
         "tools.docker_egress.egress_resolver", lambda host: ("203.0.113.7",)
     )
-    pins, fingerprint, resolve_error = resolve_egress_scope()
+    host_mappings, fingerprint, resolve_error = resolve_egress_scope()
     assert resolve_error is None
-    assert pins == {"pwn.example.com": "203.0.113.7"}
+    assert host_mappings == {"pwn.example.com": "203.0.113.7"}
     assert len(fingerprint) == 12
 
 
