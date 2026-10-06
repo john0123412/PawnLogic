@@ -675,7 +675,7 @@ mode.
 authoritative list.** A module is in the island only when CI passes its file
 to mypy; the matching `[[tool.mypy.overrides]]` entry in `pyproject.toml` is
 what actually turns on `disallow_untyped_defs` / `check_untyped_defs` for it.
-Both files, plus the list below, must name the same 50 modules;
+Both files, plus the list below, must name the same 49 modules;
 `tests/test_typed_island_sync.py` fails the build when they diverge.
 
 To add a module: annotate it until it passes
@@ -697,7 +697,7 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `pawnlogic/confirm_selector`, `pawnlogic/terminal_transcript`,
 `pawnlogic/restart_recovery`, `tools/check_doc_structure`,
 `tools/check_release_consistency`, `tools/merge_ctf_skills`, `tools/browser_ops`,
-`tools/policy_proxy`, `tools/proxy_protocol`, `tools/lsp_lite`, `tools/text_patch`, `tools/shell_ops`,
+`tools/policy_proxy`, `tools/proxy_protocol`, `tools/text_patch`, `tools/shell_ops`,
 `tools/docker_plan`, `tools/pwn_binary`, `tools/pwn_debugger`.
 
 `core/delegation` and `core/agent_orchestrator` are **not** in the island.
@@ -1286,7 +1286,7 @@ name at the end is the gate that fails if the invariant is broken.
 - **The typed-island module list is stated in three places** (CI mypy step,
   pyproject overrides, Typed Island section). `tests/test_typed_island_sync.py`
   fails the build when they diverge — treat that failure as the gate, not as a
-  test to relax. All three name the same **50 library modules**; the CI step
+  test to relax. All three name the same **49 library modules**; the CI step
   passes no `tests/` file to mypy, and `tests/test_e2e.py` appears only on the
   pytest command line.
 - **`test_live_bare_escape_interrupts_one_turn_without_another_keypress` has a

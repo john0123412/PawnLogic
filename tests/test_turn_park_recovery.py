@@ -124,7 +124,7 @@ def test_prompt_after_failed_turn_runs_even_when_binding_says_follow_up() -> Non
     START before replacing the draft meant the recovery was skipped, the
     reconciled kind became START against existing recovered work, and
     admission raised InvalidSubmissionError — typing did nothing at all.
-    Caught by tools/acceptance_post429.py under a real PTY.
+    Caught under a real PTY during post-429 acceptance testing.
     """
     calls: list[str] = []
     state = {"fail": True}

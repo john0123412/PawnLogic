@@ -24,7 +24,7 @@ from .security import (
     READ_BLACKLIST, WRITE_BLACKLIST, DANGEROUS_PATTERNS,
     smart_truncate, user_friendly_error, scrub_sensitive_env,
 )
-from .sandbox import SANDBOX_LANGS, DOCKER_IMAGES, BROWSER_CONFIG, USER_AGENTS
+from .sandbox import SANDBOX_LANGS, BROWSER_CONFIG, USER_AGENTS
 from .phases import AGENT_PHASES
 from .paths import (
     VERSION, PAWNLOGIC_HOME, SESSIONS_DIR, DB_PATH, GLOBAL_SKILLS_PATH,
@@ -47,33 +47,24 @@ __all__ = [
     "infer_effort_level",
     "READ_BLACKLIST", "WRITE_BLACKLIST", "DANGEROUS_PATTERNS",
     "smart_truncate", "user_friendly_error", "scrub_sensitive_env",
-    "SANDBOX_LANGS", "DOCKER_IMAGES", "BROWSER_CONFIG", "USER_AGENTS",
+    "SANDBOX_LANGS", "BROWSER_CONFIG", "USER_AGENTS",
     "AGENT_PHASES",
     "VERSION", "PAWNLOGIC_HOME", "SESSIONS_DIR", "DB_PATH", "GLOBAL_SKILLS_PATH",
     "SKILLS_DIR", "SKILLS_ENABLED_PATH", "LOG_DIR", "WORKSPACE_DIR", "WORKSPACE_ROOT",
-    "DYNAMIC_CONFIG", "NORMAL_CONFIG", "WEB_STRATEGY", "USER_MODE", "QUIET_MODE",
+    "DYNAMIC_CONFIG", "USER_MODE", "QUIET_MODE",
 ]
 
-# Backward compatibility: DYNAMIC_CONFIG / NORMAL_CONFIG.
-# These mutable dicts are changed at runtime by effort commands such as /mid
-# and /effort. Keep them here for existing `from config import DYNAMIC_CONFIG`
+# Backward compatibility: DYNAMIC_CONFIG.
+# This mutable dict is changed at runtime by effort commands such as /mid
+# and /effort. Keep it here for existing `from config import DYNAMIC_CONFIG`
 # imports. The seed is the default effort preset, so a fresh session starts on
 # a rung that carries its own `effort_level` instead of an unlabelled tier.
 DYNAMIC_CONFIG: dict = effort_preset(DEFAULT_EFFORT_LEVEL)
-NORMAL_CONFIG:  dict = effort_preset(DEFAULT_EFFORT_LEVEL)
 try:
     from core.state import bind_dynamic_config
     bind_dynamic_config(DYNAMIC_CONFIG)
 except Exception:
     pass
-
-# Backward compatibility: WEB_STRATEGY.
-WEB_STRATEGY = {
-    "jina_base":     "https://r.jina.ai/",
-    "use_pandoc":    True,
-    "timeout":       20,
-    "max_html_read": 600_000,
-}
 
 # Backward compatibility: USER_MODE / QUIET_MODE.
 # These flags are now managed by core.state. Module-level variables remain for

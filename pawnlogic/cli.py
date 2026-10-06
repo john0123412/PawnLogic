@@ -205,7 +205,6 @@ BROWSERBASE_PROJECT_ID=
 # LOCAL_API_URL=http://localhost:11434/v1/chat/completions
 
 # Optional runtime settings.
-# PAWNLOGIC_DEFAULT_MODEL=ds-v4-flash
 # PAWNLOGIC_LOG_LEVEL=INFO
 """
 

@@ -1,4 +1,4 @@
-"""config/sandbox.py - sandbox languages, Docker images, and browser config."""
+"""config/sandbox.py - sandbox languages, browser config, and user agents."""
 from .paths import PAWNLOGIC_HOME
 
 SANDBOX_LANGS = {
@@ -11,15 +11,6 @@ SANDBOX_LANGS = {
     "rust":       {"ext": ".rs",   "cmd": None,           "compile": "rustc {src} -o {bin} 2>&1"},
     "go":         {"ext": ".go",   "cmd": "go run {src}", "compile": None},
     "java":       {"ext": ".java", "cmd": None,           "compile": "javac {src} 2>&1"},
-}
-
-DOCKER_IMAGES = {
-    "pwndocker":  "skysider/pwndocker",
-    "ubuntu18":   "ubuntu:18.04",
-    "ubuntu22":   "ubuntu:22.04",
-    "kali":       "kalilinux/kali-rolling",
-    "python":     "python:3.12-slim",
-    "gcc":        "gcc:latest",
 }
 
 BROWSER_CONFIG = {
