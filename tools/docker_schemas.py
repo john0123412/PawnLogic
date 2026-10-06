@@ -1,6 +1,6 @@
 """Tool schemas for the Docker tool family.
 
-Moved verbatim from tools/docker_sandbox.py: the schema block is pure
+Declared separately from tools/docker_sandbox.py: the schema block is pure
 declarative data and dominates the module's size, so it lives apart from the
 runtime code. Keep this file, the plan validator (tools/docker_plan.py), and
 the network gate in tools/docker_sandbox.py in agreement when touching
@@ -19,7 +19,7 @@ DOCKER_SCHEMAS = [
                 "Use for Pwn exploit testing, multi-libc environment checks, isolated sandbox execution, and authorized CTF plaintext HTTP clients; for CTF HTTP use bridge with explicit allow_network, without host mode or credential mounts.\n"
                 "Defaults to no network (network=none) to prevent CTF flag leakage.\n"
                 "Resource limits: 512 MB memory, 0.5 CPU, 256 PIDs.\n"
-                "One-shot hardening: read-only root filesystem (relaxed only when install_deps must write site-packages), tmpfs /tmp and /run, all Linux capabilities dropped, and a non-root user matching the host user by default.\n"
+                "One-shot hardening: read-only root filesystem (relaxed only when install_deps must write site-packages), tmpfs /tmp and /run, all Linux capabilities dropped, and a user matching the host UID:GID when available (non-root only for a nonzero host UID; dependency installs retain the image user).\n"
                 "Supported languages: python / c / cpp / bash / javascript / rust / go / java.\n"
                 "Returns clear setup guidance when Docker is unavailable."
             ),
@@ -56,8 +56,8 @@ DOCKER_SCHEMAS = [
                         "description": (
                             "Network mode: none (default no network) / bridge / host. "
                             "bridge/host requires allow_network=true or an environment policy override. "
-                            "Bridge egress may additionally be scoped by the operator via "
-                            "PAWNLOGIC_DOCKER_EGRESS_ALLOW (approved hosts are DNS-pinned). "
+                            "The operator may declare scope metadata via "
+                            "PAWNLOGIC_DOCKER_EGRESS_ALLOW (hosts-file mappings only; no destination filtering). "
                             "Container-sharing modes (container:<id>) and unknown modes are rejected."
                         ),
                     },
@@ -65,7 +65,7 @@ DOCKER_SCHEMAS = [
                         "type": "string",
                         "description": (
                             "Run the container as this user (name or uid[:gid]). Default: a user "
-                            "matching the host uid:gid; 'root' restores the image default when "
+                            "matching the host uid:gid; 'root' explicitly selects root when "
                             "explicitly required."
                         ),
                     },
@@ -137,8 +137,8 @@ DOCKER_SCHEMAS = [
                         "description": (
                             "Network mode for create (default none). "
                             "bridge/host requires allow_network=true or an environment policy override. "
-                            "Bridge egress may additionally be scoped by the operator via "
-                            "PAWNLOGIC_DOCKER_EGRESS_ALLOW (approved hosts are DNS-pinned). "
+                            "The operator may declare scope metadata via "
+                            "PAWNLOGIC_DOCKER_EGRESS_ALLOW (hosts-file mappings only; no destination filtering). "
                             "Container-sharing modes (container:<id>) and unknown modes are rejected."
                         ),
                     },
@@ -173,7 +173,9 @@ DOCKER_SCHEMAS = [
             "name": "tool_install_package",
             "description": (
                 "Airlock package installation tool.\n"
-                "Temporarily connects a persistent container to install apt/pip packages, then forces network disconnect.\n"
+                "Installs apt/pip packages in a persistent container. Only connections made by this Airlock operation are disconnected; an existing bridge attachment stays unchanged.\n"
+                "Failed temporary disconnect revokes tool access and kills/removes the container; daemon cleanup failure explicitly requires manual cleanup.\n"
+                "Configured egress declarations are validated, but existing hosts-file mappings are unchanged and destinations are not filtered.\n"
                 "Package names are strictly regex-validated to prevent command injection.\n"
                 "Temporarily granting bridge egress requires explicit authorization: pass allow_network=true or set PAWNLOGIC_DOCKER_ALLOW_NETWORK=true.\n"
                 "Works only for containers created through pwn_container create."

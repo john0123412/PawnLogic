@@ -8,28 +8,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Security
+- Airlock package installation validates the operator egress declaration before
+  running, including already-bridged containers. A failed temporary disconnect
+  now overrides installation success, revokes tool access, and kills the
+  container (forced removal fallback). If daemon cleanup also fails, the tool
+  explicitly reports that the container may remain running and needs manual
+  cleanup. Attachment failures also trigger cleanup because a daemon response
+  can be lost after connecting; confirmed offline containers are preserved.
+  Existing hosts-file mappings are unchanged; this is not destination
+  enforcement.
 - One-shot `run_code_docker` containers are hardened by default: read-only
   root filesystem (relaxed only when `install_deps` must write site-packages),
-  tmpfs `/tmp` and `/run`, `cap_drop=ALL`, and a non-root user matching the
-  host uid:gid. `container_user` restores the image default (`root`) when a
-  workload explicitly needs it, and persistent `pwn_container` containers keep
+  tmpfs `/tmp` and `/run`, `cap_drop=ALL`, and a user matching the host uid:gid
+  (non-root when the host uid is nonzero). Missing host IDs and dependency
+  installs retain the image user unless an explicit user is supplied.
+  `container_user='root'` explicitly selects root, and persistent containers keep
   the image default user and capabilities for in-container debugging. The
-  hardening defaults are merged inside the `_spawn_container` choke point
+  hardening defaults are merged inside the `spawn_container` choke point
   after the caller-kwarg deny check, so tool arguments can never inject or
-  remove them.
+  supply raw hardening kwargs. Trusted Python callers may explicitly override
+  read-only/tmpfs defaults, as dependency installation requires.
 - Bridge authorization now supports an operator-declared egress scope:
-  setting `PAWNLOGIC_DOCKER_EGRESS_ALLOW` (hosts, IPs, CIDRs) pins approved
-  hostnames at policy time — resolving each once so a later DNS change cannot
-  rebind an approved name — attaches them to bridge-attached containers via
+  setting `PAWNLOGIC_DOCKER_EGRESS_ALLOW` (hosts, IPs, CIDRs) resolves declared
+  hostnames once and attaches hosts-file mappings to bridge containers via
   `extra_hosts`, and labels the container with the scope fingerprint for
   audit. Invalid or unresolvable scope entries fail closed. The declared
-  scope covers DNS resolution and container pinning; socket-level destination
+  scope provides metadata and hosts-file mappings, not transport-level DNS
+  pins or CIDR enforcement. Direct connections and custom DNS can bypass it;
+  socket-level destination
   filtering remains a host-level control (DOCKER-USER iptables or a proxy
   sidecar), not something tool code improvises.
 
 ### Changed
-- Phase whitelists now expose five registered tools the system prompt already
-  relied on (`read_file_lines`, `git_op`, `analyze_local_image`,
+- Phase whitelists now expose five registered tools aligned with the documented
+  workflows and GSA tooling (`read_file_lines`, `git_op`, `analyze_local_image`,
   `audit_payload`, `delegate_task`), so the model receives their schemas
   instead of having to hallucinate names.
 - Removed orphaned tool modules and their tests (`lsp_lite`, the 0.3.7 PTY
@@ -40,9 +52,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Clarified the authorized CTF plaintext HTTP workflow in tool guidance and
   bilingual documentation: use disposable, resource-limited Docker containers
   with explicitly authorized bridge networking, without relaxing the browser
-  proxy. Bridge authorization is capability-level by default and becomes
-  target-scoped only when the operator declares
-  `PAWNLOGIC_DOCKER_EGRESS_ALLOW`.
+  proxy. Bridge authorization remains capability-level; the operator may
+  record a declared scope with `PAWNLOGIC_DOCKER_EGRESS_ALLOW`, which does not
+  enforce destination restrictions.
 
 ## [0.4.3] - 2026-10-05
 

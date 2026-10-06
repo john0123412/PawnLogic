@@ -277,6 +277,7 @@ class _FakeAirlockClient:
 
 def _install_airlock_client(monkeypatch):
     monkeypatch.delenv("PAWNLOGIC_DOCKER_ALLOW_NETWORK", raising=False)
+    monkeypatch.delenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", raising=False)
     client = _FakeAirlockClient()
     monkeypatch.setattr(docker_sandbox, "_get_docker_client", lambda: client)
     monkeypatch.setitem(docker_sandbox._active_containers, "c1", "cid123")
@@ -309,6 +310,111 @@ def test_airlock_install_allows_bridge_egress_with_explicit_arg(monkeypatch):
     assert result.startswith("[Airlock")
     assert client.bridge.connected == [client.container]
     assert client.bridge.disconnected == [client.container]
+
+
+@pytest.mark.parametrize("install_fails", [False, True])
+@pytest.mark.parametrize("kill_fails,remove_fails", [(False, False), (True, False), (True, True)])
+def test_airlock_disconnect_failure_revokes_container_access(monkeypatch, kill_fails, remove_fails, install_fails):
+    client = _install_airlock_client(monkeypatch)
+    actions = []
+    if install_fails:
+        def fail_install(**kwargs):
+            raise RuntimeError("install unavailable")
+        monkeypatch.setattr(client.container, "exec_run", fail_install)
+
+    def fail_disconnect(*args, **kwargs):
+        raise RuntimeError("disconnect unavailable")
+
+    def kill():
+        actions.append("kill")
+        if kill_fails:
+            raise RuntimeError("kill unavailable")
+
+    def remove(force=False):
+        assert force
+        actions.append("remove")
+        if remove_fails:
+            raise RuntimeError("remove unavailable")
+
+    monkeypatch.setattr(client.bridge, "disconnect", fail_disconnect)
+    monkeypatch.setattr(client.container, "kill", kill, raising=False)
+    monkeypatch.setattr(client.container, "remove", remove, raising=False)
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["requests"],
+         "allow_network": True}
+    )
+
+    assert result.startswith("SECURITY BLOCK: Airlock network disconnect failed")
+    assert "[Airlock ✓]" not in result
+    assert actions == (["kill", "remove"] if kill_fails else ["kill"])
+    assert "c1" not in docker_sandbox._active_containers
+    if remove_fails:
+        assert "may still be running" in result
+    denied = docker_sandbox.tool_pwn_container({"action": "exec", "name": "c1", "command": "true"})
+    assert "not found" in denied
+
+
+@pytest.mark.parametrize("disconnect_fails", [False, True])
+def test_airlock_connect_error_still_revokes_partial_attachment(monkeypatch, disconnect_fails):
+    client = _install_airlock_client(monkeypatch)
+    killed = []
+
+    def partially_connect(container):
+        client.bridge.connected.append(container)
+        raise RuntimeError("connect response lost")
+
+    monkeypatch.setattr(client.bridge, "connect", partially_connect)
+    monkeypatch.setattr(client.container, "exec_run", lambda **kwargs: pytest.fail("install must not run"))
+    monkeypatch.setattr(client.container, "kill", lambda: killed.append(True), raising=False)
+    if disconnect_fails:
+        def fail_disconnect(*args, **kwargs):
+            raise RuntimeError("disconnect unavailable")
+        monkeypatch.setattr(client.bridge, "disconnect", fail_disconnect)
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["requests"],
+         "allow_network": True}
+    )
+    if disconnect_fails:
+        assert result.startswith("SECURITY BLOCK: Airlock network disconnect failed")
+        assert killed == [True]
+        assert "c1" not in docker_sandbox._active_containers
+    else:
+        assert result.startswith("ERROR:")
+        assert client.bridge.disconnected == [client.container]
+        assert killed == []
+
+
+def test_airlock_rejected_attachment_preserves_confirmed_offline_container(monkeypatch):
+    client = _install_airlock_client(monkeypatch)
+    def reject_connect(container):
+        raise RuntimeError("none-mode attachment rejected")
+    monkeypatch.setattr(client.bridge, "connect", reject_connect)
+    monkeypatch.setattr(client.bridge, "reload", lambda: None, raising=False)
+    monkeypatch.setattr(client.bridge, "disconnect", lambda *args, **kwargs: pytest.fail("confirmed offline container must not be disconnected"))
+    monkeypatch.setattr(client.container, "kill", lambda: pytest.fail("confirmed offline container must survive"), raising=False)
+    monkeypatch.setattr(client.container, "exec_run", lambda **kwargs: pytest.fail("install must not run"))
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["requests"],
+         "allow_network": True}
+    )
+    assert result.startswith("ERROR:")
+    assert docker_sandbox._active_containers["c1"] == "cid123"
+
+
+@pytest.mark.parametrize("already_on_bridge", [False, True])
+def test_airlock_invalid_operator_scope_blocks_install(monkeypatch, already_on_bridge):
+    client = _install_airlock_client(monkeypatch)
+    monkeypatch.setenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", "bad host!!")
+    if already_on_bridge:
+        client.bridge.attrs = {"Containers": {"cid123": {}}}
+    monkeypatch.setattr(client.container, "exec_run", lambda **kwargs: pytest.fail("install must not run"))
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["requests"],
+         "allow_network": True}
+    )
+    assert result.startswith("SECURITY BLOCK: PAWNLOGIC_DOCKER_EGRESS_ALLOW is set but invalid")
+    assert client.bridge.connected == []
+    assert client.bridge.disconnected == []
 
 
 def test_airlock_install_requires_authorization_even_when_already_on_bridge(
@@ -540,7 +646,7 @@ def test_parse_egress_scope_accepts_hosts_ips_cidrs_and_rejects_junk():
     assert error is not None and "invalid egress scope entry" in error
 
 
-def test_resolve_egress_scope_pins_hostnames_only(monkeypatch):
+def test_resolve_egress_scope_maps_hostnames_only(monkeypatch):
     monkeypatch.setenv(
         "PAWNLOGIC_DOCKER_EGRESS_ALLOW", "pwn.example.com,203.0.113.5,10.0.0.0/8"
     )
@@ -550,23 +656,23 @@ def test_resolve_egress_scope_pins_hostnames_only(monkeypatch):
         lambda host: ("203.0.113.7", "203.0.113.8"),
     )
 
-    pins, fingerprint, error = docker_egress.resolve_egress_scope()
+    host_mappings, fingerprint, error = docker_egress.resolve_egress_scope()
 
     assert error is None
-    assert pins == {"pwn.example.com": "203.0.113.7"}
+    assert host_mappings == {"pwn.example.com": "203.0.113.7"}
     assert fingerprint is not None and len(fingerprint) == 12
 
 
 def test_resolve_egress_scope_unset_env_is_a_no_op(monkeypatch):
     monkeypatch.delenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", raising=False)
-    pins, fingerprint, error = docker_egress.resolve_egress_scope()
-    assert pins == {} and fingerprint is None and error is None
+    host_mappings, fingerprint, error = docker_egress.resolve_egress_scope()
+    assert host_mappings == {} and fingerprint is None and error is None
 
 
 def test_resolve_egress_scope_fails_closed_on_bad_entries(monkeypatch):
     monkeypatch.setenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", "bad host!!")
-    pins, fingerprint, error = docker_egress.resolve_egress_scope()
-    assert pins == {} and fingerprint is None
+    host_mappings, fingerprint, error = docker_egress.resolve_egress_scope()
+    assert host_mappings == {} and fingerprint is None
     assert error is not None
     assert error.startswith("SECURITY BLOCK: PAWNLOGIC_DOCKER_EGRESS_ALLOW is set but invalid")
 
@@ -574,8 +680,8 @@ def test_resolve_egress_scope_fails_closed_on_bad_entries(monkeypatch):
     def _boom(host):
         raise OSError("resolver down")
     monkeypatch.setattr(docker_egress, "egress_resolver", _boom)
-    pins, fingerprint, error = docker_egress.resolve_egress_scope()
-    assert pins == {} and fingerprint is None
+    host_mappings, fingerprint, error = docker_egress.resolve_egress_scope()
+    assert host_mappings == {} and fingerprint is None
     assert error is not None and "could not be resolved at policy time" in error
 
 
@@ -585,15 +691,15 @@ def test_resolve_scope_for_network_only_applies_to_bridge(monkeypatch, capsys):
         docker_egress, "egress_resolver", lambda host: ("203.0.113.7",)
     )
 
-    pins, fingerprint, error = docker_egress.resolve_scope_for_network("none")
-    assert (pins, fingerprint, error) == ({}, None, None)
+    host_mappings, fingerprint, error = docker_egress.resolve_scope_for_network("none")
+    assert (host_mappings, fingerprint, error) == ({}, None, None)
 
-    pins, fingerprint, error = docker_egress.resolve_scope_for_network("host")
-    assert (pins, fingerprint, error) == ({}, None, None)
+    host_mappings, fingerprint, error = docker_egress.resolve_scope_for_network("host")
+    assert (host_mappings, fingerprint, error) == ({}, None, None)
     assert "cannot constrain host networking" in capsys.readouterr().out
 
 
-def test_run_code_docker_bridge_scope_pins_extra_hosts_and_labels(monkeypatch):
+def test_run_code_docker_bridge_scope_maps_extra_hosts_and_labels(monkeypatch):
     monkeypatch.delenv("PAWNLOGIC_DOCKER_ALLOW_NETWORK", raising=False)
     monkeypatch.setenv(
         "PAWNLOGIC_DOCKER_EGRESS_ALLOW", "pwn.example.com,203.0.113.5,10.0.0.0/8"
@@ -614,7 +720,7 @@ def test_run_code_docker_bridge_scope_pins_extra_hosts_and_labels(monkeypatch):
     )
 
     assert result.startswith("[run_code_docker - OK")
-    assert "| egress: scoped]" in result
+    assert "| egress: declared (not enforced)]" in result
     kwargs = client.containers.calls[0]
     assert kwargs["extra_hosts"] == {"pwn.example.com": "203.0.113.7"}
     assert len(kwargs["labels"]["pawn_egress_scope"]) == 12
@@ -659,7 +765,7 @@ def test_pwn_container_create_scope_user_and_label(monkeypatch):
     )
 
     assert result.startswith("OK: container 'lab' created")
-    assert "Egress scope: 1 pinned host(s)" in result
+    assert "Egress scope: 1 declared host mapping(s)" in result
     kwargs = client.containers.calls[0]
     assert kwargs["extra_hosts"] == {"pwn.example.com": "203.0.113.7"}
     assert kwargs["user"] == "1000:1000"
@@ -668,7 +774,7 @@ def test_pwn_container_create_scope_user_and_label(monkeypatch):
     assert "read_only" not in kwargs
     assert "cap_drop" not in kwargs
 
-    # Without the scope env, create stays unchanged (no pins, no label).
+    # Without the scope env, create stays unchanged (no host mappings, no label).
     monkeypatch.delenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", raising=False)
     docker_sandbox.tool_pwn_container(
         {"action": "create", "name": "lab2", "network": "bridge",

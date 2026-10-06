@@ -842,7 +842,9 @@ name at the end is the gate that fails if the invariant is broken.
   is present, so these kwargs never reach the Docker SDK, even under
   `python -O`. The same funnel merges the one-shot hardening defaults
   (`cap_drop=ALL`, read-only rootfs, tmpfs) after the deny check, so tool
-  arguments cannot inject or remove them either. The docker policy helpers
+  arguments cannot supply raw hardening kwargs. Trusted Python callers may
+  override read-only/tmpfs defaults; dependency installation uses this exception.
+  The docker policy helpers
   live in `tools/docker_spawn.py` (funnel + hardening + container user),
   `tools/docker_egress.py` (operator-declared bridge egress scope),
   `tools/docker_mounts.py` (mount safety), and `tools/docker_schemas.py`
@@ -853,7 +855,15 @@ name at the end is the gate that fails if the invariant is broken.
   `_check_network_policy`.** The airlock (`tool_install_package`) used to
   attach bridge egress without the `allow_network` authorization the other
   container tools require — that bypass is now closed. A new tool that
-  connects a container to a network must call the same gate.
+  connects a container to a network must call the same gate. Airlock also
+  validates any operator scope before installing, without changing existing
+  hosts-file mappings or filtering destinations. If its temporary disconnect
+  fails, revoke tool access and kill the container, falling back to forced
+  removal; if both fail, report the live-container risk and manual cleanup.
+  An attachment error must still trigger cleanup: a daemon can attach before
+  its response is lost. If refreshed daemon state confirms no attachment,
+  preserve the offline container; unknown state still requires cleanup. Never
+  return success after failed network cleanup.
 - **Docker network modes are a closed set: `none`, `bridge`, `host`.**
   `_check_network_policy` and the pure `build_docker_execution_plan`
   validator reject `container:<id>` sharing and unknown modes before the
@@ -866,25 +876,28 @@ name at the end is the gate that fails if the invariant is broken.
   memory/CPU/PID limits, and no credential mounts. Container HTTP clients do
   not inherit browser proxy framing limits. Bridge authorization carries an
   **operator-declared egress scope** when `PAWNLOGIC_DOCKER_EGRESS_ALLOW` is
-  set (hosts, IPs, CIDRs): approved hostnames are resolved once at policy time
-  and pinned into the container via `extra_hosts`, and the container is
-  labelled with the scope fingerprint. Without the variable a bridge grant
-  remains capability-only, and no in-container destination filter exists
-  either way — socket-level egress enforcement still needs a host-level
+  set (hosts, IPs, CIDRs): declared hostnames are resolved once and written
+  into the container hosts file via `extra_hosts`; the container is labelled
+  with the scope fingerprint. These are metadata and name-resolution hints,
+  not a destination filter or transport-level DNS pins. Direct IP connections,
+  custom DNS and redirects remain unrestricted by this setting. Bridge grants
+  remain capability-only either way — socket-level enforcement still needs a
   control (DOCKER-USER iptables or a proxy sidecar) and must not be improvised
   in tool code. Never suggest host networking or disabling browser enforcement
   as a workaround. One-shot `run_code_docker` containers run hardened by
   default: read-only root filesystem (relaxed only when `install_deps` must
   write site-packages), tmpfs `/tmp` and `/run`, `cap_drop=ALL`, and a
-  non-root user matching the host uid:gid (`container_user='root'` restores
-  the image default). Persistent `pwn_container` containers keep the image
+  user matching the host uid:gid (non-root only for a nonzero host uid).
+  Missing host IDs and dependency installs retain the image user unless
+  explicitly overridden; `container_user='root'` selects root. Persistent
+  `pwn_container` containers keep the image
   default user and capabilities because in-container debugging and apt/pip
   installs expect them; their network and privilege posture is unchanged.
   Extra workspace mounts remain possible under the mount policy.
   `tests/test_docker_policy.py::test_run_code_docker_blocks_risky_network_before_docker`
   covers the network authorization gate, and
   `test_run_code_docker_applies_hardening_and_nonroot_default` /
-  `test_run_code_docker_bridge_scope_pins_extra_hosts_and_labels` cover the
+  `test_run_code_docker_bridge_scope_maps_extra_hosts_and_labels` cover the
   hardening defaults and the scoped grant.
 - **Browser transports require the loopback policy proxy.** Chromium skips
   redirect route callbacks, so context guards alone cannot enforce destinations.
