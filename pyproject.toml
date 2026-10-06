@@ -134,7 +134,6 @@ select = ["E9", "F821", "F401", "F841", "E722", "B", "SIM", "UP", "RUF"]
 "tools/delegate_tool.py" = ["SIM102"]
 "tools/docker_sandbox.py" = ["SIM105"]
 "tools/file_ops.py" = ["RUF005", "RUF013", "SIM102", "SIM105"]
-"tools/lsp_lite.py" = ["RUF003", "RUF005", "SIM102", "SIM105"]
 "tools/pwn_chain.py" = ["SIM105", "SIM115"]
 "tools/recon_ops.py" = ["SIM105", "UP015"]
 "tools/sandbox.py" = ["RUF059", "SIM105", "UP024"]
@@ -222,7 +221,6 @@ module = [
     "tools.browser_ops",
     "tools.policy_proxy",
     "tools.proxy_protocol",
-    "tools.lsp_lite",
 ]
 disallow_untyped_defs = true
 check_untyped_defs = true

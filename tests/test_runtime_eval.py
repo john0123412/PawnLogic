@@ -215,7 +215,7 @@ def test_docker_suite_skips_cleanly_when_docker_is_unavailable(monkeypatch):
 
 
 def test_docker_suite_uses_no_network_and_workspace_bound_mount(monkeypatch):
-    from tools import docker_sandbox
+    from tools import docker_mounts, docker_sandbox
 
     # With child-process execution, side effects from fake functions are not visible.
     # Verify behavior through returned records instead.
@@ -226,7 +226,7 @@ def test_docker_suite_uses_no_network_and_workspace_bound_mount(monkeypatch):
         mount_files = args["mount_files"]
         assert isinstance(mount_files, dict)
         [host_path] = mount_files.keys()
-        assert Path(host_path).is_relative_to(Path(docker_sandbox.SAFE_WORKSPACE))
+        assert Path(host_path).is_relative_to(Path(docker_mounts.SAFE_WORKSPACE))
         return "[run_code_docker - OK | image: python:3.12-slim | network: none]\npawnlogic-docker-ok"
 
     monkeypatch.setattr(docker_sandbox, "_get_docker_client", lambda: FakeClient())

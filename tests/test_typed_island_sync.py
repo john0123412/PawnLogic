@@ -28,9 +28,9 @@ CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "main_ci.yml"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 AGENT_MD = REPO_ROOT / "AGENT.md"
 
-# A bare repo-relative module path, e.g. core/session.py or tools/lsp_lite.py
+# A bare repo-relative module path, e.g. core/session.py or tools/text_patch.py
 _MODULE_PATH = r"[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*\.py"
-# A dotted module name, e.g. core.session or tools.lsp_lite
+# A dotted module name, e.g. core.session or tools.text_patch
 _DOTTED_MODULE = r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
 
 

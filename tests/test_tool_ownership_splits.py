@@ -1,6 +1,15 @@
 """Focused tests for extracted tool implementation modules."""
 
+import pytest
+
+from tools.docker_egress import parse_egress_scope, resolve_egress_scope
+from tools.docker_mounts import check_path_safety
 from tools.docker_plan import build_docker_execution_plan
+from tools.docker_spawn import (
+    HARDENING_TMPFS,
+    check_privilege_flags,
+    spawn_container,
+)
 from tools.pwn_binary import ElfAnalysisCache, cyclic_result
 from tools.pwn_debugger import build_gdb_plan
 from tools.text_patch import apply_patch_blocks, find_search_in_file
@@ -70,3 +79,57 @@ def test_text_patch_engine_uses_injected_path_policy(tmp_path):
     assert result.startswith("OK: applied 1/1")
     assert target.read_text(encoding="utf-8") == "def new():\n    return 2\n"
     assert find_search_in_file(["  x\n"], "x") == (0, 1)
+
+
+def test_docker_spawn_funnel_denies_privileges_and_merges_hardening():
+    class _Recording:
+        def __init__(self):
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            return object()
+
+    class _Client:
+        def __init__(self):
+            self.containers = _Recording()
+
+    client = _Client()
+    spawn_container(client, image="img", network_mode="none", harden=True)
+    kwargs = client.containers.calls[0]
+    assert kwargs["cap_drop"] == ["ALL"]
+    assert kwargs["read_only"] is True
+    assert kwargs["tmpfs"] == dict(HARDENING_TMPFS)
+    with pytest.raises(PermissionError, match="privileged flags forbidden"):
+        spawn_container(client, image="img", harden=True, cap_add=["SYS_ADMIN"])
+    assert check_privilege_flags({"cap-drop": True}) is not None
+    assert check_privilege_flags({"language": "python"}) is None
+
+
+def test_docker_egress_scope_parses_and_pins_without_docker(monkeypatch):
+    entries, error = parse_egress_scope("pwn.example.com, 10.0.0.0/8")
+    assert error is None
+    assert entries == ("pwn.example.com", "10.0.0.0/8")
+
+    monkeypatch.setenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", "pwn.example.com")
+    monkeypatch.setattr(
+        "tools.docker_egress.egress_resolver", lambda host: ("203.0.113.7",)
+    )
+    pins, fingerprint, resolve_error = resolve_egress_scope()
+    assert resolve_error is None
+    assert pins == {"pwn.example.com": "203.0.113.7"}
+    assert len(fingerprint) == 12
+
+
+def test_docker_mount_policy_keeps_rw_inside_workspace(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    inside = workspace / "challenge.bin"
+    inside.write_text("fixture", encoding="utf-8")
+    outside = tmp_path / "outside.bin"
+    outside.write_text("fixture", encoding="utf-8")
+    monkeypatch.setattr("tools.docker_mounts.SAFE_WORKSPACE", str(workspace.resolve()))
+
+    assert check_path_safety(str(inside), "ro") == str(inside.resolve())
+    with pytest.raises(PermissionError, match="RW mode is limited"):
+        check_path_safety(str(outside), "rw")

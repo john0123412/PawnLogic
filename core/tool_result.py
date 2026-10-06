@@ -37,7 +37,6 @@ DEFAULT_VERBOSE_TOOLS: frozenset[str] = frozenset(
         "inspect_binary",
         "web_search",
         "fetch_url",
-        "find_refs",
     }
 )
 

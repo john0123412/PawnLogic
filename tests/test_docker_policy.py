@@ -1,8 +1,11 @@
 """Tests for Docker sandbox risk policy gates."""
 
+import os
+
 import pytest
 
-from tools import docker_sandbox
+from tools import docker_egress, docker_mounts, docker_sandbox, docker_spawn
+from tools import docker_plan
 
 
 class _MissingImages:
@@ -100,10 +103,10 @@ def test_docker_ro_mount_outside_workspace_blocked_by_default(monkeypatch, tmp_p
     workspace.mkdir()
     outside = tmp_path / "challenge.bin"
     outside.write_text("fixture", encoding="utf-8")
-    monkeypatch.setattr(docker_sandbox, "SAFE_WORKSPACE", str(workspace.resolve()))
+    monkeypatch.setattr(docker_mounts, "SAFE_WORKSPACE", str(workspace.resolve()))
 
     with pytest.raises(PermissionError, match="RO mounts are limited"):
-        docker_sandbox._check_path_safety(str(outside), "ro")
+        docker_mounts.check_path_safety(str(outside), "ro")
 
 
 def test_docker_ro_mount_outside_workspace_requires_explicit_allow(monkeypatch, tmp_path):
@@ -111,9 +114,9 @@ def test_docker_ro_mount_outside_workspace_requires_explicit_allow(monkeypatch, 
     workspace.mkdir()
     outside = tmp_path / "challenge.bin"
     outside.write_text("fixture", encoding="utf-8")
-    monkeypatch.setattr(docker_sandbox, "SAFE_WORKSPACE", str(workspace.resolve()))
+    monkeypatch.setattr(docker_mounts, "SAFE_WORKSPACE", str(workspace.resolve()))
 
-    assert docker_sandbox._check_path_safety(
+    assert docker_mounts.check_path_safety(
         str(outside),
         "ro",
         allow_host_read_mount=True,
@@ -127,11 +130,11 @@ def test_docker_mount_blocks_sensitive_paths_even_when_read_only_allowed(monkeyp
     workspace.mkdir()
     secret_dir.mkdir()
     secret_file.write_text("secret", encoding="utf-8")
-    monkeypatch.setattr(docker_sandbox, "SAFE_WORKSPACE", str(workspace.resolve()))
-    monkeypatch.setattr(docker_sandbox, "READ_BLACKLIST", [str(secret_dir)])
+    monkeypatch.setattr(docker_mounts, "SAFE_WORKSPACE", str(workspace.resolve()))
+    monkeypatch.setattr(docker_mounts, "READ_BLACKLIST", [str(secret_dir)])
 
     with pytest.raises(PermissionError, match="credentials"):
-        docker_sandbox._check_path_safety(
+        docker_mounts.check_path_safety(
             str(secret_file),
             "ro",
             allow_host_read_mount=True,
@@ -143,10 +146,10 @@ def test_docker_mount_blocks_docker_socket(monkeypatch, tmp_path):
     socket_path = tmp_path / "docker.sock"
     workspace.mkdir()
     socket_path.write_text("socket placeholder", encoding="utf-8")
-    monkeypatch.setattr(docker_sandbox, "SAFE_WORKSPACE", str(workspace.resolve()))
+    monkeypatch.setattr(docker_mounts, "SAFE_WORKSPACE", str(workspace.resolve()))
 
     with pytest.raises(PermissionError, match=r"docker.sock|host control"):
-        docker_sandbox._check_path_safety(
+        docker_mounts.check_path_safety(
             str(socket_path),
             "ro",
             allow_host_read_mount=True,
@@ -154,8 +157,8 @@ def test_docker_mount_blocks_docker_socket(monkeypatch, tmp_path):
 
 
 def test_privilege_flags_rejected_in_tool_args():
-    assert docker_sandbox._check_privilege_flags({}) is None
-    assert docker_sandbox._check_privilege_flags({"language": "python"}) is None
+    assert docker_spawn.check_privilege_flags({}) is None
+    assert docker_spawn.check_privilege_flags({"language": "python"}) is None
     for flag in (
         "privileged",
         "--privileged",
@@ -169,7 +172,7 @@ def test_privilege_flags_rejected_in_tool_args():
         "--security-opt",
         "Privileged",
     ):
-        err = docker_sandbox._check_privilege_flags({flag: True})
+        err = docker_spawn.check_privilege_flags({flag: True})
         assert err is not None
         assert err.startswith("SECURITY BLOCK")
         assert "never permitted" in err
@@ -221,19 +224,19 @@ class _RecordingClient:
 
 def test_spawn_container_never_passes_privilege_kwargs():
     client = _RecordingClient()
-    docker_sandbox._spawn_container(client, image="img", network_mode="none")
+    docker_spawn.spawn_container(client, image="img", network_mode="none")
     assert client.containers.calls, "expected one containers.run call"
     assert not (
-        set(client.containers.calls[0]) & docker_sandbox._FORBIDDEN_CONTAINER_KWARGS
+        set(client.containers.calls[0]) & docker_spawn.FORBIDDEN_CONTAINER_KWARGS
     )
 
     with pytest.raises(PermissionError, match="privileged flags forbidden"):
-        docker_sandbox._spawn_container(client, image="img", privileged=True)
+        docker_spawn.spawn_container(client, image="img", privileged=True)
     with pytest.raises(PermissionError, match="privileged flags forbidden"):
-        docker_sandbox._spawn_container(client, image="img", cap_add=["SYS_PTRACE"])
+        docker_spawn.spawn_container(client, image="img", cap_add=["SYS_PTRACE"])
     # CLI-style aliases must not dodge the choke point either.
     with pytest.raises(PermissionError, match="privileged flags forbidden"):
-        docker_sandbox._spawn_container(client, **{"cap-add": ["SYS_PTRACE"]})
+        docker_spawn.spawn_container(client, **{"cap-add": ["SYS_PTRACE"]})
     assert len(client.containers.calls) == 1, "blocked spawns must not reach the SDK"
 class _FakeBridgeNet:
     def __init__(self):
@@ -394,4 +397,283 @@ def test_docker_schemas_enum_matches_supported_network_modes():
         properties = schema["function"].get("parameters", {}).get("properties", {})
         if "network" not in properties:
             continue
-        assert properties["network"]["enum"] == list(docker_sandbox.SUPPORTED_NETWORK_MODES)
+        assert properties["network"]["enum"] == list(docker_plan.SUPPORTED_NETWORK_MODES)
+
+
+# ── One-shot hardening defaults ──────────────────────────────────────────
+
+
+def test_spawn_container_harden_defaults_applied_after_deny_check():
+    client = _RecordingClient()
+
+    docker_spawn.spawn_container(
+        client, image="img", network_mode="none", harden=True
+    )
+
+    kwargs = client.containers.calls[0]
+    assert kwargs["cap_drop"] == ["ALL"]
+    assert kwargs["read_only"] is True
+    assert kwargs["tmpfs"] == dict(docker_spawn.HARDENING_TMPFS)
+
+    # An explicit caller value wins over the default via setdefault.
+    docker_spawn.spawn_container(
+        client, image="img", network_mode="none", harden=True, read_only=False
+    )
+    assert client.containers.calls[1]["read_only"] is False
+
+
+def test_spawn_container_harden_never_rescues_forbidden_kwargs():
+    client = _RecordingClient()
+    with pytest.raises(PermissionError, match="privileged flags forbidden"):
+        docker_spawn.spawn_container(
+            client, image="img", network_mode="none", harden=True, cap_add=["SYS_ADMIN"]
+        )
+    assert client.containers.calls == []
+
+
+class _FakeContainer:
+    def __init__(self):
+        self.id = "abc123def456"
+        self.removed = False
+
+    def wait(self, timeout=None):
+        return {"StatusCode": 0}
+
+    def logs(self, stdout=True, stderr=False):
+        return b"hello\n" if stdout else b""
+
+    def remove(self, force=False):
+        self.removed = True
+
+
+class _PresentImages:
+    def get(self, image):
+        return object()
+
+
+class _FullRecordingContainers(_RecordingContainers):
+    def run(self, **kwargs):
+        self.calls.append(kwargs)
+        return _FakeContainer()
+
+
+class _FullRecordingClient:
+    def __init__(self):
+        self.images = _PresentImages()
+        self.containers = _FullRecordingContainers()
+
+
+def test_run_code_docker_applies_hardening_and_nonroot_default(monkeypatch):
+    monkeypatch.delenv("PAWNLOGIC_DOCKER_ALLOW_NETWORK", raising=False)
+    monkeypatch.delenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", raising=False)
+    client = _FullRecordingClient()
+    monkeypatch.setattr(docker_sandbox, "_get_docker_client", lambda: client)
+
+    result = docker_sandbox.tool_run_code_docker(
+        {"language": "python", "code": "print(1)"}
+    )
+
+    assert result.startswith("[run_code_docker - OK")
+    kwargs = client.containers.calls[0]
+    assert kwargs["read_only"] is True
+    assert kwargs["cap_drop"] == ["ALL"]
+    assert kwargs["tmpfs"] == dict(docker_spawn.HARDENING_TMPFS)
+    assert kwargs["user"] == f"{os.getuid()}:{os.getgid()}"
+    assert "extra_hosts" not in kwargs
+    assert "pawn_egress_scope" not in kwargs["labels"]
+
+
+def test_run_code_docker_install_deps_keep_writable_rootfs_and_root(monkeypatch):
+    monkeypatch.delenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", raising=False)
+    client = _FullRecordingClient()
+    monkeypatch.setattr(docker_sandbox, "_get_docker_client", lambda: client)
+
+    result = docker_sandbox.tool_run_code_docker(
+        {"language": "python", "code": "print(1)", "install_deps": "requests"}
+    )
+
+    assert result.startswith("[run_code_docker - OK")
+    kwargs = client.containers.calls[0]
+    assert kwargs["read_only"] is False
+    assert kwargs["cap_drop"] == ["ALL"]
+    assert "user" not in kwargs, "pip needs the image default (root) user"
+
+
+def test_run_code_docker_container_user_arg_and_validation(monkeypatch):
+    monkeypatch.delenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", raising=False)
+    client = _FullRecordingClient()
+    monkeypatch.setattr(docker_sandbox, "_get_docker_client", lambda: client)
+
+    docker_sandbox.tool_run_code_docker(
+        {"language": "python", "code": "print(1)", "container_user": "root"}
+    )
+    assert client.containers.calls[0]["user"] == "root"
+
+    monkeypatch.setattr(
+        docker_sandbox,
+        "_get_docker_client",
+        lambda: (_ for _ in ()).throw(AssertionError("Docker should not be touched")),
+    )
+    result = docker_sandbox.tool_run_code_docker(
+        {"language": "python", "code": "print(1)", "container_user": "bad user"}
+    )
+    assert result.startswith("ERROR: invalid container_user")
+
+
+# ── Operator-declared bridge egress scope ────────────────────────────────
+
+
+def test_parse_egress_scope_accepts_hosts_ips_cidrs_and_rejects_junk():
+    entries, error = docker_egress.parse_egress_scope(
+        "pwn.example.com, 203.0.113.5, 10.0.0.0/8 ,dup.example.com dup.example.com"
+    )
+    assert error is None
+    assert entries == (
+        "pwn.example.com",
+        "203.0.113.5",
+        "10.0.0.0/8",
+        "dup.example.com",
+    )
+
+    entries, error = docker_egress.parse_egress_scope("not a host!")
+    assert entries == ()
+    assert error is not None and "invalid egress scope entry" in error
+
+
+def test_resolve_egress_scope_pins_hostnames_only(monkeypatch):
+    monkeypatch.setenv(
+        "PAWNLOGIC_DOCKER_EGRESS_ALLOW", "pwn.example.com,203.0.113.5,10.0.0.0/8"
+    )
+    monkeypatch.setattr(
+        docker_egress,
+        "egress_resolver",
+        lambda host: ("203.0.113.7", "203.0.113.8"),
+    )
+
+    pins, fingerprint, error = docker_egress.resolve_egress_scope()
+
+    assert error is None
+    assert pins == {"pwn.example.com": "203.0.113.7"}
+    assert fingerprint is not None and len(fingerprint) == 12
+
+
+def test_resolve_egress_scope_unset_env_is_a_no_op(monkeypatch):
+    monkeypatch.delenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", raising=False)
+    pins, fingerprint, error = docker_egress.resolve_egress_scope()
+    assert pins == {} and fingerprint is None and error is None
+
+
+def test_resolve_egress_scope_fails_closed_on_bad_entries(monkeypatch):
+    monkeypatch.setenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", "bad host!!")
+    pins, fingerprint, error = docker_egress.resolve_egress_scope()
+    assert pins == {} and fingerprint is None
+    assert error is not None
+    assert error.startswith("SECURITY BLOCK: PAWNLOGIC_DOCKER_EGRESS_ALLOW is set but invalid")
+
+    monkeypatch.setenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", "missing.example.com")
+    def _boom(host):
+        raise OSError("resolver down")
+    monkeypatch.setattr(docker_egress, "egress_resolver", _boom)
+    pins, fingerprint, error = docker_egress.resolve_egress_scope()
+    assert pins == {} and fingerprint is None
+    assert error is not None and "could not be resolved at policy time" in error
+
+
+def test_resolve_scope_for_network_only_applies_to_bridge(monkeypatch, capsys):
+    monkeypatch.setenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", "pwn.example.com")
+    monkeypatch.setattr(
+        docker_egress, "egress_resolver", lambda host: ("203.0.113.7",)
+    )
+
+    pins, fingerprint, error = docker_egress.resolve_scope_for_network("none")
+    assert (pins, fingerprint, error) == ({}, None, None)
+
+    pins, fingerprint, error = docker_egress.resolve_scope_for_network("host")
+    assert (pins, fingerprint, error) == ({}, None, None)
+    assert "cannot constrain host networking" in capsys.readouterr().out
+
+
+def test_run_code_docker_bridge_scope_pins_extra_hosts_and_labels(monkeypatch):
+    monkeypatch.delenv("PAWNLOGIC_DOCKER_ALLOW_NETWORK", raising=False)
+    monkeypatch.setenv(
+        "PAWNLOGIC_DOCKER_EGRESS_ALLOW", "pwn.example.com,203.0.113.5,10.0.0.0/8"
+    )
+    monkeypatch.setattr(
+        docker_egress, "egress_resolver", lambda host: ("203.0.113.7",)
+    )
+    client = _FullRecordingClient()
+    monkeypatch.setattr(docker_sandbox, "_get_docker_client", lambda: client)
+
+    result = docker_sandbox.tool_run_code_docker(
+        {
+            "language": "python",
+            "code": "print(1)",
+            "network": "bridge",
+            "allow_network": True,
+        }
+    )
+
+    assert result.startswith("[run_code_docker - OK")
+    assert "| egress: scoped]" in result
+    kwargs = client.containers.calls[0]
+    assert kwargs["extra_hosts"] == {"pwn.example.com": "203.0.113.7"}
+    assert len(kwargs["labels"]["pawn_egress_scope"]) == 12
+
+
+def test_run_code_docker_bridge_scope_failure_blocks_before_docker(monkeypatch):
+    monkeypatch.delenv("PAWNLOGIC_DOCKER_ALLOW_NETWORK", raising=False)
+    monkeypatch.setenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", "missing.example.com")
+    def _boom(host):
+        raise OSError("resolver down")
+    monkeypatch.setattr(docker_egress, "egress_resolver", _boom)
+    monkeypatch.setattr(
+        docker_sandbox,
+        "_get_docker_client",
+        lambda: (_ for _ in ()).throw(AssertionError("Docker should not be touched")),
+    )
+
+    result = docker_sandbox.tool_run_code_docker(
+        {"language": "python", "code": "print(1)", "network": "bridge",
+         "allow_network": True}
+    )
+    assert result.startswith("SECURITY BLOCK: egress scope host")
+
+
+def test_pwn_container_create_scope_user_and_label(monkeypatch):
+    monkeypatch.delenv("PAWNLOGIC_DOCKER_ALLOW_NETWORK", raising=False)
+    monkeypatch.setenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", "pwn.example.com")
+    monkeypatch.setattr(
+        docker_egress, "egress_resolver", lambda host: ("203.0.113.7",)
+    )
+
+    client = _FullRecordingClient()
+    monkeypatch.setattr(docker_sandbox, "_get_docker_client", lambda: client)
+    result = docker_sandbox.tool_pwn_container(
+        {
+            "action": "create",
+            "name": "lab",
+            "network": "bridge",
+            "allow_network": True,
+            "container_user": "1000:1000",
+        }
+    )
+
+    assert result.startswith("OK: container 'lab' created")
+    assert "Egress scope: 1 pinned host(s)" in result
+    kwargs = client.containers.calls[0]
+    assert kwargs["extra_hosts"] == {"pwn.example.com": "203.0.113.7"}
+    assert kwargs["user"] == "1000:1000"
+    assert len(kwargs["labels"]["pawn_egress_scope"]) == 12
+    # Persistent containers keep the image default hardening posture.
+    assert "read_only" not in kwargs
+    assert "cap_drop" not in kwargs
+
+    # Without the scope env, create stays unchanged (no pins, no label).
+    monkeypatch.delenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", raising=False)
+    docker_sandbox.tool_pwn_container(
+        {"action": "create", "name": "lab2", "network": "bridge",
+         "allow_network": True}
+    )
+    kwargs = client.containers.calls[1]
+    assert "extra_hosts" not in kwargs
+    assert "pawn_egress_scope" not in kwargs["labels"]

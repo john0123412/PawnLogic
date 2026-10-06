@@ -7,11 +7,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+- One-shot `run_code_docker` containers are hardened by default: read-only
+  root filesystem (relaxed only when `install_deps` must write site-packages),
+  tmpfs `/tmp` and `/run`, `cap_drop=ALL`, and a non-root user matching the
+  host uid:gid. `container_user` restores the image default (`root`) when a
+  workload explicitly needs it, and persistent `pwn_container` containers keep
+  the image default user and capabilities for in-container debugging. The
+  hardening defaults are merged inside the `_spawn_container` choke point
+  after the caller-kwarg deny check, so tool arguments can never inject or
+  remove them.
+- Bridge authorization now supports an operator-declared egress scope:
+  setting `PAWNLOGIC_DOCKER_EGRESS_ALLOW` (hosts, IPs, CIDRs) pins approved
+  hostnames at policy time — resolving each once so a later DNS change cannot
+  rebind an approved name — attaches them to bridge-attached containers via
+  `extra_hosts`, and labels the container with the scope fingerprint for
+  audit. Invalid or unresolvable scope entries fail closed. The declared
+  scope covers DNS resolution and container pinning; socket-level destination
+  filtering remains a host-level control (DOCKER-USER iptables or a proxy
+  sidecar), not something tool code improvises.
+
 ### Changed
+- Phase whitelists now expose five registered tools the system prompt already
+  relied on (`read_file_lines`, `git_op`, `analyze_local_image`,
+  `audit_payload`, `delegate_task`), so the model receives their schemas
+  instead of having to hallucinate names.
+- Removed orphaned tool modules and their tests (`lsp_lite`, the 0.3.7 PTY
+  replay harnesses, `acceptance_post429`, `ptk_client`), dead config surface
+  (`DOCKER_IMAGES`, `NORMAL_CONFIG`, `WEB_STRATEGY`,
+  `PAWNLOGIC_DEFAULT_MODEL`), and two unreferenced provider-stream fixtures;
+  the typed island is now 49 modules.
 - Clarified the authorized CTF plaintext HTTP workflow in tool guidance and
   bilingual documentation: use disposable, resource-limited Docker containers
   with explicitly authorized bridge networking, without relaxing the browser
-  proxy. Bridge authorization does not imply a per-target allowlist.
+  proxy. Bridge authorization is capability-level by default and becomes
+  target-scoped only when the operator declares
+  `PAWNLOGIC_DOCKER_EGRESS_ALLOW`.
 
 ## [0.4.3] - 2026-10-05
 

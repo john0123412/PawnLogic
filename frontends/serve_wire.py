@@ -3,8 +3,7 @@
 Phase 2a (ADR 0011): a reference client that drives `pawn serve` over the
 versioned NDJSON wire and measures the interaction latencies a native
 frontend will see. The wire layer (ServeWire) is UI-free and fully
-unit-testable; `python -m frontends.ptk_client` adds a minimal Prompt
-Toolkit shell on top.
+unit-testable; native frontends such as the ratatui TUI build on top of it.
 
 Semantics mirror the live REPL after P2-0:
   * Enter with an active turn sends `prompt` + `"steer": true`.

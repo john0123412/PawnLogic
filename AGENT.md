@@ -675,7 +675,7 @@ mode.
 authoritative list.** A module is in the island only when CI passes its file
 to mypy; the matching `[[tool.mypy.overrides]]` entry in `pyproject.toml` is
 what actually turns on `disallow_untyped_defs` / `check_untyped_defs` for it.
-Both files, plus the list below, must name the same 50 modules;
+Both files, plus the list below, must name the same 49 modules;
 `tests/test_typed_island_sync.py` fails the build when they diverge.
 
 To add a module: annotate it until it passes
@@ -697,7 +697,7 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `pawnlogic/confirm_selector`, `pawnlogic/terminal_transcript`,
 `pawnlogic/restart_recovery`, `tools/check_doc_structure`,
 `tools/check_release_consistency`, `tools/merge_ctf_skills`, `tools/browser_ops`,
-`tools/policy_proxy`, `tools/proxy_protocol`, `tools/lsp_lite`, `tools/text_patch`, `tools/shell_ops`,
+`tools/policy_proxy`, `tools/proxy_protocol`, `tools/text_patch`, `tools/shell_ops`,
 `tools/docker_plan`, `tools/pwn_binary`, `tools/pwn_debugger`.
 
 `core/delegation` and `core/agent_orchestrator` are **not** in the island.
@@ -837,11 +837,18 @@ name at the end is the gate that fails if the invariant is broken.
 - **PawnLogic containers must never be privileged or gain Linux
   capabilities.** `tools/docker_sandbox.py` rejects `privileged`,
   `cap_add`, `cap_drop` and `security_opt` in tool arguments with a
-  SECURITY BLOCK, and `_spawn_container()` is the single choke point that
-  raises `PermissionError` whenever a forbidden kwarg is present, so these
-  kwargs never reach the Docker SDK, even under `python -O`. A new container tool
-  that calls `client.containers.run` directly instead of going through
-  `_spawn_container` silently drops this guarantee — keep the funnel.
+  SECURITY BLOCK, and `spawn_container()` in `tools/docker_spawn.py` is the
+  single choke point that raises `PermissionError` whenever a forbidden kwarg
+  is present, so these kwargs never reach the Docker SDK, even under
+  `python -O`. The same funnel merges the one-shot hardening defaults
+  (`cap_drop=ALL`, read-only rootfs, tmpfs) after the deny check, so tool
+  arguments cannot inject or remove them either. The docker policy helpers
+  live in `tools/docker_spawn.py` (funnel + hardening + container user),
+  `tools/docker_egress.py` (operator-declared bridge egress scope),
+  `tools/docker_mounts.py` (mount safety), and `tools/docker_schemas.py`
+  (tool schemas). A new container tool that calls
+  `client.containers.run` directly instead of going through
+  `spawn_container` silently drops this guarantee — keep the funnel.
 - **Any tool path that grants a container network access must go through
   `_check_network_policy`.** The airlock (`tool_install_package`) used to
   attach bridge egress without the `allow_network` authorization the other
@@ -857,14 +864,28 @@ name at the end is the gate that fails if the invariant is broken.
 - **Authorized CTF plaintext HTTP remains supported in disposable containers.**
   Use `run_code_docker` with explicitly authorized bridge networking, existing
   memory/CPU/PID limits, and no credential mounts. Container HTTP clients do
-  not inherit browser proxy framing limits. Bridge authorization is not a
-  destination allowlist; retain the agreed lab scope and never suggest host
-  networking or disabling browser enforcement as a workaround.
-  Resource limits do not force non-root execution, read-only root filesystems,
-  or removal of default Docker capabilities; those defaults come from the
-  image/runtime. Extra workspace mounts remain possible under the mount policy.
+  not inherit browser proxy framing limits. Bridge authorization carries an
+  **operator-declared egress scope** when `PAWNLOGIC_DOCKER_EGRESS_ALLOW` is
+  set (hosts, IPs, CIDRs): approved hostnames are resolved once at policy time
+  and pinned into the container via `extra_hosts`, and the container is
+  labelled with the scope fingerprint. Without the variable a bridge grant
+  remains capability-only, and no in-container destination filter exists
+  either way — socket-level egress enforcement still needs a host-level
+  control (DOCKER-USER iptables or a proxy sidecar) and must not be improvised
+  in tool code. Never suggest host networking or disabling browser enforcement
+  as a workaround. One-shot `run_code_docker` containers run hardened by
+  default: read-only root filesystem (relaxed only when `install_deps` must
+  write site-packages), tmpfs `/tmp` and `/run`, `cap_drop=ALL`, and a
+  non-root user matching the host uid:gid (`container_user='root'` restores
+  the image default). Persistent `pwn_container` containers keep the image
+  default user and capabilities because in-container debugging and apt/pip
+  installs expect them; their network and privilege posture is unchanged.
+  Extra workspace mounts remain possible under the mount policy.
   `tests/test_docker_policy.py::test_run_code_docker_blocks_risky_network_before_docker`
-  covers the network authorization gate.
+  covers the network authorization gate, and
+  `test_run_code_docker_applies_hardening_and_nonroot_default` /
+  `test_run_code_docker_bridge_scope_pins_extra_hosts_and_labels` cover the
+  hardening defaults and the scoped grant.
 - **Browser transports require the loopback policy proxy.** Chromium skips
   redirect route callbacks, so context guards alone cannot enforce destinations.
   Both Patchright paths (including Scrapling >= 0.4.15) disable HTTP/2/QUIC,
@@ -1286,7 +1307,7 @@ name at the end is the gate that fails if the invariant is broken.
 - **The typed-island module list is stated in three places** (CI mypy step,
   pyproject overrides, Typed Island section). `tests/test_typed_island_sync.py`
   fails the build when they diverge — treat that failure as the gate, not as a
-  test to relax. All three name the same **50 library modules**; the CI step
+  test to relax. All three name the same **49 library modules**; the CI step
   passes no `tests/` file to mypy, and `tests/test_e2e.py` appears only on the
   pytest command line.
 - **`test_live_bare_escape_interrupts_one_turn_without_another_keypress` has a
