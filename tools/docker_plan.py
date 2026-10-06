@@ -45,6 +45,7 @@ class DockerExecutionPlan:
     image: str
     network: str
     timeout_seconds: int
+    installs_packages: bool = False
 
 
 def build_docker_execution_plan(
@@ -75,12 +76,14 @@ def build_docker_execution_plan(
     extension, command, default_image = LANGUAGE_COMMANDS[language]
     raw_image = str(args.get("image", "")) or default_image
     install_deps = str(args.get("install_deps", "")).strip()
+    installs_packages = False
     if language == "python" and install_deps:
         packages = install_deps.split()
         invalid = [package for package in packages if not PACKAGE_NAME_RE.fullmatch(package)]
         if invalid:
             return None, "ERROR: invalid Python package name(s): " + ", ".join(invalid)
         command = f"pip install {' '.join(packages)} -q && {command}"
+        installs_packages = True
     return DockerExecutionPlan(
         language=language,
         extension=extension,
@@ -88,6 +91,7 @@ def build_docker_execution_plan(
         image=resolve_image(raw_image),
         network=network,
         timeout_seconds=int(str(args.get("timeout", 30))),
+        installs_packages=installs_packages,
     ), None
 
 

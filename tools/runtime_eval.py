@@ -332,7 +332,7 @@ def _select_local_docker_python_image(client: object) -> str | None:
 
 
 def _docker_local_smoke_scenario() -> ScenarioOutcome:
-    from tools import docker_sandbox
+    from tools import docker_mounts, docker_sandbox
 
     client = docker_sandbox._get_docker_client()
     if client is None:
@@ -353,14 +353,14 @@ def _docker_local_smoke_scenario() -> ScenarioOutcome:
             failure_class="DockerImageUnavailable",
         )
 
-    old_safe_workspace = docker_sandbox.SAFE_WORKSPACE
+    old_safe_workspace = docker_mounts.SAFE_WORKSPACE
     try:
         with tempfile.TemporaryDirectory(prefix="pawnlogic-docker-smoke-") as tmp:
             workspace = Path(tmp) / "workspace"
             workspace.mkdir()
             fixture = workspace / "fixture.txt"
             fixture.write_text("pawnlogic-docker-ok\n", encoding="utf-8")
-            docker_sandbox.SAFE_WORKSPACE = str(workspace.resolve())
+            docker_mounts.SAFE_WORKSPACE = str(workspace.resolve())
             result = docker_sandbox.tool_run_code_docker(
                 {
                     "language": "python",
@@ -377,7 +377,7 @@ def _docker_local_smoke_scenario() -> ScenarioOutcome:
                 }
             )
     finally:
-        docker_sandbox.SAFE_WORKSPACE = old_safe_workspace
+        docker_mounts.SAFE_WORKSPACE = old_safe_workspace
 
     if "pawnlogic-docker-ok" not in result or "network: none" not in result:
         return ScenarioOutcome(

@@ -10,6 +10,11 @@ Design notes:
   - Defaults to network_mode="none" to prevent CTF flag leakage.
   - Resource limits: 512 MB memory, 0.5 CPU, 256 PIDs.
   - Supports host/container file mounts.
+  - One-shot containers run hardened by default: read-only root filesystem,
+    tmpfs scratch space, all Linux capabilities dropped, non-root user.
+  - Operators may declare a bridge egress scope (PAWNLOGIC_DOCKER_EGRESS_ALLOW);
+    approved hostnames are resolved once at policy time and pinned into the
+    container, and the grant is labelled with the scope fingerprint.
 
 Dependencies:
   - pip install docker (optional).
@@ -18,88 +23,17 @@ Dependencies:
 
 import os, re, tempfile, threading
 
-from config import DANGEROUS_PATTERNS, READ_BLACKLIST, WORKSPACE_DIR
+from config import DANGEROUS_PATTERNS
 from core.network_policy import NetworkOperation, NetworkPolicy
 from core.operation_policy import OperationAction
 from core.state import state as _runtime_state, runtime_config
 from core.trust import TrustBoundaryKind, trust_notice_for_boundary
-from tools.docker_plan import SUPPORTED_NETWORK_MODES, build_docker_execution_plan, validate_network_mode
+from tools.docker_egress import EGRESS_SCOPE_ENV, resolve_scope_for_network
+from tools.docker_mounts import check_path_safety
+from tools.docker_plan import build_docker_execution_plan, validate_network_mode
+from tools.docker_schemas import DOCKER_SCHEMAS as DOCKER_SCHEMAS
+from tools.docker_spawn import check_privilege_flags, resolve_container_user, spawn_container
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN, MAGENTA, BOLD
-
-# ════════════════════════════════════════════════════════
-# P4.1 safe workspace definition (one-way glass).
-# ════════════════════════════════════════════════════════
-
-SAFE_WORKSPACE = os.path.abspath(os.path.expanduser(WORKSPACE_DIR))
-os.makedirs(SAFE_WORKSPACE, exist_ok=True)
-
-
-def _is_under(path: str, root: str) -> bool:
-    try:
-        return os.path.commonpath([path, root]) == root
-    except ValueError:
-        return False
-
-
-# System locations that must never be host-mounted into a sandbox, even
-# read-only. Checked under-only (a candidate inside them is denied).
-_HOST_SENSITIVE_DIRS = ("/var/run", "/run", "/root", "/etc")
-
-
-def _is_sensitive_host_path(path: str) -> bool:
-    if os.path.basename(path) == "docker.sock":
-        return True
-    real = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
-    if real == "/":
-        return True
-    # Bidirectional check against credential locations: deny the candidate
-    # when it is *under* a sensitive path OR when it is an *ancestor* of one
-    # (e.g. mounting "/" or "/home" would expose ~/.ssh inside the container).
-    for blocked in READ_BLACKLIST:
-        blocked_real = os.path.realpath(os.path.abspath(os.path.expanduser(blocked)))
-        if _is_under(real, blocked_real) or _is_under(blocked_real, real):
-            return True
-    for blocked in _HOST_SENSITIVE_DIRS:
-        blocked_real = os.path.realpath(blocked)
-        if _is_under(real, blocked_real) or _is_under(blocked_real, real):
-            return True
-    return False
-
-
-def _check_path_safety(host_path: str, mode: str, *, allow_host_read_mount: bool = False) -> str:
-    """
-    Validate mount path safety.
-    - Resolve absolute paths, removing .. and symlinks.
-    - rw mode: path must be inside SAFE_WORKSPACE or PermissionError is raised.
-    - ro mode: path must also be inside SAFE_WORKSPACE by default. Explicit
-      allow_host_read_mount permits outside read-only challenge files, but
-      credential paths, docker.sock, and sensitive system locations
-      (/var/run, /run, /root, /etc, /) remain denied — in both directions
-      (the candidate may not sit under a sensitive path nor be an ancestor
-      of one, since mounting an ancestor would expose it inside the
-      container).
-    Returns the canonical absolute path string.
-    """
-    mode = str(mode or "ro").lower()
-    if mode not in {"ro", "rw"}:
-        raise PermissionError("mount mode must be 'ro' or 'rw'")
-    real = os.path.realpath(os.path.abspath(os.path.expanduser(host_path)))
-    in_workspace = _is_under(real, SAFE_WORKSPACE)
-    if _is_sensitive_host_path(real):
-        raise PermissionError(f"mount path may contain credentials or host control sockets: {real}")
-    if mode == "rw" and not in_workspace:
-        raise PermissionError(
-            f"RW mode is limited to the workspace directory ({SAFE_WORKSPACE}); "
-            f"denied path: {real}"
-        )
-    if mode == "ro" and not in_workspace and not allow_host_read_mount:
-        raise PermissionError(
-            f"RO mounts are limited to the workspace directory ({SAFE_WORKSPACE}) by default; "
-            "set allow_host_read_mount=true only for trusted read-only challenge files. "
-            f"denied path: {real}"
-        )
-    return real
-
 
 # ════════════════════════════════════════════════════════
 # Docker availability check with lazy initialization.
@@ -164,46 +98,6 @@ DEFAULT_DOCKER_IMAGES = {
 
 _TRUTHY_POLICY_VALUES = {"1", "true", "yes", "on"}
 
-# Issue #177.5: PawnLogic containers are NEVER privileged and NEVER gain
-# extra Linux capabilities — deny-by-policy, not deny-by-omission.  All
-# container creation funnels through _spawn_container(), which enforces it.
-_FORBIDDEN_CONTAINER_KWARGS = frozenset({"privileged", "cap_add", "cap_drop", "security_opt"})
-
-
-def _normalize_container_kwarg(key: object) -> str:
-    """Normalize SDK and CLI spellings to one canonical kwarg name.
-
-    Covers ``privileged`` / ``--privileged``, ``cap_add`` / ``cap-add`` /
-    ``--cap-add``, and the same for ``cap_drop`` / ``security_opt``, so a
-    caller cannot dodge the deny-list with an alternate spelling.
-    """
-    return str(key).strip().lower().lstrip("-").replace("-", "_")
-
-
-def _check_privilege_flags(a: dict) -> str | None:
-    """Reject tool arguments requesting container privilege escalation."""
-    hit = sorted({_normalize_container_kwarg(k) for k in a} & _FORBIDDEN_CONTAINER_KWARGS)
-    if not hit:
-        return None
-    return (
-        "SECURITY BLOCK: privileged/capability flags are never permitted in "
-        f"PawnLogic containers (rejected: {', '.join(hit)})."
-    )
-
-
-def _spawn_container(client, **kwargs):
-    """Container creation choke point: privilege-escalation kwargs are forbidden.
-
-    Raises unconditionally (never ``assert``) so the invariant holds even
-    under ``python -O``.
-    """
-    bad = sorted({_normalize_container_kwarg(k) for k in kwargs} & _FORBIDDEN_CONTAINER_KWARGS)
-    if bad:
-        raise PermissionError(
-            "privileged flags forbidden in PawnLogic containers: " + ", ".join(bad)
-        )
-    return client.containers.run(**kwargs)
-
 
 def _policy_truthy(value: object) -> bool:
     if isinstance(value, bool):
@@ -236,7 +130,8 @@ def _check_network_policy(a: dict, network: str) -> str | None:
         return None
     return (
         f"SECURITY BLOCK: Docker network='{mode}' requires explicit approval. "
-        "Set allow_network=true for this tool call or PAWNLOGIC_DOCKER_ALLOW_NETWORK=true."
+        "Set allow_network=true for this tool call or PAWNLOGIC_DOCKER_ALLOW_NETWORK=true. "
+        f"Optionally declare a bridge egress scope via {EGRESS_SCOPE_ENV} (hosts, IPs, or CIDRs)."
     )
 
 
@@ -297,6 +192,9 @@ def tool_run_code_docker(a: dict) -> str:
         File mount mapping {host path: container path}.
     network : str
         Network mode: none (default) / bridge / host.
+    container_user : str
+        Run the container as this user (name or uid[:gid]). Default: a user
+        matching the host uid:gid; 'root' restores the image default.
     stdin : str
         Standard input passed to the program.
     install_deps : str
@@ -305,6 +203,15 @@ def tool_run_code_docker(a: dict) -> str:
     Returns
     -------
     str: execution result (stdout + stderr) plus container cleanup status.
+
+    Notes
+    -----
+    One-shot containers run hardened: read-only root filesystem (relaxed when
+    install_deps must write site-packages), tmpfs /tmp and /run, all Linux
+    capabilities dropped, and a non-root user by default. Bridge-attached
+    runs honor an operator-declared egress scope: approved hostnames are
+    resolved once at policy time and pinned via extra_hosts, and the
+    container is labelled with the scope fingerprint.
     """
     code         = a.get("code", "")
     mount_files  = a.get("mount_files", {})
@@ -317,7 +224,13 @@ def tool_run_code_docker(a: dict) -> str:
     )
     if error or plan is None:
         return error or "ERROR: invalid Docker execution plan"
-    err = _check_privilege_flags(a)
+    err = check_privilege_flags(a)
+    if err:
+        return err
+    container_user, err = resolve_container_user(a, allow_default=not plan.installs_packages)
+    if err:
+        return err
+    egress_pins, scope_fingerprint, err = resolve_scope_for_network(plan.network)
     if err:
         return err
     language = plan.language
@@ -356,7 +269,7 @@ def tool_run_code_docker(a: dict) -> str:
                 bind_spec = {"bind": bind_spec, "mode": "ro"}
             mount_mode = bind_spec.get("mode", "ro").lower()
             try:
-                real_hp = _check_path_safety(
+                real_hp = check_path_safety(
                     host_path,
                     mount_mode,
                     allow_host_read_mount=allow_host_read_mount,
@@ -380,6 +293,9 @@ def tool_run_code_docker(a: dict) -> str:
 
         print(c(MAGENTA, f"  [docker] {image_name} -> {language}"))
         print(c(GRAY,    f"  Network: {network}  Timeout: {timeout}s  Image: {image_name}"))
+        if scope_fingerprint:
+            print(c(GRAY,    f"  Egress scope: {len(egress_pins)} pinned host(s), "
+                             f"fingerprint {scope_fingerprint}"))
 
         # Pull image if it is not available locally.
         try:
@@ -402,8 +318,10 @@ def tool_run_code_docker(a: dict) -> str:
         # Create and run container.
         container = None
         try:
-            container = _spawn_container(
-                client,
+            spawn_labels = {"pawn": "true", "pawn_name": "run_code_docker"}
+            if scope_fingerprint:
+                spawn_labels["pawn_egress_scope"] = scope_fingerprint
+            spawn_kwargs: dict = dict(
                 image=image_name,
                 command=["bash", "-c", full_cmd],
                 volumes=volumes,
@@ -412,12 +330,18 @@ def tool_run_code_docker(a: dict) -> str:
                 cpu_period=100000,
                 cpu_quota=50000,
                 pids_limit=256,
-                labels={"pawn": "true", "pawn_name": "run_code_docker"},
+                labels=spawn_labels,
                 detach=True,
                 stderr=True,
                 stdout=True,
                 remove=False,
+                read_only=not plan.installs_packages,
             )
+            if container_user:
+                spawn_kwargs["user"] = container_user
+            if egress_pins:
+                spawn_kwargs["extra_hosts"] = egress_pins
+            container = spawn_container(client, harden=True, **spawn_kwargs)
 
             # Wait for completion with timeout.
             result = container.wait(timeout=timeout)
@@ -451,7 +375,10 @@ def tool_run_code_docker(a: dict) -> str:
             output = output[:half] + f"\n...[truncated to {limit} chars]...\n" + output[-half // 4:]
 
         status = "OK" if exit_code == 0 else f"FAILED (exit {exit_code})"
-        header = f"[run_code_docker - {status} | image: {image_name} | network: {network}]\n"
+        scope_tag = " | egress: scoped" if scope_fingerprint else ""
+        header = (
+            f"[run_code_docker - {status} | image: {image_name} | network: {network}{scope_tag}]\n"
+        )
         return header + (output or "(no output)")
 
 
@@ -503,7 +430,13 @@ def tool_pwn_container(a: dict) -> str:
         err = _check_network_policy(a, network)
         if err:
             return err
-        err = _check_privilege_flags(a)
+        err = check_privilege_flags(a)
+        if err:
+            return err
+        container_user, err = resolve_container_user(a, allow_default=False)
+        if err:
+            return err
+        egress_pins, scope_fingerprint, err = resolve_scope_for_network(network)
         if err:
             return err
 
@@ -559,7 +492,7 @@ def tool_pwn_container(a: dict) -> str:
                 bind_spec = {"bind": bind_spec, "mode": "ro"}
             mount_mode = bind_spec.get("mode", "ro").lower()
             try:
-                real_hp = _check_path_safety(
+                real_hp = check_path_safety(
                     host_path,
                     mount_mode,
                     allow_host_read_mount=allow_host_read_mount,
@@ -569,8 +502,10 @@ def tool_pwn_container(a: dict) -> str:
             if os.path.exists(real_hp):
                 volumes[real_hp] = {"bind": bind_spec["bind"], "mode": mount_mode}
 
-        container = _spawn_container(
-            client,
+        spawn_labels = {"pawn": "true", "pawn_name": name}
+        if scope_fingerprint:
+            spawn_labels["pawn_egress_scope"] = scope_fingerprint
+        spawn_kwargs: dict = dict(
             image=image,
             command="sleep infinity",
             network_mode=network,
@@ -580,16 +515,26 @@ def tool_pwn_container(a: dict) -> str:
             pids_limit=256,
             detach=True,
             name=f"pawn_{name}",
-            labels={"pawn": "true", "pawn_name": name},
+            labels=spawn_labels,
             volumes=volumes or None,
         )
+        if container_user:
+            spawn_kwargs["user"] = container_user
+        if egress_pins:
+            spawn_kwargs["extra_hosts"] = egress_pins
+        container = spawn_container(client, **spawn_kwargs)
 
         _active_containers[name] = container.id
+        scope_line = (
+            f"\n  Egress scope: {len(egress_pins)} pinned host(s), fingerprint {scope_fingerprint}"
+            if scope_fingerprint
+            else ""
+        )
         return (
             f"OK: container '{name}' created and started\n"
             f"  ID: {container.id[:12]}\n"
             f"  Image: {image}\n"
-            f"  Network: {network}\n"
+            f"  Network: {network}{scope_line}\n"
             f"  Run commands with /docker exec {name} <cmd>"
         )
 
@@ -844,200 +789,3 @@ def docker_prune_resources() -> str:
     )
 
 
-# ════════════════════════════════════════════════════════
-# Schema definitions.
-# ════════════════════════════════════════════════════════
-
-DOCKER_SCHEMAS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "run_code_docker",
-            "description": (
-                "Run code inside a disposable Docker container.\n"
-                "Use for Pwn exploit testing, multi-libc environment checks, isolated sandbox execution, and authorized CTF plaintext HTTP clients; for CTF HTTP use bridge with explicit allow_network, without host mode or credential mounts.\n"
-                "Defaults to no network (network=none) to prevent CTF flag leakage.\n"
-                "Resource limits: 512 MB memory, 0.5 CPU, 256 PIDs.\n"
-                "Supported languages: python / c / cpp / bash / javascript / rust / go / java.\n"
-                "Returns clear setup guidance when Docker is unavailable."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "language": {
-                        "type": "string",
-                        "description": "Programming language (default python).",
-                    },
-                    "code": {
-                        "type": "string",
-                        "description": "Source code to execute.",
-                    },
-                    "image": {
-                        "type": "string",
-                        "description": (
-                            "Execution image. Use 'python' for pure Python logic and 'pwndocker' for Pwn analysis. "
-                            "When omitted, an image is selected from the language. "
-                            "Available aliases: pwndocker / ubuntu18 / ubuntu22 / kali / python / gcc."
-                        ),
-                    },
-                    "timeout": {
-                        "type": "integer",
-                        "description": "Execution timeout seconds (default 30).",
-                    },
-                    "mount_files": {
-                        "type": "object",
-                        "description": "File mounts {host path: container path}.",
-                    },
-                    "network": {
-                        "type": "string",
-                        "enum": list(SUPPORTED_NETWORK_MODES),
-                        "description": (
-                            "Network mode: none (default no network) / bridge / host. "
-                            "bridge/host requires allow_network=true or an environment policy override. "
-                            "Container-sharing modes (container:<id>) and unknown modes are rejected."
-                        ),
-                    },
-                    "allow_network": {
-                        "type": "boolean",
-                        "description": "Explicitly allow bridge/host Docker network mode (default false).",
-                    },
-                    "allow_auto_pull": {
-                        "type": "boolean",
-                        "description": "Explicitly allow automatic docker pull when an image is missing (default false).",
-                    },
-                    "allow_host_read_mount": {
-                        "type": "boolean",
-                        "description": "Explicitly allow read-only mounts outside the workspace for trusted challenge files.",
-                    },
-                    "stdin": {
-                        "type": "string",
-                        "description": "Standard input passed to the program.",
-                    },
-                    "install_deps": {
-                        "type": "string",
-                        "description": "Space-separated pip package names for Python only.",
-                    },
-                },
-                "required": ["language", "code"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "pwn_container",
-            "description": (
-                "Persistent container management tool for long-running CTF target environments.\n"
-                "Actions:\n"
-                "  create  - create and start a persistent container\n"
-                "  exec    - run a command inside a running container\n"
-                "  destroy - stop and destroy a container\n"
-                "  list    - list active persistent containers\n"
-                "Use for multi-step Pwn debugging and exploit verification."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["create", "exec", "destroy", "list"],
-                        "description": "Operation type.",
-                    },
-                    "name": {
-                        "type": "string",
-                        "description": "Container name identifier.",
-                    },
-                    "image": {
-                        "type": "string",
-                        "description": "Docker image for create only (default pwndocker).",
-                    },
-                    "command": {
-                        "type": "string",
-                        "description": "Command to execute for exec.",
-                    },
-                    "timeout": {
-                        "type": "integer",
-                        "description": "Command timeout seconds for exec (default 30).",
-                    },
-                    "network": {
-                        "type": "string",
-                        "enum": list(SUPPORTED_NETWORK_MODES),
-                        "description": (
-                            "Network mode for create (default none). "
-                            "bridge/host requires allow_network=true or an environment policy override. "
-                            "Container-sharing modes (container:<id>) and unknown modes are rejected."
-                        ),
-                    },
-                    "allow_network": {
-                        "type": "boolean",
-                        "description": "Explicitly allow create to use bridge/host Docker network mode (default false).",
-                    },
-                    "allow_auto_pull": {
-                        "type": "boolean",
-                        "description": "Explicitly allow automatic docker pull when an image is missing (default false).",
-                    },
-                    "allow_host_read_mount": {
-                        "type": "boolean",
-                        "description": "Explicitly allow read-only mounts outside the workspace for trusted challenge files.",
-                    },
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    # P4.2: tool_install_package schema.
-    {
-        "type": "function",
-        "function": {
-            "name": "tool_install_package",
-            "description": (
-                "Airlock package installation tool.\n"
-                "Temporarily connects a persistent container to install apt/pip packages, then forces network disconnect.\n"
-                "Package names are strictly regex-validated to prevent command injection.\n"
-                "Temporarily granting bridge egress requires explicit authorization: pass allow_network=true or set PAWNLOGIC_DOCKER_ALLOW_NETWORK=true.\n"
-                "Works only for containers created through pwn_container create."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "container_name": {
-                        "type": "string",
-                        "description": "Target persistent container name (the name passed to pwn_container create).",
-                    },
-                    "pkg_manager": {
-                        "type": "string",
-                        "enum": ["apt", "pip"],
-                        "description": "Package manager: apt or pip.",
-                    },
-                    "packages": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Package names to install; each package may contain only [a-zA-Z0-9_\\-\\.]+.",
-                    },
-                    "allow_network": {
-                        "type": "boolean",
-                        "description": "Explicitly authorize the temporary bridge egress used for installation.",
-                    },
-                },
-                "required": ["container_name", "pkg_manager", "packages"],
-            },
-        },
-    },
-    # P4.3: docker_prune_resources schema.
-    {
-        "type": "function",
-        "function": {
-            "name": "docker_prune_resources",
-            "description": (
-                "Docker resource cleanup tool.\n"
-                "Removes all stopped containers and dangling images, returning reclaimed disk space in MB.\n"
-                "Use after CTF tasks or when disk space is low."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-    },
-]
