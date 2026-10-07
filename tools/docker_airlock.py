@@ -24,7 +24,9 @@ def offline_attach_rejection(container, container_name: str) -> str | None:
             f"denied and the container was left unchanged"
         )
     attrs = container.attrs if isinstance(container.attrs, dict) else {}
-    networks = (attrs.get("NetworkSettings") or {}).get("Networks")
+    settings = attrs.get("NetworkSettings")
+    settings = settings if isinstance(settings, dict) else {}
+    networks = settings.get("Networks")
     if not isinstance(networks, dict):
         return (
             f"SECURITY BLOCK: cannot determine network membership of container "

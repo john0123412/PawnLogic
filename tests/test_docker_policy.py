@@ -445,11 +445,13 @@ def test_airlock_rejects_offline_container_before_any_mutation(monkeypatch, netw
     assert docker_sandbox._active_containers.get("c1") == "cid123"
 
 
-@pytest.mark.parametrize("broken", ["reload", "attrs"])
+@pytest.mark.parametrize("broken", ["reload", "attrs", "settings"])
 def test_airlock_fails_closed_on_unknown_network_state(monkeypatch, broken):
     client = _install_airlock_client(monkeypatch)
     if broken == "reload":
         client.container.reload_error = RuntimeError("daemon unreachable")
+    elif broken == "settings":
+        client.container.attrs = {"NetworkSettings": "garbage"}
     else:
         client.container.attrs = {}
     monkeypatch.setattr(

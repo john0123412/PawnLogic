@@ -212,8 +212,10 @@ trailer，每个 HTTP 连接仅处理一个请求；拒绝 `Expect` 和协议升
 限制前须先停止或删除它们，只在两次操作之间修改操作者声明。任意 TCP/UDP 的透明
 过滤留待宿主托管的第二期。
 
-[边界后续计划](docs/plans/container-boundary-followups.md)记录了拟议的 Airlock
-执行期限、离线恢复、旧容器检查及宿主过滤验收；这些后续改动尚未实现。
+[边界后续计划](docs/plans/container-boundary-followups.md)跟踪剩余的容器边界
+工作。离线附加兼容性守卫已实现：Airlock 在任何附加或安装动作前拒绝离线
+（none/未联网）及网络状态无法核实的容器。Airlock 执行期限、离线恢复拓扑、
+旧容器预检及宿主托管的 TCP/UDP 过滤仍为拟议状态。
 
 ## 数据目录
 
