@@ -2,7 +2,7 @@
 
 import pytest
 
-from tools.docker_egress import parse_egress_scope, resolve_egress_scope
+from tools.docker_egress import parse_egress_scope, resolve_egress_addresses
 from tools.docker_mounts import check_path_safety
 from tools.docker_plan import build_docker_execution_plan
 from tools.docker_spawn import (
@@ -115,9 +115,9 @@ def test_docker_egress_scope_parses_and_maps_without_docker(monkeypatch):
     monkeypatch.setattr(
         "tools.docker_egress.egress_resolver", lambda host: ("203.0.113.7",)
     )
-    host_mappings, fingerprint, resolve_error = resolve_egress_scope()
+    host_addresses, fingerprint, resolve_error = resolve_egress_addresses()
     assert resolve_error is None
-    assert host_mappings == {"pwn.example.com": "203.0.113.7"}
+    assert host_addresses == {"pwn.example.com": ("203.0.113.7",)}
     assert len(fingerprint) == 12
 
 

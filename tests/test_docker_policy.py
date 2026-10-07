@@ -646,7 +646,7 @@ def test_parse_egress_scope_accepts_hosts_ips_cidrs_and_rejects_junk():
     assert error is not None and "invalid egress scope entry" in error
 
 
-def test_resolve_egress_scope_maps_hostnames_only(monkeypatch):
+def test_resolve_egress_addresses_snapshot_multi_answer(monkeypatch):
     monkeypatch.setenv(
         "PAWNLOGIC_DOCKER_EGRESS_ALLOW", "pwn.example.com,203.0.113.5,10.0.0.0/8"
     )
@@ -656,23 +656,23 @@ def test_resolve_egress_scope_maps_hostnames_only(monkeypatch):
         lambda host: ("203.0.113.7", "203.0.113.8"),
     )
 
-    host_mappings, fingerprint, error = docker_egress.resolve_egress_scope()
+    host_addresses, fingerprint, error = docker_egress.resolve_egress_addresses()
 
     assert error is None
-    assert host_mappings == {"pwn.example.com": "203.0.113.7"}
+    assert host_addresses == {"pwn.example.com": ("203.0.113.7", "203.0.113.8")}
     assert fingerprint is not None and len(fingerprint) == 12
 
 
-def test_resolve_egress_scope_unset_env_is_a_no_op(monkeypatch):
+def test_resolve_egress_addresses_unset_env_is_a_no_op(monkeypatch):
     monkeypatch.delenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", raising=False)
-    host_mappings, fingerprint, error = docker_egress.resolve_egress_scope()
-    assert host_mappings == {} and fingerprint is None and error is None
+    host_addresses, fingerprint, error = docker_egress.resolve_egress_addresses()
+    assert host_addresses == {} and fingerprint is None and error is None
 
 
-def test_resolve_egress_scope_fails_closed_on_bad_entries(monkeypatch):
+def test_resolve_egress_addresses_fails_closed_on_bad_entries(monkeypatch):
     monkeypatch.setenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", "bad host!!")
-    host_mappings, fingerprint, error = docker_egress.resolve_egress_scope()
-    assert host_mappings == {} and fingerprint is None
+    host_addresses, fingerprint, error = docker_egress.resolve_egress_addresses()
+    assert host_addresses == {} and fingerprint is None
     assert error is not None
     assert error.startswith("SECURITY BLOCK: PAWNLOGIC_DOCKER_EGRESS_ALLOW is set but invalid")
 
@@ -680,23 +680,9 @@ def test_resolve_egress_scope_fails_closed_on_bad_entries(monkeypatch):
     def _boom(host):
         raise OSError("resolver down")
     monkeypatch.setattr(docker_egress, "egress_resolver", _boom)
-    host_mappings, fingerprint, error = docker_egress.resolve_egress_scope()
-    assert host_mappings == {} and fingerprint is None
+    host_addresses, fingerprint, error = docker_egress.resolve_egress_addresses()
+    assert host_addresses == {} and fingerprint is None
     assert error is not None and "could not be resolved at policy time" in error
-
-
-def test_resolve_scope_for_network_only_applies_to_bridge(monkeypatch, capsys):
-    monkeypatch.setenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", "pwn.example.com")
-    monkeypatch.setattr(
-        docker_egress, "egress_resolver", lambda host: ("203.0.113.7",)
-    )
-
-    host_mappings, fingerprint, error = docker_egress.resolve_scope_for_network("none")
-    assert (host_mappings, fingerprint, error) == ({}, None, None)
-
-    host_mappings, fingerprint, error = docker_egress.resolve_scope_for_network("host")
-    assert host_mappings == {} and fingerprint is None
-    assert error.startswith("SECURITY BLOCK: host networking")
 
 
 def test_run_code_docker_scope_forces_offline_proxy_and_labels(monkeypatch):

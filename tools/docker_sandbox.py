@@ -28,7 +28,7 @@ from core.network_policy import NetworkOperation, NetworkPolicy
 from core.operation_policy import OperationAction
 from core.state import state as _runtime_state, runtime_config
 from core.trust import TrustBoundaryKind, trust_notice_for_boundary
-from tools.docker_egress import EGRESS_SCOPE_ENV, resolve_scope_for_network
+from tools.docker_egress import EGRESS_SCOPE_ENV
 from tools.docker_http import (
     code_directory, finish_transport, persistent_scope_error, prepare_transport,
     scoped_addresses, scoped_mode_error, start_transport,
@@ -453,9 +453,6 @@ def tool_pwn_container(a: dict) -> str:
         container_user, err = resolve_container_user(a, allow_default=False)
         if err:
             return err
-        egress_host_mappings, scope_fingerprint, err = resolve_scope_for_network(network)
-        if err:
-            return err
 
     client = _get_docker_client()
     if not client:
@@ -520,8 +517,6 @@ def tool_pwn_container(a: dict) -> str:
                 volumes[real_hp] = {"bind": bind_spec["bind"], "mode": mount_mode}
 
         spawn_labels = {"pawn": "true", "pawn_name": name}
-        if scope_fingerprint:
-            spawn_labels["pawn_egress_scope"] = scope_fingerprint
         spawn_kwargs: dict = dict(
             image=image,
             command="sleep infinity",
@@ -537,21 +532,14 @@ def tool_pwn_container(a: dict) -> str:
         )
         if container_user:
             spawn_kwargs["user"] = container_user
-        if egress_host_mappings:
-            spawn_kwargs["extra_hosts"] = egress_host_mappings
         container = spawn_container(client, **spawn_kwargs)
 
         _active_containers[name] = container.id
-        scope_line = (
-            f"\n  Egress scope: {len(egress_host_mappings)} declared host mapping(s), fingerprint {scope_fingerprint}"
-            if scope_fingerprint
-            else ""
-        )
         return (
             f"OK: container '{name}' created and started\n"
             f"  ID: {container.id[:12]}\n"
             f"  Image: {image}\n"
-            f"  Network: {network}{scope_line}\n"
+            f"  Network: {network}\n"
             f"  Run commands with /docker exec {name} <cmd>"
         )
 
@@ -719,11 +707,6 @@ def tool_install_package(a: dict) -> str:
         err = _check_network_policy(a, "bridge")
         if err:
             return err
-        _, scope_id, err = resolve_scope_for_network("bridge")
-        if err:
-            return err
-        if scope_id:
-            print(c(YELLOW, "  [Airlock] egress declaration validated; existing host mappings unchanged; destinations not filtered"))
 
         if already_on_bridge:
             print(c(GRAY, f"  [Airlock] container '{container_name}' is already on bridge; skipping connect"))
