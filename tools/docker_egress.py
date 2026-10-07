@@ -2,9 +2,8 @@
 
 Host configuration accepts hosts, IPs and CIDRs. A hostname resolves once into
 all numeric addresses; scoped HTTP consumes that snapshot and enforces target
-selection at the socket boundary. The legacy hosts-file view remains available
-for policy tests but is not itself a destination filter. Never let a tool arg
-supply or override the operator configuration.
+selection at the socket boundary. Never let a tool arg supply or override the
+operator configuration.
 """
 from __future__ import annotations
 
@@ -87,22 +86,3 @@ def resolve_egress_addresses(raw_scope: str | None = None) -> tuple[dict[str, tu
         host_addresses[entry.rstrip(".")] = tuple(addresses)
     fingerprint = hashlib.sha256(raw.encode()).hexdigest()[:12]
     return host_addresses, fingerprint, None
-
-
-def resolve_egress_scope() -> tuple[dict[str, str], str | None, str | None]:
-    """Legacy hosts-file view of the address snapshot; not a destination filter."""
-    addresses, fingerprint, error = resolve_egress_addresses()
-    return {host: values[0] for host, values in addresses.items()}, fingerprint, error
-
-
-def resolve_scope_for_network(network: str) -> tuple[dict[str, str], str | None, str | None]:
-    """Resolve the egress scope for a container network mode.
-
-    Only bridge grants are scoped. Host networking shares the host netstack,
-    where the scope cannot be applied, so setting it is called out loudly.
-    """
-    if network == "bridge":
-        return resolve_egress_scope()
-    if network == "host" and os.environ.get(EGRESS_SCOPE_ENV, "").strip():
-        return {}, None, "SECURITY BLOCK: host networking cannot enforce the Docker egress scope."
-    return {}, None, None
