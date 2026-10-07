@@ -221,6 +221,12 @@ PawnLogic 标记容器；配置范围不会隔离它们）。宿主托管的透�
 仅备好审查包（ADR 0014：助手接口、流量路径覆盖矩阵、回滚方案与模拟测试），
 未安装、未接入任何工具；在宿主另行授权前不会应用任何主机防火墙变更。
 离线恢复拓扑仍为拟议状态。
+维护者可按[阶段一 runbook](docs/runbooks/host-egress-stage-one.md)运行
+`python tools/host_egress_preflight.py --out .agent-work/notes/host-egress-readiness.json`，
+只读检查本机前置条件，不安装包、助手或 sudoers，也不应用规则。缺少管理员权限
+或 conntrack 会阻塞内核验证；13 条矩阵路径均保持 `not_run`，即使前置条件通过
+也不会标记为可激活。审查包的无目的地状态放行仅适用于回复方向，命令工件拒绝
+IPv6 scope 后缀。
 审查包在查询失败时拒绝确认清理成功，通过完整规则快照检查而不使用提前退出的
 管道，并拒绝链路本地及云元数据目标，包括 IPv4-mapped 写法。
 Airlock 安装器入场与到期判定采用原子状态转换。已获准的 Docker 请求可能与终止

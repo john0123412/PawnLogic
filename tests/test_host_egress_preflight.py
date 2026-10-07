@@ -1,6 +1,8 @@
 """Readiness must not imply kernel validation or activation."""
 
 import subprocess
+import json
+import sys
 
 import pytest
 
@@ -57,3 +59,13 @@ def test_query_failure_discards_raw_error_and_output(monkeypatch, exception):
 
     monkeypatch.setattr(preflight.subprocess, "run", run)
     assert preflight._query(["/usr/bin/docker", "info"]) == (False, "")
+
+
+def test_cli_creates_report_parent_on_clean_checkout(monkeypatch, tmp_path):
+    report = {"ready_for_admin_validation": False, "activation_ready": False}
+    destination = tmp_path / ".agent-work" / "notes" / "readiness.json"
+    monkeypatch.setattr(preflight, "collect_readiness", lambda: report)
+    monkeypatch.setattr(sys, "argv", ["host-egress-preflight", "--out", str(destination)])
+    assert not destination.parent.exists()
+    assert preflight.main() == 1
+    assert json.loads(destination.read_text()) == report
