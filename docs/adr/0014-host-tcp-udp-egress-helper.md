@@ -53,14 +53,18 @@ Prepare, review and simulate — but do not install — a host egress helper:
    stays in matrix row 3, and the same allowance means activation does not
    cut flows the container already had open — expiry/rollback revocation
    (row 8) handles those. Link-local and cloud-metadata destinations are
-   rejected at policy time (they can never enter an allowlist). The future
+   rejected at policy time, including `100.100.100.200` and mapped IPv4
+   spellings (they can never enter an allowlist). The future
    helper must deny concurrent activation (one managed operation at a
    time).
 4. **Lifecycle.** Expiry, failure, daemon restart and helper restart revoke
    the operation's rules and conntrack flows and then VERIFY revocation with
    listing checks; every verification command branches on the query itself,
    so a failing or unauthorized query reports a containment failure instead
-   of a false success. A remaining flow or rule is a containment failure,
+   of a false success. nft chain absence is established from a successful
+   complete owner-table snapshot, never from a failed chain query; iptables
+   snapshots are matched without a short-circuit pipeline that can SIGPIPE
+   under `pipefail`. A remaining flow or rule is a containment failure,
    never a clean report.
 
 ## Traffic-path-to-hook matrix (required before implementation approval)
@@ -78,7 +82,7 @@ an uncovered path denies activation.
 | 6 | Host/embedded DNS forwarding (127.0.0.11) | Embedded DNS forwards from the host namespace — container→DNS may not traverse FORWARD; pinned resolvers + drop rule must be verified | `docker exec` dig against 127.0.0.11 and against arbitrary resolver |
 | 7 | Direct alternate resolvers | udp/53 restricted to pinned servers; other UDP dropped (policy pins udp ports explicitly) | Negative fixture on udp/5353 to non-pinned targets |
 | 8 | Established flows after rule change | `conntrack -D -s <container-ip> -d <dest>` for the operation's destinations on expiry (source-scoped, so other tenants of a shared destination are not hit), then listing verification; pre-activation flows are not cut on activation | Expiry fixture with a long-lived connection |
-| 9 | Link-local / cloud metadata (169.254.169.254, fd00:ec2::254) | Fail-closed drop (never in any policy allowlist); Network Policy hard denial (ADR 0013) applies only on the relay path, which is separate | Backend fixture probe from the container |
+| 9 | Link-local / cloud metadata (169.254.169.254, 100.100.100.200, fd00:ec2::254, mapped IPv4 forms) | Fail-closed drop (never in any policy allowlist); Network Policy hard denial (ADR 0013) applies only on the relay path, which is separate | Backend fixture probe from the container |
 | 10 | Additional network attachments and IPv6 routes | Policy covers one managed network; attaching a second network must re-run policy or be denied | Attach-second-network probe |
 | 11 | Published-port hairpin / reverse paths | Container-originated hairpin is denied by the source-scoped drop; external-hairpin paths still need verification | Hairpin probe |
 | 12 | Container restart / IP reuse | Rules bind bridge + source snapshot + operation id comment; identity re-verified against the daemon before activation | Reuse probe with a recycled address |

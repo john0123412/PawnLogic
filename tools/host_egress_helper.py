@@ -54,6 +54,7 @@ _HARD_DENIED_NETWORKS = (
     ipaddress.ip_network("169.254.0.0/16"),
     ipaddress.ip_network("fe80::/10"),
     ipaddress.ip_network("fd00:ec2::254/128"),
+    ipaddress.ip_network("100.100.100.200/32"),
 )
 
 
@@ -329,27 +330,27 @@ def rule_presence_verification(policy: EgressPolicy, backend: str) -> list:
         return [
             (
                 f"if save=$(iptables-save 2>/dev/null); then "
-                f"if printf '%s' \"$save\" | grep -F '{comment_filter}' | grep -q .; "
-                f"then echo 'CONTAINMENT FAILURE: iptables rules remain for {policy.operation_id}'; "
-                f"else echo 'iptables rules removed'; fi; "
+                f"case \"$save\" in *'{comment_filter}'*) "
+                f"echo 'CONTAINMENT FAILURE: iptables rules remain for {policy.operation_id}';; "
+                f"*) echo 'iptables rules removed';; esac; "
                 f"else echo 'CONTAINMENT FAILURE: iptables-save failed (query error)'; fi"
             ),
             (
                 f"if save6=$(ip6tables-save 2>/dev/null); then "
-                f"if printf '%s' \"$save6\" | grep -F '{comment_filter}' | grep -q .; "
-                f"then echo 'CONTAINMENT FAILURE: ip6tables rules remain for {policy.operation_id}'; "
-                f"else echo 'ip6tables rules removed'; fi; "
+                f"case \"$save6\" in *'{comment_filter}'*) "
+                f"echo 'CONTAINMENT FAILURE: ip6tables rules remain for {policy.operation_id}';; "
+                f"*) echo 'ip6tables rules removed';; esac; "
                 f"else echo 'CONTAINMENT FAILURE: ip6tables-save failed (query error)'; fi"
             ),
         ]
     return [
         (
-            f"if nft list chain inet pawnlogic_egress op_{policy.operation_suffix} >/dev/null 2>&1; "
-            f"then echo 'CONTAINMENT FAILURE: nft chain remains for {policy.operation_id}'; "
-            f"elif nft list tables 2>/dev/null | grep -q 'inet pawnlogic_egress'; "
-            f"then echo 'nft chain removed'; "
-            f"else echo 'CONTAINMENT FAILURE: owner table inet pawnlogic_egress is gone "
-            f"(deleted wholesale?); other operations may have lost their rules'; fi"
+            f"if snapshot=$(nft list table inet pawnlogic_egress 2>/dev/null); then "
+            f"case \"$snapshot\" in *'chain op_{policy.operation_suffix} {{'*) "
+            f"echo 'CONTAINMENT FAILURE: nft chain remains for {policy.operation_id}';; "
+            f"*) echo 'nft chain removed';; esac; "
+            f"else echo 'CONTAINMENT FAILURE: nft chain remains or table query failed "
+            f"for {policy.operation_id} (query error)'; fi"
         ),
     ]
 

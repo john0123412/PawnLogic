@@ -253,6 +253,12 @@ a review package only (ADR 0014: helper interface, traffic-path-to-hook
 matrix, rollback; simulated tests); it stays uninstalled and requires
 separate host authorization before anything is applied. Offline restoration
 topology remains proposed.
+Review-package checks fail closed on query errors, inspect complete rule
+snapshots without short-circuit pipelines, and reject link-local and cloud
+metadata destinations, including IPv4-mapped spellings.
+Airlock installer admission is atomic against expiry. An already-admitted
+Docker request can race with termination; an unconfirmed cleanup is reported
+as a live-container risk requiring manual action.
 
 ## Data Layout
 

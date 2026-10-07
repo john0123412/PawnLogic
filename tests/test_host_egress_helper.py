@@ -4,6 +4,8 @@ The helper never executes anything; these tests pin the artifacts an owner
 would review before authorizing activation (ADR 0014, plan §5).
 """
 
+import subprocess
+
 import pytest
 
 from tools.host_egress_helper import (
@@ -37,6 +39,17 @@ def make_policy(**overrides):
     )
     base.update(overrides)
     return EgressPolicy(**base)
+
+
+def _run_stubbed_shell(command: str, stubs: str) -> subprocess.CompletedProcess:
+    """Run one generated query with shell functions standing in for binaries."""
+    script = f"set -o pipefail\n{stubs}\n{command}\n"
+    return subprocess.run(
+        ["bash", "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_unknown_backend_denies_activation_without_fallback():
@@ -139,6 +152,25 @@ def test_policy_hard_denies_link_local_and_metadata_destinations():
         make_policy(dns_servers_ipv4=("169.254.169.254",))
 
 
+@pytest.mark.parametrize(
+    ("field", "address"),
+    [
+        ("allowed_ipv4", "100.100.100.200"),
+        ("allowed_ipv6", "::ffff:100.100.100.200"),
+        ("dns_servers_ipv4", "100.100.100.200"),
+        ("dns_servers_ipv6", "::ffff:100.100.100.200"),
+    ],
+)
+def test_policy_hard_denies_all_mapped_metadata_allowlist_fields(field, address):
+    overrides = {field: (address,)}
+    if field == "allowed_ipv4":
+        overrides["allowed_ipv6"] = ("2001:db8::7",)
+    elif field == "allowed_ipv6":
+        overrides["allowed_ipv4"] = ("203.0.113.7",)
+    with pytest.raises(ValueError, match="hard-denied"):
+        make_policy(**overrides)
+
+
 def test_iptables_inserts_drop_first_so_preexisting_return_cannot_shadow():
     # Appended (-A) rules may land after an owner's RETURN rule in
     # DOCKER-USER and become dead code. The artifact must insert at the top
@@ -177,6 +209,57 @@ def test_verification_distinguishes_query_failure_from_revoked():
     presence = rule_presence_verification(make_policy(), "iptables")
     for command in presence:
         assert "query error" in command or "check failed" in command, command
+
+
+def test_nft_chain_query_failure_is_not_reported_as_removed():
+    command = rule_presence_verification(make_policy(), "nftables")[0]
+    result = _run_stubbed_shell(
+        command,
+        """
+nft() {
+    if [ "$1" = list ] && [ "$2" = chain ]; then return 1; fi
+    if [ "$1" = list ] && [ "$2" = tables ]; then
+        printf '%s\\n' 'table inet pawnlogic_egress'
+        return 0
+    fi
+    return 1
+}
+""",
+    )
+    assert "CONTAINMENT FAILURE" in result.stdout
+    assert "chain removed" not in result.stdout
+
+
+def test_iptables_presence_query_drains_all_matches_under_pipefail():
+    command = rule_presence_verification(make_policy(), "iptables")[0]
+    result = _run_stubbed_shell(
+        command,
+        """
+iptables-save() {
+    i=0
+    while [ "$i" -lt 4096 ]; do
+        printf '%s\\n' "-A DOCKER-USER -m comment --comment 'pawnlogic pawn-op-test0001 abc'"
+        i=$((i + 1))
+    done
+    return 0
+}
+""",
+    )
+    assert "CONTAINMENT FAILURE" in result.stdout
+    assert "rules removed" not in result.stdout
+
+
+@pytest.mark.parametrize("chain,present", [("op_test0001", True), ("op_test00012", False)])
+def test_nft_presence_matches_complete_chain_identifier(chain, present):
+    command = rule_presence_verification(make_policy(), "nftables")[0]
+    result = _run_stubbed_shell(
+        command,
+        "nft() { printf '%s\\n' 'table inet pawnlogic_egress {' "
+        + f"'    chain {chain} {{' "
+        + "'    }' '}'; }",
+    )
+    assert ("CONTAINMENT FAILURE" in result.stdout) is present
+    assert ("chain removed" in result.stdout) is not present
 
 
 def test_nftables_uses_per_operation_chain_in_an_owner_table():

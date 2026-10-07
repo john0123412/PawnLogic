@@ -32,9 +32,9 @@ from tools.docker_airlock import (
     AIRLOCK_TIMEOUT_DEFAULT,
     CONTAINMENT_JOIN_SECONDS,
     begin_airlock_operation,
+    claim_airlock_execution,
     finish_airlock_run,
     offline_attach_rejection,
-    operation_expired,
     start_deadline_watchdog,
     validate_airlock_timeout,
 )
@@ -802,14 +802,6 @@ def tool_install_package(a: dict) -> str:
                 raise
             print(c(YELLOW, f"  [Airlock] temporarily connected container '{container_name}' to bridge"))
 
-        # An operation the watchdog already condemned must not hand work to
-        # the installer, even if a hung attach completed after the deadline.
-        if operation_expired(op):
-            raise _AirlockRejected(
-                f"SECURITY BLOCK: Airlock install exceeded its {op.timeout_seconds}s "
-                f"deadline for container '{container_name}' before the installer could start"
-            )
-
         # Bounded installer call: the watchdog kills the container at the
         # deadline; if containment cannot land (kill/removal failing), the
         # caller must still stop waiting and report containment instead of
@@ -819,6 +811,10 @@ def tool_install_package(a: dict) -> str:
 
         def _run_install():
             try:
+                # Admission and expiry share the state lock. A queued worker
+                # cannot use a stale main-thread check after the deadline.
+                if not claim_airlock_execution(op):
+                    raise _AirlockRejected("SECURITY BLOCK: Airlock installer admission denied after expiry or settlement")
                 exec_box["out"] = container.exec_run(
                     cmd=["bash", "-c", install_cmd],
                     stdout=True, stderr=True, demux=False,
