@@ -214,9 +214,11 @@ trailer，每个 HTTP 连接仅处理一个请求；拒绝 `Expect` 和协议升
 
 [边界后续计划](docs/plans/container-boundary-followups.md)跟踪剩余的容器边界
 工作。目前已实现：离线附加兼容性守卫（Airlock 在任何附加或安装动作前拒绝
-离线（none/未联网）及网络状态无法核实的容器）与 Airlock 执行期限（硬性
-`timeout_seconds`，由看门狗线程强制；到期撤销工具句柄并终止容器）。离线
-恢复拓扑、旧容器预检及宿主托管的 TCP/UDP 过滤仍为拟议状态。
+离线（none/未联网）及网络状态无法核实的容器）、Airlock 执行期限（硬性
+`timeout_seconds`，由看门狗线程强制；到期撤销工具句柄并终止容器）以及
+只读的旧容器预检（`pwn_container action=preflight` 报告仍在联网的
+PawnLogic 标记容器；配置范围不会隔离它们）。离线恢复拓扑与宿主托管的
+TCP/UDP 过滤仍为拟议状态。
 
 ## 数据目录
 

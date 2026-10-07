@@ -243,10 +243,12 @@ separate host-managed phase.
 The [boundary follow-up plan](docs/plans/container-boundary-followups.md)
 tracks the remaining container boundary work. Implemented so far: the offline
 attach compatibility guard (Airlock rejects offline (none/unattached)
-containers and unverifiable network state before any attach or install) and
-the Airlock operation deadline (hard `timeout_seconds`, watchdog-enforced;
-expiry revokes the tool handle and terminates the container). Offline
-restoration topology, legacy-container preflight and host-managed TCP/UDP
+containers and unverifiable network state before any attach or install), the
+Airlock operation deadline (hard `timeout_seconds`, watchdog-enforced; expiry
+revokes the tool handle and terminates the container) and the read-only
+legacy-container preflight (`pwn_container action=preflight` reports running
+PawnLogic-labelled containers that still have network access; a scope never
+quarantines them). Offline restoration topology and host-managed TCP/UDP
 filtering remain proposed.
 
 ## Data Layout

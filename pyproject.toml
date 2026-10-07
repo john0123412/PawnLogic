@@ -217,6 +217,7 @@ module = [
     "tools.container_http_protocol",
     "tools.container_http_relay",
     "tools.docker_http",
+    "tools.docker_preflight",
     "tools.pwn_binary",
     "tools.pwn_debugger",
     "tools.check_doc_structure",
