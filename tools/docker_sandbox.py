@@ -28,7 +28,15 @@ from core.network_policy import NetworkOperation, NetworkPolicy
 from core.operation_policy import OperationAction
 from core.state import state as _runtime_state, runtime_config
 from core.trust import TrustBoundaryKind, trust_notice_for_boundary
-from tools.docker_airlock import offline_attach_rejection
+from tools.docker_airlock import (
+    AIRLOCK_TIMEOUT_DEFAULT,
+    CONTAINMENT_JOIN_SECONDS,
+    begin_airlock_operation,
+    finish_airlock_run,
+    offline_attach_rejection,
+    start_deadline_watchdog,
+    validate_airlock_timeout,
+)
 from tools.docker_egress import EGRESS_SCOPE_ENV
 from tools.docker_http import (
     code_directory, finish_transport, persistent_scope_error, prepare_transport,
@@ -57,7 +65,9 @@ def _get_docker_client():
     _docker_checked = True
     try:
         import docker
-        _docker_client = docker.from_env()
+        # Explicit (finite) daemon request timeout; equals the SDK default but
+        # keeps the bound project-owned for the containment contracts.
+        _docker_client = docker.from_env(timeout=60)
         _docker_client.ping()
         return _docker_client
     except ImportError:
@@ -637,11 +647,27 @@ def tool_pwn_container(a: dict) -> str:
 _PKG_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
 
 
+class _AirlockRejected(Exception):
+    """Internal sentinel: a guard rejection after the operation has begun."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
 def tool_install_package(a: dict) -> str:
     """
     Install packages inside a persistent container in Airlock mode.
     - Supports apt and pip only.
     - Strict package-name validation prevents command injection.
+    - The whole operation runs under a hard deadline (timeout_seconds,
+      integer 1-300, default 120) enforced by an independent watchdog: on
+      expiry the tool handle is revoked first, then the container is
+      terminated (forced-removal fallback) and the owned bridge attachment
+      is removed — a timed-out persistent container does not survive, and
+      unresolved cleanup is reported as a containment failure. Operations
+      for the same container are serialized; late timers cannot kill a
+      successor operation.
     - Disconnects only bridge attachments made by this run; existing ones remain.
     - Failed temporary disconnect revokes access and kills/removes the container.
     - Offline containers (network none/unattached) and unknown network state
@@ -650,6 +676,11 @@ def tool_install_package(a: dict) -> str:
     err = persistent_scope_error(a, operation='airlock')
     if err:
         return err
+    timeout_seconds, terr = validate_airlock_timeout(
+        a.get("timeout_seconds", AIRLOCK_TIMEOUT_DEFAULT)
+    )
+    if terr:
+        return terr
     client = _get_docker_client()
     if not client:
         return f"ERROR: Docker unavailable - {_docker_error}"
@@ -686,11 +717,32 @@ def tool_install_package(a: dict) -> str:
     else:
         install_cmd = f"pip install --quiet {pkg_str}"
 
-    # Airlock: temporarily connect -> install -> force disconnect.
+    # Airlock: temporarily connect -> install -> force disconnect, all under
+    # a hard operation deadline.
     bridge_net = None
     _airlock_connected = False
+    op = None
+    watchdog = None
     try:
         bridge_net = client.networks.get("bridge")
+
+        # Issue #177.4: installing packages always causes outbound traffic,
+        # so every call needs explicit network authorization — even when the
+        # container is already on bridge via user-managed networking. The
+        # already_on_bridge check below only decides whether the airlock
+        # itself must connect/disconnect.
+        err = _check_network_policy(a, "bridge")
+        if err:
+            return err
+
+        # Serialize per container before reading bridge membership: the
+        # ownership decision must come from serialized state, or a concurrent
+        # operation's temporary attachment could be mistaken for a
+        # pre-existing user-managed one.
+        maybe_op = begin_airlock_operation(container_name, timeout_seconds)
+        if isinstance(maybe_op, str):
+            return maybe_op
+        op = maybe_op
 
         # Check whether the container is already on bridge to avoid touching user-managed networking.
         already_on_bridge = False
@@ -702,23 +754,30 @@ def tool_install_package(a: dict) -> str:
         except Exception:
             pass
 
-        # Issue #177.4: installing packages always causes outbound traffic,
-        # so every call needs explicit network authorization — even when the
-        # container is already on bridge via user-managed networking. The
-        # already_on_bridge check below only decides whether the airlock
-        # itself must connect/disconnect.
-        err = _check_network_policy(a, "bridge")
-        if err:
-            return err
-
         if already_on_bridge:
             print(c(GRAY, f"  [Airlock] container '{container_name}' is already on bridge; skipping connect"))
         else:
             # The daemon rejects bridge attachment for containers created in
-            # private network modes; refuse before touching anything.
+            # private network modes; refuse before touching anything. Raised
+            # as a sentinel so the operation still settles in the finally and
+            # the rejection rides on `result`.
             guard = offline_attach_rejection(container, container_name)
             if guard:
-                return guard
+                raise _AirlockRejected(guard)
+
+        # The deadline starts before any attach and covers the exec and the
+        # owned-network cleanup; watchdog callbacks are generation-bound, so
+        # a late timer cannot kill its successor.
+        watchdog = start_deadline_watchdog(
+            op, container,
+            revoke_handle=lambda: _active_containers.pop(container_name, None),
+            owned_disconnect=(
+                None if already_on_bridge
+                else (lambda: bridge_net.disconnect(container, force=True))
+            ),
+        )
+
+        if not already_on_bridge:
             # A lost daemon response can follow a successful attachment.
             # Attempt cleanup even when connect() raises.
             _airlock_connected = True
@@ -733,40 +792,59 @@ def tool_install_package(a: dict) -> str:
                 raise
             print(c(YELLOW, f"  [Airlock] temporarily connected container '{container_name}' to bridge"))
 
-        exit_code, output = container.exec_run(
-            cmd=["bash", "-c", install_cmd],
-            stdout=True, stderr=True, demux=False,
-        )
-        result = output.decode("utf-8", errors="ignore") if output else ""
-        status = "✓" if exit_code == 0 else f"✗ (exit {exit_code})"
-        result = (
-            f"[Airlock {status}] {pkg_manager} install {pkg_str}\n"
-            f"{result or '(no output)'}"
-        )
+        # Bounded installer call: the watchdog kills the container at the
+        # deadline; if containment cannot land (kill/removal failing), the
+        # caller must still stop waiting and report containment instead of
+        # blocking on a stuck exec stream.
+        exec_box: dict = {}
+        exec_done = threading.Event()
 
+        def _run_install():
+            try:
+                exec_box["out"] = container.exec_run(
+                    cmd=["bash", "-c", install_cmd],
+                    stdout=True, stderr=True, demux=False,
+                )
+            except Exception as exc:
+                exec_box["error"] = exc
+            finally:
+                exec_done.set()
+
+        threading.Thread(target=_run_install, daemon=True).start()
+        if not exec_done.wait(timeout_seconds + CONTAINMENT_JOIN_SECONDS):
+            result = (
+                f"SECURITY BLOCK: Airlock install did not return within its "
+                f"{timeout_seconds}s deadline for container '{container_name}'"
+            )
+        elif "error" in exec_box:
+            raise exec_box["error"]
+        else:
+            exit_code, output = exec_box["out"]
+            text = output.decode("utf-8", errors="ignore") if output else ""
+            status = "✓" if exit_code == 0 else f"✗ (exit {exit_code})"
+            result = (
+                f"[Airlock {status}] {pkg_manager} install {pkg_str}\n"
+                f"{text or '(no output)'}"
+            )
+
+    except _AirlockRejected as rejected:
+        result = rejected.message
     except Exception as e:
         result = f"ERROR: install process failed: {type(e).__name__}: {e}"
 
     finally:
-        # Only disconnect network connections made by this Airlock run.
-        if bridge_net and _airlock_connected:
-            try:
-                bridge_net.disconnect(container, force=True)
-                print(c(GREEN, f"  [Airlock] container '{container_name}' forcibly disconnected from network"))
-            except Exception as disc_err:
-                # Revoke tool access even if the daemon cannot terminate the
-                # container. Never report installation success after a leak.
-                _active_containers.pop(container_name, None)
-                containment = "container killed; tool access revoked"
-                try:
-                    container.kill()
-                except Exception:
-                    try:
-                        container.remove(force=True)
-                        containment = "container removed; tool access revoked"
-                    except Exception as cleanup_err:
-                        containment = f"container may still be running; tool access revoked; manual Docker cleanup required: {cleanup_err}"
-                result = f"SECURITY BLOCK: Airlock network disconnect failed: {disc_err}; {containment}"
+        if op is not None:
+            # Containment first, owned-network cleanup second (bounded, with
+            # the watchdog still armed), lease release last.
+            result = finish_airlock_run(
+                op, watchdog, result,
+                container=container, container_name=container_name,
+                owned_disconnect=(
+                    (lambda: bridge_net.disconnect(container, force=True))
+                    if (bridge_net is not None and _airlock_connected) else None
+                ),
+                revoke_handle=lambda: _active_containers.pop(container_name, None),
+            )
     return result
 
 

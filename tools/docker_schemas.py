@@ -175,6 +175,7 @@ DOCKER_SCHEMAS = [
             "description": (
                 "Airlock package installation tool.\n"
                 "Installs apt/pip packages in a persistent container. Only connections made by this Airlock operation are disconnected; an existing bridge attachment stays unchanged.\n"
+                "The whole operation runs under a hard deadline (timeout_seconds, integer 1-300, default 120): on expiry the tool handle is revoked, install processes are stopped by terminating the container (a timed-out persistent container does not survive), and the owned bridge attachment is removed; unresolved cleanup is reported as a containment failure.\n"
                 "Offline containers (network none/unattached) and containers with unverifiable network state are rejected before any attach or install; the Docker daemon cannot attach none-created containers to bridge afterward.\n"
                 "Failed temporary disconnect revokes tool access and kills/removes the container; daemon cleanup failure explicitly requires manual cleanup.\n"
                 "An operator egress scope denies Airlock installs; unscoped installs retain the explicit network gate.\n"
@@ -202,6 +203,12 @@ DOCKER_SCHEMAS = [
                     "allow_network": {
                         "type": "boolean",
                         "description": "Explicitly authorize the temporary bridge egress used for installation.",
+                    },
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 300,
+                        "description": "Hard deadline for the whole Airlock operation in seconds; integer 1-300, default 120. On expiry the tool handle is revoked and the container is terminated.",
                     },
                 },
                 "required": ["container_name", "pkg_manager", "packages"],

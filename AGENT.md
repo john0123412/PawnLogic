@@ -862,7 +862,22 @@ name at the end is the gate that fails if the invariant is broken.
   refreshes the container and rejects offline (none/unattached) membership and
   unknown network state without connecting or installing — the daemon cannot
   attach none-created containers to bridge afterward; the container is
-  preserved and the rejection never suggests host networking. If its temporary disconnect
+  preserved and the rejection never suggests host networking. Every install
+  also runs under a hard deadline (`timeout_seconds`, integer 1–300, default
+  120) enforced by an independent watchdog thread: the installer call and the
+  owned-network disconnect are bounded waits, the per-container lease is
+  acquired before the bridge-membership ownership decision and held until
+  cleanup completes, so the deadline and serialization span the whole
+  lifecycle. Expiry revokes the tool
+  handle, terminates the container (a timed-out persistent container does not
+  survive), and removes the owned attachment; per-container operations are
+  serialized with generation-bound timers so a late watchdog cannot kill its
+  successor, and unresolved cleanup is a containment failure, never success.
+  If expiry containment outlives its bounded join window the operator is told
+  containment was unresolved; a late containment pass may still land on the
+  same condemned container (fail-closed over-kill) but skips the
+  owned-attachment disconnect once a successor operation has begun.
+  If its temporary disconnect
   fails, revoke tool access and kill the container, falling back to forced
   removal; if both fail, report the live-container risk and manual cleanup.
   An attachment error must still trigger cleanup: a daemon can attach before

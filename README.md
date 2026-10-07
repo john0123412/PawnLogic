@@ -241,11 +241,13 @@ only between operations. Transparent arbitrary TCP/UDP filtering remains a
 separate host-managed phase.
 
 The [boundary follow-up plan](docs/plans/container-boundary-followups.md)
-tracks the remaining container boundary work. The offline attach compatibility
-guard is implemented: Airlock rejects offline (none/unattached) containers and
-unverifiable network state before any attach or install. Airlock operation
-deadlines, offline restoration topology, legacy-container preflight and
-host-managed TCP/UDP filtering remain proposed.
+tracks the remaining container boundary work. Implemented so far: the offline
+attach compatibility guard (Airlock rejects offline (none/unattached)
+containers and unverifiable network state before any attach or install) and
+the Airlock operation deadline (hard `timeout_seconds`, watchdog-enforced;
+expiry revokes the tool handle and terminates the container). Offline
+restoration topology, legacy-container preflight and host-managed TCP/UDP
+filtering remain proposed.
 
 ## Data Layout
 

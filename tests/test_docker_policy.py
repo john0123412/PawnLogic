@@ -1,6 +1,7 @@
 """Tests for Docker sandbox risk policy gates."""
 
 import os
+import threading
 
 import pytest
 
@@ -258,12 +259,38 @@ class _FakeAirlockContainer:
         # tests that exercise the attach path set a real network here.
         self.attrs = {"NetworkSettings": {"Networks": {}}}
         self.reload_error: Exception | None = None
+        self.kill_calls = 0
+        self.remove_calls: list[bool] = []
+        self.kill_error: Exception | None = None
+        self.remove_error: Exception | None = None
+        self.exec_mode = "ok"  # "ok" stalls until killed when set to "stall"
+        self.dead = threading.Event()
 
     def reload(self):
         if self.reload_error is not None:
             raise self.reload_error
 
+    def kill(self):
+        self.kill_calls += 1
+        if self.kill_error is not None:
+            raise self.kill_error
+        self.dead.set()
+
+    def remove(self, force=False):
+        self.remove_calls.append(force)
+        if self.remove_error is not None:
+            raise self.remove_error
+
     def exec_run(self, cmd, stdout=True, stderr=True, demux=False):
+        if self.exec_mode in ("stall", "stall_success"):
+            # Models a hung apt update / pip resolve; returns only when the
+            # watchdog kills the container (or after a test-bounded wait).
+            self.dead.wait(timeout=15)
+            if self.exec_mode == "stall_success":
+                return 0, b"ok"
+            if self.dead.is_set():
+                return 137, b"terminated mid-install"
+            return 124, b"exec still running"
         return 0, b"ok"
 
 
@@ -474,6 +501,266 @@ def test_airlock_fails_closed_on_unknown_network_state(monkeypatch, broken):
     assert client.bridge.connected == []
     assert client.bridge.disconnected == []
     assert docker_sandbox._active_containers.get("c1") == "cid123"
+
+
+@pytest.mark.parametrize("pkg_manager", ["apt", "pip"])
+@pytest.mark.parametrize("already_on_bridge", [False, True])
+def test_airlock_deadline_terminates_stalled_install(monkeypatch, pkg_manager, already_on_bridge):
+    # The deadline covers the whole operation (attach + apt update + install);
+    # expiry must revoke the handle, terminate the container, remove the owned
+    # attachment, and never report install success.
+    client = _install_airlock_client(monkeypatch)
+    if already_on_bridge:
+        client.bridge.attrs = {"Containers": {"cid123": {}}}
+    else:
+        client.container.attrs["NetworkSettings"]["Networks"] = {
+            "lab_net": {"NetworkID": "netabc"}
+        }
+    client.container.exec_mode = "stall"
+
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": pkg_manager, "packages": ["curl"],
+         "allow_network": True, "timeout_seconds": 1}
+    )
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "deadline" in result
+    assert client.container.kill_calls == 1
+    assert "c1" not in docker_sandbox._active_containers
+    if already_on_bridge:
+        assert client.bridge.connected == []
+        assert client.bridge.disconnected == []
+    else:
+        assert client.bridge.connected == [client.container]
+        assert client.bridge.disconnected == [client.container]
+
+
+def test_airlock_deadline_kill_and_remove_failure_reports_manual_cleanup(monkeypatch):
+    client = _install_airlock_client(monkeypatch)
+    client.container.attrs["NetworkSettings"]["Networks"] = {
+        "lab_net": {"NetworkID": "netabc"}
+    }
+    client.container.exec_mode = "stall"
+    client.container.kill_error = RuntimeError("kill unavailable")
+    client.container.remove_error = RuntimeError("remove unavailable")
+
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["curl"],
+         "allow_network": True, "timeout_seconds": 1}
+    )
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "may still be running" in result
+    assert "manual Docker cleanup" in result
+    assert client.container.remove_calls == [True]
+    assert "c1" not in docker_sandbox._active_containers
+
+
+def test_airlock_install_completing_after_expiry_reports_containment_not_success(monkeypatch):
+    # Deadline/completion race: if the watchdog won the atomic decision, the
+    # operation is a containment failure even when exec returned success.
+    client = _install_airlock_client(monkeypatch)
+    client.container.attrs["NetworkSettings"]["Networks"] = {
+        "lab_net": {"NetworkID": "netabc"}
+    }
+    client.container.exec_mode = "stall_success"
+
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["curl"],
+         "allow_network": True, "timeout_seconds": 1}
+    )
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "deadline" in result
+    assert "[Airlock ✓]" not in result
+    assert client.container.kill_calls == 1
+
+
+@pytest.mark.parametrize(
+    "raw", [True, "60", 0, 301, None, 1.5], ids=["bool", "str", "zero", "too-big", "none", "float"]
+)
+def test_airlock_rejects_invalid_timeout_without_touching_docker(monkeypatch, raw):
+    monkeypatch.setattr(
+        docker_sandbox,
+        "_get_docker_client",
+        lambda: pytest.fail("invalid timeout must be rejected before any daemon use"),
+    )
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["curl"],
+         "allow_network": True, "timeout_seconds": raw}
+    )
+    assert result.startswith("ERROR: timeout_seconds")
+
+
+def test_airlock_serializes_operations_for_same_container(monkeypatch):
+    from tools import docker_airlock
+
+    monkeypatch.setattr(docker_airlock, "SERIAL_WAIT_SECONDS", 0.3)
+    client = _install_airlock_client(monkeypatch)
+    client.container.attrs["NetworkSettings"]["Networks"] = {
+        "lab_net": {"NetworkID": "netabc"}
+    }
+    client.container.exec_mode = "stall"
+
+    first = {}
+
+    def run_first():
+        first["result"] = docker_sandbox.tool_install_package(
+            {"container_name": "c1", "pkg_manager": "pip", "packages": ["curl"],
+             "allow_network": True, "timeout_seconds": 300}
+        )
+
+    worker = threading.Thread(target=run_first, daemon=True)
+    worker.start()
+    for _ in range(100):
+        if client.bridge.connected:
+            break
+        threading.Event().wait(0.02)
+    assert client.bridge.connected, "first operation never reached connect"
+
+    second = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["curl"],
+         "allow_network": True, "timeout_seconds": 5}
+    )
+    assert second.startswith("SECURITY BLOCK")
+    assert "another Airlock operation" in second
+    assert client.container.kill_calls == 0
+    # The rejected call must not have touched network ownership either.
+    assert client.bridge.connected == [client.container]
+
+    client.container.dead.set()  # unblock the stalled exec; no watchdog at 300s
+    worker.join(timeout=10)
+    assert first["result"].startswith("[Airlock ✗")
+    assert client.container.kill_calls == 0
+
+    # The serial slot is released: a fresh operation can run to completion.
+    client.container.exec_mode = "ok"
+    client.container.dead.clear()
+    third = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["curl"],
+         "allow_network": True, "timeout_seconds": 120}
+    )
+    assert third.startswith("[Airlock ✓")
+
+
+def test_airlock_stale_watchdog_cannot_kill_successor_operation():
+    from tools import docker_airlock
+
+    handles: dict[str, str] = {"c1": "cid123"}
+    container_one = _FakeAirlockContainer()
+    container_two = _FakeAirlockContainer()
+
+    op1 = docker_airlock.begin_airlock_operation("c1", 1)
+    revoke = lambda: handles.pop("c1", None)
+    watchdog1 = docker_airlock.start_deadline_watchdog(
+        op1, container_one, revoke, owned_disconnect=None
+    )
+    # Production exec blocks until the kill lands; mirror that here by
+    # waiting for the watchdog to fire before settling the operation.
+    for _ in range(300):
+        if container_one.kill_calls:
+            break
+        threading.Event().wait(0.01)
+    expired, _ = docker_airlock.settle_airlock_operation(op1, watchdog1)
+    assert expired and container_one.kill_calls == 1
+    assert "c1" not in handles
+
+    op2 = docker_airlock.begin_airlock_operation("c1", 1)
+    assert op2.generation == op1.generation + 1
+
+    # The old timer fires late: generation mismatch must make it a no-op.
+    docker_airlock._deadline_fired(op1, container_two, revoke, owned_disconnect=None)
+    assert container_two.kill_calls == 0
+    assert not container_two.dead.is_set()
+
+    watchdog2 = docker_airlock.start_deadline_watchdog(
+        op2, container_two, revoke, owned_disconnect=None
+    )
+    for _ in range(300):
+        if container_two.kill_calls:
+            break
+        threading.Event().wait(0.01)
+    expired2, _ = docker_airlock.settle_airlock_operation(op2, watchdog2)
+    assert expired2 and container_two.kill_calls == 1
+
+
+def test_airlock_watchdog_start_failure_releases_serial_slot(monkeypatch):
+    from tools import docker_airlock
+
+    client = _install_airlock_client(monkeypatch)
+    client.container.attrs["NetworkSettings"]["Networks"] = {
+        "lab_net": {"NetworkID": "netabc"}
+    }
+
+    def no_threads(*args, **kwargs):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(docker_sandbox, "start_deadline_watchdog", no_threads)
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["curl"],
+         "allow_network": True, "timeout_seconds": 120}
+    )
+    assert result.startswith("ERROR: install process failed")
+    assert client.container.kill_calls == 0  # nothing attached or executed
+
+    # The serial slot must not leak: a fresh operation can begin immediately.
+    op = docker_airlock.begin_airlock_operation("c1", 120)
+    assert not isinstance(op, str)
+    expired, _ = docker_airlock.settle_airlock_operation(op, None)
+    assert expired is False
+
+
+def test_airlock_uncontainable_install_returns_bounded(monkeypatch):
+    # Kill and forced removal both fail: the caller must stop waiting at the
+    # deadline window and report containment instead of blocking on exec.
+    from tools import docker_airlock
+
+    monkeypatch.setattr(docker_sandbox, "CONTAINMENT_JOIN_SECONDS", 0.5)
+    monkeypatch.setattr(docker_airlock, "CONTAINMENT_JOIN_SECONDS", 0.5)
+    client = _install_airlock_client(monkeypatch)
+    client.container.attrs["NetworkSettings"]["Networks"] = {
+        "lab_net": {"NetworkID": "netabc"}
+    }
+    client.container.exec_mode = "stall"
+    client.container.kill_error = RuntimeError("kill unavailable")
+    client.container.remove_error = RuntimeError("remove unavailable")
+
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["curl"],
+         "allow_network": True, "timeout_seconds": 1}
+    )
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "deadline" in result
+    assert "may still be running" in result
+    assert "c1" not in docker_sandbox._active_containers
+
+
+def test_airlock_disconnect_stall_is_contained_within_bound(monkeypatch):
+    from tools import docker_airlock
+
+    monkeypatch.setattr(docker_airlock, "CONTAINMENT_JOIN_SECONDS", 0.5)
+    client = _install_airlock_client(monkeypatch)
+    client.container.attrs["NetworkSettings"]["Networks"] = {
+        "lab_net": {"NetworkID": "netabc"}
+    }
+    release = threading.Event()
+
+    def stalled_disconnect(*args, **kwargs):
+        client.bridge.disconnected.append(client.container)
+        release.wait(timeout=15)  # models a stuck daemon call
+
+    monkeypatch.setattr(client.bridge, "disconnect", stalled_disconnect)
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["curl"],
+         "allow_network": True, "timeout_seconds": 120}
+    )
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "did not complete" in result
+    assert client.container.kill_calls == 1  # containment covers the stall
+    assert "c1" not in docker_sandbox._active_containers
+    release.set()  # unblock the leaked worker before the test process moves on
 
 
 @pytest.mark.parametrize("already_on_bridge", [False, True])

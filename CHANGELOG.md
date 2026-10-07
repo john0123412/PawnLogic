@@ -30,6 +30,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   executing the installer — the Docker daemon cannot attach none-created
   containers to bridge afterward — and the container is preserved unchanged.
   The rejection never suggests host networking or scope relaxation.
+- Airlock installs now run under a hard operation deadline
+  (`timeout_seconds`, integer 1–300, default 120) that covers the temporary
+  attach, `apt update`/install and `pip` as one budget and is enforced by an
+  independent watchdog thread rather than client timeouts; the installer call
+  and the owned-network disconnect are bounded waits, so a stuck Docker SDK
+  request cannot outwait containment. Per-container serialization is acquired
+  before the bridge-membership ownership decision, so a concurrent
+  operation's temporary attachment cannot be mistaken for a pre-existing one,
+  and the per-container lease is held until network cleanup completes — the
+  deadline and serialization span the whole Airlock lifecycle. Operations'
+  watchdog callbacks are bound to an operation generation, so a late timer
+  cannot kill its successor. Expiry revokes the tool handle before
+  terminating the container (forced removal fallback), removes the owned
+  bridge attachment, and reports unresolved cleanup as a containment
+  failure — a timed-out persistent container does not survive, and
+  completion racing the deadline still reports containment instead of
+  success. Invalid timeout values are rejected before any daemon
+  interaction; configured operator scopes continue to deny Airlock installs.
 - One-shot `run_code_docker` containers are hardened by default: read-only
   root filesystem (relaxed only when `install_deps` must write site-packages),
   tmpfs `/tmp` and `/run`, `cap_drop=ALL`, and a user matching the host uid:gid
