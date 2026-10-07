@@ -873,6 +873,9 @@ name at the end is the gate that fails if the invariant is broken.
   survive), and removes the owned attachment; per-container operations are
   serialized with generation-bound timers so a late watchdog cannot kill its
   successor, and unresolved cleanup is a containment failure, never success.
+  A hung attach that completes after the deadline never reaches the
+  installer, and the disconnect-failure containment is itself a bounded
+  wait — no failure path outwaits the deadline window.
   If expiry containment outlives its bounded join window the operator is told
   containment was unresolved; a late containment pass may still land on the
   same condemned container (fail-closed over-kill) but skips the

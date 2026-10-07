@@ -831,6 +831,81 @@ def test_pwn_container_preflight_reports_daemon_failure(monkeypatch):
     assert result.startswith("ERROR: preflight inspection failed")
 
 
+def test_airlock_expired_connect_recovery_does_not_install(monkeypatch):
+    # A hung attach that outlives the deadline and then completes must not
+    # hand an expired, condemned operation to the installer.
+    client = _install_airlock_client(monkeypatch)
+    client.container.attrs["NetworkSettings"]["Networks"] = {
+        "lab_net": {"NetworkID": "netabc"}
+    }
+    exec_calls = []
+
+    def connect_after_kill(container):
+        client.bridge.connected.append(container)
+        client.container.dead.wait(timeout=10)  # deadline fires; kill lands
+        return None  # the hung connect eventually "recovers"
+
+    monkeypatch.setattr(client.bridge, "connect", connect_after_kill)
+    monkeypatch.setattr(
+        client.container,
+        "exec_run",
+        lambda **kwargs: exec_calls.append(True) or (0, b"ok"),
+    )
+
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["curl"],
+         "allow_network": True, "timeout_seconds": 1}
+    )
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "deadline" in result
+    assert exec_calls == [], "an expired operation must not start the installer"
+    assert client.container.kill_calls == 1
+    assert "c1" not in docker_sandbox._active_containers
+
+
+def test_airlock_disconnect_failure_containment_is_bounded(monkeypatch):
+    # When the owned disconnect fails, the kill/remove containment must be a
+    # bounded wait too: a hung daemon call cannot outwait the deadline window
+    # or hold the per-container lease forever.
+    import time
+
+    from tools import docker_airlock
+
+    monkeypatch.setattr(docker_sandbox, "CONTAINMENT_JOIN_SECONDS", 0.5)
+    monkeypatch.setattr(docker_airlock, "CONTAINMENT_JOIN_SECONDS", 0.5)
+    client = _install_airlock_client(monkeypatch)
+    client.container.attrs["NetworkSettings"]["Networks"] = {
+        "lab_net": {"NetworkID": "netabc"}
+    }
+
+    def failing_disconnect(*args, **kwargs):
+        raise RuntimeError("disconnect unavailable")
+
+    kill_started = threading.Event()
+
+    def hanging_kill():
+        kill_started.set()
+        client.container.dead.wait(timeout=15)  # models a stuck daemon kill
+
+    monkeypatch.setattr(client.bridge, "disconnect", failing_disconnect)
+    monkeypatch.setattr(client.container, "kill", hanging_kill, raising=False)
+
+    started = time.monotonic()
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["curl"],
+         "allow_network": True, "timeout_seconds": 120}
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "disconnect failed" in result
+    assert "could not be confirmed" in result
+    assert elapsed < 10, f"containment must stay bounded, took {elapsed:.1f}s"
+    assert "c1" not in docker_sandbox._active_containers
+    client.container.dead.set()  # unblock the leaked worker before exiting
+
+
 @pytest.mark.parametrize("already_on_bridge", [False, True])
 def test_airlock_invalid_operator_scope_blocks_install(monkeypatch, already_on_bridge):
     client = _install_airlock_client(monkeypatch)
