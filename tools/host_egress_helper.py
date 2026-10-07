@@ -346,7 +346,7 @@ def rule_presence_verification(policy: EgressPolicy, backend: str) -> list:
     return [
         (
             f"if snapshot=$(nft list table inet pawnlogic_egress 2>/dev/null); then "
-            f"case \"$snapshot\" in *'chain op_{policy.operation_suffix}'*) "
+            f"case \"$snapshot\" in *'chain op_{policy.operation_suffix} {{'*) "
             f"echo 'CONTAINMENT FAILURE: nft chain remains for {policy.operation_id}';; "
             f"*) echo 'nft chain removed';; esac; "
             f"else echo 'CONTAINMENT FAILURE: nft chain remains or table query failed "

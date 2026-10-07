@@ -249,6 +249,19 @@ iptables-save() {
     assert "rules removed" not in result.stdout
 
 
+@pytest.mark.parametrize("chain,present", [("op_test0001", True), ("op_test00012", False)])
+def test_nft_presence_matches_complete_chain_identifier(chain, present):
+    command = rule_presence_verification(make_policy(), "nftables")[0]
+    result = _run_stubbed_shell(
+        command,
+        "nft() { printf '%s\\n' 'table inet pawnlogic_egress {' "
+        + f"'    chain {chain} {{' "
+        + "'    }' '}'; }",
+    )
+    assert ("CONTAINMENT FAILURE" in result.stdout) is present
+    assert ("chain removed" in result.stdout) is not present
+
+
 def test_nftables_uses_per_operation_chain_in_an_owner_table():
     rules = build_rules(make_policy(), "nftables")
     joined = "\n".join(rules)
