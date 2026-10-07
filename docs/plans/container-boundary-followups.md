@@ -5,9 +5,9 @@ final-code evidence (§1), the offline attach compatibility guard (§3),
 Airlock operation deadlines including the post-merge failure-path fixes (§2),
 and the legacy-container read-only preflight (§4). Prepared but NOT
 installed: the host TCP/UDP review package (§5). Open: owner terminal
-acceptance (§6) and separately authorized §5 activation. The bounded
-`bf6e9cb` IQuest workflow passed with one tool call and no nudges; the earlier
-failed attempt remains recorded separately. Version remains 0.4.3; no tag, release, host firewall
+acceptance (§6), separately authorized §5 activation and current-code IQuest
+acceptance. The `bf6e9cb` workflow passed; the later `44114c1` bounded attempt
+made no tool calls. Both reports remain recorded separately. Version remains 0.4.3; no tag, release, host firewall
 change or privilege installation has been authorized. Delivery follows
 independent review, the protected-branch PR flow and required CI.
 
@@ -54,6 +54,13 @@ bounded IQuest-Q1 workflow made one actual tool call, created one offline
 non-root container, independently verified the random proof and produced no
 out-of-scope canary requests. It required no nudges and had no API error.
 This establishes the scoped HTTP workflow, not the uninstalled host filter.
+
+Follow-up `44114c1` acceptance: all nine real deterministic checks passed,
+and real Airlock expiry/completion checks passed. The bounded IQuest-Q1
+attempt made zero tool calls and created no containers after two nudges,
+with no API error. Model acceptance failed; no whole-attempt retry was made.
+This does not invalidate the deterministic results or the earlier workflow
+pass, but the latest code has no successful model execution evidence.
 
 ## 2. Airlock deadline (after the small compatibility guard PR)
 
