@@ -240,6 +240,10 @@ stop/destroy them before relying on the scope. Change the operator declaration
 only between operations. Transparent arbitrary TCP/UDP filtering remains a
 separate host-managed phase.
 
+The [boundary follow-up plan](docs/plans/container-boundary-followups.md)
+records proposed Airlock deadlines, offline restoration, legacy-container
+checks and host-filter acceptance; these follow-ups are not implemented yet.
+
 ## Data Layout
 
 ```text
