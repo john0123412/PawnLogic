@@ -248,8 +248,11 @@ Airlock operation deadline (hard `timeout_seconds`, watchdog-enforced; expiry
 revokes the tool handle and terminates the container) and the read-only
 legacy-container preflight (`pwn_container action=preflight` reports running
 PawnLogic-labelled containers that still have network access; a scope never
-quarantines them). Offline restoration topology and host-managed TCP/UDP
-filtering remain proposed.
+quarantines them). Host-managed transparent TCP/UDP filtering is prepared as
+a review package only (ADR 0014: helper interface, traffic-path-to-hook
+matrix, rollback; simulated tests); it stays uninstalled and requires
+separate host authorization before anything is applied. Offline restoration
+topology remains proposed.
 
 ## Data Layout
 

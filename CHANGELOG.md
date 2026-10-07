@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- ADR 0014 and a review package for the separately authorized host-managed
+  transparent TCP/UDP filter (`tools/host_egress_helper.py` with simulated
+  backend tests): operation-bound policy schema, candidate rules for the
+  Docker-supported `DOCKER-USER` chain (iptables, with an ip6tables mirror)
+  and an owned `inet pawnlogic_egress` table (nftables), dry-run output,
+  conntrack revocation and rollback commands, plus the required
+  traffic-path-to-hook matrix. Nothing is installed, registered as a tool,
+  or executed; unknown backends deny activation, and applying anything to
+  the host firewall requires separate owner authorization and the backend
+  verification matrix to pass first.
+
 ### Security
 - Network Policy classifies IPv4-mapped IPv6 by its effective IPv4 address
   before metadata/special-address checks, so explicit scope authorization
