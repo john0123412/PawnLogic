@@ -86,6 +86,14 @@ def test_policy_schema_rejects_ambiguous_identity_and_destinations():
         make_policy(tcp_ports=(0,))
 
 
+@pytest.mark.parametrize("field", ["container_ipv6", "allowed_ipv6", "dns_servers_ipv6"])
+def test_policy_rejects_ipv6_zone_identifiers_in_command_artifacts(field):
+    # ipaddress accepts arbitrary scope strings; interpolating such a scope
+    # into a reviewed shell artifact must never introduce command syntax.
+    with pytest.raises(ValueError, match="scope"):
+        make_policy(**{field: ("2001:db8::7%$(id)",)})
+
+
 def test_iptables_rules_bind_network_and_container_identity():
     rules = build_rules(make_policy(), "iptables")
     assert rules
@@ -120,6 +128,20 @@ def test_iptables_rules_cover_both_families_and_fail_closed():
     accepts = [r for r in rules if "-j ACCEPT" in r]
     assert accepts
     assert all("-s 198.18.0.7" in r or "-s fd12::7" in r for r in accepts)
+
+
+@pytest.mark.parametrize("backend", ["iptables", "nftables"])
+def test_unpinned_established_original_traffic_has_no_blanket_allow(backend):
+    # A socket opened before activation remains ESTABLISHED in ORIGINAL
+    # direction. State alone must not let it bypass destination enforcement.
+    rules = build_rules(make_policy(), backend)
+    broad = [r for r in rules if "established,related" in r.lower()]
+    assert broad
+    for rule in broad:
+        if backend == "iptables":
+            assert "--ctdir REPLY" in rule
+        else:
+            assert "ct direction reply" in rule
 
 
 def test_multi_address_snapshots_emit_one_rule_per_source():
@@ -169,6 +191,25 @@ def test_policy_hard_denies_all_mapped_metadata_allowlist_fields(field, address)
         overrides["allowed_ipv4"] = ("203.0.113.7",)
     with pytest.raises(ValueError, match="hard-denied"):
         make_policy(**overrides)
+
+
+def test_policy_hard_denies_expanded_mapped_metadata_in_every_allowlist_family():
+    # The mapped form can also be written with an expanded IPv6 tail; it must
+    # classify by its effective IPv4 address in both destination and DNS fields.
+    expanded = "0:0:0:0:0:ffff:6464:64c8"
+    for field, address in (
+        ("allowed_ipv4", "100.100.100.200"),
+        ("allowed_ipv6", expanded),
+        ("dns_servers_ipv4", "100.100.100.200"),
+        ("dns_servers_ipv6", expanded),
+    ):
+        overrides = {field: (address,)}
+        if field.endswith("ipv4"):
+            overrides["allowed_ipv6"] = ("2001:db8::7",)
+        else:
+            overrides["allowed_ipv4"] = ("203.0.113.7",)
+        with pytest.raises(ValueError, match="hard-denied"):
+            make_policy(**overrides)
 
 
 def test_iptables_inserts_drop_first_so_preexisting_return_cannot_shadow():
@@ -230,6 +271,25 @@ nft() {
     assert "chain removed" not in result.stdout
 
 
+def test_nft_successful_full_table_without_target_chain_reports_removed():
+    command = rule_presence_verification(make_policy(), "nftables")[0]
+    result = _run_stubbed_shell(
+        command,
+        """
+nft() {
+    if [ "$1" = list ] && [ "$2" = table ]; then
+        printf '%s\\n' 'table inet pawnlogic_egress {' \
+            '    chain op_other {' '    }' '}'
+        return 0
+    fi
+    return 1
+}
+""",
+    )
+    assert "nft chain removed" in result.stdout
+    assert "CONTAINMENT FAILURE" not in result.stdout
+
+
 def test_iptables_presence_query_drains_all_matches_under_pipefail():
     command = rule_presence_verification(make_policy(), "iptables")[0]
     result = _run_stubbed_shell(
@@ -247,6 +307,17 @@ iptables-save() {
     )
     assert "CONTAINMENT FAILURE" in result.stdout
     assert "rules removed" not in result.stdout
+
+
+def test_iptables_presence_query_error_is_containment_failure():
+    stubs = """
+iptables-save() { return 1; }
+ip6tables-save() { return 1; }
+"""
+    for command in rule_presence_verification(make_policy(), "iptables"):
+        result = _run_stubbed_shell(command, stubs)
+        assert "CONTAINMENT FAILURE" in result.stdout
+        assert "rules removed" not in result.stdout
 
 
 @pytest.mark.parametrize("chain,present", [("op_test0001", True), ("op_test00012", False)])
@@ -277,7 +348,7 @@ def test_nftables_uses_per_operation_chain_in_an_owner_table():
             assert rule.count(" accept") <= 1 and not rule.rstrip().endswith("accept accept")
     assert any("counter drop" in r for r in rules)
     assert any("udp dport 5353" in r for r in rules), "udp ports must appear for nftables"
-    assert any("ct state established,related accept" in r for r in rules), (
+    assert any("ct state established,related ct direction reply accept" in r for r in rules), (
         "published-port replies must keep flowing on nftables too"
     )
     assert any(

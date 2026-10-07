@@ -253,6 +253,13 @@ a review package only (ADR 0014: helper interface, traffic-path-to-hook
 matrix, rollback; simulated tests); it stays uninstalled and requires
 separate host authorization before anything is applied. Offline restoration
 topology remains proposed.
+The maintainer-only [stage-one runbook](docs/runbooks/host-egress-stage-one.md)
+uses `python tools/host_egress_preflight.py --out .agent-work/notes/host-egress-readiness.json`
+to inspect local prerequisites without installing packages/helper/sudoers or
+applying rules. Missing administrator access or conntrack blocks kernel
+verification; all 13 matrix paths remain `not_run` and activation readiness is
+false even when prerequisites pass. The review package allows blanket state
+acceptance only for replies and rejects IPv6 scope suffixes in command artifacts.
 Review-package checks fail closed on query errors, inspect complete rule
 snapshots without short-circuit pipelines, and reject link-local and cloud
 metadata destinations, including IPv4-mapped spellings.
