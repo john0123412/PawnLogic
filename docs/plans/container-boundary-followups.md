@@ -10,8 +10,11 @@ acceptance (§6) and separately authorized §5 activation. Current-code
 the earlier `44114c1` failed attempt remains recorded as history. Automated
 probe checks pass against a locally built `pawnlogic-tui` from `35aa6c5`
 (not a published release artifact); the four visual checks stay manual.
-Version remains 0.4.3; no tag, release, host firewall
-change or privilege installation has been authorized. Delivery follows
+Stage-one implementation/verification has owner authorization; administrator
+access and conntrack prerequisites are still unavailable to the current
+session. No privileged executor is installed and all 13 real backend rows
+remain `not_run`. Operational activation is a separate second-stage decision.
+Version remains 0.4.3; no tag or release is authorized. Delivery follows
 independent review, the protected-branch PR flow and required CI.
 
 ## Goal and existing guarantees
@@ -171,6 +174,14 @@ live connection. Unsupported topology fails before installer execution.
 operations remain fail-closed, and reports never imply retroactive isolation.
 
 ## 5. Host-managed transparent TCP/UDP (authorization gate)
+
+The [stage-one runbook](../runbooks/host-egress-stage-one.md) distinguishes
+owner authorization from administrator access. The read-only prerequisite
+CLI preserves blocked/not-run results and cannot activate rules or grant
+sudoers access. Before installation, the privileged executor must bind
+root-owned policies and live container identity; the generator is not that
+executor. Reply-only state allowances fix the pre-activation ORIGINAL-flow
+bypass in candidate rules. Deleting artifacts is not live-container containment.
 
 First prepare a concrete review package without installing it: helper interface,
 policy/identity schema, generated rule examples, dry-run output, rollback,

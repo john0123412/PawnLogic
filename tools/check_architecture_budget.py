@@ -31,6 +31,7 @@ BUDGETS: dict[str, tuple[int, int]] = {
     "tools/docker_airlock.py": (320, 42),
     "tools/docker_preflight.py": (110, 20),
     "tools/host_egress_helper.py": (400, 70),
+    "tools/host_egress_preflight.py": (120, 25),
     "tools/pwn_chain.py": (650, 90),
     "tools/browser_ops.py": (500, 80),
     "tools/policy_proxy.py": (430, 70),

@@ -103,6 +103,7 @@
 | `tools/eval/artifacts.py` | Artifact I/O | `write_artifact()` | `test_runtime_eval_artifacts.py` | Atomic replacement. Allowlisted fields only. |
 | `tools/eval/redaction.py` | Redaction | `redact_summary()` | `test_runtime_eval.py` | Never stores raw Provider output. |
 | `tools/runtime_eval.py` | CLI facade | `--suite`, `--max-api-calls` | `test_runtime_eval.py` | Delegates to `tools/eval/`. CLI args compatible. |
+| `tools/host_egress_preflight.py` | Read-only host prerequisite CLI | `collect_readiness()`, `--out` | `test_host_egress_preflight.py` | Queries the local daemon and bounded privilege availability; never applies rules or grants sudoers. All kernel matrix rows remain `not_run`. |
 
 ## Configuration
 

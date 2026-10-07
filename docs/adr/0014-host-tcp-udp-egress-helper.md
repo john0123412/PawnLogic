@@ -48,11 +48,12 @@ Prepare, review and simulate — but do not install — a host egress helper:
    order with the drop first — appended rules could land after a pre-existing
    owner RETURN rule and become dead code, and drop-first keeps the
    container fail-closed during the whole activation sequence. An
-   `ESTABLISHED,RELATED` allowance precedes the drop so reply traffic of
-   published-port services keeps flowing; the original-direction caveat
-   stays in matrix row 3, and the same allowance means activation does not
-   cut flows the container already had open — expiry/rollback revocation
-   (row 8) handles those. Link-local and cloud-metadata destinations are
+   `ESTABLISHED,RELATED` allowance is limited to the REPLY direction so
+   published-port responses keep flowing. Original-direction packets,
+   including connections established before activation, must still match
+   pinned destinations and ports; state alone never grants outbound access.
+   Expiry/rollback revocation still needs real backend verification (row 8).
+   Link-local and cloud-metadata destinations are
    rejected at policy time, including `100.100.100.200` and mapped IPv4
    spellings (they can never enter an allowlist). The future
    helper must deny concurrent activation (one managed operation at a
@@ -81,7 +82,7 @@ an uncovered path denies activation.
 | 5 | Same-bridge peer traffic | NOT covered by the container-scoped rules; peer-to-peer frames may not traverse FORWARD at all | Two-container peer probe on the managed bridge |
 | 6 | Host/embedded DNS forwarding (127.0.0.11) | Embedded DNS forwards from the host namespace — container→DNS may not traverse FORWARD; pinned resolvers + drop rule must be verified | `docker exec` dig against 127.0.0.11 and against arbitrary resolver |
 | 7 | Direct alternate resolvers | udp/53 restricted to pinned servers; other UDP dropped (policy pins udp ports explicitly) | Negative fixture on udp/5353 to non-pinned targets |
-| 8 | Established flows after rule change | `conntrack -D -s <container-ip> -d <dest>` for the operation's destinations on expiry (source-scoped, so other tenants of a shared destination are not hit), then listing verification; pre-activation flows are not cut on activation | Expiry fixture with a long-lived connection |
+| 8 | Established flows after rule change | Original-direction packets must match pinned destinations even when established; only replies get the blanket state allowance. Candidate destination-scoped deletion still needs lifecycle and DNAT verification before use | Pre-activation out-of-scope connection and expiry fixture with a long-lived approved connection |
 | 9 | Link-local / cloud metadata (169.254.169.254, 100.100.100.200, fd00:ec2::254, mapped IPv4 forms) | Fail-closed drop (never in any policy allowlist); Network Policy hard denial (ADR 0013) applies only on the relay path, which is separate | Backend fixture probe from the container |
 | 10 | Additional network attachments and IPv6 routes | Policy covers one managed network; attaching a second network must re-run policy or be denied | Attach-second-network probe |
 | 11 | Published-port hairpin / reverse paths | Container-originated hairpin is denied by the source-scoped drop; external-hairpin paths still need verification | Hairpin probe |
@@ -102,7 +103,9 @@ an uncovered path denies activation.
   the candidate rules (DoT 853 must be added explicitly if ever needed).
 - **Command injection into reviewed artifacts.** Operation ids, interface
   names and addresses are charset-validated (numeric addresses only, no
-  shell metacharacters) before they are interpolated into commands.
+  shell metacharacters) before they are interpolated into commands. IPv6
+  scope suffixes are rejected: `ipaddress` alone accepts nonnumeric zone text
+  that must never be interpolated into a shell artifact.
 - **Privilege scope.** The helper's privilege policy must be a narrow
   sudoers rule set for the exact commands it runs (rule add/delete,
   conntrack delete/list, save/restore for rollback), never broad sudo; the
@@ -119,6 +122,14 @@ an uncovered path denies activation.
 
 ## Rollback
 
+The commands below are candidate artifact deletion, NOT a safe standalone
+live-container rollback. Before deleting the last blocking rule, a future
+executor must stop/quarantine the owned container and verify containment.
+Deleting rules while a live bridge container remains connected restores its
+unfiltered access. Query failures retain containment and require administrator
+attention; a save/restore command must never be suggested as a universal
+"one-line cleanup" while other operations or Docker are changing the table.
+
 iptables: `iptables-save | grep -vF 'pawnlogic <op-id> ' | iptables-restore`
 (and the ip6tables mirror) — the fixed-string filter is anchored with a
 trailing delimiter so concurrent operation ids cannot be over-matched —
@@ -132,6 +143,11 @@ success.
 
 ## Consequences
 
+The stage-one runbook is [host-egress-stage-one.md](../runbooks/host-egress-stage-one.md).
+The read-only prerequisite CLI reports missing binaries/administrator access
+and initializes all matrix rows as `not_run`; even a ready prerequisite report
+never authorizes activation or installs a sudoers entry.
+
 Until the owner authorizes and the backend verification matrix passes,
 unscoped bridge/host grants remain capability-only, and the CHANGELOG keeps
 saying so. After authorization, acceptance follows §5: owned dual-stack
@@ -143,4 +159,5 @@ concurrent-operation isolation; only then a bounded real IQuest workflow.
 
 - [Docker iptables](https://docs.docker.com/engine/network/firewall-iptables/)
 - [Docker nftables](https://docs.docker.com/engine/network/firewall-nftables/)
+- [Netfilter conntrack expressions and directions](https://www.netfilter.org/projects/nftables/manpage.html)
 - ADR 0013 (scoped HTTP/CONNECT relay), plan §5

@@ -958,6 +958,12 @@ name at the end is the gate that fails if the invariant is broken.
   Real backend coverage and owner authorization are still required before
   installing any host filter. `tests/test_host_egress_helper.py` gates the
   artifact behavior, not kernel enforcement.
+  Blanket established-state acceptance is REPLY-only; original-direction
+  connections must still match pinned destinations, including pre-activation
+  connections. Artifact deletion alone cannot quarantine a live container.
+  `tools/host_egress_preflight.py` is a read-only prerequisite CLI, never a
+  privileged entry point or activation gate. It records all kernel matrix
+  paths as `not_run`; no simulated result can substitute for backend evidence.
 - **Browser transports require the loopback policy proxy.** Chromium skips
   redirect route callbacks, so context guards alone cannot enforce destinations.
   Both Patchright paths (including Scrapling >= 0.4.15) disable HTTP/2/QUIC,

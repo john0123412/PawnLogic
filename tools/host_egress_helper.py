@@ -65,6 +65,8 @@ def _numeric_addresses(kind: str, addresses) -> tuple:
             parsed = ipaddress.ip_address(address)
         except ValueError as exc:
             raise ValueError(f"{kind} entry {address!r} is not a numeric address") from exc
+        if getattr(parsed, "scope_id", None) is not None:
+            raise ValueError(f"{kind} entry {address!r} contains an unsupported IPv6 scope")
         expected = "IPv6" if kind.endswith("ipv6") else "IPv4"
         wrong_family = (parsed.version == 6 and expected == "IPv4") or (
             parsed.version == 4 and expected == "IPv6"
@@ -188,10 +190,10 @@ def _iptables_family(policy: EgressPolicy, binary: str, bridge: str, sources, de
                 )
         # Replies of established flows (e.g. DNAT'd published-port services)
         # pass before the fail-closed drop; matrix row 3 covers the
-        # original-direction caveat. Emitted last so it lands on top.
+        # original-direction restriction. Emitted last so it lands on top.
         established.append(
             f"{binary} -I DOCKER-USER 1 -i {bridge} -s {source} "
-            f"-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT "
+            f"-m conntrack --ctstate ESTABLISHED,RELATED --ctdir REPLY -j ACCEPT "
             f"-m comment --comment '{comment}'"
         )
     return drops, logs + accepts + established
@@ -231,7 +233,7 @@ def build_rules(policy: EgressPolicy, backend: str) -> list:
     for source in policy.container_ipv4:
         rules.append(
             f"nft add rule {table_chain} ip saddr {source} "
-            f"ct state established,related accept"
+            f"ct state established,related ct direction reply accept"
         )
         for destination in policy.allowed_ipv4:
             for port in policy.tcp_ports:
@@ -257,7 +259,7 @@ def build_rules(policy: EgressPolicy, backend: str) -> list:
     for source in policy.container_ipv6:
         rules.append(
             f"nft add rule {table_chain} ip6 saddr {source} "
-            f"ct state established,related accept"
+            f"ct state established,related ct direction reply accept"
         )
         for destination in policy.allowed_ipv6:
             for port in policy.tcp_ports:

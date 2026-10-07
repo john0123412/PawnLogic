@@ -8,6 +8,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- A read-only host-egress prerequisite CLI and stage-one runbook. Missing
+  administrator access or conntrack blocks real backend verification; the
+  report never claims activation readiness or matrix passes and installs no
+  privileged helper or sudoers grant.
 - ADR 0014 and a review package for the separately authorized host-managed
   transparent TCP/UDP filter (`tools/host_egress_helper.py` with simulated
   backend tests): operation-bound policy schema, candidate rules for the
@@ -29,6 +33,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `100.100.100.200` and its IPv4-mapped IPv6 spelling.
 
 ### Security
+- Host-egress candidate state allowances are REPLY-only on both backends;
+  pre-existing original-direction connections cannot bypass destination pins
+  merely by being established. IPv6 scope suffixes are rejected before command
+  artifact generation. The review package remains uninstalled.
 - Airlock installer workers claim admission atomically against expiry and
   operation generation changes, so a worker queued until after expiry cannot
   use a stale main-thread check to start installation. Already-admitted
