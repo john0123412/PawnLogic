@@ -17,7 +17,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   traffic-path-to-hook matrix. Nothing is installed, registered as a tool,
   or executed; unknown backends deny activation, and applying anything to
   the host firewall requires separate owner authorization and the backend
-  verification matrix to pass first.
+  verification matrix to pass first. Post-merge independent review hardened
+  the package: link-local and cloud-metadata destinations are hard-denied at
+  policy time, rules insert at the top of `DOCKER-USER` drop-first (a
+  pre-existing owner RETURN rule cannot shadow them), nftables rollback
+  flushes the chain before deleting it, and every verification command
+  branches on the query itself so a failing or unauthorized check reports a
+  containment failure instead of a false success.
 
 ### Security
 - Network Policy classifies IPv4-mapped IPv6 by its effective IPv4 address

@@ -40,23 +40,28 @@ Prepare, review and simulate — but do not install — a host egress helper:
    edited. The host firewall backend is not migrated as part of this work.
    Unknown or unsupported backends deny activation rather than falling back
    to an unfiltered bridge.
-3. **Fail-closed coverage, scoped.** A per-interface drop terminates the
-   managed container's uncovered traffic (matched on its own source
-   addresses on the bridge interface) so uncovered paths are denied, not
-   silently passed, while sibling containers on the same bridge are not
-   collateral. An `ESTABLISHED,RELATED` allowance precedes the drop so
-   reply traffic of published-port services keeps flowing; the
-   original-direction caveat stays in matrix row 3, and the same allowance
-   means activation does not cut flows the container already had open —
-   expiry/rollback revocation (row 8) handles those. Activation must apply
-   the rule set atomically, or insert the drop before the accepts, so the
-   append window cannot fall through to Docker's default accept. The
-   future helper must deny concurrent activation (one managed operation at
-   a time).
+3. **Fail-closed coverage, scoped, drop-first.** A per-interface drop
+   terminates the managed container's uncovered traffic (matched on its own
+   source addresses on the bridge interface) so uncovered paths are denied,
+   not silently passed, while sibling containers on the same bridge are not
+   collateral. Rules are INSERTED at the top of `DOCKER-USER` in reverse
+   order with the drop first — appended rules could land after a pre-existing
+   owner RETURN rule and become dead code, and drop-first keeps the
+   container fail-closed during the whole activation sequence. An
+   `ESTABLISHED,RELATED` allowance precedes the drop so reply traffic of
+   published-port services keeps flowing; the original-direction caveat
+   stays in matrix row 3, and the same allowance means activation does not
+   cut flows the container already had open — expiry/rollback revocation
+   (row 8) handles those. Link-local and cloud-metadata destinations are
+   rejected at policy time (they can never enter an allowlist). The future
+   helper must deny concurrent activation (one managed operation at a
+   time).
 4. **Lifecycle.** Expiry, failure, daemon restart and helper restart revoke
    the operation's rules and conntrack flows and then VERIFY revocation with
-   listing checks; a remaining flow or rule is a containment failure, never
-   a clean report.
+   listing checks; every verification command branches on the query itself,
+   so a failing or unauthorized query reports a containment failure instead
+   of a false success. A remaining flow or rule is a containment failure,
+   never a clean report.
 
 ## Traffic-path-to-hook matrix (required before implementation approval)
 
@@ -103,19 +108,23 @@ an uncovered path denies activation.
   string, suffix-charset enforced against prefix collisions); nftables
   rollback deletes only the operation's own chain. `iptables-save | restore`
   rewrites the table from a snapshot: Docker churn must be quiesced (or the
-  xtables lock held) while rollback runs, and every rollback ends with
-  conntrack listing checks whose failure is a containment failure.
+  xtables lock held) while rollback runs. nftables chains must be flushed
+  before they can be deleted (`nft flush chain`, then `nft delete chain`),
+  and rollback ends with conntrack and rule-presence checks whose failure is
+  a containment failure with the exact residual state, never as success.
 
 ## Rollback
 
 iptables: `iptables-save | grep -vF 'pawnlogic <op-id> ' | iptables-restore`
 (and the ip6tables mirror) — the fixed-string filter is anchored with a
 trailing delimiter so concurrent operation ids cannot be over-matched —
-followed by per-destination `conntrack -L -d` checks that report
-`CONTAINMENT FAILURE` when flows remain. nftables: `nft delete chain inet
-pawnlogic_egress op_<id>` (per-operation chain; other operations' chains
-are untouched) plus the same verification. A failed rollback is reported as
-a containment failure with the exact residual state, never as success.
+followed by per-destination `conntrack -L` checks that report
+`CONTAINMENT FAILURE` when flows remain. nftables: `nft flush chain inet
+pawnlogic_egress op_<id>` then `nft delete chain inet pawnlogic_egress
+op_<id>` (per-operation chain; other operations' chains are untouched) plus
+the same verification. A failed rollback or a failing verification query is
+reported as a containment failure with the exact residual state, never as
+success.
 
 ## Consequences
 
