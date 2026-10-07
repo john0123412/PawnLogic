@@ -23,9 +23,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   pre-existing owner RETURN rule cannot shadow them), nftables rollback
   flushes the chain before deleting it, and every verification command
   branches on the query itself so a failing or unauthorized check reports a
-  containment failure instead of a false success.
+  containment failure instead of a false success. Complete-table nft queries
+  and pipeline-free iptables snapshot checks also prevent false cleanup
+  reports after query errors or SIGPIPE. The hard-denied metadata set includes
+  `100.100.100.200` and its IPv4-mapped IPv6 spelling.
 
 ### Security
+- Airlock installer workers claim admission atomically against expiry and
+  operation generation changes, so a worker queued until after expiry cannot
+  use a stale main-thread check to start installation. Already-admitted
+  remote Docker work still requires watchdog containment; unresolved cleanup
+  is reported explicitly.
 - Network Policy classifies IPv4-mapped IPv6 by its effective IPv4 address
   before metadata/special-address checks, so explicit scope authorization
   cannot allow a mapped cloud metadata endpoint. Original address forms remain
@@ -111,7 +119,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   replay harnesses, `acceptance_post429`, `ptk_client`), dead config surface
   (`DOCKER_IMAGES`, `NORMAL_CONFIG`, `WEB_STRATEGY`,
   `PAWNLOGIC_DEFAULT_MODEL`), and two unreferenced provider-stream fixtures;
-  the typed island is now 53 modules.
+  the typed island is now 54 modules.
 - Clarified the authorized CTF plaintext HTTP workflow in tool guidance and
   bilingual documentation: use disposable, resource-limited Docker containers
   with explicitly authorized bridge networking, without relaxing the browser

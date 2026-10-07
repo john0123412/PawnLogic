@@ -864,6 +864,49 @@ def test_airlock_expired_connect_recovery_does_not_install(monkeypatch):
     assert "c1" not in docker_sandbox._active_containers
 
 
+def test_airlock_expiry_before_installer_worker_admission_does_not_install(monkeypatch):
+    client = _install_airlock_client(monkeypatch)
+    client.bridge.attrs = {"Containers": {"cid123": {}}}
+    exec_calls = []
+    original_thread = threading.Thread
+
+    class DelayedInstallerThread(original_thread):
+        def run(self):
+            if self._target and self._target.__name__ == "_run_install":
+                assert client.container.dead.wait(timeout=5)
+            return super().run()
+
+    monkeypatch.setattr(threading, "Thread", DelayedInstallerThread)
+    monkeypatch.setattr(client.container, "exec_run", lambda **kwargs: exec_calls.append(True) or (0, b"ok"))
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["fixture"],
+         "allow_network": True, "timeout_seconds": 1}
+    )
+    assert result.startswith("SECURITY BLOCK")
+    assert exec_calls == [], "an expired queued worker must not enter the installer"
+
+
+@pytest.mark.parametrize("flag", ["expired", "finished", "settled"])
+def test_airlock_execution_claim_rejects_terminal_state(monkeypatch, flag):
+    from tools import docker_airlock
+
+    op = docker_airlock.AirlockOperation("claim-test", 1, 120)
+    monkeypatch.setitem(docker_airlock._generations, op.container_name, op.generation)
+    setattr(op, flag, True)
+    assert docker_airlock.claim_airlock_execution(op) is False
+
+
+def test_airlock_execution_claim_is_once_per_current_generation(monkeypatch):
+    from tools import docker_airlock
+
+    op = docker_airlock.AirlockOperation("claim-test", 1, 120)
+    monkeypatch.setitem(docker_airlock._generations, op.container_name, op.generation)
+    assert docker_airlock.claim_airlock_execution(op) is True
+    assert docker_airlock.claim_airlock_execution(op) is False
+    stale = docker_airlock.AirlockOperation(op.container_name, 0, 120)
+    assert docker_airlock.claim_airlock_execution(stale) is False
+
+
 def test_airlock_disconnect_failure_containment_is_bounded(monkeypatch):
     # When the owned disconnect fails, the kill/remove containment must be a
     # bounded wait too: a hung daemon call cannot outwait the deadline window

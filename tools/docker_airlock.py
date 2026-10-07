@@ -59,6 +59,7 @@ class AirlockOperation:
         self.expired = False
         self.finished = False
         self.settled = False
+        self.execution_claimed = False
         self.containment: str | None = None
 
 
@@ -87,11 +88,19 @@ def begin_airlock_operation(container_name: str, timeout_seconds: int) -> Airloc
         return AirlockOperation(container_name, generation, timeout_seconds)
 
 
-def operation_expired(op: AirlockOperation) -> bool:
-    """Read-only expiry peek; lets the caller abandon work an expired
-    operation must not start."""
+def claim_airlock_execution(op: AirlockOperation) -> bool:
+    """Admit one installer atomically against expiry and generation changes.
+
+    This is the local admission point, not atomic cancellation of a remote
+    Docker request. Never hold the state lock while calling the daemon.
+    """
     with _state_guard:
-        return op.expired
+        if any((op.expired, op.finished, op.settled, op.execution_claimed)):
+            return False
+        if _generations.get(op.container_name) != op.generation:
+            return False
+        op.execution_claimed = True
+        return True
 
 
 def settle_airlock_operation(op: AirlockOperation, watchdog: threading.Timer | None) -> tuple[bool, str | None]:

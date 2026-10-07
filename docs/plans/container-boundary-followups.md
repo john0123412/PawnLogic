@@ -1,13 +1,13 @@
 # Container Boundary Follow-ups
 
-**Status:** Partially implemented on main (`ea6600f`…`5efe42b`). Merged:
+**Status:** Partially implemented on main (implementation PRs #202–#207). Merged:
 final-code evidence (§1), the offline attach compatibility guard (§3),
 Airlock operation deadlines including the post-merge failure-path fixes (§2),
 and the legacy-container read-only preflight (§4). Prepared but NOT
 installed: the host TCP/UDP review package (§5). Open: owner terminal
-acceptance (§6), separately authorized §5 activation, and a passing
-final-code IQuest run (the bounded attempt produced no tool calls and stays
-recorded as failed). Version remains 0.4.3; no tag, release, host firewall
+acceptance (§6) and separately authorized §5 activation. The bounded
+`bf6e9cb` IQuest workflow passed with one tool call and no nudges; the earlier
+failed attempt remains recorded separately. Version remains 0.4.3; no tag, release, host firewall
 change or privilege installation has been authorized. Delivery follows
 independent review, the protected-branch PR flow and required CI.
 
@@ -49,6 +49,12 @@ Current `ea6600f` evidence: all nine real deterministic checks passed. The
 bounded IQuest attempt produced zero tool calls after two nudges, with no API
 error; model acceptance failed. It is not recorded as an overall pass.
 
+Later `bf6e9cb` acceptance: all nine real deterministic checks passed. A
+bounded IQuest-Q1 workflow made one actual tool call, created one offline
+non-root container, independently verified the random proof and produced no
+out-of-scope canary requests. It required no nudges and had no API error.
+This establishes the scoped HTTP workflow, not the uninstalled host filter.
+
 ## 2. Airlock deadline (after the small compatibility guard PR)
 
 Affected ownership: `tools/docker_sandbox.py`, Airlock schema in
@@ -76,6 +82,10 @@ only if the existing architecture budget requires a cohesive extraction.
   Use bounded joins only: a stuck Docker SDK request must not reintroduce
   unlimited waiting. Cannot confirm process termination or cleanup means
   containment failure, never success.
+- Installer workers must atomically claim local admission against expiry and
+  generation changes before submitting work. No state lock spans the Docker
+  request. Already-admitted remote work can race with termination and remains
+  subject to watchdog containment; this is not atomic remote cancellation.
 - Retain the configured-scope Airlock denial. Package execution deadlines
   must not introduce a scoped package-install bypass.
 

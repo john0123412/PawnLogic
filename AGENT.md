@@ -869,13 +869,18 @@ name at the end is the gate that fails if the invariant is broken.
   acquired before the bridge-membership ownership decision and held until
   cleanup completes, so the deadline and serialization span the whole
   lifecycle. Expiry revokes the tool
-  handle, terminates the container (a timed-out persistent container does not
-  survive), and removes the owned attachment; per-container operations are
-  serialized with generation-bound timers so a late watchdog cannot kill its
-  successor, and unresolved cleanup is a containment failure, never success.
+  handle and attempts container termination and owned-attachment removal;
+  failed or unconfirmed daemon cleanup is explicitly reported. Per-container operations are
+  serialized with generation-bound timers that reject stale callbacks before
+  expiry is claimed; unresolved cleanup is a containment failure, never success.
   A hung attach that completes after the deadline never reaches the
   installer, and the disconnect-failure containment is itself a bounded
-  wait — no failure path outwaits the deadline window.
+  wait. Installer admission uses one generation-bound, atomic state claim
+  inside its worker; expiry winning that claim prevents the daemon exec call.
+  Already-admitted work can race with remote termination: Docker requests
+  cannot be physically cancelled atomically. No state lock spans a daemon
+  call. Metadata/attach calls have the finite SDK timeout and may return
+  after the operation deadline while the watchdog attempts containment.
   If expiry containment outlives its bounded join window the operator is told
   containment was unresolved; a late containment pass may still land on the
   same condemned container (fail-closed over-kill) but skips the
@@ -946,6 +951,13 @@ name at the end is the gate that fails if the invariant is broken.
   authorization must never admit mapped metadata. Literal and hostname-snapshot
   regressions in `tests/test_network_policy.py` and
   `tests/test_container_http_proxy.py` fail before any dial.
+- **The host egress helper is an uninstalled review package.** Its policies
+  must reject metadata including `100.100.100.200` and mapped forms. Cleanup
+  verification must use successful complete snapshots; failed queries and
+  short-circuit pipeline SIGPIPE must never masquerade as absent rules.
+  Real backend coverage and owner authorization are still required before
+  installing any host filter. `tests/test_host_egress_helper.py` gates the
+  artifact behavior, not kernel enforcement.
 - **Browser transports require the loopback policy proxy.** Chromium skips
   redirect route callbacks, so context guards alone cannot enforce destinations.
   Both Patchright paths (including Scrapling >= 0.4.15) disable HTTP/2/QUIC,
