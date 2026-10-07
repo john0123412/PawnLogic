@@ -44,6 +44,7 @@ from tools.docker_http import (
 )
 from tools.docker_mounts import check_path_safety
 from tools.docker_plan import build_docker_execution_plan, validate_network_mode
+from tools.docker_preflight import preflight_report
 from tools.docker_schemas import DOCKER_SCHEMAS as DOCKER_SCHEMAS
 from tools.docker_spawn import check_privilege_flags, resolve_container_user, spawn_container
 from utils.ansi import c, YELLOW, GREEN, RED, GRAY, CYAN, MAGENTA, BOLD
@@ -424,11 +425,13 @@ def tool_pwn_container(a: dict) -> str:
       - exec: run a command inside a running container.
       - destroy: stop and destroy a container.
       - list: list active persistent containers.
+      - preflight: read-only report of running PawnLogic-labelled containers
+        with network access; enabling a scope does not quarantine them.
 
     Parameters
     ----------
     action : str
-        create / exec / destroy / list
+        create / exec / destroy / list / preflight
     name : str
         Container name identifier for create/exec/destroy.
     image : str
@@ -481,6 +484,13 @@ def tool_pwn_container(a: dict) -> str:
             except Exception:
                 lines.append(f"  {c(RED, cname):20} {'missing':12}")
         return "\n".join(lines)
+
+    if action == "preflight":
+        # Read-only §4 report (docker_preflight): identifies running
+        # PawnLogic-labelled containers with network access; enabling a
+        # scope never quarantines them, so stop/destroy stays an explicit
+        # owner action.
+        return preflight_report(client)
 
     if action == "create":
         if not name:

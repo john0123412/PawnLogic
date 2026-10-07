@@ -11,6 +11,7 @@ from tools.docker_spawn import (
     check_privilege_flags,
     spawn_container,
 )
+from tools.docker_preflight import build_preflight_report, classify_container_network
 from tools.pwn_binary import ElfAnalysisCache, cyclic_result
 from tools.pwn_debugger import build_gdb_plan
 from tools.text_patch import apply_patch_blocks, find_search_in_file
@@ -67,6 +68,49 @@ def test_offline_attach_guard_rejects_offline_and_allows_attached():
         "c1",
     )
     assert attached is None
+
+
+def _net_attrs(networks, mode=None):
+    attrs = {"NetworkSettings": {"Networks": networks}}
+    if mode:
+        attrs["HostConfig"] = {"NetworkMode": mode}
+    return attrs
+
+
+def test_preflight_classification_covers_membership_kinds():
+    assert classify_container_network(_net_attrs({"bridge": {"NetworkID": "b"}})) == "bridge"
+    assert classify_container_network(_net_attrs({"lab": {"NetworkID": "u"}}, mode="lab")) == "other"
+    # Real daemon shapes for host mode: explicit NetworkMode and a live
+    # "host" endpoint with a populated NetworkID.
+    assert classify_container_network(_net_attrs({}, mode="host")) == "host"
+    assert classify_container_network(_net_attrs({"host": {"NetworkID": "h"}})) == "host"
+    assert classify_container_network(_net_attrs({"none": {"NetworkID": "n"}})) == "none"
+    assert classify_container_network(_net_attrs({})) == "unknown"
+    assert classify_container_network(None) == "unknown"
+    assert classify_container_network({"NetworkSettings": "junk"}) == "unknown"
+    assert classify_container_network(
+        {"NetworkSettings": {"Networks": ["bridge"]}}
+    ) == "unknown"
+
+
+def test_preflight_classification_prefers_real_attachment_over_none():
+    # A container attached to both none and a real network is network-capable.
+    attrs = _net_attrs({"none": {"NetworkID": "n"}, "bridge": {"NetworkID": "b"}})
+    assert classify_container_network(attrs) == "bridge"
+    # Malformed entries never mask a live attachment.
+    attrs = _net_attrs({"bridge": "junk", "lab": {"NetworkID": "u"}})
+    assert classify_container_network(attrs) == "other"
+
+
+def test_preflight_report_flags_risky_and_explains_no_quarantine():
+    report = build_preflight_report(
+        [("legacy", "running", "bridge"), ("offline", "running", "none")]
+    )
+    assert "legacy" in report and "NEEDS ATTENTION" in report
+    assert "does not quarantine" in report
+
+    clean = build_preflight_report([("offline", "running", "none")])
+    assert "No running PawnLogic-labelled container" in clean
 
 
 def test_elf_cache_invalidates_on_mtime_change(tmp_path):

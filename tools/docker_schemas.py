@@ -102,10 +102,11 @@ DOCKER_SCHEMAS = [
             "description": (
                 "Persistent container management tool for long-running CTF target environments.\n"
                 "Actions:\n"
-                "  create  - create and start a persistent container\n"
-                "  exec    - run a command inside a running container\n"
-                "  destroy - stop and destroy a container\n"
-                "  list    - list active persistent containers\n"
+                "  create    - create and start a persistent container\n"
+                "  exec      - run a command inside a running container\n"
+                "  destroy   - stop and destroy a container\n"
+                "  list      - list active persistent containers\n"
+                "  preflight - read-only report of running PawnLogic-labelled containers with network access; enabling an operator scope does not quarantine them\n"
                 "Use for multi-step Pwn debugging and exploit verification."
             ),
             "parameters": {
@@ -113,8 +114,8 @@ DOCKER_SCHEMAS = [
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["create", "exec", "destroy", "list"],
-                        "description": "Operation type.",
+                        "enum": ["create", "exec", "destroy", "list", "preflight"],
+                        "description": "Operation type. preflight is read-only.",
                     },
                     "name": {
                         "type": "string",

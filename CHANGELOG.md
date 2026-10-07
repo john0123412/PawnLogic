@@ -48,6 +48,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   completion racing the deadline still reports containment instead of
   success. Invalid timeout values are rejected before any daemon
   interaction; configured operator scopes continue to deny Airlock installs.
+- `pwn_container` gains a read-only `preflight` action for PawnLogic-labelled
+  containers: it reports running containers that still have network access
+  (bridge, host, user-defined or unknown membership) and explains that
+  enabling an operator scope does not quarantine them. Missing or ambiguous
+  daemon state is reported as unknown, never as safe; the report never
+  mutates a container, and stop/destroy remains an explicit owner action.
 - One-shot `run_code_docker` containers are hardened by default: read-only
   root filesystem (relaxed only when `install_deps` must write site-packages),
   tmpfs `/tmp` and `/run`, `cap_drop=ALL`, and a user matching the host uid:gid

@@ -201,6 +201,7 @@ jobs:
             tools/container_http_protocol.py \
             tools/container_http_relay.py \
             tools/docker_http.py \
+            tools/docker_preflight.py \
             tools/pwn_binary.py \
             tools/pwn_debugger.py
 

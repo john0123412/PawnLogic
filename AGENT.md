@@ -675,7 +675,7 @@ mode.
 authoritative list.** A module is in the island only when CI passes its file
 to mypy; the matching `[[tool.mypy.overrides]]` entry in `pyproject.toml` is
 what actually turns on `disallow_untyped_defs` / `check_untyped_defs` for it.
-Both files, plus the list below, must name the same 53 modules;
+Both files, plus the list below, must name the same 54 modules;
 `tests/test_typed_island_sync.py` fails the build when they diverge.
 
 To add a module: annotate it until it passes
@@ -699,7 +699,7 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `tools/check_release_consistency`, `tools/merge_ctf_skills`, `tools/browser_ops`,
 `tools/policy_proxy`, `tools/proxy_protocol`, `tools/text_patch`, `tools/shell_ops`,
 `tools/docker_plan`, `tools/container_http_proxy`, `tools/container_http_protocol`,
-`tools/container_http_relay`, `tools/docker_http`, `tools/pwn_binary`, `tools/pwn_debugger`.
+`tools/container_http_relay`, `tools/docker_http`, `tools/docker_preflight`, `tools/pwn_binary`, `tools/pwn_debugger`.
 
 `core/delegation` and `core/agent_orchestrator` are **not** in the island.
 `core/agent_orchestrator` has an unannotated parameter at line 402 and would
@@ -891,6 +891,15 @@ name at the end is the gate that fails if the invariant is broken.
   mode must not inherit another container's network without an authorization
   gate of its own. The tool schemas carry the matching `enum`, so keep the
   schema, plan validator, and gate in agreement when touching network modes.
+- **Legacy containers are identified, never auto-quarantined.**
+  `pwn_container action=preflight` is a read-only report over
+  PawnLogic-labelled (`pawn=true`) containers: running bridge/host/
+  user-defined/unknown-network membership is flagged as needing attention,
+  offline (`none`) containers are listed as offline, and missing or
+  ambiguous daemon state is reported as unknown — never as safe. Enabling
+  `PAWNLOGIC_DOCKER_EGRESS_ALLOW` does not quarantine these containers;
+  stop/destroy stays an explicit owner action, and the report never mutates
+  a container. The classification lives in `tools/docker_preflight.py`.
 - **Authorized CTF plaintext HTTP remains supported in disposable containers.**
   Use `run_code_docker` with explicitly authorized bridge networking, existing
   memory/CPU/PID limits, and no credential mounts. Container HTTP clients do
@@ -1355,7 +1364,7 @@ name at the end is the gate that fails if the invariant is broken.
 - **The typed-island module list is stated in three places** (CI mypy step,
   pyproject overrides, Typed Island section). `tests/test_typed_island_sync.py`
   fails the build when they diverge — treat that failure as the gate, not as a
-  test to relax. All three name the same **53 library modules**; the CI step
+  test to relax. All three name the same **54 library modules**; the CI step
   passes no `tests/` file to mypy, and `tests/test_e2e.py` appears only on the
   pytest command line.
 - **`test_live_bare_escape_interrupts_one_turn_without_another_keypress` has a

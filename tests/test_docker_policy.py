@@ -763,6 +763,74 @@ def test_airlock_disconnect_stall_is_contained_within_bound(monkeypatch):
     release.set()  # unblock the leaked worker before the test process moves on
 
 
+class _LegacyContainer:
+    def __init__(self, name, attrs):
+        self.name = name
+        self.status = "running"
+        self.attrs = attrs
+        self.reload_calls = 0
+
+    def reload(self):
+        self.reload_calls += 1
+
+
+class _PreflightClient:
+    def __init__(self, items=None, list_error=None):
+        self._items = items or []
+        self._list_error = list_error
+        self.list_filters = None
+        self.containers = self
+
+    def list(self, filters=None, ignore_removed=False):
+        if self._list_error is not None:
+            raise self._list_error
+        self.list_filters = filters
+        return self._items
+
+
+def test_pwn_container_preflight_is_read_only_and_labelled(monkeypatch):
+    legacy = _LegacyContainer(
+        "pawn_legacy", {"NetworkSettings": {"Networks": {"bridge": {"NetworkID": "b"}}}}
+    )
+    offline = _LegacyContainer(
+        "pawn_offline", {"NetworkSettings": {"Networks": {"none": {"NetworkID": "n"}}}}
+    )
+    broken = _LegacyContainer("pawn_broken", None)
+    client = _PreflightClient([legacy, offline, broken])
+    monkeypatch.setattr(docker_sandbox, "_get_docker_client", lambda: client)
+    monkeypatch.delenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", raising=False)
+
+    result = docker_sandbox.tool_pwn_container({"action": "preflight"})
+
+    assert client.list_filters == {"label": "pawn=true"}
+    assert "pawn_legacy" in result and "network=bridge" in result
+    assert "NEEDS ATTENTION" in result
+    assert "pawn_offline" in result and "network=none" in result
+    assert "pawn_broken" in result and "network=unknown" in result
+    assert "does not quarantine" in result
+    assert legacy.reload_calls == 1 and offline.reload_calls == 1
+
+
+def test_pwn_container_preflight_allowed_under_scope(monkeypatch):
+    client = _PreflightClient([])
+    monkeypatch.setattr(docker_sandbox, "_get_docker_client", lambda: client)
+    monkeypatch.setenv("PAWNLOGIC_DOCKER_EGRESS_ALLOW", "pwn.example.com")
+
+    result = docker_sandbox.tool_pwn_container({"action": "preflight"})
+
+    assert result.startswith("  Read-only preflight")
+    assert "No running" in result
+
+
+def test_pwn_container_preflight_reports_daemon_failure(monkeypatch):
+    client = _PreflightClient(list_error=RuntimeError("daemon down"))
+    monkeypatch.setattr(docker_sandbox, "_get_docker_client", lambda: client)
+
+    result = docker_sandbox.tool_pwn_container({"action": "preflight"})
+
+    assert result.startswith("ERROR: preflight inspection failed")
+
+
 @pytest.mark.parametrize("already_on_bridge", [False, True])
 def test_airlock_invalid_operator_scope_blocks_install(monkeypatch, already_on_bridge):
     client = _install_airlock_client(monkeypatch)
