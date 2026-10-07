@@ -2,6 +2,7 @@
 
 import pytest
 
+from tools.docker_airlock import offline_attach_rejection
 from tools.docker_egress import parse_egress_scope, resolve_egress_addresses
 from tools.docker_mounts import check_path_safety
 from tools.docker_plan import build_docker_execution_plan
@@ -38,6 +39,34 @@ def test_docker_plan_rejects_before_sdk_calls():
     )
     assert plan is None
     assert error == "SECURITY BLOCK: test"
+
+
+class _InspectOnlyContainer:
+    def __init__(self, attrs, reload_error=None):
+        self.attrs = attrs
+        self._reload_error = reload_error
+
+    def reload(self):
+        if self._reload_error is not None:
+            raise self._reload_error
+
+
+def test_offline_attach_guard_rejects_offline_and_allows_attached():
+    offline = offline_attach_rejection(_InspectOnlyContainer({}), "c1")
+    assert offline is not None
+    assert offline.startswith("SECURITY BLOCK")
+
+    malformed = offline_attach_rejection(_InspectOnlyContainer(None), "c1")
+    assert malformed is not None
+    assert malformed.startswith("SECURITY BLOCK")
+
+    attached = offline_attach_rejection(
+        _InspectOnlyContainer(
+            {"NetworkSettings": {"Networks": {"lab": {"NetworkID": "n1"}}}}
+        ),
+        "c1",
+    )
+    assert attached is None
 
 
 def test_elf_cache_invalidates_on_mtime_change(tmp_path):

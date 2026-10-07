@@ -22,6 +22,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   can be lost after connecting; confirmed offline containers are preserved.
   This lifecycle cleanup is separate from destination enforcement; configured
   operator scopes now deny Airlock installs.
+- Airlock installs on offline containers are rejected up front: a
+  compatibility guard refreshes the container and verifies its actual network
+  membership before any attach or install. Offline containers (membership
+  `none` or unattached at check time, regardless of creation mode) and
+  containers with unverifiable network state are denied without connecting or
+  executing the installer — the Docker daemon cannot attach none-created
+  containers to bridge afterward — and the container is preserved unchanged.
+  The rejection never suggests host networking or scope relaxation.
 - One-shot `run_code_docker` containers are hardened by default: read-only
   root filesystem (relaxed only when `install_deps` must write site-packages),
   tmpfs `/tmp` and `/run`, `cap_drop=ALL`, and a user matching the host uid:gid

@@ -858,7 +858,11 @@ name at the end is the gate that fails if the invariant is broken.
   container tools require — that bypass is now closed. A new tool that
   connects a container to a network must call the same gate. Airlock rejects
   installs while an operator scope is configured; without a scope its legacy
-  capability gate remains mandatory. If its temporary disconnect
+  capability gate remains mandatory. Before any attach, a compatibility guard
+  refreshes the container and rejects offline (none/unattached) membership and
+  unknown network state without connecting or installing — the daemon cannot
+  attach none-created containers to bridge afterward; the container is
+  preserved and the rejection never suggests host networking. If its temporary disconnect
   fails, revoke tool access and kill the container, falling back to forced
   removal; if both fail, report the live-container risk and manual cleanup.
   An attachment error must still trigger cleanup: a daemon can attach before

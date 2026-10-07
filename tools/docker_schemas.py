@@ -175,6 +175,7 @@ DOCKER_SCHEMAS = [
             "description": (
                 "Airlock package installation tool.\n"
                 "Installs apt/pip packages in a persistent container. Only connections made by this Airlock operation are disconnected; an existing bridge attachment stays unchanged.\n"
+                "Offline containers (network none/unattached) and containers with unverifiable network state are rejected before any attach or install; the Docker daemon cannot attach none-created containers to bridge afterward.\n"
                 "Failed temporary disconnect revokes tool access and kills/removes the container; daemon cleanup failure explicitly requires manual cleanup.\n"
                 "An operator egress scope denies Airlock installs; unscoped installs retain the explicit network gate.\n"
                 "Package names are strictly regex-validated to prevent command injection.\n"
