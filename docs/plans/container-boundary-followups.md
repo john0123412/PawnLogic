@@ -1,10 +1,15 @@
 # Container Boundary Follow-ups
 
-**Status:** Proposed execution plan, based on `main` at `ea6600f`.
-No implementation PR is open for this plan. Version remains 0.4.3;
-no tag, release, host firewall change or privilege installation is authorized
-by this document. Implementation delivery follows independent luna_max review,
-the protected-branch PR flow and required CI.
+**Status:** Partially implemented on main (`ea6600f`…`5efe42b`). Merged:
+final-code evidence (§1), the offline attach compatibility guard (§3),
+Airlock operation deadlines including the post-merge failure-path fixes (§2),
+and the legacy-container read-only preflight (§4). Prepared but NOT
+installed: the host TCP/UDP review package (§5). Open: owner terminal
+acceptance (§6), separately authorized §5 activation, and a passing
+final-code IQuest run (the bounded attempt produced no tool calls and stays
+recorded as failed). Version remains 0.4.3; no tag, release, host firewall
+change or privilege installation has been authorized. Delivery follows
+independent review, the protected-branch PR flow and required CI.
 
 ## Goal and existing guarantees
 

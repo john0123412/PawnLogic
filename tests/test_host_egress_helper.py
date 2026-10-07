@@ -126,6 +126,59 @@ def test_multi_address_snapshots_emit_one_rule_per_source():
     assert sum(1 for r in nft if r.startswith("nft add rule") and "198.18.0.8" in r) > 0
 
 
+def test_policy_hard_denies_link_local_and_metadata_destinations():
+    # ADR 0014 row 9: metadata/link-local addresses are never allowed into a
+    # policy allowlist — including IPv4-mapped spellings.
+    for bad in ("169.254.169.254", "169.254.1.1", "fe80::1", "fd00:ec2::254"):
+        with pytest.raises(ValueError, match="hard-denied"):
+            make_policy(allowed_ipv4=(bad,) if bad.count(":") == 0 else (),
+                        allowed_ipv6=() if bad.count(":") == 0 else (bad,))
+    with pytest.raises(ValueError, match="hard-denied"):
+        make_policy(allowed_ipv6=("::ffff:169.254.169.254",))
+    with pytest.raises(ValueError, match="hard-denied"):
+        make_policy(dns_servers_ipv4=("169.254.169.254",))
+
+
+def test_iptables_inserts_drop_first_so_preexisting_return_cannot_shadow():
+    # Appended (-A) rules may land after an owner's RETURN rule in
+    # DOCKER-USER and become dead code. The artifact must insert at the top
+    # in reverse order, and every source's DROP (both families) must precede
+    # any allow rule so no source stays unfiltered during activation.
+    policy = make_policy()
+    rules = build_rules(policy, "iptables")
+    assert all("-A DOCKER-USER" not in r for r in rules)
+    assert "-I DOCKER-USER 1" in rules[0] and "-j DROP" in rules[0]
+    assert "ESTABLISHED,RELATED" in rules[-1] and "-I DOCKER-USER 1" in rules[-1]
+    last_drop = max(i for i, r in enumerate(rules) if "-j DROP" in r)
+    first_accept = min(i for i, r in enumerate(rules) if "-j ACCEPT" in r)
+    assert last_drop < first_accept
+    # Every rule still carries the operation and container identity.
+    for rule in rules:
+        assert "pawn-op-test0001" in rule
+        assert "-s 198.18.0.7" in rule or "-s fd12::7" in rule
+
+
+def test_nftables_rollback_flushes_the_chain_before_deleting():
+    # `nft delete chain` fails while the chain still holds rules.
+    rollback = rollback_commands(make_policy(), "nftables")
+    flush_index = next(i for i, c in enumerate(rollback) if "flush chain" in c)
+    delete_index = next(i for i, c in enumerate(rollback) if "delete chain" in c)
+    assert flush_index < delete_index
+
+
+def test_verification_distinguishes_query_failure_from_revoked():
+    # A failing or unauthorized query must NOT be reported as success.
+    flow_checks = revocation_verification(make_policy(), "iptables")
+    for command in flow_checks:
+        assert "check failed" in command, command
+        # The conflated `grep -q . && echo ok || echo done` pattern reports
+        # query errors as success; the artifact must branch on the query.
+        assert "| grep -q . && echo" not in command
+    presence = rule_presence_verification(make_policy(), "iptables")
+    for command in presence:
+        assert "query error" in command or "check failed" in command, command
+
+
 def test_nftables_uses_per_operation_chain_in_an_owner_table():
     rules = build_rules(make_policy(), "nftables")
     joined = "\n".join(rules)

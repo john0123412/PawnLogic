@@ -5,15 +5,17 @@
 
 ## Active Plan
 
-None. [reasoning-effort-unification.md](reasoning-effort-unification.md)
-moved to Completed Plans once the `v0.4.0` tag existed, per the rule below.
+[Container boundary follow-ups](container-boundary-followups.md): final-code
+evidence, Airlock deadlines, offline lifecycle, legacy-container preflight,
+separately authorized TCP/UDP filtering and owner terminal acceptance.
+Sections 1–4 are implemented on main (including post-merge independent
+review fixes); section 5 is prepared as an uninstalled review package;
+owner terminal acceptance and separately authorized host activation remain
+open. No release version has been selected.
 
 ## Proposed Plans
 
-- [Container boundary follow-ups](container-boundary-followups.md): final-code
-  evidence, Airlock deadlines, offline lifecycle, legacy-container preflight,
-  separately authorized TCP/UDP filtering and owner terminal acceptance.
-  No implementation PR or release version has been selected.
+None.
 
 ## Completed Plans
 
