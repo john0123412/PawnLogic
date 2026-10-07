@@ -11,9 +11,10 @@ separately authorized TCP/UDP filtering and owner terminal acceptance.
 Sections 1–4 are implemented on main (including post-merge independent
 review fixes); section 5 is prepared as an uninstalled review package;
 owner terminal acceptance and separately authorized host activation remain
-open. The scoped HTTP IQuest workflow passed on `bf6e9cb`, but the bounded
-`44114c1` follow-up produced no tool calls; final-code model acceptance remains
-open. Deterministic transport checks passed on both. No release version has been selected.
+open. The scoped HTTP IQuest workflow passed on `bf6e9cb`, produced no tool
+calls on `44114c1`, and passed again on the merged head `35aa6c5` (one
+actual tool call, canary ignored); deterministic transport checks passed on
+all three. No release version has been selected.
 
 ## Proposed Plans
 
