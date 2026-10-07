@@ -34,6 +34,7 @@ from tools.docker_airlock import (
     begin_airlock_operation,
     finish_airlock_run,
     offline_attach_rejection,
+    operation_expired,
     start_deadline_watchdog,
     validate_airlock_timeout,
 )
@@ -757,8 +758,7 @@ def tool_install_package(a: dict) -> str:
         # Check whether the container is already on bridge to avoid touching user-managed networking.
         already_on_bridge = False
         try:
-            net_attrs = bridge_net.attrs or {}
-            containers_on_net = net_attrs.get("Containers", {})
+            containers_on_net = bridge_net.attrs["Containers"]
             if container.id in containers_on_net:
                 already_on_bridge = True
         except Exception:
@@ -801,6 +801,14 @@ def tool_install_package(a: dict) -> str:
                     pass  # Unknown daemon state must still trigger cleanup.
                 raise
             print(c(YELLOW, f"  [Airlock] temporarily connected container '{container_name}' to bridge"))
+
+        # An operation the watchdog already condemned must not hand work to
+        # the installer, even if a hung attach completed after the deadline.
+        if operation_expired(op):
+            raise _AirlockRejected(
+                f"SECURITY BLOCK: Airlock install exceeded its {op.timeout_seconds}s "
+                f"deadline for container '{container_name}' before the installer could start"
+            )
 
         # Bounded installer call: the watchdog kills the container at the
         # deadline; if containment cannot land (kill/removal failing), the

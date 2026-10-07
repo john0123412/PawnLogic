@@ -87,6 +87,13 @@ def begin_airlock_operation(container_name: str, timeout_seconds: int) -> Airloc
         return AirlockOperation(container_name, generation, timeout_seconds)
 
 
+def operation_expired(op: AirlockOperation) -> bool:
+    """Read-only expiry peek; lets the caller abandon work an expired
+    operation must not start."""
+    with _state_guard:
+        return op.expired
+
+
 def settle_airlock_operation(op: AirlockOperation, watchdog: threading.Timer | None) -> tuple[bool, str | None]:
     """
     Main-thread completion of an operation. Atomically marks the operation
@@ -188,23 +195,40 @@ def _terminate(container) -> str:
 def contain_after_leak(revoke_handle, container) -> str:
     """
     Containment for a failed owned disconnect: revoke tool access, then
-    kill the container with a forced-removal fallback. The returned text
-    matches the historical disconnect-failure containment report.
+    kill the container with a forced-removal fallback. The kill/remove runs
+    in a bounded worker so a hung daemon call cannot outwait the deadline
+    window or hold the per-container lease; containment that cannot be
+    confirmed within the window is reported as unresolved, never as clean.
+    The returned text matches the historical disconnect-failure report.
     """
     revoke_handle()
-    containment = "container killed; tool access revoked"
-    try:
-        container.kill()
-    except Exception:
+    done = threading.Event()
+    box: dict = {}
+
+    def _terminate():
         try:
-            container.remove(force=True)
-            containment = "container removed; tool access revoked"
-        except Exception as cleanup_err:
-            containment = (
-                "container may still be running; tool access revoked; manual "
-                f"Docker cleanup required: {cleanup_err}"
-            )
-    return containment
+            container.kill()
+            box["result"] = "container killed; tool access revoked"
+        except Exception:
+            try:
+                container.remove(force=True)
+                box["result"] = "container removed; tool access revoked"
+            except Exception as cleanup_err:
+                box["result"] = (
+                    "container may still be running; tool access revoked; manual "
+                    f"Docker cleanup required: {cleanup_err}"
+                )
+        finally:
+            done.set()
+
+    threading.Thread(target=_terminate, daemon=True).start()
+    if not done.wait(CONTAINMENT_JOIN_SECONDS):
+        return (
+            "containment could not be confirmed before the wait window closed; "
+            "tool access revoked; the container may still be running and needs "
+            "manual cleanup"
+        )
+    return box["result"]
 
 
 def _deadline_report(op: AirlockOperation, container_name: str, containment) -> str:

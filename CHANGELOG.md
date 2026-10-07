@@ -58,8 +58,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   bridge attachment, and reports unresolved cleanup as a containment
   failure — a timed-out persistent container does not survive, and
   completion racing the deadline still reports containment instead of
-  success. Invalid timeout values are rejected before any daemon
-  interaction; configured operator scopes continue to deny Airlock installs.
+  success. A hung attach that completes after the deadline never hands the
+  operation to the installer, and the disconnect-failure containment
+  (kill/forced removal) is itself a bounded wait, so no failure path can
+  outwait the deadline window. Invalid timeout values are rejected before
+  any daemon interaction; configured operator scopes continue to deny
+  Airlock installs.
 - `pwn_container` gains a read-only `preflight` action for PawnLogic-labelled
   containers: it reports running containers that still have network access
   (bridge, host, user-defined or unknown membership) and explains that
