@@ -254,6 +254,14 @@ class _FakeBridgeNet:
 class _FakeAirlockContainer:
     def __init__(self):
         self.id = "cid123"
+        # Empty membership models an offline (none/unattached) container;
+        # tests that exercise the attach path set a real network here.
+        self.attrs = {"NetworkSettings": {"Networks": {}}}
+        self.reload_error: Exception | None = None
+
+    def reload(self):
+        if self.reload_error is not None:
+            raise self.reload_error
 
     def exec_run(self, cmd, stdout=True, stderr=True, demux=False):
         return 0, b"ok"
@@ -297,6 +305,12 @@ def test_airlock_install_blocks_bridge_egress_without_authorization(monkeypatch)
 
 def test_airlock_install_allows_bridge_egress_with_explicit_arg(monkeypatch):
     client = _install_airlock_client(monkeypatch)
+    # Attach is only supported for containers that already sit on a real
+    # network (e.g. a user-defined bridge); offline containers are rejected
+    # by the compatibility guard before any mutation.
+    client.container.attrs["NetworkSettings"]["Networks"] = {
+        "lab_net": {"NetworkID": "netabc"}
+    }
 
     result = docker_sandbox.tool_install_package(
         {
@@ -316,6 +330,9 @@ def test_airlock_install_allows_bridge_egress_with_explicit_arg(monkeypatch):
 @pytest.mark.parametrize("kill_fails,remove_fails", [(False, False), (True, False), (True, True)])
 def test_airlock_disconnect_failure_revokes_container_access(monkeypatch, kill_fails, remove_fails, install_fails):
     client = _install_airlock_client(monkeypatch)
+    client.container.attrs["NetworkSettings"]["Networks"] = {
+        "lab_net": {"NetworkID": "netabc"}
+    }
     actions = []
     if install_fails:
         def fail_install(**kwargs):
@@ -357,6 +374,9 @@ def test_airlock_disconnect_failure_revokes_container_access(monkeypatch, kill_f
 @pytest.mark.parametrize("disconnect_fails", [False, True])
 def test_airlock_connect_error_still_revokes_partial_attachment(monkeypatch, disconnect_fails):
     client = _install_airlock_client(monkeypatch)
+    client.container.attrs["NetworkSettings"]["Networks"] = {
+        "lab_net": {"NetworkID": "netabc"}
+    }
     killed = []
 
     def partially_connect(container):
@@ -384,21 +404,74 @@ def test_airlock_connect_error_still_revokes_partial_attachment(monkeypatch, dis
         assert killed == []
 
 
-def test_airlock_rejected_attachment_preserves_confirmed_offline_container(monkeypatch):
+@pytest.mark.parametrize(
+    "networks",
+    [
+        {"none": {"NetworkID": "net_none"}},
+        {},
+    ],
+    ids=["none_mode", "unattached"],
+)
+def test_airlock_rejects_offline_container_before_any_mutation(monkeypatch, networks):
+    # Engine contract: the daemon rejects attaching containers created in
+    # private network modes to bridge, so the guard must refuse before any
+    # connect attempt, before running the installer, and leave the container.
     client = _install_airlock_client(monkeypatch)
-    def reject_connect(container):
-        raise RuntimeError("none-mode attachment rejected")
-    monkeypatch.setattr(client.bridge, "connect", reject_connect)
-    monkeypatch.setattr(client.bridge, "reload", lambda: None, raising=False)
-    monkeypatch.setattr(client.bridge, "disconnect", lambda *args, **kwargs: pytest.fail("confirmed offline container must not be disconnected"))
-    monkeypatch.setattr(client.container, "kill", lambda: pytest.fail("confirmed offline container must survive"), raising=False)
-    monkeypatch.setattr(client.container, "exec_run", lambda **kwargs: pytest.fail("install must not run"))
+    client.container.attrs["NetworkSettings"]["Networks"] = networks
+    monkeypatch.setattr(
+        client.bridge, "connect", lambda c: pytest.fail("offline container must not be connected")
+    )
+    monkeypatch.setattr(
+        client.container, "exec_run", lambda **kwargs: pytest.fail("install must not run")
+    )
+    monkeypatch.setattr(
+        client.container, "kill", lambda: pytest.fail("offline container must survive"), raising=False
+    )
+    monkeypatch.setattr(
+        client.bridge, "disconnect", lambda *a, **k: pytest.fail("nothing to disconnect"), raising=False
+    )
+
     result = docker_sandbox.tool_install_package(
         {"container_name": "c1", "pkg_manager": "pip", "packages": ["requests"],
          "allow_network": True}
     )
-    assert result.startswith("ERROR:")
-    assert docker_sandbox._active_containers["c1"] == "cid123"
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "offline" in result
+    # The rejection must not suggest host networking or scope relaxation.
+    assert "host network" not in result
+    assert client.bridge.connected == []
+    assert client.bridge.disconnected == []
+    assert docker_sandbox._active_containers.get("c1") == "cid123"
+
+
+@pytest.mark.parametrize("broken", ["reload", "attrs"])
+def test_airlock_fails_closed_on_unknown_network_state(monkeypatch, broken):
+    client = _install_airlock_client(monkeypatch)
+    if broken == "reload":
+        client.container.reload_error = RuntimeError("daemon unreachable")
+    else:
+        client.container.attrs = {}
+    monkeypatch.setattr(
+        client.bridge, "connect", lambda c: pytest.fail("unknown state must not be connected")
+    )
+    monkeypatch.setattr(
+        client.container, "exec_run", lambda **kwargs: pytest.fail("install must not run")
+    )
+    monkeypatch.setattr(
+        client.container, "kill", lambda: pytest.fail("unknown state must not mutate"), raising=False
+    )
+
+    result = docker_sandbox.tool_install_package(
+        {"container_name": "c1", "pkg_manager": "pip", "packages": ["requests"],
+         "allow_network": True}
+    )
+
+    assert result.startswith("SECURITY BLOCK")
+    assert "cannot" in result
+    assert client.bridge.connected == []
+    assert client.bridge.disconnected == []
+    assert docker_sandbox._active_containers.get("c1") == "cid123"
 
 
 @pytest.mark.parametrize("already_on_bridge", [False, True])

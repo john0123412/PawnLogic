@@ -28,6 +28,7 @@ from core.network_policy import NetworkOperation, NetworkPolicy
 from core.operation_policy import OperationAction
 from core.state import state as _runtime_state, runtime_config
 from core.trust import TrustBoundaryKind, trust_notice_for_boundary
+from tools.docker_airlock import offline_attach_rejection
 from tools.docker_egress import EGRESS_SCOPE_ENV
 from tools.docker_http import (
     code_directory, finish_transport, persistent_scope_error, prepare_transport,
@@ -643,6 +644,8 @@ def tool_install_package(a: dict) -> str:
     - Strict package-name validation prevents command injection.
     - Disconnects only bridge attachments made by this run; existing ones remain.
     - Failed temporary disconnect revokes access and kills/removes the container.
+    - Offline containers (network none/unattached) and unknown network state
+      are rejected before any connect or install; the container is preserved.
     """
     err = persistent_scope_error(a, operation='airlock')
     if err:
@@ -711,6 +714,11 @@ def tool_install_package(a: dict) -> str:
         if already_on_bridge:
             print(c(GRAY, f"  [Airlock] container '{container_name}' is already on bridge; skipping connect"))
         else:
+            # The daemon rejects bridge attachment for containers created in
+            # private network modes; refuse before touching anything.
+            guard = offline_attach_rejection(container, container_name)
+            if guard:
+                return guard
             # A lost daemon response can follow a successful attachment.
             # Attempt cleanup even when connect() raises.
             _airlock_connected = True
