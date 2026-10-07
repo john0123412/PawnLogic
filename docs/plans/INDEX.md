@@ -8,6 +8,13 @@
 None. [reasoning-effort-unification.md](reasoning-effort-unification.md)
 moved to Completed Plans once the `v0.4.0` tag existed, per the rule below.
 
+## Proposed Plans
+
+- [Container boundary follow-ups](container-boundary-followups.md): final-code
+  evidence, Airlock deadlines, offline lifecycle, legacy-container preflight,
+  separately authorized TCP/UDP filtering and owner terminal acceptance.
+  No implementation PR or release version has been selected.
+
 ## Completed Plans
 
 | Version | Plan | Release |
