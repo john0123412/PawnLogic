@@ -262,6 +262,12 @@ acceptance only for replies and rejects IPv6 scope suffixes in command artifacts
 Review-package checks fail closed on query errors, inspect complete rule
 snapshots without short-circuit pipelines, and reject link-local and cloud
 metadata destinations, including IPv4-mapped spellings.
+Unreleased review-artifact fixes also bind nftables packet rules to the approved
+bridge and require an explicit original conntrack zone when revoking all
+outbound source flows, including pre-existing unapproved destinations. A future
+executor must prove exclusive zone/source ownership and quarantine first;
+these candidate commands do not establish live containment. Stage-one local
+verification selects iptables; nftables remains a separate review candidate.
 Airlock installer admission is atomic against expiry. An already-admitted
 Docker request can race with termination; an unconfirmed cleanup is reported
 as a live-container risk requiring manual action.

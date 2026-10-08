@@ -633,6 +633,7 @@ def _spawn_controlled_turn_process(
     stream_open_path = tmp_path / f"{stream_mode}-stream-open"
     stream_complete_path = tmp_path / f"{stream_mode}-stream-complete"
     cancellation_observed_path = tmp_path / f"{stream_mode}-cancellation-observed"
+    recovery_settled_path = tmp_path / f"{stream_mode}-recovery-settled"
     release_path = tmp_path / f"{stream_mode}-release"
     mode_path = tmp_path / f"{stream_mode}-input-mode"
     bootstrap_dir = tmp_path / f"{stream_mode}-bootstrap"
@@ -656,8 +657,21 @@ stream_complete_path = Path(os.environ["PAWNLOGIC_CONTROL_STREAM_COMPLETE"])
 cancellation_observed_path = Path(
     os.environ["PAWNLOGIC_CONTROL_CANCELLATION_OBSERVED"]
 )
+recovery_settled_path = Path(os.environ["PAWNLOGIC_CONTROL_RECOVERY_SETTLED"])
 release_path = Path(os.environ["PAWNLOGIC_CONTROL_RELEASE"])
 mode_path = Path(os.environ["PAWNLOGIC_CONTROL_MODE_PATH"])
+
+_original_prefill_settled_recovery = cli.prefill_settled_recovery
+
+
+def observed_prefill_settled_recovery(*args, **kwargs):
+    result = _original_prefill_settled_recovery(*args, **kwargs)
+    recovery_settled_path.write_text("settled", encoding="utf-8")
+    return result
+
+
+cli.prefill_settled_recovery = observed_prefill_settled_recovery
+
 stream_mode = os.environ["PAWNLOGIC_CONTROL_STREAM_MODE"]
 expected_mode = os.environ["PAWNLOGIC_CONTROL_EXPECTED_MODE"]
 actual_mode = "prompt_toolkit" if cli._HAS_PROMPT_TOOLKIT else "readline"
@@ -802,6 +816,7 @@ core.session.stream_request = controlled_stream
         "PAWNLOGIC_CONTROL_CANCELLATION_OBSERVED": str(
             cancellation_observed_path
         ),
+        "PAWNLOGIC_CONTROL_RECOVERY_SETTLED": str(recovery_settled_path),
         "PAWNLOGIC_CONTROL_RELEASE": str(release_path),
         "PAWNLOGIC_CONTROL_MODE_PATH": str(mode_path),
         "PAWNLOGIC_CONTROL_STREAM_MODE": stream_mode,
@@ -828,6 +843,7 @@ core.session.stream_request = controlled_stream
         "stream_open": stream_open_path,
         "stream_complete": stream_complete_path,
         "cancellation_observed": cancellation_observed_path,
+        "recovery_settled": recovery_settled_path,
         "release": release_path,
         "mode": mode_path,
     }
@@ -1034,6 +1050,11 @@ def test_live_bare_escape_interrupts_one_turn_without_another_keypress(tmp_path)
 
         # Esc leaves the interrupted prompt in the composer so it can be
         # edited/replaced.  Clear that draft before entering a queue command.
+        # The cancellation marker is emitted by the blocking tool before the
+        # scheduler's settlement callback can prefill the composer.  The
+        # harness marker is written only after that callback returns, so
+        # Ctrl-U cannot race the recovery prefill.
+        _wait_for_control_marker(process["recovery_settled"], timeout=10)
         child.sendcontrol("u")
         child.sendline("/queue")
         child.expect("Status: interrupted", timeout=10)

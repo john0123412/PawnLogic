@@ -10,7 +10,9 @@ acceptance (§6) and separately authorized §5 activation. Release-finalization 
 canary ignored); the earlier `44114c1` and `abd134b` failed attempts remain
 recorded as history. Automated
 probe checks pass against a locally built `pawnlogic-tui` from `35aa6c5`
-(not a published release artifact); the four visual checks stay manual.
+(not a published release artifact). The published 0.4.4 binary was subsequently
+checksum-verified and passed both automated probe checks with zero skips;
+the four visual checks stay manual.
 Stage-one implementation/verification has owner authorization; administrator
 access and conntrack prerequisites are still unavailable to the current
 session. No privileged executor is installed and all 13 real backend rows
@@ -100,6 +102,17 @@ exercise the new rejection guidance; it does not establish the exact cause
 of the earlier failure. Earlier failed attempts remain recorded separately.
 Later finalization evidence edits change documentation only. This acceptance
 covers the scoped HTTP runtime, not the uninstalled host TCP/UDP filter.
+
+Post-release working-tree verification based on `cb5f267` (0.4.4): the nine
+real deterministic checks passed again. A new bounded IQuest attempt failed
+with an API error before any tool call or container creation (zero nudges).
+One separately recorded diagnostic attempt, adding only non-secret error
+observations, also failed before a tool call; its numeric HTTP status and
+fixed-label indicators did not classify the error. The free model-list GET
+returned 200, which does not establish inference availability or its failure
+cause. Further model requests were stopped. The finalization success remains
+historical evidence for the unchanged scoped runtime; neither new attempt is
+recorded as a pass. All failure records remain preserved separately.
 
 ## 2. Airlock deadline (after the small compatibility guard PR)
 
@@ -206,6 +219,12 @@ sudoers access. Before installation, the privileged executor must bind
 root-owned policies and live container identity; the generator is not that
 executor. Reply-only state allowances fix the pre-activation ORIGINAL-flow
 bypass in candidate rules. Deleting artifacts is not live-container containment.
+Post-0.4.4 review-artifact fixes bind every nftables packet rule to its bridge
+and require an explicit original conntrack zone for all outbound source-flow
+deletion/verification. Actual zone assignment and exclusive zone/source
+ownership require proof before execution; these are uninstalled artifacts,
+not a privileged executor or kernel acceptance result. The local stage-one
+preflight selects iptables; nftables remains a separate review candidate.
 
 First prepare a concrete review package without installing it: helper interface,
 policy/identity schema, generated rule examples, dry-run output, rollback,
@@ -257,6 +276,12 @@ do not prove the four visual checks on the owner's terminal emulator.
 Scrollback, selection/copy, CJK/emoji width and duplicate output stay manual
 until the owner actually observes and records each outcome. A checkout test
 does not replace published-binary acceptance.
+
+The Esc/queue PTY regression now waits for the recovery-prefill callback to
+return before clearing the restored draft. The earlier tool-cancellation
+marker alone could race scheduler settlement. Cancellation timing and queue
+assertions remain unchanged; this test-only synchronization does not verify
+owner terminal visuals or change the terminal runtime.
 
 Each implementation PR requires focused red/green regression, ruff, the
 authoritative typed-island mypy command, architecture budget, code index,
