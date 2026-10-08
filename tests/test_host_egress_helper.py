@@ -5,6 +5,7 @@ would review before authorizing activation (ADR 0014, plan §5).
 """
 
 import subprocess
+import shlex
 
 import pytest
 
@@ -28,6 +29,7 @@ def make_policy(**overrides):
         container_id=CONTAINER_ID,
         network_name="pawn_bridge_x",
         bridge_interface="br-abc123",
+        conntrack_zone=42,
         container_ipv4=("198.18.0.7",),
         container_ipv6=("fd12::7",),
         allowed_ipv4=("203.0.113.7",),
@@ -105,6 +107,74 @@ def test_iptables_rules_bind_network_and_container_identity():
         # rule is scoped to the container's own source addresses.
         assert "-i br-abc123" in rule
         assert "-s 198.18.0.7" in rule or "-s fd12::7" in rule
+
+
+def test_nft_rules_bind_every_packet_match_to_the_exact_bridge():
+    rules = build_rules(make_policy(bridge_interface="br-other.42"), "nftables")
+    packets = [shlex.split(rule) for rule in rules if rule.startswith("nft add rule")]
+    assert packets
+    for argv in packets:
+        assert "iifname" in argv
+        assert argv[argv.index("iifname") + 1] == '"br-other.42"'
+
+
+@pytest.mark.parametrize("zone", [None, True, False, -1, 65536, "42", 1.5])
+def test_conntrack_zone_must_be_an_explicit_numeric_policy_binding(zone):
+    with pytest.raises(ValueError, match="conntrack_zone"):
+        make_policy(conntrack_zone=zone)
+
+
+def test_conntrack_zone_has_no_implicit_default():
+    with pytest.raises(TypeError, match="conntrack_zone"):
+        EgressPolicy(operation_id="pawn-op-test", container_id=CONTAINER_ID,
+                     network_name="pawn_test", bridge_interface="br-test")
+
+
+@pytest.mark.parametrize("zone", [0, 65535])
+def test_explicit_conntrack_zone_boundaries_are_preserved(zone):
+    policy = make_policy(conntrack_zone=zone)
+    commands = conntrack_revocation(policy, "iptables") + revocation_verification(policy, "iptables")
+    assert commands and all(f"--orig-zone {zone}" in command for command in commands)
+    assert f"conntrack zone: {zone}" in dry_run(policy, "iptables")
+
+
+@pytest.mark.parametrize("backend", ["iptables", "nftables"])
+def test_revocation_covers_unapproved_outbound_flows_without_crossing_zone(backend):
+    policy = make_policy()
+    commands = conntrack_revocation(policy, backend)
+    assert len(commands) == 2
+    for command, family, source in zip(commands, ("ipv4", "ipv6"), ("198.18.0.7", "fd12::7"), strict=True):
+        argv = shlex.split(command, comments=True)
+        assert argv == ["conntrack", "-D", "-f", family, "--orig-zone", "42", "-s", source]
+    check = revocation_verification(policy, backend)[0]
+    result = _run_stubbed_shell(check, """
+conntrack() {
+    [ "$*" = '-L -f ipv4 --orig-zone 42 -s 198.18.0.7' ] || return 2
+    printf '%s\\n' 'tcp ESTABLISHED src=198.18.0.7 dst=198.51.100.99 zone=42'
+}
+""")
+    assert "CONTAINMENT FAILURE: flows remain" in result.stdout
+    assert "flows revoked" not in result.stdout
+
+
+@pytest.mark.parametrize("family,source", [("ipv4", "198.18.0.7"), ("ipv6", "fd12::7")])
+@pytest.mark.parametrize("state", ["empty", "remaining", "error"])
+def test_revocation_query_checks_exact_original_zone_and_all_destinations(family, source, state):
+    index = 0 if family == "ipv4" else 1
+    command = revocation_verification(make_policy(), "iptables")[index]
+    behavior = {
+        "empty": "printf '%s\\n' '0 flow entries' >&2; return 0",
+        "remaining": "printf '%s\\n' 'tcp ESTABLISHED remaining'; return 0",
+        "error": "return 1",
+    }[state]
+    stub = (
+        "conntrack() { "
+        f"[ \"$*\" = '-L -f {family} --orig-zone 42 -s {source}' ] || return 2; "
+        + behavior + "; }"
+    )
+    result = _run_stubbed_shell(command, stub)
+    assert ("flows revoked" in result.stdout) is (state == "empty")
+    assert ("CONTAINMENT FAILURE" in result.stdout) is (state != "empty")
 
 
 def test_iptables_rules_cover_both_families_and_fail_closed():
@@ -368,10 +438,10 @@ def test_dry_run_discloses_plan_and_caveats_without_activation():
     assert "pinned ipv4: 203.0.113.7" in text
 
 
-def test_conntrack_revocation_is_source_scoped():
+def test_conntrack_revocation_is_zone_and_source_scoped():
     commands = conntrack_revocation(make_policy(), "iptables")
-    assert any("conntrack -D -s 198.18.0.7 -d 203.0.113.7" in c for c in commands)
-    assert any("conntrack -D -f ipv6 -s fd12::7 -d 2001:db8::7" in c for c in commands)
+    assert any("conntrack -D -f ipv4 --orig-zone 42 -s 198.18.0.7" in c for c in commands)
+    assert any("conntrack -D -f ipv6 --orig-zone 42 -s fd12::7" in c for c in commands)
     assert all("pawn-op-test0001" in c for c in commands)
 
 
@@ -380,7 +450,7 @@ def test_revocation_and_rule_presence_are_verified():
     assert flow_checks
     for command in flow_checks:
         assert "CONTAINMENT FAILURE" in command or "flows revoked" in command
-    assert any("198.18.0.7" in c and "203.0.113.7" in c for c in flow_checks)
+    assert any("--orig-zone 42 -s 198.18.0.7" in c for c in flow_checks)
     presence = rule_presence_verification(make_policy(), "iptables")
     assert any("rules remain" in c for c in presence)
     assert any("rules removed" in c for c in presence)

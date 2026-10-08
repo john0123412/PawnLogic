@@ -10,7 +10,9 @@ acceptance (§6) and separately authorized §5 activation. Release-finalization 
 canary ignored); the earlier `44114c1` and `abd134b` failed attempts remain
 recorded as history. Automated
 probe checks pass against a locally built `pawnlogic-tui` from `35aa6c5`
-(not a published release artifact); the four visual checks stay manual.
+(not a published release artifact). The published 0.4.4 binary was subsequently
+checksum-verified and passed both automated probe checks with zero skips;
+the four visual checks stay manual.
 Stage-one implementation/verification has owner authorization; administrator
 access and conntrack prerequisites are still unavailable to the current
 session. No privileged executor is installed and all 13 real backend rows
@@ -100,6 +102,58 @@ exercise the new rejection guidance; it does not establish the exact cause
 of the earlier failure. Earlier failed attempts remain recorded separately.
 Later finalization evidence edits change documentation only. This acceptance
 covers the scoped HTTP runtime, not the uninstalled host TCP/UDP filter.
+
+Post-release working-tree verification based on `cb5f267` (0.4.4): the nine
+real deterministic checks passed again. A new bounded IQuest attempt failed
+with an API error before any tool call or container creation (zero nudges).
+One separately recorded diagnostic attempt, adding only non-secret error
+observations, also failed before a tool call; its numeric HTTP status and
+fixed-label indicators did not classify the error. The free model-list GET
+returned 200, which does not establish inference availability or its failure
+cause. Further model requests were stopped. The finalization success remains
+historical evidence for the unchanged scoped runtime; neither new attempt is
+recorded as a pass. All failure records remain preserved separately.
+
+Committed follow-up `d70ed41`: after independent luna_max review, the local
+acceptance harness retained bounded, redacted error evidence in a private
+directory. Twenty offline checks passed, including failure paths, exact-key
+redaction, discarded console capture, artifact limits and existing-file
+permissions. One newly authorized bounded real attempt passed the nine
+deterministic checks and did not reproduce the API error, but observed zero
+tool calls and zero model containers after two nudges. Its final answer only
+described a plan; model acceptance failed and further requests were stopped.
+The earlier API errors remain unexplained rather than marked fixed. Because
+the model assertion failed before final fixture-event collection, this attempt
+does not provide a separately retained model-phase canary-event receipt.
+Execution-policy conditions and acceptance assertions remain unchanged. This
+evidence does not close host-kernel or owner visual acceptance.
+
+Further owner-authorized diagnosis on `d70ed41` retained metadata-only event
+counts, selected-model aliases and fixture events even on failure. The first
+IQuest sample passed: one native call, one offline non-root container, no
+external nudges and no API error. A separately declared second sample failed:
+all seven IQuest responses completed without any native function-call event
+or normalized tool call. This locates that sample's missing call before the
+project parser, but does not distinguish model behavior from gateway behavior
+or explain the older API errors. That failed attempt also contained one
+default-model history-summary request and is explicitly a mixed-model sample,
+not a pure IQuest comparison. All records remain separate.
+
+The Qwen comparison stopped before inference with HTTP 402 (insufficient
+provider balance). OpenRouter `nvidia/nemotron-3-ultra-550b-a55b:free` passed
+the same real fixture workflow. The diagnostic harness then pinned auxiliary
+summaries and API configuration lookup to the selected model; an unselected
+alias is rejected before transport. Two new regression checks failed before
+the fix; all 25 offline diagnostic checks passed afterward. The final locked
+Nemotron run passed all nine deterministic checks and the proof/scope workflow,
+using only the selected model. It attempted three tool calls: the first created
+one offline non-root container, and the two extra attempts were blocked by the
+unchanged one-container policy. There were no external nudges, API errors or
+out-of-scope canary requests. This is a safety/workflow pass, not perfect model
+instruction following or a reliability guarantee. Luna_max independently
+reviewed the event evidence and harness. Production runtime, user provider
+settings, tool policy and acceptance assertions are unchanged; host-kernel
+and owner visual acceptance remain open.
 
 ## 2. Airlock deadline (after the small compatibility guard PR)
 
@@ -206,6 +260,12 @@ sudoers access. Before installation, the privileged executor must bind
 root-owned policies and live container identity; the generator is not that
 executor. Reply-only state allowances fix the pre-activation ORIGINAL-flow
 bypass in candidate rules. Deleting artifacts is not live-container containment.
+Post-0.4.4 review-artifact fixes bind every nftables packet rule to its bridge
+and require an explicit original conntrack zone for all outbound source-flow
+deletion/verification. Actual zone assignment and exclusive zone/source
+ownership require proof before execution; these are uninstalled artifacts,
+not a privileged executor or kernel acceptance result. The local stage-one
+preflight selects iptables; nftables remains a separate review candidate.
 
 First prepare a concrete review package without installing it: helper interface,
 policy/identity schema, generated rule examples, dry-run output, rollback,
@@ -257,6 +317,12 @@ do not prove the four visual checks on the owner's terminal emulator.
 Scrollback, selection/copy, CJK/emoji width and duplicate output stay manual
 until the owner actually observes and records each outcome. A checkout test
 does not replace published-binary acceptance.
+
+The Esc/queue PTY regression now waits for the recovery-prefill callback to
+return before clearing the restored draft. The earlier tool-cancellation
+marker alone could race scheduler settlement. Cancellation timing and queue
+assertions remain unchanged; this test-only synchronization does not verify
+owner terminal visuals or change the terminal runtime.
 
 Each implementation PR requires focused red/green regression, ruff, the
 authoritative typed-island mypy command, architecture budget, code index,

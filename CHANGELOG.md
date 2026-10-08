@@ -7,6 +7,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+- Host-egress review artifacts bind every nftables packet rule to the approved
+  bridge interface. Conntrack deletion and verification require an explicit
+  original-direction zone and cover all outbound flows from each approved
+  source, including destinations outside the allowlist. A future executor must
+  prove exclusive zone/source ownership and quarantine before deleting flows;
+  these simulated artifacts still do not install or activate a host filter.
+
+### Fixed
+- The Esc-cancellation PTY regression waits for recovery prefill to settle
+  before clearing the draft and submitting a queue command. Cancellation
+  deadlines and queue assertions are unchanged; terminal runtime behavior is
+  unchanged.
+
 ## [0.4.4] - 2026-10-08
 
 ### Added
