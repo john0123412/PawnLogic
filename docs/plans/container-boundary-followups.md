@@ -14,7 +14,8 @@ Stage-one implementation/verification has owner authorization; administrator
 access and conntrack prerequisites are still unavailable to the current
 session. No privileged executor is installed and all 13 real backend rows
 remain `not_run`. Operational activation is a separate second-stage decision.
-Version remains 0.4.3; no tag or release is authorized. Delivery follows
+The implemented changes are being prepared for the authorized 0.4.4 release;
+host operational activation and owner visual acceptance remain open. Delivery follows
 independent review, the protected-branch PR flow and required CI.
 
 ## Goal and existing guarantees

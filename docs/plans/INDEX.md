@@ -14,7 +14,8 @@ owner terminal acceptance and second-stage operational host activation remain
 open. The scoped HTTP IQuest workflow passed on `bf6e9cb`, produced no tool
 calls on `44114c1`, and passed again on the merged head `35aa6c5` (one
 actual tool call, canary ignored); deterministic transport checks passed on
-all three. No release version has been selected.
+all three. The implemented changes are being prepared for the authorized
+0.4.4 release; the remaining host and visual acceptance work keeps this plan active.
 Stage-one implementation/verification is authorized, but administrator
 credentials and conntrack prerequisites block real kernel acceptance. See the
 [stage-one runbook](../runbooks/host-egress-stage-one.md); its read-only

@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-10-08
+
 ### Added
 - A read-only host-egress prerequisite CLI and stage-one runbook. Missing
   administrator access or conntrack blocks real backend verification; the
