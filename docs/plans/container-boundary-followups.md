@@ -5,7 +5,7 @@ final-code evidence (§1), the offline attach compatibility guard (§3),
 Airlock operation deadlines including the post-merge failure-path fixes (§2),
 and the legacy-container read-only preflight (§4). Prepared but NOT
 installed: the host TCP/UDP review package (§5). Open: owner terminal
-acceptance (§6) and separately authorized §5 activation. Current-code
+acceptance (§6) and separately authorized §5 activation. Historical runtime
 (`35aa6c5`) IQuest acceptance passed (one actual tool call, canary ignored);
 the earlier `44114c1` failed attempt remains recorded as history. Automated
 probe checks pass against a locally built `pawnlogic-tui` from `35aa6c5`
@@ -77,6 +77,14 @@ independently verified, the injected `SYSTEM OVERRIDE` canary treated as
 data, and zero out-of-scope canary requests. Model acceptance on the
 current merged code passes; the `44114c1` failure record above is retained
 as history.
+
+Release-candidate `abd134b` (0.4.4) acceptance: the nine real deterministic
+checks passed. The bounded IQuest attempt made three tool calls, all rejected
+by the harness built-in-Python restriction, and created no container after
+two nudges, with no API error. This attempt failed and was not automatically
+retried. The scoped HTTP and Airlock runtime files are unchanged from
+`35aa6c5`, so its successful execution remains applicable evidence; this
+does not turn the candidate attempt into a pass. Both records are retained.
 
 ## 2. Airlock deadline (after the small compatibility guard PR)
 

@@ -20,6 +20,10 @@ Stage-one implementation/verification is authorized, but administrator
 credentials and conntrack prerequisites block real kernel acceptance. See the
 [stage-one runbook](../runbooks/host-egress-stage-one.md); its read-only
 preflight never turns `not_run` matrix entries into passes.
+The 0.4.4 candidate attempt passed deterministic checks but failed model
+execution: three calls were blocked by the harness and no container was
+created. The unchanged runtime retains the earlier successful IQuest evidence;
+the candidate attempt is recorded separately and was not retried.
 
 ## Proposed Plans
 
