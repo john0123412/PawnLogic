@@ -9,8 +9,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20WSL2-lightgrey.svg)]()
 
 PawnLogic 是一个 terminal-first 的自主 AI agent：多 provider 模型路由、
-持久记忆、真实的本地工具执行、MCP 集成，以及面向 CTF 的工具链。当前公开发布版本是 **0.4.3**。
-版本 **0.4.4** 是尚未发布的候选版本，包含容器网络强制边界、Airlock 生命周期加固与维护改动。
+持久记忆、真实的本地工具执行、MCP 集成，以及面向 CTF 的工具链。当前公开发布版本是 **0.4.4**。
 
 ## 快速开始
 
@@ -186,7 +185,7 @@ context 级 route guard 对可拦截的请求做二次检查，安装失败会�
 `container_user="root"` 显式选择 root。持久 `pwn_container` 保留镜像默认配置。
 额外工作区挂载仍须满足挂载策略。
 
-以下范围过滤属于 Unreleased 源码改动，尚未包含在已发布的 0.4.3 包中。
+0.4.4 已包含以下容器范围过滤传输。
 
 可选操作者配置 `PAWNLOGIC_DOCKER_EGRESS_ALLOW` 接受显式域名、IP 和 CIDR。
 设置后，已授权的 `network="bridge"` 请求实际使用 `network=none` 一次性容器，

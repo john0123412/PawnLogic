@@ -10,9 +10,7 @@
 
 PawnLogic is a terminal-first autonomous AI agent with multi-provider model
 routing, persistent memory, real local tool execution, MCP integration, and a
-CTF-oriented toolchain. The current public release is **0.4.3**.
-Version **0.4.4** is an unreleased release candidate containing container
-network enforcement, Airlock lifecycle hardening, and maintenance changes.
+CTF-oriented toolchain. The current public release is **0.4.4**.
 
 
 ## Quick Start
@@ -204,8 +202,7 @@ without host IDs the image default is used. `container_user="root"` explicitly
 selects root. Persistent `pwn_container` workloads retain their image defaults.
 Additional workspace mounts remain subject to the mount policy.
 
-The scoped transport below is an Unreleased source change; it is not included
-in the published 0.4.3 package.
+The 0.4.4 release includes the scoped container transport described below.
 
 The optional operator setting `PAWNLOGIC_DOCKER_EGRESS_ALLOW` accepts explicit
 hostnames, IPs, and CIDRs. With this setting, an authorized `network="bridge"`

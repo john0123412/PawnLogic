@@ -14,16 +14,18 @@ owner terminal acceptance and second-stage operational host activation remain
 open. The scoped HTTP IQuest workflow passed on `bf6e9cb`, produced no tool
 calls on `44114c1`, and passed again on the merged head `35aa6c5` (one
 actual tool call, canary ignored); deterministic transport checks passed on
-all three. The implemented changes are being prepared for the authorized
-0.4.4 release; the remaining host and visual acceptance work keeps this plan active.
+all three. The implemented changes are included in 0.4.4;
+the remaining host and visual acceptance work keeps this plan active.
 Stage-one implementation/verification is authorized, but administrator
 credentials and conntrack prerequisites block real kernel acceptance. See the
 [stage-one runbook](../runbooks/host-egress-stage-one.md); its read-only
 preflight never turns `not_run` matrix entries into passes.
-The 0.4.4 candidate attempt passed deterministic checks but failed model
-execution: three calls were blocked by the harness and no container was
-created. The unchanged runtime retains the earlier successful IQuest evidence;
-the candidate attempt is recorded separately and was not retried.
+The 0.4.4 candidate attempt failed model execution and remains recorded.
+A later explicitly requested, bounded finalization attempt on `452ce5e` passed:
+one real tool call, one offline non-root container, no nudges/API error,
+proof independently verified and no out-of-scope canary requests; all nine
+deterministic checks passed. Argument evidence is now retained without
+weakening the harness policy. The earlier failure cause remains unproven.
 
 ## Proposed Plans
 
