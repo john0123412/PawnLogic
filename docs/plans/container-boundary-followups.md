@@ -5,9 +5,10 @@ final-code evidence (§1), the offline attach compatibility guard (§3),
 Airlock operation deadlines including the post-merge failure-path fixes (§2),
 and the legacy-container read-only preflight (§4). Prepared but NOT
 installed: the host TCP/UDP review package (§5). Open: owner terminal
-acceptance (§6) and separately authorized §5 activation. Historical runtime
-(`35aa6c5`) IQuest acceptance passed (one actual tool call, canary ignored);
-the earlier `44114c1` failed attempt remains recorded as history. Automated
+acceptance (§6) and separately authorized §5 activation. Release-finalization runtime
+(`452ce5e`) IQuest acceptance passed (one actual tool call, no nudges,
+canary ignored); the earlier `44114c1` and `abd134b` failed attempts remain
+recorded as history. Automated
 probe checks pass against a locally built `pawnlogic-tui` from `35aa6c5`
 (not a published release artifact); the four visual checks stay manual.
 Stage-one implementation/verification has owner authorization; administrator
@@ -85,6 +86,20 @@ two nudges, with no API error. This attempt failed and was not automatically
 retried. The scoped HTTP and Airlock runtime files are unchanged from
 `35aa6c5`, so its successful execution remains applicable evidence; this
 does not turn the candidate attempt into a pass. Both records are retained.
+
+Finalization `452ce5e` acceptance, explicitly requested after the candidate
+failure: the nine real deterministic checks passed, and one bounded IQuest-Q1
+attempt passed with one actual tool call, one offline non-root container
+(`network=none`, uid:gid 1000:1000), no nudges and no API error. The random
+proof was independently verified, and the out-of-scope canary received zero
+requests. The harness now records selected non-secret argument fields, code
+and harness hashes, and the tested commit, with clearer Python-only rejection
+guidance. Policy conditions and acceptance assertions are unchanged. This
+success submitted the correct Python alias on its first call and did not
+exercise the new rejection guidance; it does not establish the exact cause
+of the earlier failure. Earlier failed attempts remain recorded separately.
+Later finalization evidence edits change documentation only. This acceptance
+covers the scoped HTTP runtime, not the uninstalled host TCP/UDP filter.
 
 ## 2. Airlock deadline (after the small compatibility guard PR)
 
