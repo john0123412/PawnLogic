@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-10-14
+
 ### Security
 - Host-egress review artifacts bind every nftables packet rule to the approved
   bridge interface. Conntrack deletion and verification require an explicit
