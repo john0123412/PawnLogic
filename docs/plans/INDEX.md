@@ -31,6 +31,8 @@ zero skips); four visual checks remain manual. Post-release review-artifact
 fixes bind nftables packet rules to the bridge and scope all outbound-flow
 revocation to an explicitly approved original conntrack zone/source binding.
 They neither install a privileged executor nor complete the kernel matrix.
+Those review-artifact fixes ship in 0.4.5; the host and visual acceptance
+items above remain open.
 
 ## Proposed Plans
 
