@@ -50,24 +50,33 @@ PROVIDERS: dict[str, dict] = {
 #
 # DeepSeek documents that the API accepts the OpenAI-style level names and
 # maps them onto its own low/high/max efforts, so the names go out verbatim
-# rather than being compressed client-side into a guess.
+# rather than being compressed client-side into a guess.  Its mapping table
+# lists no ``none``: on the chat-completions format thinking is switched off
+# by a separate ``thinking`` field, so ``off`` stays a local-only rung here.
 _EFFORT_DEEPSEEK = {
-    "off": "none", "low": "low", "medium": "medium",
+    "low": "low", "medium": "medium",
     "high": "high", "xhigh": "xhigh", "max": "max",
 }
 # The GPT-5 family stops at `high`; it has no `xhigh` or `max` rung.
 _EFFORT_GPT5 = {
     "off": "none", "low": "low", "medium": "medium", "high": "high",
 }
+# GPT-6 Astra and GPT-6.1 Sol take low..max and reject `none`; GPT-6 Luna
+# also takes `none`.
+_EFFORT_GPT6 = {
+    "low": "low", "medium": "medium", "high": "high",
+    "xhigh": "xhigh", "max": "max",
+}
+_EFFORT_GPT6_LUNA = {"off": "none", **_EFFORT_GPT6}
 # The o-series takes low/medium/high but has no `none`.
 _EFFORT_O_SERIES = {"low": "low", "medium": "medium", "high": "high"}
 
 
 MODELS: dict[str, dict] = {
     "ds-v4-flash": {
-        "id":        "deepseek-v4-flash",
+        "id":        "deepseek-flash",
         "provider":  "deepseek",
-        "desc":      "DeepSeek V4 Flash - default primary model, fast and low-cost",
+        "desc":      "DeepSeek V4.1 Flash - default model, fast and low-cost",
         "color":     "\033[32m",
         "vision":    False,
         "reasoning": True,   # Returns reasoning_content and must be echoed back.
@@ -76,16 +85,49 @@ MODELS: dict[str, dict] = {
     "ds-v4-pro": {
         "id":        "deepseek-v4-pro",
         "provider":  "deepseek",
-        "desc":      "DeepSeek V4 Pro - flagship reasoning model",
+        "desc":      "DeepSeek V4 Pro (0813) - flagship reasoning model",
         "color":     "\033[92m",
         "vision":    False,
         "reasoning": True,
         "effort":    _EFFORT_DEEPSEEK,
     },
+    # GPT-6 models support tool calling only on the Responses API (Luna on
+    # Chat Completions only at effort `none`), so they override the provider
+    # format; requests go to {base}/responses with the same OpenAI key.
+    "gpt-6-astra": {
+        "id":         "gpt-6-astra",
+        "provider":   "openai",
+        "api_format": "responses",
+        "desc":       "OpenAI GPT-6 Astra - flagship for complex reasoning and coding",
+        "color":      "\033[97m",
+        "vision":     True,
+        "reasoning":  False,
+        "effort":     _EFFORT_GPT6,
+    },
+    "gpt-6.1-sol": {
+        "id":         "gpt-6.1-sol",
+        "provider":   "openai",
+        "api_format": "responses",
+        "desc":       "OpenAI GPT-6.1 Sol - balance of intelligence and cost",
+        "color":      "\033[37m",
+        "vision":     True,
+        "reasoning":  False,
+        "effort":     _EFFORT_GPT6,
+    },
+    "gpt-6-luna": {
+        "id":         "gpt-6-luna",
+        "provider":   "openai",
+        "api_format": "responses",
+        "desc":       "OpenAI GPT-6 Luna - cost-sensitive, high-volume work",
+        "color":      "\033[36m",
+        "vision":     True,
+        "reasoning":  False,
+        "effort":     _EFFORT_GPT6_LUNA,
+    },
     "gpt-5.5": {
         "id":        "gpt-5.5",
         "provider":  "openai",
-        "desc":      "OpenAI GPT-5.5 - latest flagship for complex reasoning and coding",
+        "desc":      "OpenAI GPT-5.5 - complex reasoning and coding",
         "color":     "\033[97m",
         "vision":    True,
         "reasoning": False,
@@ -112,7 +154,7 @@ MODELS: dict[str, dict] = {
     "gpt-5.4-nano": {
         "id":        "gpt-5.4-nano",
         "provider":  "openai",
-        "desc":      "OpenAI GPT-5.4 Nano - lowest-cost option",
+        "desc":      "OpenAI GPT-5.4 Nano - lowest-cost; shuts down 2027-04-01",
         "color":     "\033[90m",
         "vision":    True,
         "reasoning": False,
@@ -129,7 +171,7 @@ MODELS: dict[str, dict] = {
     "gpt-4.1": {
         "id":        "gpt-4.1",
         "provider":  "openai",
-        "desc":      "OpenAI GPT-4.1 - coding and instruction following",
+        "desc":      "OpenAI GPT-4.1 - legacy; 2025-04-14 snapshot shuts down 2027-01-14",
         "color":     "\033[37m",
         "vision":    False,
         "reasoning": False,
@@ -137,32 +179,40 @@ MODELS: dict[str, dict] = {
     "o3": {
         "id":        "o3",
         "provider":  "openai",
-        "desc":      "OpenAI o3 - complex reasoning",
+        "desc":      "OpenAI o3 - legacy; 2025-04-16 snapshot shuts down 2026-12-11",
         "color":     "\033[96m",
         "vision":    False,
         "reasoning": False,  # OpenAI o-series reasoning is internalized.
         "effort":    _EFFORT_O_SERIES,
     },
-    "claude-opus": {
-        "id":        "claude-opus-4-6",
+    "claude-fable": {
+        "id":        "claude-fable-5-1",
         "provider":  "anthropic",
-        "desc":      "Claude Opus 4.6 - frontier reasoning flagship",
+        "desc":      "Claude Fable 5.1 - demanding reasoning, long-horizon agentic work",
+        "color":     "\033[95m",
+        "vision":    True,
+        "reasoning": False,
+    },
+    "claude-opus": {
+        "id":        "claude-opus-5-5",
+        "provider":  "anthropic",
+        "desc":      "Claude Opus 5.5 - long-running agentic coding and knowledge work",
         "color":     "\033[95m",
         "vision":    True,
         "reasoning": False,
     },
     "claude-sonnet": {
-        "id":        "claude-sonnet-4-6",
+        "id":        "claude-sonnet-5-5",
         "provider":  "anthropic",
-        "desc":      "Claude Sonnet 4.6 - balanced primary model",
+        "desc":      "Claude Sonnet 5.5 - best balance of speed and intelligence",
         "color":     "\033[95m",
         "vision":    True,
         "reasoning": False,  # Anthropic format uses its own API path.
     },
     "claude-haiku": {
-        "id":        "claude-haiku-4-5-20251001",
+        "id":        "claude-haiku-5-5",
         "provider":  "anthropic",
-        "desc":      "Claude Haiku 4.5 - fast and low-cost",
+        "desc":      "Claude Haiku 5.5 - fastest, high-volume tasks",
         "color":     "\033[35m",
         "vision":    True,
         "reasoning": False,
@@ -609,14 +659,44 @@ def find_fast_peer(model_alias: str) -> str | None:
     return None
 
 
+def _model_api_format(model: dict, prov: dict) -> str:
+    """Return the wire format for one model: its own override, else the provider's.
+
+    A model may declare ``api_format`` when its provider serves it only on a
+    different protocol, e.g. OpenAI models whose tool calling exists only on
+    the Responses API. An unknown value raises instead of falling back.
+    """
+    override = model.get("api_format")
+    if override:
+        return normalize_api_format(override)
+    return prov.get("api_format", "openai")
+
+
+def _model_endpoint(model: dict, prov: dict) -> tuple[str, str]:
+    """Return (endpoint_url, api_format) for a model on its provider.
+
+    When a model overrides the provider format, the provider's known endpoint
+    suffix is swapped for the model's, so ``.../v1/chat/completions`` becomes
+    ``.../v1/responses`` instead of being returned unchanged.
+    """
+    fmt = _model_api_format(model, prov)
+    base = str(prov["base_url"]).rstrip("/")
+    if model.get("api_format"):
+        for spec in FORMAT_SPECS.values():
+            if base.endswith(spec.path_suffix):
+                base = base[: -len(spec.path_suffix)]
+                break
+    return _normalize_url(base, fmt), fmt
+
+
 def get_api_config(model_alias: str) -> tuple[str, str]:
     """Return (base_url, api_key). Keys are read from environment variables."""
     _ensure_providers_initialized()
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
     prov = PROVIDERS.get(m["provider"], list(PROVIDERS.values())[0])
     key  = os.getenv(prov["api_key_env"], "")
-    fmt  = prov.get("api_format", "openai")
-    return _normalize_url(prov["base_url"], fmt), key
+    url, _ = _model_endpoint(m, prov)
+    return url, key
 
 
 def get_api_format(model_alias: str) -> str:
@@ -624,7 +704,7 @@ def get_api_format(model_alias: str) -> str:
     _ensure_providers_initialized()
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
     prov = PROVIDERS.get(m["provider"], {})
-    return prov.get("api_format", "openai")
+    return _model_api_format(m, prov)
 
 
 def get_provider_auth(model_alias: str) -> str:
@@ -641,9 +721,9 @@ def get_provider_config(model_alias: str) -> dict:
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
     prov = PROVIDERS.get(m["provider"], list(PROVIDERS.values())[0])
     key  = os.getenv(prov["api_key_env"], "")
-    fmt  = prov.get("api_format", "openai")
+    url, fmt = _model_endpoint(m, prov)
     return {
-        "base_url":   _normalize_url(prov["base_url"], fmt),
+        "base_url":   url,
         "api_key":    key,
         "api_format": fmt,
         "auth":       prov.get("auth", "auto"),

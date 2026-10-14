@@ -697,7 +697,7 @@ def test_provider_active_state_defaults_deepseek_only_for_model_visibility(monke
         provider_config,
         "MODELS",
         {
-            "ds-v4-flash": {"id": "deepseek-v4-flash", "provider": "deepseek"},
+            "ds-v4-flash": {"id": "deepseek-flash", "provider": "deepseek"},
             "relay-chat": {"id": "relay-chat", "provider": "relay"},
             "mimo": {"id": "mimo", "provider": "xiaomi"},
         },
@@ -731,7 +731,7 @@ def test_visible_models_require_active_provider_and_configured_key(monkeypatch):
         provider_config,
         "MODELS",
         {
-            "ds-v4-flash": {"id": "deepseek-v4-flash", "provider": "deepseek"},
+            "ds-v4-flash": {"id": "deepseek-flash", "provider": "deepseek"},
             "relay-chat": {"id": "relay-chat", "provider": "relay"},
             "dormant-chat": {"id": "dormant-chat", "provider": "dormant"},
         },
@@ -827,7 +827,7 @@ def test_get_provider_config_lazily_initializes_custom_providers(tmp_path, monke
         provider_config,
         "MODELS",
         {
-            "ds-v4-flash": {"id": "deepseek-v4-flash", "provider": "deepseek"},
+            "ds-v4-flash": {"id": "deepseek-flash", "provider": "deepseek"},
         },
     )
     monkeypatch.setenv("RELAY_API_KEY", "relay-secret")

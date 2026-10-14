@@ -7,6 +7,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- Built-in model registry synced with the providers' published model lists
+  (checked 2026-10-14). `ds-v4-flash` now requests `deepseek-flash`
+  (DeepSeek V4.1 Flash); DeepSeek lists `deepseek-v4-flash` as a retired
+  legacy name it still accepts. `claude-opus`, `claude-sonnet`, and
+  `claude-haiku` now point at `claude-opus-5-5`, `claude-sonnet-5-5`, and
+  `claude-haiku-5-5`, and a new `claude-fable` alias targets
+  `claude-fable-5-1`. Model descriptions note OpenAI's published shutdown
+  dates for `o3`, `gpt-4.1`, and `gpt-5.4-nano`.
+- README model tables gain a short "Use" column.
+
+### Added
+- Built-in `gpt-6-astra`, `gpt-6.1-sol`, and `gpt-6-luna` aliases. OpenAI
+  supports their tool calling only on the Responses API, so a model entry may
+  now declare its own `api_format`; these three send Responses requests to
+  `https://api.openai.com/v1/responses` with `OPENAI_API_KEY`, while the other
+  OpenAI aliases keep Chat Completions. Effort follows each model's published
+  ladder: Astra and 6.1 Sol accept `low` to `max` (no `none`), Luna also
+  accepts `none`.
+
+### Fixed
+- Effort `off` is no longer sent to DeepSeek as `reasoning_effort: "none"`.
+  DeepSeek's effort mapping table lists no `none` for the chat-completions
+  format, so `off` now applies only its local limits for DeepSeek models.
+
 ## [0.4.5] - 2026-10-14
 
 ### Security

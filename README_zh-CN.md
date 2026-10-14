@@ -66,20 +66,28 @@ pawn --debug                             # 完整诊断输出
 每个别名都指向一个真实模型 ID；provider 发布新模型时别名会跟着走，
 添加 key 后跑一遍 `/provider fetch <name>` 即可同步最新列表。
 
-| 别名 | 模型 | Provider |
-|------|------|----------|
-| `ds-v4-flash` | `deepseek-v4-flash` | DeepSeek |
-| `ds-v4-pro` | `deepseek-v4-pro` | DeepSeek |
-| `gpt-5.5` | `gpt-5.5` | OpenAI |
-| `gpt-5.4` | `gpt-5.4` | OpenAI |
-| `gpt-5.4-mini` | `gpt-5.4-mini` | OpenAI |
-| `gpt-5.4-nano` | `gpt-5.4-nano` | OpenAI |
-| `gpt-4o` | `gpt-4o` | OpenAI |
-| `gpt-4.1` | `gpt-4.1` | OpenAI |
-| `o3` | `o3` | OpenAI |
-| `claude-opus` | `claude-opus-4-6` | Anthropic |
-| `claude-sonnet` | `claude-sonnet-4-6` | Anthropic |
-| `claude-haiku` | `claude-haiku-4-5-20251001` | Anthropic |
+| 别名 | 模型 | Provider | 用途 |
+|------|------|----------|------|
+| `ds-v4-flash` | `deepseek-flash` | DeepSeek | 默认；V4.1 Flash，快速低成本 |
+| `ds-v4-pro` | `deepseek-v4-pro` | DeepSeek | V4 Pro 旗舰推理 |
+| `gpt-6-astra` | `gpt-6-astra` | OpenAI | 旗舰推理与编程（Responses API） |
+| `gpt-6.1-sol` | `gpt-6.1-sol` | OpenAI | 能力与成本的平衡（Responses API） |
+| `gpt-6-luna` | `gpt-6-luna` | OpenAI | 成本敏感、高并发（Responses API） |
+| `gpt-5.5` | `gpt-5.5` | OpenAI | 复杂推理与编程 |
+| `gpt-5.4` | `gpt-5.4` | OpenAI | 编程与专业工作 |
+| `gpt-5.4-mini` | `gpt-5.4-mini` | OpenAI | 低延迟、低成本 |
+| `gpt-5.4-nano` | `gpt-5.4-nano` | OpenAI | 最低成本；2027-04-01 下线 |
+| `gpt-4o` | `gpt-4o` | OpenAI | 视觉与多模态 |
+| `gpt-4.1` | `gpt-4.1` | OpenAI | 旧版；快照 2027-01-14 下线 |
+| `o3` | `o3` | OpenAI | 旧版；快照 2026-12-11 下线 |
+| `claude-fable` | `claude-fable-5-1` | Anthropic | 高难推理、长时程 agent 任务 |
+| `claude-opus` | `claude-opus-5-5` | Anthropic | agent 式编程与知识工作 |
+| `claude-sonnet` | `claude-sonnet-5-5` | Anthropic | 速度与能力的平衡 |
+| `claude-haiku` | `claude-haiku-5-5` | Anthropic | 最快，适合高并发任务 |
+
+GPT-6 系列只在 OpenAI 的 Responses API 上支持工具调用，因此这些别名使用
+`responses` 格式（`POST .../v1/responses`），其余 OpenAI 别名仍走 Chat
+Completions。它们共用 `openai` provider 与 `OPENAI_API_KEY`。
 
 ```bash
 /provider                              # provider TUI
@@ -116,7 +124,7 @@ Key 存放在 `~/.pawnlogic/.env`；provider 配置在
 
 | 档位 | 发给 provider 的值 | 工具调用轮数 | 替代旧命令 |
 |-------|------------------|----------------------|----------|
-| `off` | `none` | 10 | — |
+| `off` | `none`（不发给 DeepSeek） | 10 | — |
 | `low` | `low` | 10 | `/low` |
 | `medium` | `medium` | 30 | `/mid`、`/normal` |
 | `high` | `high` | 50 | `/deep` |
