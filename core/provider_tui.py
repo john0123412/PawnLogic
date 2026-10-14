@@ -27,6 +27,8 @@ from config.providers import (
 from core.provider_tui_state import ProviderTUIState
 from core import provider_tui_form as _form
 from core import provider_tui_rows as rows_mod
+from core.provider_formats import format_label
+from core.provider_transport import derived_key_env
 from core.provider_tui_rows import default_wiz_fields
 from pawnlogic.selectors import ModalSpec
 from core.provider_runtime import (
@@ -374,7 +376,7 @@ class ProviderTUI:
         key = _provider_key(pname)
         n = _model_count(pname)
         fmt = pinfo.get("api_format", "openai")
-        fmt_label = "Anthropic Compatible" if fmt == "anthropic" else "OpenAI Compatible"
+        fmt_label = format_label(fmt)
         active = is_provider_active(pname)
         f: StyleAndTextTuples = [("class:title", f"\n  ◀ {pname}\n\n")]
         f += [("class:subtitle", f"  {'Name':<12}│ {pname}\n"),
@@ -1263,7 +1265,7 @@ class ProviderTUI:
             self._wiz_error = "API Key is required."; self._app and self._app.invalidate(); return
 
         self._wiz_error = ""
-        env_var = f"{name.upper().replace('-','_').replace(' ','_')}_API_KEY"
+        env_var = derived_key_env(name)
         _save_key_to_env(env_var, key)
         prov_cfg = {"base_url": url, "api_key_env": env_var,
                     "label": f"Custom ({name})", "api_format": fmt,

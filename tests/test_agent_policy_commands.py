@@ -467,3 +467,21 @@ def test_worker_cannot_override_explicit_model_policy(
     assert command_env.runtime_config["preferred_worker"] == "auto"
     assert command_env.session.reset_calls == 0
     assert message in "\n".join(command_env.output)
+
+
+def test_worker_selects_a_mixed_case_fetched_alias_by_name(
+    isolated_tools_commands, command_env, monkeypatch
+):
+    mixed = "Qwen/Qwen3-235B-A22B"
+    models = {mixed: {"desc": "Fetched custom model"}}
+    monkeypatch.setattr(command_env.module, "MODELS", models)
+    monkeypatch.setattr(command_env.module, "_visible_worker_models", lambda: models)
+
+    run_worker(isolated_tools_commands, command_env, mixed)
+    assert command_env.store.policy.preferred_model == mixed
+
+    run_worker(isolated_tools_commands, command_env, "qwen/qwen3-235b-a22b")
+    assert command_env.store.policy.preferred_model == mixed
+
+    run_worker(isolated_tools_commands, command_env, "AUTO")
+    assert command_env.store.policy.preferred_model is None

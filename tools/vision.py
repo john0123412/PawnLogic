@@ -102,11 +102,10 @@ def analyze_local_image(a: dict) -> str:
             avail = list_vision_models()
             return (
                 f"ERROR: no available vision model found.\n"
-                f"Configure one of these API keys:\n"
-                f"  ZHIPU_API_KEY      -> glm-4v-plus\n"
-                f"  OPENROUTER_API_KEY -> gpt-4o\n\n"
+                f"Configure a key for a provider with a vision model "
+                f"(for example OPENAI_API_KEY -> gpt-4o, then /provider activate openai).\n\n"
                 f"All vision models: {avail}\n"
-                f"After configuration, switch with /model glm-4v or pass model_alias in the tool call."
+                f"After configuration, pass model_alias in the tool call or switch with /model <alias>."
             )
 
     print(c(BLUE, f"  [Vision] analyzing image: {p.name}  ({file_size_mb:.2f}MB)  model: {model_alias}"))

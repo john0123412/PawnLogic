@@ -351,7 +351,9 @@ async def cmd_agent(ctx: CommandContext) -> None:
 async def cmd_worker(ctx: CommandContext) -> None:
     session = ctx.session
     arg = ctx.arg
-    target = arg.lower().strip() if arg else ""
+    # Fetched custom aliases keep the provider's raw, often mixed-case ID, so
+    # only the "auto" keyword is case-insensitive.
+    target = arg.strip() if arg else ""
     visible_models = _visible_worker_models()
     visible_aliases = list(visible_models)
 
@@ -381,7 +383,7 @@ async def cmd_worker(ctx: CommandContext) -> None:
         _print(c(GRAY, "\n  Usage: /worker <alias> or /worker auto"))
         return
 
-    if target == "auto":
+    if target.lower() == "auto":
         store = _delegation_policy_store()
         policy = store.load()
         store.save(replace(policy, preferred_model=None))
@@ -399,7 +401,10 @@ async def cmd_worker(ctx: CommandContext) -> None:
             return
         alias = visible_aliases[idx]
     except ValueError:
-        pass
+        if alias not in MODELS:
+            folded = [a for a in MODELS if a.lower() == alias.lower()]
+            if len(folded) == 1:
+                alias = folded[0]
 
     if alias not in MODELS:
         _print(c(RED, f"  ✗ Unknown model '{target}'. Use /worker to list candidates."))

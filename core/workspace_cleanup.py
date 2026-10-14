@@ -120,7 +120,12 @@ def _extract_restore_to_staging(
 ) -> None:
     staging.mkdir(parents=True, exist_ok=False)
     with tarfile.open(backup_path, "r:gz") as tf:
-        tf.extractall(str(staging), members=members)
+        # Members are already validated; the stdlib "data" filter is a second
+        # layer (it also strips setuid bits) where this Python provides it.
+        if hasattr(tarfile, "data_filter"):
+            tf.extractall(str(staging), members=members, filter="data")
+        else:
+            tf.extractall(str(staging), members=members)
     if not (staging / "workspace").is_dir():
         raise ValueError("backup archive must contain a workspace directory")
 

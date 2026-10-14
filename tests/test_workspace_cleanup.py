@@ -8,6 +8,8 @@ import tarfile
 from pathlib import Path
 from datetime import datetime
 
+import pytest
+
 
 def _drop_project_modules(*module_names: str) -> None:
     for name in module_names:
@@ -118,7 +120,7 @@ def test_restore_extract_failure_preserves_existing_workspace(monkeypatch, tmp_p
         ],
     )
 
-    def fail_extractall(self, path=".", members=None, *, numeric_owner=False):
+    def fail_extractall(self, path=".", members=None, *, numeric_owner=False, filter=None):
         raise OSError("boom")
 
     monkeypatch.setattr(tarfile.TarFile, "extractall", fail_extractall)
@@ -129,6 +131,28 @@ def test_restore_extract_failure_preserves_existing_workspace(monkeypatch, tmp_p
     assert "boom" in result["error"]
     assert (wc.WORKSPACE_PATH / "keep.txt").read_text(encoding="utf-8") == "keep"
     assert not (wc.WORKSPACE_PATH / "restored.txt").exists()
+
+
+@pytest.mark.skipif(not hasattr(tarfile, "data_filter"), reason="stdlib tar filters unavailable")
+def test_restore_extracts_with_the_stdlib_data_filter(monkeypatch, tmp_path):
+    wc = _load_workspace_cleanup(monkeypatch, tmp_path)
+    backup = _write_tar(
+        tmp_path / "backup.tar.gz",
+        [("dir", "workspace"), ("file", "workspace/restored.txt", b"new")],
+    )
+    seen = []
+    real_extractall = tarfile.TarFile.extractall
+
+    def spy_extractall(self, *args, **kwargs):
+        seen.append(kwargs.get("filter"))
+        return real_extractall(self, *args, **kwargs)
+
+    monkeypatch.setattr(tarfile.TarFile, "extractall", spy_extractall)
+
+    result = wc.restore_from_backup(backup)
+
+    assert result["ok"] is True
+    assert seen == ["data"]
 
 
 def test_restore_requires_workspace_directory(monkeypatch, tmp_path):

@@ -184,16 +184,17 @@ ENV_TEMPLATE = """# PawnLogic .env template.
 # DeepSeek key URL: https://platform.deepseek.com
 DEEPSEEK_API_KEY=
 
-# Optional AI providers.
+# Optional built-in providers. Activate with /provider activate <name>.
 ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
+
+# Custom provider keys are read only after `/provider add` registers a
+# provider whose API key variable has this name; built-ins never read them.
 QWEN_API_KEY=
 ZHIPU_API_KEY=
 SILICON_API_KEY=
 MOONSHOT_API_KEY=
 GROQ_API_KEY=
-
-# Custom provider examples. Add the provider with /provider before use.
 XIAOMI_API_KEY=
 
 # MCP tool keys. Only required when the matching MCP server is enabled.
@@ -201,8 +202,7 @@ TAVILY_API_KEY=
 BROWSERBASE_API_KEY=
 BROWSERBASE_PROJECT_ID=
 
-# Advanced local endpoint.
-# LOCAL_API_URL=http://localhost:11434/v1/chat/completions
+# Local endpoints (Ollama, vLLM, ...): add them with /provider add.
 
 # Optional runtime settings.
 # PAWNLOGIC_LOG_LEVEL=INFO
@@ -305,6 +305,8 @@ HELP_TEXT = f"""
   {c(YELLOW, "/clear")}           Clear context while keeping pinned messages
   {c(YELLOW, "/context")}         Show context size and token estimate
   {c(YELLOW, "/pin [n]")}         Pin the last n messages
+  {c(YELLOW, "/unpin")}           Clear all pinned messages
+  {c(YELLOW, "/history")}         Show indexed message history
   {c(YELLOW, "/undo [n]")}        Undo recent turns
   {c(YELLOW, "/abort")}           Interrupt active Turn and clear all queued input
   {c(YELLOW, "/compact")}         Summarize and compact context
@@ -323,14 +325,20 @@ HELP_TEXT = f"""
   {c(CYAN, "/provider activate <name>")} Show selected provider models
   {c(CYAN, "/provider deactivate <name>")} Hide provider models
   {c(CYAN, "/provider test <model>")} Test provider connectivity
+  {c(CYAN, "/provider effort <name> on|off")} Send reasoning_effort for a custom provider
+  {c(CYAN, "/provider remove <name>")} Remove a custom provider
 
 {c(BOLD, "Sessions & Memory")}
   {c(CYAN, "/save [name]")}       Save current session
   {c(CYAN, "/load <name|n>")}     Load a saved session
   {c(CYAN, "/sessions")}          List sessions
   {c(CYAN, "/resume [n]")}        Resume and display history
+  {c(CYAN, "/rename <n|name> <new>")} Rename a saved session
+  {c(CYAN, "/del <name|n>")}      Delete a saved session
   {c(MAGENTA, "/memorize [topic]")} Save a summary to knowledge base
   {c(MAGENTA, "/knowledge [query]")} Search knowledge entries
+  {c(MAGENTA, "/forget <id>")}      Delete a knowledge entry
+  {c(MAGENTA, "/memo <text>")}      Archive a skill note manually
 
 {c(BOLD, "Delegated Agents")}
   {c(CYAN, "/worker [alias|auto]")} Select the preferred visible worker model
@@ -352,18 +360,26 @@ HELP_TEXT = f"""
   {c(RED, "/max")}     Alias for effort xhigh
   {c(BOLD + CYAN, "/ultra")} Alias for effort max (150 iterations)
   {c(YELLOW, "/planguard [mode]")} Select plan-guard mode; no arg opens a selector
+  {c(YELLOW, "/tokens /ctx /iter <n>")} Set max_tokens, context limit, or max iterations
+  {c(YELLOW, "/toolsize /fetchsize <n>")} Set tool or web-fetch output truncation
+  {c(YELLOW, "/time [seconds]")} Show or set the time budget
+  {c(YELLOW, "/stats /ping /failures")} Token usage, cache keepalive, failure records
   {c(YELLOW, "/webstatus /browserstatus /docker /pwnenv")} Tool status
 
 {c(BOLD, "Projects & History")}
   {c(YELLOW, "/init_project [desc]")} Create .pawn_state.md
   {c(YELLOW, "/state")}               Show .pawn_state.md
+  {c(YELLOW, "/ctf init <name>")}       Start CTF workspace metadata
   {c(YELLOW, "/ctf status")}           Show CTF workspace metadata
+  {c(YELLOW, "/ctf solved [flag]")}    Mark a confirmed flag as solved
   {c(YELLOW, "/ctf writeup")}          Export CTF writeup draft
   {c(CYAN, "/chat list [n]")}         List recent sessions
   {c(CYAN, "/chat find <keyword>")}   Search all sessions
   {c(CYAN, "/workspace status")}      Show workspace status
+  {c(CYAN, "/skills")}                 Manage skill packs
+  {c(CYAN, "/skills install <repo_url>")} Install a git-backed skill pack
 
-{c(YELLOW, "/exit")} Exit
+{c(YELLOW, "/help")} Show this list   {c(YELLOW, "/exit")} Exit
 """
 
 
@@ -1094,6 +1110,8 @@ async def _main_impl():
     # Flat command list with gray descriptions on the right.
     _all_cmd_words = _builtin_command_completion_words()
 
+    from config.tiers import effort_alias_hint
+
     _cmd_meta = {
         "/mode":          "Toggle user-friendly/debug output",
         "/model":         "Switch AI model (/model ds-v4-flash)",
@@ -1122,11 +1140,11 @@ async def _main_impl():
         "/init_project":  "Initialize .pawn_state.md project state",
         "/state":         "Show current project .pawn_state.md",
         "/effort":        "Reasoning effort; no arg opens a selector",
-        "/low":           "Alias for effort low (tokens=4k, ctx=40k)",
-        "/mid":           "Alias for effort medium (tokens=8k, ctx=150k) <- default",
-        "/deep":          "Alias for effort high (tokens=32k, ctx=400k)",
-        "/max":           "Alias for effort xhigh (tokens=32k, ctx=600k, iter=100, 60min)",
-        "/ultra":         "Alias for effort max (tokens=32k, ctx=600k, iter=150, 60min)",
+        "/low":           effort_alias_hint("low"),
+        "/mid":           effort_alias_hint("medium") + " <- default",
+        "/deep":          effort_alias_hint("high"),
+        "/max":           effort_alias_hint("xhigh"),
+        "/ultra":         effort_alias_hint("max"),
         "/normal":        "Alias for effort medium",
         "/limits":        "Show all runtime limits",
         "/tokens":        "Set max_tokens",

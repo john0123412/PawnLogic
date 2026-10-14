@@ -136,6 +136,20 @@ def effort_options(accepted: dict) -> tuple[tuple[str, str, str], ...]:
     return tuple(rows)
 
 
+def effort_alias_hint(level: str) -> str:
+    """Completion hint for an effort alias such as ``/deep``.
+
+    Generated from the preset: hand-written hints drifted to the old character
+    budgets, overstating the real token limits by up to 4.7x.
+    """
+    preset = EFFORT_PRESETS[level]
+    return (
+        f"Alias for effort {level} (tokens={preset['max_tokens'] // 1024}k, "
+        f"ctx={preset['ctx_max_tokens'] // 1000}k tokens, "
+        f"iter={preset['max_iter']}, {preset['time_budget_sec'] // 60}min)"
+    )
+
+
 def effort_delivery(accepted: dict, model_alias: str, level: str) -> str:
     """Describe where one level is actually applied for a model."""
     if level in accepted:

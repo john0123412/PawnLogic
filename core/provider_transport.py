@@ -26,6 +26,7 @@ __all__ = [
     "VALID_API_FORMATS",
     "VALID_AUTH_SCHEMES",
     "ProviderDefinition",
+    "derived_key_env",
     "provider_headers",
     "validate_provider_definition",
 ]
@@ -52,6 +53,17 @@ def provider_headers(
     the protocol it speaks -- e.g. Anthropic-shaped payloads over Bearer.
     """
     return build_auth_headers(api_format, auth, api_key)
+
+
+def derived_key_env(name: str) -> str:
+    """Return the ``<NAME>_API_KEY`` variable a new provider's key is stored in.
+
+    Every non-alphanumeric run becomes ``_``: a provider named ``my relay``
+    must not produce ``MY RELAY_API_KEY``, which a .env parser cannot read
+    back.  Both the CLI and the TUI add paths derive the name here.
+    """
+    stem = re.sub(r"[^A-Za-z0-9]+", "_", name.strip()).strip("_").upper()
+    return f"{stem}_API_KEY"
 
 
 def validate_provider_definition(

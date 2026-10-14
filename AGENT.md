@@ -819,6 +819,9 @@ name at the end is the gate that fails if the invariant is broken.
   only splits `ctx.arg` makes the documented form unreachable *while its unit
   test — which passes the whole string as `arg` — still passes*. Same split
   for `/provider <sub> <rest>`. Test two-token forms through the real split.
+  A command taking free text or a path (`/think`, `/cd`, `/file`) must read
+  `CommandContext.text`, not `arg`; reading `arg` silently keeps only the
+  first word (`test_think_sends_the_whole_prompt_through_handle_slash`).
 - Provider visibility must agree across CLI, TUI, completions, and runtime fetch.
 - Trust/Operation/Network Policy drift across host, Docker, browser, MCP, and
   CTF paths; URL adapters must re-evaluate DNS and redirects.

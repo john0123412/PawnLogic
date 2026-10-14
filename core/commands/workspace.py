@@ -197,7 +197,7 @@ def _handle_workspace_cmd(arg: str, arg2: str, session) -> None:
 @register("/cd")
 async def cmd_cd(ctx: CommandContext) -> None:
     session = ctx.session
-    target = ctx.arg or "~"
+    target = ctx.text or "~"
     try:
         os.chdir(Path(target).expanduser())
         session.cwd = os.getcwd()
@@ -229,7 +229,7 @@ async def cmd_cd(ctx: CommandContext) -> None:
 @register("/file")
 async def cmd_file(ctx: CommandContext) -> None:
     session = ctx.session
-    arg = ctx.arg
+    arg = ctx.text
     if not arg:
         _print(c(RED, "  Usage: /file <path>"))
         return

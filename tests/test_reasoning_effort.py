@@ -318,11 +318,13 @@ class TestAliasHelpText:
         source = (Path(__file__).resolve().parents[1] / "pawnlogic" / "cli.py").read_text(
             encoding="utf-8"
         )
-        # Both surfaces are matched: the `{/max}  Alias for effort X` help
-        # block and the `"/max":  "Alias for effort X (...)"` dict entry.
+        # Every surface is matched: the `{/max}  Alias for effort X` help
+        # block, a literal `"/max":  "Alias for effort X (...)"` dict entry,
+        # and the generated `"/max": effort_alias_hint("X")` completion hint.
         found = []
         for pattern in (
             rf'"{re.escape(verb)}":\s*"Alias for effort (\w+)',
+            rf'"{re.escape(verb)}":\s*effort_alias_hint\("(\w+)"\)',
             rf"\{{{re.escape(verb)}\}}\s+Alias for effort (\w+)",
         ):
             found += re.findall(pattern, source)
@@ -728,3 +730,17 @@ def _provider_ctx(sub: str, sub_arg: str = ""):
         session=None,
         terminal_controller=None,
     )
+
+
+def test_effort_alias_completion_hints_match_the_live_presets():
+    import pawnlogic.cli as cli_module
+    from config.tiers import effort_alias_hint, effort_preset
+
+    for level in ("low", "medium", "high", "xhigh", "max"):
+        preset = effort_preset(level)
+        hint = effort_alias_hint(level)
+        assert f"ctx={preset['ctx_max_tokens'] // 1000}k tokens" in hint
+        assert f"iter={preset['max_iter']}" in hint
+    source = Path(cli_module.__file__).read_text(encoding="utf-8")
+    for stale in ("ctx=40k", "ctx=150k", "ctx=400k", "ctx=600k"):
+        assert stale not in source
