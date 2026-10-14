@@ -628,7 +628,7 @@ async def cmd_compact(ctx: CommandContext) -> None:
 @register("/think")
 async def cmd_think(ctx: CommandContext) -> None:
     session = ctx.session
-    arg = ctx.arg
+    arg = ctx.text
     if not arg:
         _print(c(RED, "  Usage: /think <prompt>  (single reasoning-mode turn)"))
         return

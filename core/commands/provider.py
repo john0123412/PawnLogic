@@ -62,10 +62,12 @@ from core.commands._model_picker import cc_style_model_selector
 from core.logger import logger
 from core.provider_formats import (
     AUTH_LABELS,
+    format_label,
     normalize_api_format,
     normalize_auth,
 )
 from core import provider_tui_rows as rows_mod
+from core.provider_transport import derived_key_env, validate_provider_definition
 from core.provider_runtime import (
     ENV_PATH,
     fetch_models,
@@ -99,17 +101,35 @@ except ImportError:
 # Key wizard
 # ════════════════════════════════════════════════════════
 
-# (number label, env_var, label, hint, whether the key can be skipped)
-_WIZARD_PROVIDERS = [
-    ("1", "PAWN_API_KEY",       "PawnLogic Engine",  "hermes · hermes405",                  False),
-    ("2", "DEEPSEEK_API_KEY",   "DeepSeek",          "ds-v4-flash / ds-v4-pro",             False),
-    ("3", "OPENROUTER_API_KEY", "OpenRouter",        "multi-model routing, includes gpt-4o vision", False),
-    ("4", "SILICON_API_KEY",    "SiliconFlow",       "ds-coder, qwen, and regional models",         False),
-    ("5", "ZHIPU_API_KEY",      "ZhipuAI",           "glm-4v-plus vision with regional access",     False),
-    ("6", "XIAOMI_API_KEY",     "Xiaomi MiMo",       "mimo-v2.5-pro · mimo-v2-omni",        False),
-    ("7", "ANTHROPIC_API_KEY",  "Anthropic",         "claude-opus-4-7 · claude-sonnet-4-6", False),
-    ("8", None,                 "Local Ollama",      "run ollama serve first; no key needed", True),
-]
+# Built-in providers the wizard offers, in menu order.  Custom endpoints are
+# configured through ``/provider add``; offering a key for a provider that
+# does not exist only reports success while ``/model`` stays empty.
+_WIZARD_PROVIDER_ORDER = ("deepseek", "openai", "anthropic")
+
+_KEY_URLS = {
+    "DEEPSEEK_API_KEY":  "https://platform.deepseek.com/api_keys",
+    "OPENAI_API_KEY":    "https://platform.openai.com/api-keys",
+    "ANTHROPIC_API_KEY": "https://console.anthropic.com/settings/keys",
+}
+
+
+def _wizard_providers() -> list[tuple[str, str, str, str, str]]:
+    """Return ``(number, provider, env_var, label, hint)`` rows.
+
+    Rows come from the built-in ``PROVIDERS`` and their registered models, so
+    the menu cannot drift from what ``/model`` will actually show.
+    """
+    providers = provider_config.provider_snapshot()
+    models = provider_config.model_snapshot()
+    rows = []
+    for name in _WIZARD_PROVIDER_ORDER:
+        cfg = providers.get(name)
+        if not cfg or not cfg.get("api_key_env"):
+            continue
+        aliases = [a for a, m in models.items() if m.get("provider") == name]
+        hint = " · ".join(aliases[:3])
+        rows.append((str(len(rows) + 1), name, cfg["api_key_env"], cfg.get("label", name), hint))
+    return rows
 
 
 def _write_key_to_shell(env_var: str, key: str) -> str:
@@ -140,12 +160,14 @@ Select providers to configure. You can run this multiple times:
 
 """)
 
-    for num, env_var, label, hint, no_key in _WIZARD_PROVIDERS:
+    wizard_rows = _wizard_providers()
+    for num, _name, env_var, label, hint in wizard_rows:
         already = ""
-        if env_var and os.environ.get(env_var):
+        if os.environ.get(env_var):
             already = c(GREEN, "  [configured ✓]")
         _print(f"  {c(CYAN, f'[{num}]')} {c(BOLD, f'{label:18}')} {c(GRAY, hint)}{already}")
 
+    _print(f"\n  {c(GRAY, 'Other OpenAI/Anthropic-compatible endpoints: /provider add')}")
     _print(f"\n  {c(GRAY, '[0]')} Skip for now. Configure later with /setkey or ~/.pawnlogic/.env.")
     _print()
 
@@ -153,7 +175,7 @@ Select providers to configure. You can run this multiple times:
 
     while True:
         try:
-            choice = input(cp(BOLD, "  Enter number(s), e.g. 1 5: ")).strip()
+            choice = input(cp(BOLD, "  Enter number(s), e.g. 1 3: ")).strip()
         except (EOFError, KeyboardInterrupt):
             _print()
             break
@@ -164,34 +186,14 @@ Select providers to configure. You can run this multiple times:
         selected = [s.strip() for s in choice.split() if s.strip()]
 
         for sel in selected:
-            matched = next((p for p in _WIZARD_PROVIDERS if p[0] == sel), None)
+            matched = next((p for p in wizard_rows if p[0] == sel), None)
             if not matched:
                 _print(c(RED, f"  ✗ Invalid selection '{sel}'"))
                 continue
 
-            num, env_var, label, hint, no_key = matched
-
-            if no_key:
-                local_url = input(
-                    c(GRAY, "  Ollama API URL [default: http://localhost:11434/v1/chat/completions]: ")
-                ).strip()
-                if local_url:
-                    os.environ["LOCAL_API_URL"] = local_url
-                    _write_key_to_shell("LOCAL_API_URL", local_url)
-                _print(c(GREEN, "  ✓ Ollama configured. Make sure ollama serve is running."))
-                configured_any = True
-                continue
+            num, name, env_var, label, hint = matched
 
             _print(c(GRAY, f"\n  Get a {label} key:"))
-            _KEY_URLS = {
-                "PAWN_API_KEY":       "https://portal.nousresearch.com/api-keys",
-                "DEEPSEEK_API_KEY":   "https://platform.deepseek.com/api_keys",
-                "OPENROUTER_API_KEY": "https://openrouter.ai/keys",
-                "SILICON_API_KEY":    "https://cloud.siliconflow.cn/account/ak",
-                "ZHIPU_API_KEY":      "https://open.bigmodel.cn/usercenter/apikeys",
-                "XIAOMI_API_KEY":     "https://token-plan-cn.xiaomimimo.com",
-                "ANTHROPIC_API_KEY":  "https://console.anthropic.com/settings/keys",
-            }
             url = _KEY_URLS.get(env_var, "")
             if url:
                 _print(c(CYAN, f"  Key URL: {url}"))
@@ -209,6 +211,10 @@ Select providers to configure. You can run this multiple times:
             written_to = _write_key_to_shell(env_var, key)
             _print(c(GREEN, f"  ✓ {env_var} saved -> {written_to}"))
             _print(c(GRAY,  "  Injected into the current process; no terminal restart needed."))
+            if provider_config.is_provider_active(name):
+                _print(c(GRAY, "  Its models are available in /model."))
+            else:
+                _print(c(YELLOW, f"  Run /provider activate {name} to show its models in /model."))
             configured_any = True
 
         try:
@@ -292,7 +298,7 @@ def _provider_list(sink=None) -> None:
             ktag = c(GRAY, "No key required")
         else:
             ktag = c(RED, "✗ Not configured")
-        fmt_tag = c(MAGENTA, "[Anthropic]") if fmt == "anthropic" else c(GRAY, "[OpenAI]")
+        fmt_tag = c(GRAY, f"[{format_label(fmt)}]")
         active_tag = c(GREEN, "active") if is_provider_active(pname) else c(GRAY, "inactive")
         hint = pinfo.get("models_hint", "")
         _print(f"  {c(CYAN, f'{pname:16}')}{fmt_tag:14} {label:24} {ktag}  {active_tag}")
@@ -357,7 +363,19 @@ def _provider_add() -> None:
         _print(c(RED, "  ✗ URL cannot be empty."))
         return
 
-    env_var_name = f"{name.upper().replace('-', '_')}_API_KEY"
+    env_var_name = derived_key_env(name)
+    # Validate before anything is written: the key lands in .env first.
+    try:
+        validate_provider_definition(name, {
+            "base_url": base_url,
+            "api_key_env": env_var_name,
+            "api_format": api_format,
+            "auth": auth,
+        })
+    except ValueError as exc:
+        _print(c(RED, f"  ✗ {exc}"))
+        return
+
     try:
         key = ptk_prompt(f"  Paste API key and press Enter; it will be stored in .env -> {env_var_name}: ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -472,8 +490,6 @@ def _provider_add_cli(
     api_format: str = "openai", auth: str = "auto",
 ) -> bool:
     """Non-interactive: /provider add <alias> <base_url> <ENV_KEY> [format] [auth]."""
-    from core.provider_transport import validate_provider_definition
-
     if alias in PROVIDERS:
         _print(c(YELLOW, f"  ⚠ Provider '{alias}' already exists; config will be overwritten."))
     try:

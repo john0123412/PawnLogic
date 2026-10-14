@@ -16,6 +16,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   these simulated artifacts still do not install or activate a host filter.
 
 ### Fixed
+- `/think`, `/cd`, and `/file` receive their whole argument. The slash parser
+  splits `verb arg rest`, so `/think explain why it fails` sent only
+  `explain`, and `/cd My Dir` tried to open `My`.
+- The `/setkey` wizard offers exactly the built-in providers (DeepSeek,
+  OpenAI, Anthropic) with their real model aliases, and says when
+  `/provider activate <name>` is needed. It previously offered providers that
+  do not exist, reported success, and left `/model` empty, while omitting
+  OpenAI entirely. Custom endpoints are pointed at `/provider add`.
+- `/worker <alias>` accepts mixed-case fetched aliases such as
+  `Qwen/Qwen3-235B-A22B` instead of lowercasing them into an unknown model.
+- Effort alias completion hints (`/low` … `/ultra`) are generated from the
+  live presets; they showed stale character-era context budgets.
+- `/provider list` and the provider panel label `responses`-format providers
+  from the format registry instead of calling them OpenAI.
+- Interactive `/provider add` validates the provider before writing its key
+  to `.env`, and derives a parseable key variable (`my relay` ->
+  `MY_RELAY_API_KEY`) shared with the provider panel.
+- `/help` lists every built-in command, including `/skills install`,
+  `/provider effort`, `/provider remove`, and `/ctf init`/`solved`.
+- `install.sh` prints the missing-venv error as colored text instead of
+  literal escape sequences.
+- The vision tool's no-model error and the generated `.env` template no
+  longer point at nonexistent built-in providers or the unused
+  `LOCAL_API_URL` variable.
+- Workspace backup restore additionally applies the stdlib `data` extraction
+  filter where available, on top of the existing member validation.
 - The Esc-cancellation PTY regression waits for recovery prefill to settle
   before clearing the draft and submitting a queue command. Cancellation
   deadlines and queue assertions are unchanged; terminal runtime behavior is

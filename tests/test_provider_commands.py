@@ -2332,3 +2332,108 @@ def test_provider_add_cli_refuses_an_unknown_auth_scheme(monkeypatch):
 
     assert ok is False
     assert saved == {}
+
+
+def test_key_wizard_offers_exactly_the_builtin_providers():
+    cmd = sys.modules["core.commands.provider"]
+    live_config = sys.modules["config.providers"]
+    rows = cmd._wizard_providers()
+    providers = live_config.provider_snapshot()
+
+    assert [row[1] for row in rows] == ["deepseek", "openai", "anthropic"]
+    for _num, name, env_var, _label, hint in rows:
+        assert providers[name]["api_key_env"] == env_var
+        models = live_config.model_snapshot()
+        for alias in filter(None, hint.split(" · ")):
+            assert models[alias]["provider"] == name
+
+
+def test_key_wizard_saves_openai_key_and_points_at_activation(monkeypatch, capsys):
+    cmd = sys.modules["core.commands.provider"]
+    saved: list[tuple[str, str]] = []
+    answers = iter(["2", "n"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr(cmd, "ptk_prompt", lambda prompt="": "dummy-test-key")
+    monkeypatch.setattr(cmd, "save_key", lambda env, key: saved.append((env, key)))
+    monkeypatch.setattr(cmd.provider_config, "is_provider_active", lambda name: False)
+
+    assert cmd._run_key_wizard() is True
+
+    out = capsys.readouterr().out
+    assert saved == [("OPENAI_API_KEY", "dummy-test-key")]
+    assert "/provider activate openai" in out
+    for stale in ("OPENROUTER_API_KEY", "PAWN_API_KEY", "ZHIPU_API_KEY", "Ollama"):
+        assert stale not in out
+
+
+def test_responses_format_provider_is_labelled_from_the_format_registry(
+    monkeypatch, capsys
+):
+    cmd = sys.modules["core.commands.provider"]
+    tui_mod = sys.modules["core.provider_tui"]
+    snapshot = {
+        "relay": {
+            "base_url": "https://relay.example.com/v1",
+            "api_key_env": "RELAY_API_KEY",
+            "label": "relay",
+            "api_format": "responses",
+        }
+    }
+    monkeypatch.setattr(cmd.provider_config, "init_providers", lambda force=False: None)
+    monkeypatch.setattr(cmd.provider_config, "provider_snapshot", lambda: snapshot)
+    monkeypatch.setattr(cmd.provider_config, "model_snapshot", lambda: {})
+
+    cmd._provider_list()
+    out = capsys.readouterr().out
+    assert "[OpenAI Responses]" in out
+    assert "[OpenAI]" not in out
+
+    monkeypatch.setattr(tui_mod, "_provider_snapshot", lambda: snapshot)
+    tui = tui_mod.ProviderTUI()
+    tui._panel = "detail"
+    tui._detail_provider = "relay"
+    rendered = "".join(text for _s, text in tui._render_detail())
+    assert "OpenAI Responses" in rendered
+    assert "OpenAI Compatible" not in rendered
+
+
+def test_derived_key_env_is_a_readable_env_var_name():
+    from core.provider_transport import derived_key_env
+
+    assert derived_key_env("my relay") == "MY_RELAY_API_KEY"
+    assert derived_key_env("my-relay.v2") == "MY_RELAY_V2_API_KEY"
+    assert derived_key_env("openrouter") == "OPENROUTER_API_KEY"
+
+
+def _drive_interactive_add(monkeypatch, name):
+    cmd = sys.modules["core.commands.provider"]
+    saved_keys: list[tuple[str, str]] = []
+    saved_providers: list[tuple[str, dict]] = []
+    answers = iter([name, "1", "1", "https://relay.example.com/v1/chat/completions"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr(cmd, "ptk_prompt", lambda prompt="": "dummy-test-key")
+    monkeypatch.setattr(cmd, "save_key", lambda env, key: saved_keys.append((env, key)))
+    monkeypatch.setattr(
+        provider_runtime,
+        "save_provider_with_rollback",
+        lambda n, cfg, models: saved_providers.append((n, cfg)) or (True, ""),
+    )
+    cmd._provider_add()
+    return saved_keys, saved_providers
+
+
+def test_interactive_provider_add_derives_a_parseable_key_env(monkeypatch):
+    saved_keys, saved_providers = _drive_interactive_add(monkeypatch, "my relay")
+
+    assert saved_keys == [("MY_RELAY_API_KEY", "dummy-test-key")]
+    assert saved_providers[0][1]["api_key_env"] == "MY_RELAY_API_KEY"
+
+
+def test_interactive_provider_add_rejects_an_unsafe_name_before_writing_env(
+    monkeypatch, capsys
+):
+    saved_keys, saved_providers = _drive_interactive_add(monkeypatch, "evil=name")
+
+    assert saved_keys == []
+    assert saved_providers == []
+    assert "Provider name must start" in capsys.readouterr().out

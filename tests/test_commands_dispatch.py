@@ -606,3 +606,90 @@ def test_ultra_tier_sets_150_iterations_and_reports_advisory_guard(
     finally:
         DYNAMIC_CONFIG.clear()
         DYNAMIC_CONFIG.update(previous)
+
+
+# ════════════════════════════════════════════════════════
+# 4. Free-text arguments survive the real ``verb arg arg2`` split
+# ════════════════════════════════════════════════════════
+
+class _TextSession:
+    def __init__(self, cwd: str) -> None:
+        self.cwd = cwd
+        self.messages: list = []
+        self.model_alias = "ds-v4-flash"
+        self.prompts: list[str] = []
+
+    def run_turn(self, prompt: str) -> None:
+        self.prompts.append(prompt)
+
+    def _sync_runtime_context(self) -> None:
+        pass
+
+    def _reset_system_prompt(self) -> None:
+        pass
+
+
+def test_command_context_text_joins_arg_and_remainder(cmd_pkg, fake_session):
+    ctx = _ctx(cmd_pkg, "/think", "explain", "why  it overflows", fake_session)
+    assert ctx.text == "explain why  it overflows"
+    assert _ctx(cmd_pkg, "/cd", session=fake_session).text == ""
+
+
+def test_think_sends_the_whole_prompt_through_handle_slash(monkeypatch, tmp_path):
+    from pawnlogic import cli
+    session_cmds = importlib.import_module("core.commands.session")
+    monkeypatch.setattr(session_cmds, "validate_api_key", lambda alias: (False, ""))
+    session = _TextSession(str(tmp_path))
+
+    asyncio.run(cli.handle_slash("/think explain why the heap overflows", session))
+
+    assert len(session.prompts) == 1
+    assert session.prompts[0].endswith("explain why the heap overflows")
+
+
+def test_cd_accepts_a_path_with_spaces_through_handle_slash(monkeypatch, tmp_path):
+    from pawnlogic import cli
+    target = tmp_path / "My Dir"
+    target.mkdir()
+    monkeypatch.chdir(tmp_path)
+    session = _TextSession(str(tmp_path))
+
+    asyncio.run(cli.handle_slash(f"/cd {target}", session))
+
+    assert session.cwd == str(target.resolve())
+
+
+def test_file_loads_a_path_with_spaces_through_handle_slash(monkeypatch, tmp_path):
+    from pawnlogic import cli
+    workspace_cmds = importlib.import_module("core.commands.workspace")
+    seen: list[str] = []
+    monkeypatch.setattr(
+        workspace_cmds, "tool_read_file", lambda args: seen.append(args["path"]) or "x"
+    )
+    session = _TextSession(str(tmp_path))
+
+    asyncio.run(cli.handle_slash("/file notes/my file.txt", session))
+
+    assert seen == ["notes/my file.txt"]
+    assert session.messages[0]["content"].startswith("[Loaded: notes/my file.txt]")
+
+
+# README promises that ``/help`` lists everything; aliases and the
+# deliberately hidden ``/queue`` are the only exceptions.
+_HELP_EXEMPT_VERBS = {"/q", "/quit", "/normal", "/queue"}
+
+
+def test_help_text_names_every_builtin_command():
+    import re
+
+    from pawnlogic import cli
+
+    help_text = cli.strip_ansi(cli.HELP_TEXT)
+    builtin = set().union(*EXPECTED_VERBS_BY_MODULE.values()) - _HELP_EXEMPT_VERBS
+    missing = sorted(
+        verb for verb in builtin
+        if not re.search(re.escape(verb) + r"(?![\w-])", help_text)
+    )
+    assert missing == []
+    for documented in ("/skills install", "/provider effort", "/ctf init", "/ctf solved"):
+        assert documented in help_text

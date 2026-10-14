@@ -76,6 +76,15 @@ class CommandContext:
     sink: Any = None  # HumanSink | JsonSink; populated by dispatch()
     terminal_controller: Any = None  # PersistentTerminalController | None
 
+    @property
+    def text(self) -> str:
+        """The whole argument text after the verb (``arg`` plus ``arg2``).
+
+        ``handle_slash`` splits the line as ``verb arg arg2``, so a command
+        taking free text or a path with spaces must read this, not ``arg``.
+        """
+        return f"{self.arg} {self.arg2}".strip()
+
 
 # ────────────────────────────────────────────────────────
 # Command registry
