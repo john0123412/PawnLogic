@@ -77,6 +77,9 @@ current list.
 |-------|-------|----------|-----|
 | `ds-v4-flash` | `deepseek-flash` | DeepSeek | Default; V4.1 Flash, fast and low-cost |
 | `ds-v4-pro` | `deepseek-v4-pro` | DeepSeek | V4 Pro flagship reasoning |
+| `gpt-6-astra` | `gpt-6-astra` | OpenAI | Flagship reasoning and coding (Responses API) |
+| `gpt-6.1-sol` | `gpt-6.1-sol` | OpenAI | Balance of intelligence and cost (Responses API) |
+| `gpt-6-luna` | `gpt-6-luna` | OpenAI | Cost-sensitive, high volume (Responses API) |
 | `gpt-5.5` | `gpt-5.5` | OpenAI | Complex reasoning and coding |
 | `gpt-5.4` | `gpt-5.4` | OpenAI | Coding and professional work |
 | `gpt-5.4-mini` | `gpt-5.4-mini` | OpenAI | Low latency, low cost |
@@ -89,12 +92,10 @@ current list.
 | `claude-sonnet` | `claude-sonnet-5-5` | Anthropic | Balance of speed and intelligence |
 | `claude-haiku` | `claude-haiku-5-5` | Anthropic | Fastest, high-volume tasks |
 
-OpenAI's GPT-6 models are not built in: the built-in OpenAI provider uses
-Chat Completions, where GPT-6 Astra and GPT-6.1 Sol do not support function
-calling and GPT-6 Luna supports it only with reasoning effort `none`. Add them
-as a `responses` provider instead, for example
-`/provider add <name> https://api.openai.com/v1 OPENAI_API_KEY responses`,
-then `/provider activate <name>` and `/provider fetch <name>`.
+GPT-6 models support tool calling only on OpenAI's Responses API, so their
+aliases use the `responses` format (`POST .../v1/responses`) while the other
+OpenAI aliases keep Chat Completions. All of them share the `openai` provider
+and `OPENAI_API_KEY`.
 
 ```bash
 /provider                              # provider TUI

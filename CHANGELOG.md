@@ -16,10 +16,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `claude-haiku-5-5`, and a new `claude-fable` alias targets
   `claude-fable-5-1`. Model descriptions note OpenAI's published shutdown
   dates for `o3`, `gpt-4.1`, and `gpt-5.4-nano`.
-- README model tables gain a short "Use" column and explain why GPT-6 models
-  are not built in: Chat Completions does not support function calling for
-  GPT-6 Astra and GPT-6.1 Sol, and supports it for GPT-6 Luna only at effort
-  `none`. They can be added as a `responses` provider.
+- README model tables gain a short "Use" column.
+
+### Added
+- Built-in `gpt-6-astra`, `gpt-6.1-sol`, and `gpt-6-luna` aliases. OpenAI
+  supports their tool calling only on the Responses API, so a model entry may
+  now declare its own `api_format`; these three send Responses requests to
+  `https://api.openai.com/v1/responses` with `OPENAI_API_KEY`, while the other
+  OpenAI aliases keep Chat Completions. Effort follows each model's published
+  ladder: Astra and 6.1 Sol accept `low` to `max` (no `none`), Luna also
+  accepts `none`.
 
 ### Fixed
 - Effort `off` is no longer sent to DeepSeek as `reasoning_effort: "none"`.

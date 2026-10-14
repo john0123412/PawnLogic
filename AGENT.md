@@ -730,7 +730,13 @@ name at the end is the gate that fails if the invariant is broken.
   seam, and `core/provider_responses.py` the Responses adapter. **A new
   format is a registry entry plus a `Protocol` row — never a new `if
   api_format == ...` anywhere else.** `protocol_for()` raises on an
-  unregistered format; keep it that way. The TUI's `/provider add` menus are
+  unregistered format; keep it that way. A model may override its provider's
+  format with its own `api_format` (GPT-6 needs Responses for tool calling
+  under the Chat Completions `openai` provider); `config/providers.py`
+  `_model_endpoint` is the only place that resolves it and swaps the endpoint
+  suffix. A resolver that reads `PROVIDERS[...]["api_format"]` for a model
+  silently sends GPT-6 to `/chat/completions`
+  (`tests/test_model_api_format_override.py`). The TUI's `/provider add` menus are
   generated from `core/provider_tui_rows.py` for the same reason: a
   hand-written menu is how the third format ended up unselectable outside the
   TUI.

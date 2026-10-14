@@ -70,6 +70,9 @@ pawn --debug                             # 完整诊断输出
 |------|------|----------|------|
 | `ds-v4-flash` | `deepseek-flash` | DeepSeek | 默认；V4.1 Flash，快速低成本 |
 | `ds-v4-pro` | `deepseek-v4-pro` | DeepSeek | V4 Pro 旗舰推理 |
+| `gpt-6-astra` | `gpt-6-astra` | OpenAI | 旗舰推理与编程（Responses API） |
+| `gpt-6.1-sol` | `gpt-6.1-sol` | OpenAI | 能力与成本的平衡（Responses API） |
+| `gpt-6-luna` | `gpt-6-luna` | OpenAI | 成本敏感、高并发（Responses API） |
 | `gpt-5.5` | `gpt-5.5` | OpenAI | 复杂推理与编程 |
 | `gpt-5.4` | `gpt-5.4` | OpenAI | 编程与专业工作 |
 | `gpt-5.4-mini` | `gpt-5.4-mini` | OpenAI | 低延迟、低成本 |
@@ -82,11 +85,9 @@ pawn --debug                             # 完整诊断输出
 | `claude-sonnet` | `claude-sonnet-5-5` | Anthropic | 速度与能力的平衡 |
 | `claude-haiku` | `claude-haiku-5-5` | Anthropic | 最快，适合高并发任务 |
 
-OpenAI 的 GPT-6 系列未内置：内置 OpenAI provider 走 Chat Completions，
-而 GPT-6 Astra 与 GPT-6.1 Sol 在该接口上不支持函数调用，GPT-6 Luna 仅在
-推理强度为 `none` 时支持。请改用 `responses` 格式添加，例如
-`/provider add <name> https://api.openai.com/v1 OPENAI_API_KEY responses`，
-再执行 `/provider activate <name>` 与 `/provider fetch <name>`。
+GPT-6 系列只在 OpenAI 的 Responses API 上支持工具调用，因此这些别名使用
+`responses` 格式（`POST .../v1/responses`），其余 OpenAI 别名仍走 Chat
+Completions。它们共用 `openai` provider 与 `OPENAI_API_KEY`。
 
 ```bash
 /provider                              # provider TUI

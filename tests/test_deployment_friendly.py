@@ -746,6 +746,9 @@ def test_latest_documented_model_aliases_are_registered():
     from config.providers import MODELS
 
     for alias in [
+        "gpt-6-astra",
+        "gpt-6.1-sol",
+        "gpt-6-luna",
         "gpt-5.5",
         "gpt-5.4",
         "gpt-5.4-mini",

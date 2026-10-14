@@ -61,6 +61,13 @@ _EFFORT_DEEPSEEK = {
 _EFFORT_GPT5 = {
     "off": "none", "low": "low", "medium": "medium", "high": "high",
 }
+# GPT-6 Astra and GPT-6.1 Sol take low..max and reject `none`; GPT-6 Luna
+# also takes `none`.
+_EFFORT_GPT6 = {
+    "low": "low", "medium": "medium", "high": "high",
+    "xhigh": "xhigh", "max": "max",
+}
+_EFFORT_GPT6_LUNA = {"off": "none", **_EFFORT_GPT6}
 # The o-series takes low/medium/high but has no `none`.
 _EFFORT_O_SERIES = {"low": "low", "medium": "medium", "high": "high"}
 
@@ -83,6 +90,39 @@ MODELS: dict[str, dict] = {
         "vision":    False,
         "reasoning": True,
         "effort":    _EFFORT_DEEPSEEK,
+    },
+    # GPT-6 models support tool calling only on the Responses API (Luna on
+    # Chat Completions only at effort `none`), so they override the provider
+    # format; requests go to {base}/responses with the same OpenAI key.
+    "gpt-6-astra": {
+        "id":         "gpt-6-astra",
+        "provider":   "openai",
+        "api_format": "responses",
+        "desc":       "OpenAI GPT-6 Astra - flagship for complex reasoning and coding",
+        "color":      "\033[97m",
+        "vision":     True,
+        "reasoning":  False,
+        "effort":     _EFFORT_GPT6,
+    },
+    "gpt-6.1-sol": {
+        "id":         "gpt-6.1-sol",
+        "provider":   "openai",
+        "api_format": "responses",
+        "desc":       "OpenAI GPT-6.1 Sol - balance of intelligence and cost",
+        "color":      "\033[37m",
+        "vision":     True,
+        "reasoning":  False,
+        "effort":     _EFFORT_GPT6,
+    },
+    "gpt-6-luna": {
+        "id":         "gpt-6-luna",
+        "provider":   "openai",
+        "api_format": "responses",
+        "desc":       "OpenAI GPT-6 Luna - cost-sensitive, high-volume work",
+        "color":      "\033[36m",
+        "vision":     True,
+        "reasoning":  False,
+        "effort":     _EFFORT_GPT6_LUNA,
     },
     "gpt-5.5": {
         "id":        "gpt-5.5",
@@ -619,14 +659,44 @@ def find_fast_peer(model_alias: str) -> str | None:
     return None
 
 
+def _model_api_format(model: dict, prov: dict) -> str:
+    """Return the wire format for one model: its own override, else the provider's.
+
+    A model may declare ``api_format`` when its provider serves it only on a
+    different protocol, e.g. OpenAI models whose tool calling exists only on
+    the Responses API. An unknown value raises instead of falling back.
+    """
+    override = model.get("api_format")
+    if override:
+        return normalize_api_format(override)
+    return prov.get("api_format", "openai")
+
+
+def _model_endpoint(model: dict, prov: dict) -> tuple[str, str]:
+    """Return (endpoint_url, api_format) for a model on its provider.
+
+    When a model overrides the provider format, the provider's known endpoint
+    suffix is swapped for the model's, so ``.../v1/chat/completions`` becomes
+    ``.../v1/responses`` instead of being returned unchanged.
+    """
+    fmt = _model_api_format(model, prov)
+    base = str(prov["base_url"]).rstrip("/")
+    if model.get("api_format"):
+        for spec in FORMAT_SPECS.values():
+            if base.endswith(spec.path_suffix):
+                base = base[: -len(spec.path_suffix)]
+                break
+    return _normalize_url(base, fmt), fmt
+
+
 def get_api_config(model_alias: str) -> tuple[str, str]:
     """Return (base_url, api_key). Keys are read from environment variables."""
     _ensure_providers_initialized()
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
     prov = PROVIDERS.get(m["provider"], list(PROVIDERS.values())[0])
     key  = os.getenv(prov["api_key_env"], "")
-    fmt  = prov.get("api_format", "openai")
-    return _normalize_url(prov["base_url"], fmt), key
+    url, _ = _model_endpoint(m, prov)
+    return url, key
 
 
 def get_api_format(model_alias: str) -> str:
@@ -634,7 +704,7 @@ def get_api_format(model_alias: str) -> str:
     _ensure_providers_initialized()
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
     prov = PROVIDERS.get(m["provider"], {})
-    return prov.get("api_format", "openai")
+    return _model_api_format(m, prov)
 
 
 def get_provider_auth(model_alias: str) -> str:
@@ -651,9 +721,9 @@ def get_provider_config(model_alias: str) -> dict:
     m    = MODELS.get(model_alias, MODELS[DEFAULT_MODEL])
     prov = PROVIDERS.get(m["provider"], list(PROVIDERS.values())[0])
     key  = os.getenv(prov["api_key_env"], "")
-    fmt  = prov.get("api_format", "openai")
+    url, fmt = _model_endpoint(m, prov)
     return {
-        "base_url":   _normalize_url(prov["base_url"], fmt),
+        "base_url":   url,
         "api_key":    key,
         "api_format": fmt,
         "auth":       prov.get("auth", "auto"),
