@@ -27,8 +27,8 @@ Prepare, review and simulate — but do not install — a host egress helper:
    interface of the managed network plus the container's frozen
    source-address snapshot (one rule per source address), and every rule
    carries a unique operation id (`pawn-op-…`, lowercase alphanumeric
-   suffix); the nftables rules match the source snapshot on the per-operation
-   chain. Labels or IPs alone are insufficient when addresses
+   suffix); every nftables packet rule matches the bridge interface and source
+   snapshot on the per-operation chain. Labels or IPs alone are insufficient when addresses
    are reused. Each hostname resolves exactly once when the operation is
    established; its snapshot is immutable until operation end. New answers
    require a new operation with renewed authorization; retries never add
@@ -58,7 +58,15 @@ Prepare, review and simulate — but do not install — a host egress helper:
    spellings (they can never enter an allowlist). The future
    helper must deny concurrent activation (one managed operation at a
    time).
-4. **Lifecycle.** Expiry, failure, daemon restart and helper restart revoke
+4. **Lifecycle.** An explicit `conntrack_zone` (integer 0–65535, no default)
+   binds the original-direction zone. Before executing any candidate deletion,
+   the future executor must verify actual zone assignment and exclusive
+   `(zone, family, original source)` ownership, quarantine or stop the owned
+   container and keep containment throughout verification. Numeric zone 0 is
+   not implicitly safe; declaring a zone does not assign one. Deletion and
+   listing use `--orig-zone` with every original outbound destination, including
+   pre-existing unapproved destinations. Reply-direction/DNAT cleanup remains
+   subject to the real backend matrix. Expiry, failure, daemon restart and helper restart revoke
    the operation's rules and conntrack flows and then VERIFY revocation with
    listing checks; every verification command branches on the query itself,
    so a failing or unauthorized query reports a containment failure instead
@@ -82,7 +90,7 @@ an uncovered path denies activation.
 | 5 | Same-bridge peer traffic | NOT covered by the container-scoped rules; peer-to-peer frames may not traverse FORWARD at all | Two-container peer probe on the managed bridge |
 | 6 | Host/embedded DNS forwarding (127.0.0.11) | Embedded DNS forwards from the host namespace — container→DNS may not traverse FORWARD; pinned resolvers + drop rule must be verified | `docker exec` dig against 127.0.0.11 and against arbitrary resolver |
 | 7 | Direct alternate resolvers | udp/53 restricted to pinned servers; other UDP dropped (policy pins udp ports explicitly) | Negative fixture on udp/5353 to non-pinned targets |
-| 8 | Established flows after rule change | Original-direction packets must match pinned destinations even when established; only replies get the blanket state allowance. Candidate destination-scoped deletion still needs lifecycle and DNAT verification before use | Pre-activation out-of-scope connection and expiry fixture with a long-lived approved connection |
+| 8 | Established flows after rule change | Original-direction packets must match pinned destinations even when established; only replies get the blanket state allowance. Candidate deletion covers all original outbound destinations in the proven zone/source binding; lifecycle, uniqueness and DNAT handling still need real verification | Pre-activation out-of-scope connection and expiry fixture with a long-lived approved connection |
 | 9 | Link-local / cloud metadata (169.254.169.254, 100.100.100.200, fd00:ec2::254, mapped IPv4 forms) | Fail-closed drop (never in any policy allowlist); Network Policy hard denial (ADR 0013) applies only on the relay path, which is separate | Backend fixture probe from the container |
 | 10 | Additional network attachments and IPv6 routes | Policy covers one managed network; attaching a second network must re-run policy or be denied | Attach-second-network probe |
 | 11 | Published-port hairpin / reverse paths | Container-originated hairpin is denied by the source-scoped drop; external-hairpin paths still need verification | Hairpin probe |
@@ -133,7 +141,7 @@ attention; a save/restore command must never be suggested as a universal
 iptables: `iptables-save | grep -vF 'pawnlogic <op-id> ' | iptables-restore`
 (and the ip6tables mirror) — the fixed-string filter is anchored with a
 trailing delimiter so concurrent operation ids cannot be over-matched —
-followed by per-destination `conntrack -L` checks that report
+followed by original-zone/source `conntrack -L` checks that report
 `CONTAINMENT FAILURE` when flows remain. nftables: `nft flush chain inet
 pawnlogic_egress op_<id>` then `nft delete chain inet pawnlogic_egress
 op_<id>` (per-operation chain; other operations' chains are untouched) plus
@@ -160,4 +168,5 @@ concurrent-operation isolation; only then a bounded real IQuest workflow.
 - [Docker iptables](https://docs.docker.com/engine/network/firewall-iptables/)
 - [Docker nftables](https://docs.docker.com/engine/network/firewall-nftables/)
 - [Netfilter conntrack expressions and directions](https://www.netfilter.org/projects/nftables/manpage.html)
+- [Conntrack original-source and original-zone filters](https://netfilter.org/projects/conntrack-tools/conntrack-manpage.html)
 - ADR 0013 (scoped HTTP/CONNECT relay), plan §5

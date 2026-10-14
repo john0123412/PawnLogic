@@ -964,6 +964,12 @@ name at the end is the gate that fails if the invariant is broken.
   `tools/host_egress_preflight.py` is a read-only prerequisite CLI, never a
   privileged entry point or activation gate. It records all kernel matrix
   paths as `not_run`; no simulated result can substitute for backend evidence.
+  Every nftables packet rule binds the approved bridge interface. Conntrack
+  deletion and verification require an explicit original-direction zone and
+  original source, without an allowlist destination restriction. Before running
+  these artifacts, an executor must prove exclusive zone/source ownership,
+  validate actual zone assignment and quarantine the owned container. A numeric
+  zone alone neither creates isolation nor proves ownership, including zone 0.
 - **Browser transports require the loopback policy proxy.** Chromium skips
   redirect route callbacks, so context guards alone cannot enforce destinations.
   Both Patchright paths (including Scrapling >= 0.4.15) disable HTTP/2/QUIC,
@@ -1388,14 +1394,17 @@ name at the end is the gate that fails if the invariant is broken.
   test to relax. All three name the same **54 library modules**; the CI step
   passes no `tests/` file to mypy, and `tests/test_e2e.py` appears only on the
   pytest command line.
-- **`test_live_bare_escape_interrupts_one_turn_without_another_keypress` has a
-  transient environment-sensitive flake.** The pexpect expectations for
-  `Status: interrupted` and `Queued: 1 message(s)` use a 10 s window that
-  sometimes times out on GitHub runners while passing locally and on the owner
-  PTY (seen on runs `33973977545` → re-run `33974631898` cleared it, and again
-  on the `test/release-0.3.12` push). The PTY Esc behavior is intact — a flake,
-  not a regression. Re-check before the next publish; widen the window or split
-  it into "Esc → banner" vs "Esc → worker settles within N s".
+- **Esc cancellation and recovery prefill are separate test milestones.**
+  `test_live_bare_escape_interrupts_one_turn_without_another_keypress` previously
+  had intermittent `Status: interrupted` / `Queued: 1 message(s)` timeouts
+  (including runs `33973977545` and `33974631898`). A blocking tool's
+  cancellation marker precedes the scheduler's recovery-prefill callback:
+  clearing the composer at that marker can race a later draft restoration.
+  The PTY harness now observes the original callback returning before sending
+  Ctrl-U, while retaining the cancellation deadline and queue assertions.
+  This fixes test synchronization; it is not a production terminal change or
+  evidence for the four owner visual checks. Do not replace the milestone
+  with sleeps, automatic retries, or wider cancellation limits.
 - **The language-policy test scans tracked files only.** Re-run it after
   staging; a green pre-commit run misses new untracked files.
 - **A project-local pytest basetemp under `.agent-work/` must set

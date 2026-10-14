@@ -23,6 +23,9 @@ firewall rules. All 13 matrix rows begin as `not_run`, and
 The `sudo -n true` probe establishes only permission to run that no-op; it
 does not establish permission for a future helper or firewall command.
 Do not install this developer CLI as a sudoers entry point.
+This stage-one preflight selects the local iptables backend. The generator's
+nftables artifacts are a separate review candidate, not a fallback or evidence
+that an nftables host is ready for this stage-one procedure.
 
 If conntrack is missing and the owner has authorized package installation,
 an administrator can run this in the host's local terminal:
@@ -54,6 +57,14 @@ passes independent review and the administrator reviews its exact digest.
   against the root-owned manifest. Unknown state, extra attachments, backend
   changes or IP reuse deny admission. No privileged daemon state is inferred
   from a model's description of a container.
+- The manifest must explicitly fix `conntrack_zone` (integer 0–65535, no
+  default). Prove the actual original-direction zone assignment before lookup
+  and exclusive ownership of each `(zone, family, original source)` binding;
+  missing or ambiguous proof denies execution. Zone 0 is not presumed safe,
+  and naming a zone does not assign one. Candidate deletion/verification uses
+  `--orig-zone` and every original outbound destination, not just the allowlist.
+  Keep the container quarantined or stopped before deletion and throughout
+  verification. Reply-direction/DNAT cleanup still needs the real matrix.
 - Execution uses fixed absolute binaries and argument vectors, never a shell
   evaluating the generator's human-readable strings. A root-owned operation
   lock and monotonic duration prevent competing activations or extensions.

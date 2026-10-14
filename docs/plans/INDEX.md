@@ -26,6 +26,11 @@ one real tool call, one offline non-root container, no nudges/API error,
 proof independently verified and no out-of-scope canary requests; all nine
 deterministic checks passed. Argument evidence is now retained without
 weakening the harness policy. The earlier failure cause remains unproven.
+The published 0.4.4 binary passed its checksum-verified automated probe (2/2,
+zero skips); four visual checks remain manual. Post-release review-artifact
+fixes bind nftables packet rules to the bridge and scope all outbound-flow
+revocation to an explicitly approved original conntrack zone/source binding.
+They neither install a privileged executor nor complete the kernel matrix.
 
 ## Proposed Plans
 

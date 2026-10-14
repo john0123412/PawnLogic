@@ -94,6 +94,7 @@ class EgressPolicy:
     container_id: str
     network_name: str
     bridge_interface: str
+    conntrack_zone: int
     container_ipv4: tuple = field(default=())
     container_ipv6: tuple = field(default=())
     allowed_ipv4: tuple = field(default=())
@@ -104,6 +105,8 @@ class EgressPolicy:
     dns_servers_ipv6: tuple = field(default=())
 
     def __post_init__(self):
+        if type(self.conntrack_zone) is not int or not 0 <= self.conntrack_zone <= 65535:
+            raise ValueError("conntrack_zone must be an explicit integer from 0 to 65535")
         if not self.operation_id.startswith(RESERVED_OPERATION_PREFIX) or not _OPERATION_SUFFIX_RE.match(
             self.operation_id[len(RESERVED_OPERATION_PREFIX):]
         ):
@@ -225,6 +228,7 @@ def build_rules(policy: EgressPolicy, backend: str) -> list:
 
     chain = f"op_{policy.operation_suffix}"
     table_chain = f"inet pawnlogic_egress {chain}"
+    packet_rule = f"nft add rule {table_chain} iifname '\"{policy.bridge_interface}\"'"
     rules = [
         "nft list table inet pawnlogic_egress >/dev/null 2>&1 || "
         "nft add table inet pawnlogic_egress",
@@ -232,67 +236,67 @@ def build_rules(policy: EgressPolicy, backend: str) -> list:
     ]
     for source in policy.container_ipv4:
         rules.append(
-            f"nft add rule {table_chain} ip saddr {source} "
+            f"{packet_rule} ip saddr {source} "
             f"ct state established,related ct direction reply accept"
         )
         for destination in policy.allowed_ipv4:
             for port in policy.tcp_ports:
                 rules.append(
-                    f"nft add rule {table_chain} ip saddr {source} ip daddr {destination} "
+                    f"{packet_rule} ip saddr {source} ip daddr {destination} "
                     f"tcp dport {port} ct state new,established accept"
                 )
             for port in policy.udp_ports:
                 rules.append(
-                    f"nft add rule {table_chain} ip saddr {source} ip daddr {destination} "
+                    f"{packet_rule} ip saddr {source} ip daddr {destination} "
                     f"udp dport {port} accept"
                 )
         for server in policy.dns_servers_ipv4:
             rules.append(
-                f"nft add rule {table_chain} ip saddr {source} ip daddr {server} "
+                f"{packet_rule} ip saddr {source} ip daddr {server} "
                 f"udp dport 53 accept"
             )
         rules.append(
-            f"nft add rule {table_chain} ip saddr {source} limit rate 5/minute "
+            f"{packet_rule} ip saddr {source} limit rate 5/minute "
             f"log prefix 'PAWNEGRESS-DENY '"
         )
-        rules.append(f"nft add rule {table_chain} ip saddr {source} counter drop")
+        rules.append(f"{packet_rule} ip saddr {source} counter drop")
     for source in policy.container_ipv6:
         rules.append(
-            f"nft add rule {table_chain} ip6 saddr {source} "
+            f"{packet_rule} ip6 saddr {source} "
             f"ct state established,related ct direction reply accept"
         )
         for destination in policy.allowed_ipv6:
             for port in policy.tcp_ports:
                 rules.append(
-                    f"nft add rule {table_chain} ip6 saddr {source} ip6 daddr {destination} "
+                    f"{packet_rule} ip6 saddr {source} ip6 daddr {destination} "
                     f"tcp dport {port} ct state new,established accept"
                 )
             for port in policy.udp_ports:
                 rules.append(
-                    f"nft add rule {table_chain} ip6 saddr {source} ip6 daddr {destination} "
+                    f"{packet_rule} ip6 saddr {source} ip6 daddr {destination} "
                     f"udp dport {port} accept"
                 )
         for server in policy.dns_servers_ipv6:
             rules.append(
-                f"nft add rule {table_chain} ip6 saddr {source} ip6 daddr {server} "
+                f"{packet_rule} ip6 saddr {source} ip6 daddr {server} "
                 f"udp dport 53 accept"
             )
-        rules.append(f"nft add rule {table_chain} ip6 saddr {source} counter drop")
+        rules.append(f"{packet_rule} ip6 saddr {source} counter drop")
     return rules
 
 
 def conntrack_revocation(policy: EgressPolicy, backend: str) -> list:
-    """Delete the operation's flows, scoped to the container's own source
-    addresses so other tenants of the pinned destinations are not hit."""
+    """Delete all original-direction outbound flows in the verified zone/source
+    binding, including destinations that predate the operation's allowlist.
+    An executor must prove this binding belongs exclusively to the container.
+    """
     validate_backend(backend)
     commands = []
-    for source in policy.container_ipv4:
-        for address in policy.allowed_ipv4 + policy.dns_servers_ipv4:
-            commands.append(f"conntrack -D -s {source} -d {address}  # {policy.operation_id}")
-    for source in policy.container_ipv6:
-        for address in policy.allowed_ipv6 + policy.dns_servers_ipv6:
+    for family, sources in (("ipv4", policy.container_ipv4), ("ipv6", policy.container_ipv6)):
+        for source in sources:
             commands.append(
-                f"conntrack -D -f ipv6 -s {source} -d {address}  # {policy.operation_id}"
+                f"conntrack -D -f {family} --orig-zone {policy.conntrack_zone} -s {source}"
+                f"  # {policy.operation_id}"
             )
     return commands
 
@@ -304,22 +308,19 @@ def revocation_verification(policy: EgressPolicy, backend: str) -> list:
     validate_backend(backend)
     commands = []
 
-    def flow_check(source: str, address: str) -> str:
-        family = "-f ipv6 " if ":" in source else ""
+    def flow_check(family: str, source: str) -> str:
         return (
-            f"if out=$(conntrack -L {family}-s {source} -d {address} 2>/dev/null); then "
-            f"if [ -n \"$out\" ]; then echo 'CONTAINMENT FAILURE: flows remain for {address}'; "
-            f"else echo 'flows revoked for {address}'; fi; "
-            f"else echo 'CONTAINMENT FAILURE: revocation check failed for {address} (query error)'; fi"
+            f"if out=$(conntrack -L -f {family} --orig-zone {policy.conntrack_zone} "
+            f"-s {source} 2>/dev/null); then "
+            f"if [ -n \"$out\" ]; then echo 'CONTAINMENT FAILURE: flows remain for {source}'; "
+            f"else echo 'flows revoked for {source}'; fi; "
+            f"else echo 'CONTAINMENT FAILURE: revocation check failed for {source} (query error)'; fi"
             f"  # {policy.operation_id}"
         )
 
-    for source in policy.container_ipv4:
-        for address in policy.allowed_ipv4 + policy.dns_servers_ipv4:
-            commands.append(flow_check(source, address))
-    for source in policy.container_ipv6:
-        for address in policy.allowed_ipv6 + policy.dns_servers_ipv6:
-            commands.append(flow_check(source, address))
+    for family, sources in (("ipv4", policy.container_ipv4), ("ipv6", policy.container_ipv6)):
+        for source in sources:
+            commands.append(flow_check(family, source))
     return commands
 
 
@@ -395,6 +396,7 @@ def dry_run(policy: EgressPolicy, backend: str) -> str:
         f"via bridge {policy.bridge_interface}",
         f"  container source snapshot: "
         f"{', '.join(policy.container_ipv4 + policy.container_ipv6)}",
+        f"  conntrack zone: {policy.conntrack_zone} (zone/source ownership must be verified);",
         f"  tcp ports: {', '.join(map(str, policy.tcp_ports)) or '-'}",
         f"  udp ports: {', '.join(map(str, policy.udp_ports)) or '-'}",
         f"  pinned ipv4: {', '.join(policy.allowed_ipv4) or '-'}",

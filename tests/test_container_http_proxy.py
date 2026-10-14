@@ -12,6 +12,7 @@ import pytest
 
 from tools import container_http_proxy
 from tools.container_http_proxy import ContainerHTTPProxy
+from tools.container_http_protocol import HTTPRequest
 
 
 @pytest.fixture
@@ -304,7 +305,18 @@ def test_stop_closes_an_active_connect_tunnel(
         thread.join(timeout=2)
 
 
-def test_operation_timer_revokes_an_idle_handler(tmp_path: Path) -> None:
+def test_operation_timer_revokes_an_idle_handler(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    read_request = container_http_proxy.read_request
+
+    def read_past_operation_deadline(client: socket.socket) -> HTTPRequest:
+        # Keep the request timeout beyond the operation deadline so this test
+        # proves watchdog revocation rather than racing an equal read timeout.
+        client.settimeout(5)
+        return read_request(client)
+
+    monkeypatch.setattr(container_http_proxy, "read_request", read_past_operation_deadline)
     proxy = ContainerHTTPProxy(
         str(tmp_path),
         "93.184.216.34/32",
