@@ -7,6 +7,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- Built-in model registry synced with the providers' published model lists
+  (checked 2026-10-14). `ds-v4-flash` now requests `deepseek-flash`
+  (DeepSeek V4.1 Flash); DeepSeek lists `deepseek-v4-flash` as a retired
+  legacy name it still accepts. `claude-opus`, `claude-sonnet`, and
+  `claude-haiku` now point at `claude-opus-5-5`, `claude-sonnet-5-5`, and
+  `claude-haiku-5-5`, and a new `claude-fable` alias targets
+  `claude-fable-5-1`. Model descriptions note OpenAI's published shutdown
+  dates for `o3`, `gpt-4.1`, and `gpt-5.4-nano`.
+- README model tables gain a short "Use" column and explain why GPT-6 models
+  are not built in: Chat Completions does not support function calling for
+  GPT-6 Astra and GPT-6.1 Sol, and supports it for GPT-6 Luna only at effort
+  `none`. They can be added as a `responses` provider.
+
+### Fixed
+- Effort `off` is no longer sent to DeepSeek as `reasoning_effort: "none"`.
+  DeepSeek's effort mapping table lists no `none` for the chat-completions
+  format, so `off` now applies only its local limits for DeepSeek models.
+
 ## [0.4.5] - 2026-10-14
 
 ### Security

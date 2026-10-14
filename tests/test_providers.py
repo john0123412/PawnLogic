@@ -251,7 +251,7 @@ def test_provider_auto_routing_respects_inactive_providers(monkeypatch):
         _provider_config,
         "MODELS",
         {
-            "ds-v4-flash": {"id": "deepseek-v4-flash", "provider": "relay", "vision": False},
+            "ds-v4-flash": {"id": "deepseek-flash", "provider": "relay", "vision": False},
             "relay-pro": {"id": "relay-pro", "provider": "relay", "vision": True},
             "relay-fast": {"id": "relay-flash", "provider": "relay", "vision": True},
             "active-vision": {"id": "active-mini", "provider": "active", "vision": True},

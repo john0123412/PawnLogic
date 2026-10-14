@@ -73,20 +73,28 @@ Each alias points at a real model ID; aliases move when providers ship new
 models, so run `/provider fetch <name>` after adding a key to pick up the
 current list.
 
-| Alias | Model | Provider |
-|-------|-------|----------|
-| `ds-v4-flash` | `deepseek-v4-flash` | DeepSeek |
-| `ds-v4-pro` | `deepseek-v4-pro` | DeepSeek |
-| `gpt-5.5` | `gpt-5.5` | OpenAI |
-| `gpt-5.4` | `gpt-5.4` | OpenAI |
-| `gpt-5.4-mini` | `gpt-5.4-mini` | OpenAI |
-| `gpt-5.4-nano` | `gpt-5.4-nano` | OpenAI |
-| `gpt-4o` | `gpt-4o` | OpenAI |
-| `gpt-4.1` | `gpt-4.1` | OpenAI |
-| `o3` | `o3` | OpenAI |
-| `claude-opus` | `claude-opus-4-6` | Anthropic |
-| `claude-sonnet` | `claude-sonnet-4-6` | Anthropic |
-| `claude-haiku` | `claude-haiku-4-5-20251001` | Anthropic |
+| Alias | Model | Provider | Use |
+|-------|-------|----------|-----|
+| `ds-v4-flash` | `deepseek-flash` | DeepSeek | Default; V4.1 Flash, fast and low-cost |
+| `ds-v4-pro` | `deepseek-v4-pro` | DeepSeek | V4 Pro flagship reasoning |
+| `gpt-5.5` | `gpt-5.5` | OpenAI | Complex reasoning and coding |
+| `gpt-5.4` | `gpt-5.4` | OpenAI | Coding and professional work |
+| `gpt-5.4-mini` | `gpt-5.4-mini` | OpenAI | Low latency, low cost |
+| `gpt-5.4-nano` | `gpt-5.4-nano` | OpenAI | Lowest cost; shuts down 2027-04-01 |
+| `gpt-4o` | `gpt-4o` | OpenAI | Vision and multimodal |
+| `gpt-4.1` | `gpt-4.1` | OpenAI | Legacy; snapshot shuts down 2027-01-14 |
+| `o3` | `o3` | OpenAI | Legacy; snapshot shuts down 2026-12-11 |
+| `claude-fable` | `claude-fable-5-1` | Anthropic | Demanding reasoning, long-horizon agents |
+| `claude-opus` | `claude-opus-5-5` | Anthropic | Agentic coding and knowledge work |
+| `claude-sonnet` | `claude-sonnet-5-5` | Anthropic | Balance of speed and intelligence |
+| `claude-haiku` | `claude-haiku-5-5` | Anthropic | Fastest, high-volume tasks |
+
+OpenAI's GPT-6 models are not built in: the built-in OpenAI provider uses
+Chat Completions, where GPT-6 Astra and GPT-6.1 Sol do not support function
+calling and GPT-6 Luna supports it only with reasoning effort `none`. Add them
+as a `responses` provider instead, for example
+`/provider add <name> https://api.openai.com/v1 OPENAI_API_KEY responses`,
+then `/provider activate <name>` and `/provider fetch <name>`.
 
 ```bash
 /provider                              # provider TUI
@@ -124,7 +132,7 @@ One control sets both how hard the model thinks and the runtime limits
 
 | Level | Sent to provider | Tool-call iterations | Replaces |
 |-------|------------------|----------------------|----------|
-| `off` | `none` | 10 | — |
+| `off` | `none` (not sent to DeepSeek) | 10 | — |
 | `low` | `low` | 10 | `/low` |
 | `medium` | `medium` | 30 | `/mid`, `/normal` |
 | `high` | `high` | 50 | `/deep` |

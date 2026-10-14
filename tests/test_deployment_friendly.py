@@ -750,6 +750,7 @@ def test_latest_documented_model_aliases_are_registered():
         "gpt-5.4",
         "gpt-5.4-mini",
         "gpt-5.4-nano",
+        "claude-fable",
         "claude-opus",
         "claude-sonnet",
         "claude-haiku",

@@ -82,6 +82,8 @@ class TestWireValueResolution:
         from core.api_payloads import resolve_reasoning_effort
 
         for level in EFFORT_LEVELS:
+            if level == "off":
+                continue
             _set_effort(level)
             assert resolve_reasoning_effort("ds-v4-flash") is not None, level
 
@@ -91,9 +93,31 @@ class TestWireValueResolution:
 
         accepted = model_effort_map("ds-v4-flash")
         for level, wire in EFFORT_WIRE_VALUES.items():
+            if level == "off":
+                continue
             assert accepted[level] == wire, level
             _set_effort(level)
             assert resolve_reasoning_effort("ds-v4-flash") == wire, level
+
+    def test_deepseek_off_is_local_only(self, restore_dynamic_config):
+        """DeepSeek's chat-completions mapping table has no ``none``.
+
+        ``off`` still applies its local limits but must not put an
+        undocumented value on the wire; ``low`` keeps sending.
+        """
+        from core.api_payloads import resolve_reasoning_effort
+
+        for alias in ("ds-v4-flash", "ds-v4-pro"):
+            _set_effort("off")
+            assert resolve_reasoning_effort(alias) is None, alias
+            _set_effort("low")
+            assert resolve_reasoning_effort(alias) == "low", alias
+
+    def test_gpt5_off_still_sends_none(self, restore_dynamic_config):
+        from core.api_payloads import resolve_reasoning_effort
+
+        _set_effort("off")
+        assert resolve_reasoning_effort("gpt-5.5") == "none"
 
     def test_undeclared_model_never_sends_the_field(self, restore_dynamic_config):
         """A model with no declaration and no provider opt-in is silent.

@@ -50,9 +50,11 @@ PROVIDERS: dict[str, dict] = {
 #
 # DeepSeek documents that the API accepts the OpenAI-style level names and
 # maps them onto its own low/high/max efforts, so the names go out verbatim
-# rather than being compressed client-side into a guess.
+# rather than being compressed client-side into a guess.  Its mapping table
+# lists no ``none``: on the chat-completions format thinking is switched off
+# by a separate ``thinking`` field, so ``off`` stays a local-only rung here.
 _EFFORT_DEEPSEEK = {
-    "off": "none", "low": "low", "medium": "medium",
+    "low": "low", "medium": "medium",
     "high": "high", "xhigh": "xhigh", "max": "max",
 }
 # The GPT-5 family stops at `high`; it has no `xhigh` or `max` rung.
@@ -65,9 +67,9 @@ _EFFORT_O_SERIES = {"low": "low", "medium": "medium", "high": "high"}
 
 MODELS: dict[str, dict] = {
     "ds-v4-flash": {
-        "id":        "deepseek-v4-flash",
+        "id":        "deepseek-flash",
         "provider":  "deepseek",
-        "desc":      "DeepSeek V4 Flash - default primary model, fast and low-cost",
+        "desc":      "DeepSeek V4.1 Flash - default model, fast and low-cost",
         "color":     "\033[32m",
         "vision":    False,
         "reasoning": True,   # Returns reasoning_content and must be echoed back.
@@ -76,7 +78,7 @@ MODELS: dict[str, dict] = {
     "ds-v4-pro": {
         "id":        "deepseek-v4-pro",
         "provider":  "deepseek",
-        "desc":      "DeepSeek V4 Pro - flagship reasoning model",
+        "desc":      "DeepSeek V4 Pro (0813) - flagship reasoning model",
         "color":     "\033[92m",
         "vision":    False,
         "reasoning": True,
@@ -85,7 +87,7 @@ MODELS: dict[str, dict] = {
     "gpt-5.5": {
         "id":        "gpt-5.5",
         "provider":  "openai",
-        "desc":      "OpenAI GPT-5.5 - latest flagship for complex reasoning and coding",
+        "desc":      "OpenAI GPT-5.5 - complex reasoning and coding",
         "color":     "\033[97m",
         "vision":    True,
         "reasoning": False,
@@ -112,7 +114,7 @@ MODELS: dict[str, dict] = {
     "gpt-5.4-nano": {
         "id":        "gpt-5.4-nano",
         "provider":  "openai",
-        "desc":      "OpenAI GPT-5.4 Nano - lowest-cost option",
+        "desc":      "OpenAI GPT-5.4 Nano - lowest-cost; shuts down 2027-04-01",
         "color":     "\033[90m",
         "vision":    True,
         "reasoning": False,
@@ -129,7 +131,7 @@ MODELS: dict[str, dict] = {
     "gpt-4.1": {
         "id":        "gpt-4.1",
         "provider":  "openai",
-        "desc":      "OpenAI GPT-4.1 - coding and instruction following",
+        "desc":      "OpenAI GPT-4.1 - legacy; 2025-04-14 snapshot shuts down 2027-01-14",
         "color":     "\033[37m",
         "vision":    False,
         "reasoning": False,
@@ -137,32 +139,40 @@ MODELS: dict[str, dict] = {
     "o3": {
         "id":        "o3",
         "provider":  "openai",
-        "desc":      "OpenAI o3 - complex reasoning",
+        "desc":      "OpenAI o3 - legacy; 2025-04-16 snapshot shuts down 2026-12-11",
         "color":     "\033[96m",
         "vision":    False,
         "reasoning": False,  # OpenAI o-series reasoning is internalized.
         "effort":    _EFFORT_O_SERIES,
     },
-    "claude-opus": {
-        "id":        "claude-opus-4-6",
+    "claude-fable": {
+        "id":        "claude-fable-5-1",
         "provider":  "anthropic",
-        "desc":      "Claude Opus 4.6 - frontier reasoning flagship",
+        "desc":      "Claude Fable 5.1 - demanding reasoning, long-horizon agentic work",
+        "color":     "\033[95m",
+        "vision":    True,
+        "reasoning": False,
+    },
+    "claude-opus": {
+        "id":        "claude-opus-5-5",
+        "provider":  "anthropic",
+        "desc":      "Claude Opus 5.5 - long-running agentic coding and knowledge work",
         "color":     "\033[95m",
         "vision":    True,
         "reasoning": False,
     },
     "claude-sonnet": {
-        "id":        "claude-sonnet-4-6",
+        "id":        "claude-sonnet-5-5",
         "provider":  "anthropic",
-        "desc":      "Claude Sonnet 4.6 - balanced primary model",
+        "desc":      "Claude Sonnet 5.5 - best balance of speed and intelligence",
         "color":     "\033[95m",
         "vision":    True,
         "reasoning": False,  # Anthropic format uses its own API path.
     },
     "claude-haiku": {
-        "id":        "claude-haiku-4-5-20251001",
+        "id":        "claude-haiku-5-5",
         "provider":  "anthropic",
-        "desc":      "Claude Haiku 4.5 - fast and low-cost",
+        "desc":      "Claude Haiku 5.5 - fastest, high-volume tasks",
         "color":     "\033[35m",
         "vision":    True,
         "reasoning": False,
