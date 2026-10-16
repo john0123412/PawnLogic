@@ -36,7 +36,11 @@ dependencies = [
     "prompt_toolkit>=3.0",
     "loguru>=0.7",
     "httpx>=0.27",
-    "mcp>=1.0",
+    # Floor raised to 2.2.0 (2026-10-16): MCP Python SDK 1.9.1-2.1.1 has an
+    # OAuth-discovery flaw letting a malicious server steal OAuth credentials
+    # (Cycode). Fixed in 2.2.0 / 1.30.0; 2.2.0 floor excludes every vulnerable
+    # build (>=1.30.0 alone would still admit vulnerable 2.0.x-2.1.x).
+    "mcp>=2.2.0",
 ]
 
 [project.optional-dependencies]
