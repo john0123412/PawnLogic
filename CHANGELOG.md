@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- The Esc edit-and-replace PTY regression now waits for the recovery-prefill
+  callback instead of matching the recovered text in the PTY stream. That
+  text was already echoed by the original submission, so the match could
+  return before the prefill ran and let typed keys interleave with it — the
+  flake that failed the first v0.4.6 publish attempt (#221). The test now
+  appends to the prefilled draft and asserts the combined text, so it fails if
+  the prefill stops landing in the composer; the old Ctrl-U form passed either
+  way. Terminal runtime behavior is unchanged.
+
 ## [0.4.6] - 2026-10-24
 
 ### Security
