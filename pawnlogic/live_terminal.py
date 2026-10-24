@@ -64,6 +64,9 @@ from core.turn_scheduler import SubmissionKind
 
 
 _ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+# Select Graphic Rendition: the only escape the host scrollback keeps.
+_SGR = re.compile(r"\x1b\[[0-9;:]*m")
+_SGR_RESET = "\x1b[0m"
 _KEY_SEQUENCE_TIMEOUT_SECONDS = 0.1
 # Host scrollback is best-effort: a broken stdout must not take down the
 # persistent Prompt Toolkit application or keep its event loop busy forever.
@@ -238,8 +241,45 @@ def _host_terminal_columns(fallback: int = 80) -> int:
     return size.columns if size.columns and size.columns > 0 else fallback
 
 
+def _active_sgr(text: str) -> str:
+    """Return the SGR sequences still in effect at the end of ``text``."""
+    cut = max(text.rfind("\x1b[0m"), text.rfind("\x1b[m"))
+    active: list[str] = []
+    for match in _SGR.finditer(text, max(cut, 0)):
+        params = match.group()[2:-1]
+        if params in ("", "0"):
+            active = []
+        elif params.startswith("0;"):
+            active = [match.group()]
+        else:
+            active.append(match.group())
+    return "".join(active)
+
+
+def _host_scrollback_text(payload: str, delivered: str) -> str:
+    """Return ``payload`` as it may be written to the host scrollback.
+
+    Cursor, erase, and OSC sequences are dropped: the host scrollback is not
+    Prompt Toolkit's screen, and a stray cursor move there would corrupt it.
+    SGR is kept so a flushed row keeps the color it had in the live viewport;
+    stripping it made every debounced flush repaint dim thinking text in the
+    default color, which reads as the text flickering.  A span opened in
+    ``delivered`` (text an earlier flush already wrote) is re-opened, and a
+    span still open at the end is closed, so color neither drops at a flush
+    boundary nor bleeds into the redraw that follows the handoff.
+    """
+    text = _ANSI_ESCAPE.sub(
+        lambda match: match.group() if _SGR.fullmatch(match.group()) else "",
+        payload,
+    )
+    text = _active_sgr(delivered) + text
+    if _active_sgr(text):
+        text += _SGR_RESET
+    return text
+
+
 def _wrap_host_payload(text: str, columns: int) -> str:
-    """Pre-wrap plain text so the host terminal never wraps a line itself.
+    """Pre-wrap host text so the host terminal never wraps a line itself.
 
     Each host flush erases and redraws the inline application; the erase
     assumes one screen row per logical line. When a flushed row is wider
@@ -253,7 +293,8 @@ def _wrap_host_payload(text: str, columns: int) -> str:
 
     Zero-width and wide characters are measured with ``wcwidth`` (already a
     prompt_toolkit dependency); characters with no measurable width fall
-    back to one column so wrapping stays conservative.
+    back to one column so wrapping stays conservative.  SGR sequences take
+    no columns, and one that precedes a fold moves to the row it colors.
     """
     if columns <= 0:
         return text
@@ -268,7 +309,14 @@ def _wrap_host_payload(text: str, columns: int) -> str:
         while remaining:
             width = 0
             cut = 0
-            for idx, ch in enumerate(remaining):
+            idx = 0
+            overflow = False
+            while idx < len(remaining):
+                ch = remaining[idx]
+                sgr = _SGR.match(remaining, idx) if ch == "\x1b" else None
+                if sgr is not None:
+                    idx = sgr.end()
+                    continue
                 if ch == "\t":
                     # Count Tab at its maximum expansion (8 columns): the
                     # actual stop depends on the host's current column, which
@@ -282,10 +330,12 @@ def _wrap_host_payload(text: str, columns: int) -> str:
                     if ch_width is None or ch_width < 0:
                         ch_width = 1
                 if width + ch_width > columns:
+                    overflow = True
                     break
                 width += ch_width
-                cut = idx + 1
-            if cut >= len(remaining):
+                idx += 1
+                cut = idx
+            if not overflow:
                 out_lines.append(remaining)
                 break
             if cut == 0:
@@ -293,7 +343,7 @@ def _wrap_host_payload(text: str, columns: int) -> str:
                 # terminal + wide glyph) can never fit; emitting it verbatim
                 # guarantees the loop advances. The host may wrap that row —
                 # unavoidable at this width — but a hang is strictly worse.
-                cut = 1
+                cut = idx + 1
             out_lines.append(remaining[:cut])
             remaining = remaining[cut:]
     return "\n".join(out_lines)
@@ -1019,13 +1069,25 @@ class PersistentTerminal:
             return None
 
     def _write_host_payload(
-        self, original_stdout: TextIO, payload: str, *, include_partial: bool
+        self,
+        original_stdout: TextIO,
+        payload: str,
+        *,
+        include_partial: bool,
+        prefix: str = "",
     ) -> bool:
-        """Write a transcript payload while Prompt Toolkit is suspended."""
-        plain = _ANSI_ESCAPE.sub("", payload)
-        if not plain:
+        """Write a transcript payload while Prompt Toolkit is suspended.
+
+        ``prefix`` is the transcript through the end of ``payload`` (see
+        ``pending_host_flush``); the text before ``payload`` is what earlier
+        flushes delivered, which decides the color the payload starts in.
+        """
+        delivered = prefix[: len(prefix) - len(payload)] if prefix.endswith(payload) else ""
+        plain = _host_scrollback_text(payload, delivered)
+        visible = _SGR.sub("", plain)
+        if not visible:
             return True
-        if include_partial and not plain.endswith("\n"):
+        if include_partial and not visible.endswith("\n"):
             plain = f"{plain}\n"
         plain = _wrap_host_payload(plain, _host_terminal_columns())
         # Keep the payload and a close-time newline in one write call.  If a
@@ -1159,6 +1221,7 @@ class PersistentTerminal:
                     original_stdout,
                     payload,
                     include_partial=include_partial,
+                    prefix=prefix,
                 )
                 if written:
                     self._transcript.mark_host_flushed(end, prefix)
@@ -1274,7 +1337,7 @@ class PersistentTerminal:
         for attempt in range(1, _HOST_FLUSH_MAX_ATTEMPTS + 1):
             try:
                 succeeded = self._write_host_payload(
-                    original_stdout, payload, include_partial=True
+                    original_stdout, payload, include_partial=True, prefix=prefix
                 )
             except Exception:
                 succeeded = False

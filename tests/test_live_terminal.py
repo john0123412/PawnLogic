@@ -1779,3 +1779,81 @@ def test_inline_block_never_claims_the_terminal_top_row() -> None:
                 await asyncio.wait_for(run_task, timeout=5)
 
     asyncio.run(scenario())
+
+
+def test_host_scrollback_keeps_colors_and_drops_cursor_control() -> None:
+    """Flushed rows keep the color they had in the live viewport.
+
+    The live viewport renders transcript SGR (dim thinking text, the green
+    ``You >`` echo); the host flush used to strip every escape, so each
+    debounced flush turned those rows from gray to the default color — the
+    owner saw it as text flickering between colors. Cursor and erase
+    sequences must still never reach the host, because the host scrollback
+    is not Prompt Toolkit's screen.
+    """
+    from pawnlogic.live_terminal import _host_scrollback_text
+
+    dim = "\x1b[90m\x1b[2m"
+    text = _host_scrollback_text(f"{dim}thinking\x1b[0m\x1b[2K\x1b[3A done\n", "")
+    assert text == f"{dim}thinking\x1b[0m done\n"
+    # A span opened in an earlier flush is re-opened for the next payload and
+    # closed at its end, so it neither loses its color nor bleeds into the
+    # redraw that follows the handoff.
+    carried = _host_scrollback_text("thinking, continued\n", f"before\n{dim}thinking\n")
+    assert carried == f"{dim}thinking, continued\n\x1b[0m"
+    # A reset in the delivered text ends the span; a combined reset restarts it.
+    assert _host_scrollback_text("next\n", f"{dim}x\x1b[0m\n") == "next\n"
+    assert (
+        _host_scrollback_text("next\n", f"{dim}x\x1b[0;92m\n")
+        == "\x1b[0;92mnext\n\x1b[0m"
+    )
+
+
+def test_wrap_host_payload_gives_color_codes_no_width() -> None:
+    """SGR sequences occupy no columns, so they must not trigger a fold."""
+    from pawnlogic.live_terminal import _wrap_host_payload
+
+    row = "\x1b[90m" + "a" * 20 + "\x1b[0m"
+    assert _wrap_host_payload(row, 20) == row
+    # A fold carries the pending color code to the row it applies to.
+    assert _wrap_host_payload("ab\x1b[90mcd", 2) == "ab\n\x1b[90mcd"
+    assert _wrap_host_payload("\x1b[90m\u72ec", 1) == "\x1b[90m\u72ec"
+
+
+def test_live_host_flush_carries_color_across_flushes() -> None:
+    """A dim span split across two debounced flushes stays dim in both."""
+
+    async def scenario() -> None:
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+            run_task = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+            try:
+                host_writes: list[str] = []
+
+                class _Host:
+                    def write(self, text: str) -> int:
+                        host_writes.append(text)
+                        return len(text)
+
+                    def flush(self) -> None:
+                        return None
+
+                    def isatty(self) -> bool:
+                        return True
+
+                terminal._host_stdout = lambda: _Host()  # type: ignore[method-assign]
+                dim = "\x1b[90m\x1b[2m"
+                terminal.append_output(f"{dim}thinking one\n")
+                await asyncio.sleep(0.3)
+                terminal.append_output("thinking two\x1b[0m\nanswer\n")
+                await asyncio.sleep(_HOST_FLUSH_MIN_INTERVAL_SECONDS + 0.5)
+                assert len(host_writes) == 2, host_writes
+                assert host_writes[0] == f"{dim}thinking one\n\x1b[0m"
+                assert host_writes[1] == f"{dim}thinking two\x1b[0m\nanswer\n"
+            finally:
+                terminal.close()
+                await asyncio.sleep(0.1)
+                await run_task
+
+    asyncio.run(scenario())
