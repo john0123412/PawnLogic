@@ -1121,9 +1121,9 @@ def test_live_escape_prefills_recovered_draft_for_edit_and_replace(tmp_path):
     0.3.7: recovery is silent on the user UI.  The persistent status
     line briefly carries the "edit the draft" hint; the recovered
     text shows up in the composer's prompt region instead of a
-    banner.  The next ``child.expect("original escape prompt", ...)``
-    confirms the recovery prefill by waiting for the original text
-    to appear in the prompt.
+    banner.  The test synchronizes on the harness's recovery-settled
+    marker and proves the prefill by appending to the draft and
+    asserting the submitted text.
     """
     _require_prompt_toolkit()
     process = _spawn_controlled_turn_process(
@@ -1138,18 +1138,21 @@ def test_live_escape_prefills_recovered_draft_for_edit_and_replace(tmp_path):
 
         child.send("\x1b")
         _wait_for_control_marker(process["cancellation_observed"], timeout=1.0)
-        # The alternate-screen renderer may emit only differential cursor
-        # updates, so the recovered text can appear without a fresh prompt
-        # prefix in the PTY stream.  The next assertion waits for the
-        # recovered text directly (no "Response stopped" banner anymore).
-        child.expect("original escape prompt", timeout=10)
+        # Wait for the settlement callback itself, not for the recovered text
+        # in the PTY stream: that text was already echoed when the prompt was
+        # first submitted, so a text match can return before the prefill runs
+        # and let typed keys interleave with it (issue #221).  The callback
+        # runs on the Application loop and sets the buffer synchronously, so
+        # keys sent after the marker are applied to the prefilled draft.
+        _wait_for_control_marker(process["recovery_settled"], timeout=10)
 
-        # The prefilled line is a replacement draft.  This Enter must run the
-        # edited text exactly once; the original prompt must not be replayed.
-        child.sendcontrol("u")
-        child.sendline("edited escape prompt")
+        # The prefilled line is a replacement draft with the cursor at its
+        # end.  Appending proves the draft is really in the composer; this
+        # Enter must run the edited text exactly once and must not replay the
+        # original prompt.
+        child.sendline(" (edited)")
         records = _wait_for_control_trace(process["trace"], 2, timeout=10)
-        assert records[1]["users"][-1] == "edited escape prompt"
+        assert records[1]["users"][-1] == "original escape prompt (edited)"
         assert len(records) == 2
 
         child.sendcontrol("c")

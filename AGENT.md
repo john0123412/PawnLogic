@@ -1414,6 +1414,16 @@ name at the end is the gate that fails if the invariant is broken.
   This fixes test synchronization; it is not a production terminal change or
   evidence for the four owner visual checks. Do not replace the milestone
   with sleeps, automatic retries, or wider cancellation limits.
+  `test_live_escape_prefills_recovered_draft_for_edit_and_replace` hit the
+  same race in the first v0.4.6 publish attempt (issue #221) through a
+  different door: it waited on `child.expect("original escape prompt")`, and
+  that text is already in the PTY stream from the original submission, so the
+  match returned before the prefill ran. **Never synchronize on text the PTY
+  has already carried; wait on `recovery_settled`.** The callback runs on the
+  Application loop and sets the buffer synchronously, so keys sent after the
+  marker land on the prefilled draft. The test appends to the draft rather
+  than clearing it, so it also fails when the prefill stops landing at all —
+  the Ctrl-U form passed with the prefill stubbed out.
 - **The language-policy test scans tracked files only.** Re-run it after
   staging; a green pre-commit run misses new untracked files.
 - **A project-local pytest basetemp under `.agent-work/` must set
