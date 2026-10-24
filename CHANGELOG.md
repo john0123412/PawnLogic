@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-10-24
+
+### Security
+- Raised the `mcp` dependency floor from `>=1.0` to `>=2.2.0`. MCP Python SDK
+  1.9.1–2.1.1 has an OAuth-discovery flaw (Cycode disclosure, 2026-09-28,
+  CVSS 7.5): a malicious MCP server could capture the client secret,
+  authorization code, and PKCE verifier by advertising an attacker-controlled
+  token endpoint during OAuth discovery, enabling account takeover. Fixed
+  upstream in 2.2.0 and the 1.x backport 1.30.0; the `>=2.2.0` floor excludes
+  every vulnerable build (`>=1.30.0` alone would still admit 2.0.x–2.1.x).
+  Supersedes #218.
+
 ### Changed
 - Built-in model registry synced with the providers' published model lists
   (checked 2026-10-14). `ds-v4-flash` now requests `deepseek-flash`
