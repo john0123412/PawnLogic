@@ -1179,6 +1179,14 @@ name at the end is the gate that fails if the invariant is broken.
   erase cycle assuming one row per logical line leaves residue on rows the host
   wrapped itself (wcwidth mismatch on CJK/emoji), which stacked into duplicated
   interleaved scrollback.
+  The payload keeps SGR and drops every other escape
+  (`_host_scrollback_text`): stripping SGR too made each debounced flush
+  repaint dim thinking text in the default color, which the owner saw as
+  flicker. Color state crosses flush boundaries from the delivered prefix, so
+  a new flush path must pass `prefix` to `_write_host_payload`; without it a
+  span split by a flush loses its color on the far side. `_wrap_host_payload`
+  must keep giving SGR zero width, or colored CJK rows fold early.
+  `test_live_host_flush_carries_color_across_flushes`.
 - **The ratatui frontend is a separate wire-v1 client**, not a UI embedded in
   the Python REPL. Its terminal guard must restore raw mode, alternate screen,
   mouse capture, bracketed paste, and cursor visibility on every error path. It
