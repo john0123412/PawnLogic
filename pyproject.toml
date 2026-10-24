@@ -31,7 +31,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "python-dotenv>=1.0",
+    "python-dotenv>=1.2.2",
     "rich>=13.0",
     "prompt_toolkit>=3.0",
     "loguru>=0.7",

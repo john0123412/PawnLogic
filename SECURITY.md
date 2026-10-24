@@ -5,26 +5,26 @@
 | Version | Supported |
 |---------|-----------|
 | 0.4.6   | ✅ Yes     |
-| 0.4.5   | ✅ Yes     |
-| 0.4.4   | ✅ Yes     |
-| 0.4.3   | ✅ Yes     |
-| 0.4.2   | ✅ Yes     |
-| 0.4.1   | ✅ Yes     |
-| 0.4.0   | ✅ Yes     |
-| 0.3.13  | ✅ Yes     |
-| 0.3.12  | ✅ Yes     |
-| 0.3.11  | ✅ Yes     |
-| 0.3.10  | ✅ Yes     |
-| 0.3.9   | ✅ Yes     |
-| 0.3.8   | ✅ Yes     |
-| 0.3.7   | ✅ Yes     |
-| 0.3.6   | ✅ Yes     |
-| 0.3.5   | ✅ Yes     |
-| 0.3.4   | ✅ Yes     |
-| 0.3.3   | ✅ Yes     |
-| 0.3.2   | ✅ Yes     |
-| 0.3.1   | ✅ Yes     |
-| 0.3.0   | ✅ Yes     |
+| 0.4.5   | ⚠️ Upgrade recommended |
+| 0.4.4   | ⚠️ Upgrade recommended |
+| 0.4.3   | ⚠️ Upgrade recommended |
+| 0.4.2   | ⚠️ Upgrade recommended |
+| 0.4.1   | ⚠️ Upgrade recommended |
+| 0.4.0   | ⚠️ Upgrade recommended |
+| 0.3.13  | ⚠️ Upgrade recommended |
+| 0.3.12  | ⚠️ Upgrade recommended |
+| 0.3.11  | ⚠️ Upgrade recommended |
+| 0.3.10  | ⚠️ Upgrade recommended |
+| 0.3.9   | ⚠️ Upgrade recommended |
+| 0.3.8   | ⚠️ Upgrade recommended |
+| 0.3.7   | ⚠️ Upgrade recommended |
+| 0.3.6   | ⚠️ Upgrade recommended |
+| 0.3.5   | ⚠️ Upgrade recommended |
+| 0.3.4   | ⚠️ Upgrade recommended |
+| 0.3.3   | ⚠️ Upgrade recommended |
+| 0.3.2   | ⚠️ Upgrade recommended |
+| 0.3.1   | ⚠️ Upgrade recommended |
+| 0.3.0   | ⚠️ Upgrade recommended |
 | 0.2.3   | ⚠️ Upgrade recommended |
 | 0.2.2   | ⚠️ Upgrade recommended |
 | 0.2.1   | ⚠️ Upgrade recommended |
@@ -40,6 +40,18 @@
 | 0.0.10  | ⚠️ Upgrade recommended |
 | 0.0.1 – 0.0.9 | ⚠️ Upgrade recommended |
 | < 0.0.1 | ❌ No      |
+
+Only the latest patch release is supported. Upgrade to it:
+
+```bash
+pip install --upgrade pawnlogic
+```
+
+Re-running the one-line installer also upgrades an installer-managed copy.
+Releases before 0.4.6 declare dependency floors that still admit MCP Python
+SDK builds with an OAuth-discovery credential leak and a session-accumulation
+flaw (CVE-2026-59951), and python-dotenv builds with a symlink-following file
+overwrite (CVE-2026-28684). See `CHANGELOG.md` for details.
 
 ## Reporting a Vulnerability
 
