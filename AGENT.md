@@ -1141,6 +1141,23 @@ name at the end is the gate that fails if the invariant is broken.
   suite relies on for submit) and `eager=True` on `enter` made the first typed
   key disappear. Multi-line drafts need a future `/draft`-style command driving
   `buffer.insert_text`; until then the only way is one pre-formatted `send`.
+- **The inline block must never be as tall as the host terminal.** Prompt
+  Toolkit caps an inline block at `rows`, and a block that tall starts at
+  screen row 0, so the `run_in_terminal` erase (`ESC[<n>A` to the block's
+  first row, then `ESC[J`) runs from the home position. tmux's default
+  `scroll-on-clear` treats that as a full-screen clear and keeps the old rows
+  in the scrollback: the transient viewport survived there and the flush
+  wrote the same answer below it. The viewport reaches full height whenever
+  more undelivered output arrives than fits on screen inside one
+  `_HOST_FLUSH_MIN_INTERVAL_SECONDS` window — a fast stream or one large
+  tool result. `_HeadroomContainer` (the Application root in
+  `pawnlogic/live_terminal.py`) clamps the preferred height to
+  `rows - _INLINE_HEADROOM_ROWS`; replacing the root with a bare
+  `DynamicContainer` reintroduces the duplicate. The clamp cannot cover a
+  cursor already at row 0, where Prompt Toolkit's cursor-position report
+  alone makes the block full height; nothing in the app clears the screen
+  today, so do not add a clear without revisiting this.
+  `test_inline_block_never_claims_the_terminal_top_row`.
 - **Rich in-Application TUIs (`/provider`, `/skills`)** contribute containers,
   key bindings, and focus targets to the persistent Application. Their live
   command factories must never return an awaitable or start a nested

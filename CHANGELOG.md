@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- A completed answer no longer appears twice in tmux scrollback. When more
+  output arrived inside one 2-second host-flush window than fit on screen,
+  the live viewport grew to the full terminal height, so its top row was the
+  screen's top row. The `run_in_terminal` erase then ran from the home
+  position, and tmux's default `scroll-on-clear` kept that viewport in the
+  scrollback before the flush wrote the same answer again. The inline block
+  now always leaves the top row free, so the erase never starts at home.
+  Reproduced on the published 0.4.6 in a real tmux 3.4 pane with a
+  fast-streaming local provider; clean with `scroll-on-clear off` or after
+  this fix.
 - The Esc edit-and-replace PTY regression now waits for the recovery-prefill
   callback instead of matching the recovered text in the PTY stream. That
   text was already echoed by the original submission, so the match could

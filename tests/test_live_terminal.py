@@ -1738,3 +1738,44 @@ def test_completion_menu_gets_its_own_rows_instead_of_covering_the_toolbar() -> 
                 await asyncio.wait_for(run_task, timeout=5)
 
     asyncio.run(scenario())
+
+
+def test_inline_block_never_claims_the_terminal_top_row() -> None:
+    """A tall undelivered tail must leave the host's top row outside the block.
+
+    The live host flush is debounced, so an answer that streams in faster
+    than the debounce window sits undelivered and the output viewport grows
+    with it.  Prompt Toolkit caps an inline block at the terminal height; a
+    block that tall starts at screen row 0, so the ``run_in_terminal`` erase
+    (cursor up to the block's first row, then ``ESC[J``) is issued from the
+    home position.  tmux's default ``scroll-on-clear`` treats an erase from
+    the home position as a full-screen clear and pushes the transient
+    viewport into the scrollback, after which the flush writes the same
+    answer again: every line below the viewport's first row appeared twice.
+    Keeping the block at most ``rows - 1`` tall keeps the erase off row 0.
+    """
+
+    async def scenario() -> None:
+        with create_pipe_input() as pipe:
+            output = _InlineSizedOutput()
+            terminal = PersistentTerminal(input=pipe, output=output)
+            run_task = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+            try:
+                rows = output.get_size().rows
+                terminal.append_output(
+                    "".join(f"answer line {index:03d}\n" for index in range(rows * 2))
+                )
+                await asyncio.sleep(0.5)
+                lines = terminal.rendered_screen_lines()
+                assert any("answer line" in line for line in lines), lines
+                assert lines[-1].startswith("Ready"), lines[-1]
+                assert len(lines) < rows, (
+                    f"inline block is {len(lines)} rows on a {rows}-row host; "
+                    "its erase would start at the home position"
+                )
+            finally:
+                terminal.close()
+                await asyncio.wait_for(run_task, timeout=5)
+
+    asyncio.run(scenario())

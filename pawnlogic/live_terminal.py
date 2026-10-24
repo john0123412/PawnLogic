@@ -88,6 +88,9 @@ _RENDER_TAIL_LINES = 1000
 # Upper bound on invalidation scheduling rate (frames per second) so a
 # streaming producer cannot starve the key-processing loop.
 _MAX_RENDER_FPS = 30
+# Host rows the inline block must leave above itself. See
+# ``_HeadroomContainer``.
+_INLINE_HEADROOM_ROWS = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +157,31 @@ class _OutputControl(FormattedTextControl):
             self._terminal.scroll_output(3)
             return None
         return super().mouse_handler(mouse_event)
+
+
+class _HeadroomContainer(DynamicContainer):
+    """Root container whose preferred height stays below the host height.
+
+    Prompt Toolkit caps an inline block at the terminal height, and a block
+    that tall starts at screen row 0.  Every ``run_in_terminal`` handoff
+    erases the block by moving to its first row and sending ``ESC[J``, so a
+    full-height block is erased from the home position.  tmux's default
+    ``scroll-on-clear`` turns an erase from home into a full-screen clear that
+    keeps the old contents in the scrollback: the transient viewport was
+    preserved there and the flush then wrote the same answer again.  The
+    viewport grows that tall whenever more undelivered output arrives than
+    fits on screen inside one host-flush debounce window.
+    """
+
+    def preferred_height(self, width: int, max_available_height: int) -> Dimension:
+        dimension = super().preferred_height(width, max_available_height)
+        ceiling = max(1, max_available_height - _INLINE_HEADROOM_ROWS)
+        return Dimension(
+            min=min(dimension.min, ceiling),
+            max=min(dimension.max, ceiling),
+            preferred=min(dimension.preferred, ceiling),
+            weight=dimension.weight,
+        )
 
 
 class _StdoutProxy:
@@ -1546,7 +1574,7 @@ class PersistentTerminal:
                 return modal.container
             return body
 
-        root = DynamicContainer(root_content)
+        root = _HeadroomContainer(root_content)
         self._application = Application(
             layout=Layout(root, focused_element=self._composer),
             key_bindings=bindings,
