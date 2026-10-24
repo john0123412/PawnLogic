@@ -26,6 +26,11 @@ pip install pawnlogic
 pawn
 ```
 
+**Already installed?** Upgrade to the latest patch release with
+`pip install --upgrade pawnlogic`, or re-run the one-line installer below.
+Releases before 0.4.6 can resolve MCP SDK and python-dotenv builds with known
+vulnerabilities; see [SECURITY.md](SECURITY.md).
+
 **One-line installer** (isolated venv, writes `~/.local/bin/pawn`):
 
 ```bash

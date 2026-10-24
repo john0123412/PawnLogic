@@ -18,6 +18,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   upstream in 2.2.0 and the 1.x backport 1.30.0; the `>=2.2.0` floor excludes
   every vulnerable build (`>=1.30.0` alone would still admit 2.0.x–2.1.x).
   Supersedes #218.
+- Raised the `python-dotenv` dependency floor from `>=1.0` to `>=1.2.2`.
+  Earlier builds follow symlinks in `set_key`/`unset_key`, allowing an
+  arbitrary file overwrite (CVE-2026-28684, GHSA-mf9w-mj56-hr94). PawnLogic
+  does not call either function, but the old floor still let a fresh install
+  resolve a vulnerable build.
+- Upgrade recommended for every earlier release: run
+  `pip install --upgrade pawnlogic` or re-run the one-line installer.
+  `SECURITY.md` now supports only the latest patch release and marks 0.3.0
+  through 0.4.5 as upgrade-recommended; the README Quick Start carries the
+  same notice.
 
 ### Changed
 - Built-in model registry synced with the providers' published model lists

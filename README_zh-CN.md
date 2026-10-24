@@ -23,6 +23,10 @@ pip install pawnlogic
 pawn
 ```
 
+**已经安装过？** 请升级到最新补丁版本：`pip install --upgrade pawnlogic`，
+或重新运行下方的一键安装脚本。0.4.6 之前的版本可能解析到存在已知漏洞的
+MCP SDK 与 python-dotenv 版本；详见 [SECURITY.md](SECURITY.md)。
+
 **一键安装脚本**（隔离 venv，并写入 `~/.local/bin/pawn`）：
 
 ```bash
