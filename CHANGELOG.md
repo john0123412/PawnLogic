@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-10-24
+
 ### Fixed
 - Colored text no longer changes color when it moves into the scrollback.
   The host flush stripped every escape sequence, so dim `🧠 [thinking]` text
