@@ -161,6 +161,7 @@ jobs:
             core/tool_calls.py \
             core/tool_registry.py \
             core/token_estimate.py \
+            core/stream_repetition.py \
             core/context_window.py \
             core/workspace_cleanup.py \
             core/turn_state.py \

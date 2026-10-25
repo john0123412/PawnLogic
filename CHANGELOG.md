@@ -27,6 +27,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   refused and no config entry is ever created, as for `/provider effort`.
 
 ### Fixed
+- The terminal no longer floods when a model repeats itself. A weak model asked
+  for a final answer sometimes loops on one sentence until it fills the whole
+  output budget (one reply was 37 KB, a sentence repeated 52 times, the full
+  8192-token cap). A streaming guard now stops reading as soon as a substantial
+  line recurs too often, or the recent window is too repetitive, keeping the
+  useful prefix, marking the reply, and closing the request so the rest is not
+  billed. `PAWNLOGIC_STREAM_LOOP_GUARD=0` disables it.
 - An answer that quotes the `<plan>` tag is no longer rendered as a plan. The
   stream renderer opened a plan at any `<plan>`, so an answer explaining the
   plan protocol -- the tag inside a code block, mid-line -- printed a

@@ -675,7 +675,7 @@ mode.
 authoritative list.** A module is in the island only when CI passes its file
 to mypy; the matching `[[tool.mypy.overrides]]` entry in `pyproject.toml` is
 what actually turns on `disallow_untyped_defs` / `check_untyped_defs` for it.
-Both files, plus the list below, must name the same 59 modules;
+Both files, plus the list below, must name the same 60 modules;
 `tests/test_typed_island_sync.py` fails the build when they diverge.
 
 To add a module: annotate it until it passes
@@ -685,7 +685,7 @@ and the pyproject override, and add it to the list below.
 Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `core/tool_executor`, `core/runtime_context`, `core/provider_runtime`,
 `core/provider_models`, `core/api_errors`, `core/tool_calls`,
-`core/tool_registry`, `core/token_estimate`, `core/context_window`, `core/workspace_cleanup`,
+`core/tool_registry`, `core/token_estimate`, `core/stream_repetition`, `core/context_window`, `core/workspace_cleanup`,
 `core/turn_state`, `core/session_tool_loop`, `core/session_snapshot`,
 `core/message_history`, `core/plan_recovery`, `core/plan_protocol`,
 `core/tool_markup`, `core/synthetic_messages`,
@@ -1623,6 +1623,23 @@ name at the end is the gate that fails if the invariant is broken.
   `tests/test_delegation_tree_budget.py::test_shared_ledger_rejects_second_branch_when_exhausted`
   is the gate. Depth and tree state are ContextVars (not threading.local)
   so they propagate into the orchestrator's pool workers.
+- **A repeating stream is cut inside `consume_model_stream`, not by any
+  per-turn counter.** The anti-loop logic in `core/tool_result.py` counts
+  repeated *tool* iterations; a model that loops on one sentence inside a
+  single reply (the incident: 37 KB, one line x52, the whole 8192-token cap)
+  is caught by `core/stream_repetition.StreamRepetitionGuard`, which
+  `consume_model_stream` feeds per content and per reasoning chunk. On a trip
+  it appends `REPETITION_NOTICE`, sets `TurnApiResult.repetition_stopped`,
+  breaks, and closes the delta generator so the provider stops streaming
+  (and billing). The truncated text flows through as the final answer -- no
+  session.py wiring and no recovery ladder, because re-asking a looping model
+  loops again. The guard is deliberately conservative (lines under
+  `MIN_LINE_CHARS` ignored; a line must recur `MAX_LINE_REPEATS` times in the
+  window, or the full window fall below `MAX_DUP_RATIO` distinct), because
+  cutting a real answer is worse than some waste; `PAWNLOGIC_STREAM_LOOP_GUARD=0`
+  is the escape hatch. A guard that buffered to hide the few leaked repeats
+  would add latency to every live stream. `tests/test_stream_repetition.py`
+  and the `consume_model_stream` repetition tests in `tests/test_turn_api.py`.
 - **The tool watchdog abandons wedged tool threads instead of blocking the
   session**; abandoned threads keep running until process exit and their
   results are lost.
@@ -1726,7 +1743,7 @@ name at the end is the gate that fails if the invariant is broken.
 - **The typed-island module list is stated in three places** (CI mypy step,
   pyproject overrides, Typed Island section). `tests/test_typed_island_sync.py`
   fails the build when they diverge — treat that failure as the gate, not as a
-  test to relax. All three name the same **59 library modules**; the CI step
+  test to relax. All three name the same **60 library modules**; the CI step
   passes no `tests/` file to mypy, and `tests/test_e2e.py` appears only on the
   pytest command line.
 - **Esc cancellation and recovery prefill are separate test milestones.**

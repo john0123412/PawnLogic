@@ -6,6 +6,13 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.stream_repetition import StreamRepetitionGuard, guard_enabled
+
+# Appended to the answer, and printed, when the guard stops a repeating stream.
+# It makes the truncation visible to the user and keeps the saved reply a
+# non-empty text answer, so the turn ends normally instead of looking empty.
+REPETITION_NOTICE = "\n\n[output stopped: the model was repeating itself]\n"
+
 
 @dataclass
 class TurnApiResult:
@@ -19,6 +26,8 @@ class TurnApiResult:
     )
     error: str | None = None
     retry_events: list[str] = field(default_factory=list)
+    #: Set when the repetition guard cut the stream short.
+    repetition_stopped: bool = False
 
 
 def _usage_counts(delta: dict[str, Any]) -> tuple[int, int]:
@@ -58,6 +67,12 @@ def consume_model_stream(
     before the provider retry sleep resumes.
     """
     result = TurnApiResult()
+    # One guard per text channel: a model may loop in either the answer or the
+    # reasoning side-channel, and a repeat in one must not be counted against
+    # the other.  Disabled wholesale by PAWNLOGIC_STREAM_LOOP_GUARD=0.
+    guarding = guard_enabled()
+    content_guard = StreamRepetitionGuard() if guarding else None
+    reasoning_guard = StreamRepetitionGuard() if guarding else None
 
     for delta in deltas:
         if "_retry" in delta:
@@ -92,11 +107,23 @@ def consume_model_stream(
             result.reasoning += reasoning_chunk
             if on_reasoning:
                 on_reasoning(reasoning_chunk)
+            if reasoning_guard is not None and reasoning_guard.feed(reasoning_chunk):
+                if on_reasoning:
+                    on_reasoning(REPETITION_NOTICE)
+                result.reasoning += REPETITION_NOTICE
+                result.repetition_stopped = True
+                break
 
         if chunk:
             result.text += chunk
             if on_content:
                 on_content(chunk)
+            if content_guard is not None and content_guard.feed(chunk):
+                if on_content:
+                    on_content(REPETITION_NOTICE)
+                result.text += REPETITION_NOTICE
+                result.repetition_stopped = True
+                break
 
         for tool_delta in data.get("tool_calls") or []:
             if on_tool_delta:
@@ -113,6 +140,14 @@ def consume_model_stream(
                 result.tool_calls[idx]["name"], fn.get("name") or ""
             )
             result.tool_calls[idx]["args"] += fn.get("arguments") or ""
+
+    if result.repetition_stopped:
+        # Stop the provider from streaming (and billing) the rest of the loop:
+        # closing the generator raises GeneratorExit into stream_request, which
+        # closes the socket. A plain iterator (tests) has no close(); ignore it.
+        close = getattr(deltas, "close", None)
+        if callable(close):
+            close()
 
     return result
 
