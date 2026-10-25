@@ -876,6 +876,22 @@ name at the end is the gate that fails if the invariant is broken.
   `arg2="<name> [on|off]"` and is dispatched beside `effort`
   (`test_provider_plan_off_reaches_the_handler_with_name_and_state_split`,
   `test_provider_completion_covers_every_dispatched_subcommand`).
+- **A `<plan>` in the stream opens a plan block only outside code, at the
+  start of a line or directly followed by a plan sub-tag.** `_PlanRenderer`
+  prints plan text dim gray and keeps it out of the answer, so treating a
+  *quoted* tag as a plan swallowed the rest of an answer that explained the
+  plan protocol: a "[plan start]" line mid-answer, then everything dim gray,
+  indistinguishable from the thinking stream, because no `</plan>` ever came.
+  The rule classifies all 421 stored replies containing the tag (419 real
+  plans unchanged; the two quotes, one in a code fence and one in inline code,
+  are now answer text). The renderer tracks only the answer's current-line
+  head, its backtick parity and the fence state (`_note`), resets them on
+  `flush()` and after `</plan>`, and waits (`_opens_plan` returns `None`)
+  while the stream has not yet said whether a sub-tag follows; a stream that
+  ends undecided returns the tag as text. Reintroducing an unconditional
+  `<plan>` match, or tracking the whole line instead of its head (quadratic on
+  a long line fed in small chunks), is the mistake. `tests/test_plan_renderer.py`
+  feeds every case in 1-, 2-, 3- and 7-character chunks.
 - **Auth is an axis orthogonal to the payload format, and `anthropic-version`
   is a protocol constant, not a credential.** The reported 401 was a relay
   serving Anthropic-shaped payloads over `Authorization: Bearer`, which

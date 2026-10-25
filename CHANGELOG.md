@@ -27,6 +27,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   refused and no config entry is ever created, as for `/provider effort`.
 
 ### Fixed
+- An answer that quotes the `<plan>` tag is no longer rendered as a plan. The
+  stream renderer opened a plan at any `<plan>`, so an answer explaining the
+  plan protocol -- the tag inside a code block, mid-line -- printed a
+  "[plan start]" line in the middle and the rest of the answer dim gray, like
+  the thinking stream. A `<plan>` now opens a plan only outside code and at the
+  start of a line or directly followed by a plan sub-tag; replayed over the 421
+  stored replies containing the tag, the 419 real plans render as before.
 - `/chat view` no longer prints a stored tool result's escape sequences to the
   terminal. A `run_shell` result now keeps them for the model, and the tool
   preview printed them raw in readline mode (an OSC 52 clipboard write or a
