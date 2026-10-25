@@ -18,11 +18,14 @@ import hashlib
 
 from config.security import smart_truncate
 from core.logger import logger
-from utils.ansi import GRAY, YELLOW
+from utils.ansi import GRAY, YELLOW, strip_ansi
 
-# Tools whose output is shown in full (head/tail trimmed) rather than hard
-# truncated to ``tool_max_chars``. Mirrors the inline set previously defined in
-# ``run_turn``.
+# Tools whose output is trimmed to its first and last lines rather than cut by
+# the ``tool_max_chars`` budget: long, ordered text -- file reads, program and
+# shell output, web content -- whose beginning and end orient the reader.
+# Everything else, notably directory listings and search results whose useful
+# entries can be anywhere in the output, is cut by the character budget only.
+# Mirrors the inline set previously defined in ``run_turn``.
 DEFAULT_VERBOSE_TOOLS: frozenset[str] = frozenset(
     {
         "read_file",
@@ -70,16 +73,22 @@ def truncate_tool_output(
     result: str,
     *,
     tool_name: str,
-    user_mode: bool,
     verbose_tools: frozenset[str] = DEFAULT_VERBOSE_TOOLS,
     max_chars: int,
 ) -> str:
-    """Trim a tool result for context.
+    """Trim a tool result for the model's context.
 
-    Verbose tools (and user mode) get head/tail trimming via ``smart_truncate``;
-    everything else is hard truncated to ``max_chars`` only when it exceeds it.
+    What the model sees must not depend on how the terminal is rendering: this
+    function deliberately has no display-mode parameter. It used to take
+    ``user_mode`` and, in the default user-friendly mode, head/tail-trimmed every
+    tool's output to 60 lines, so a 90-entry home-directory listing reached the
+    model with its middle -- every ordinary project directory -- removed, and
+    the model concluded there was no project.
+
+    Verbose tools get head/tail trimming via ``smart_truncate``; everything else
+    is cut to ``max_chars`` only when it exceeds it.
     """
-    if user_mode or tool_name in verbose_tools:
+    if tool_name in verbose_tools:
         return smart_truncate(result, head=30, tail=30)
     if len(result) > max_chars:
         return (
@@ -314,7 +323,6 @@ class ToolResultProcessor:
         elapsed_ms: int,
         failure_warning: str,
         iteration: int,
-        user_mode: bool,
         max_chars: int,
     ) -> ProcessedToolResult:
         """Process one executed (non-phase) tool result.
@@ -341,11 +349,13 @@ class ToolResultProcessor:
             success=audit_ok,
         )
 
-        # 3. Truncate for context.
+        # 3. Make the text model-facing, then truncate it for context. Colour
+        #    escapes are for a terminal; to a model they are noise that costs
+        #    tokens and eats the character budget. Nothing displays this
+        #    content (tool-result events carry no body), so no colour is lost.
         content = truncate_tool_output(
-            content,
+            strip_ansi(content),
             tool_name=tool_name,
-            user_mode=user_mode,
             verbose_tools=self.verbose_tools,
             max_chars=max_chars,
         )

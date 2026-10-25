@@ -178,6 +178,8 @@ jobs:
             core/session_tool_loop.py \
             core/session_snapshot.py \
             core/message_history.py \
+            core/plan_recovery.py \
+            core/synthetic_messages.py \
             core/turn_scheduler.py \
             core/live_turn_control.py \
             core/turn_cancellation.py \

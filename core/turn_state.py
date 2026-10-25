@@ -6,7 +6,7 @@ persisted, exposed through CLI surfaces, or used as a provider stream contract.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -25,6 +25,10 @@ class TurnState:
     plan_rejected: int = 0
     plan_only_recoveries: int = 0
     plan_only_authorizes_next_tool_batch: bool = False
+    # Plan-only replies and recovery nudges this turn appended to the history.
+    # Kept by reference so a failed turn can remove exactly these (see
+    # core/plan_recovery.purge_messages); they are never persisted.
+    plan_only_artifacts: list[dict[str, Any]] = field(default_factory=list)
     logic_refresh_interval: int = 20
     urgent_mode_active: bool = False
 
@@ -72,6 +76,10 @@ class TurnState:
     def reset_plan_only_recoveries(self) -> None:
         """Clear the consecutive plan-only recovery count after useful output."""
         self.plan_only_recoveries = 0
+
+    def record_plan_only_artifact(self, message: dict[str, Any]) -> None:
+        """Remember a message the plan-only recovery appended to the history."""
+        self.plan_only_artifacts.append(message)
 
     def authorize_next_tool_batch_from_plan_only(self) -> None:
         """Allow one adjacent native tool batch to consume a saved plan."""

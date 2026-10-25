@@ -571,7 +571,14 @@ def tool_list_dir(a: dict) -> str:
                 if len(lines) > 500:
                     lines.append(c(GRAY, "  ...[more than 500 entries, truncated]")); break
         else:
-            entries = sorted(p.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
+            # Dot-entries last: a cut (this 200-entry cap, or the character budget
+            # downstream) must remove hidden config before the ordinary directories
+            # and files the model is trying to find. Sorting them first hid every
+            # project directory of a crowded home directory behind the dot-dirs.
+            entries = sorted(
+                p.iterdir(),
+                key=lambda x: (x.name.startswith("."), x.is_file(), x.name.lower()),
+            )
             for e in entries[:200]:
                 if _is_read_blacklisted(e) or _is_other_isolated_child_path(e):
                     continue

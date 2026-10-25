@@ -32,6 +32,7 @@ from core.tool_executor import (
 )
 from core.turn_api import consume_model_stream
 from core.prompt_builder import format_context_envelope_for_prompt
+from utils.ansi import strip_ansi
 
 
 CAPABILITY_PROFILES = ("inherited", "read_only", "no_shell", "custom")
@@ -626,7 +627,8 @@ class SubAgentSession:
             fn_args=arguments,
             context=context,
         )
-        result = execution.content
+        # Colour escapes are for a terminal; a worker model only pays tokens for them.
+        result = strip_ansi(execution.content)
         limit = min(int(runtime_config()["tool_max_chars"]), 6000)
         if len(result) > limit:
             result = (

@@ -415,7 +415,51 @@ def _detect_conflicts(
 # scoring and conflict detection.
 # ════════════════════════════════════════════════════════
 
+def _skill_blocks(content: str) -> list[str]:
+    """Split the archive into its ``##`` skill blocks, one string per skill.
+
+    A skill ends at the next ``#`` or ``##`` heading. Splitting on ``## `` alone
+    glued every ``# `` category header, and the note under it, onto the tail of
+    the skill above it, so a retrieved skill dragged an unrelated category's
+    header into the prompt. A ``# `` line inside a fenced code block is a shell
+    comment, not a heading, and must not cut the skill that contains it; a
+    ``## `` line has always opened a skill wherever it appears, and still does,
+    which also stops one unbalanced fence from swallowing every skill below it.
+    """
+    blocks: list[str] = []
+    current: list[str] | None = None  # lines of the skill being collected
+    in_fence = False
+    for line in content.splitlines(keepends=True):
+        if line.startswith("## "):
+            if current:
+                blocks.append("".join(current))
+            current, in_fence = [line], False
+            continue
+        if not in_fence and line.startswith("# "):
+            if current:
+                blocks.append("".join(current))
+            current = None  # a category header is not part of any skill
+            continue
+        if current is None:
+            continue
+        if line.lstrip().startswith(("```", "~~~")):
+            in_fence = not in_fence
+        current.append(line)
+    if current:
+        blocks.append("".join(current))
+    return [block.strip() for block in blocks if block.strip()]
+
+
 def _rank_relevant_blocks(query: str, top_k: int) -> list[tuple[float, str, str]]:
+    """Rank archive skills against ``query``; return only those that overlap it.
+
+    No overlap means no skill. A query that yields no word tokens (Chinese
+    only: the tokenizer is ASCII word characters) cannot overlap anything, and a
+    forced top-1 fallback used to inject the archive's first skill into every
+    such prompt, for the whole session, as if it were relevant.
+    """
+    if not _word_tokens(query):
+        return []
     try:
         content = _ensure_file()
     except Exception:
@@ -424,12 +468,7 @@ def _rank_relevant_blocks(query: str, top_k: int) -> list[tuple[float, str, str]
     if not content.strip():
         return []
 
-    # Split by "## " while preserving heading lines.
-    raw_blocks = [
-        block.strip()
-        for block in re.split(r'(?=^## )', content, flags=re.MULTILINE)
-        if block.strip().startswith("## ")
-    ]
+    raw_blocks = _skill_blocks(content)
     if not raw_blocks:
         return []
 
@@ -453,12 +492,9 @@ def _rank_relevant_blocks(query: str, top_k: int) -> list[tuple[float, str, str]
     scored.sort(key=lambda x: x[0], reverse=True)
     top = scored[:top_k]
 
-    # Filter truly unrelated entries below the floor while keeping at least one.
+    # Drop entries below the floor. Nothing above it means nothing is injected.
     threshold = _SCORE_FLOOR * 0.5   # Slightly relaxed to avoid false negatives.
-    filtered = [(s, t, b) for s, t, b in top if s >= threshold]
-    if not filtered:
-        filtered = [top[0]]
-    return filtered
+    return [(s, t, b) for s, t, b in top if s >= threshold]
 
 
 def search_gsa_hits(

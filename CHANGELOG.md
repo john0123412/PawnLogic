@@ -8,6 +8,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Recovery from a plan-only reply now changes the request instead of repeating
+  it. A reply that is only a `<plan>` used to be answered by re-sending the
+  identical request plus a sterner user message, which recovered once in nine
+  tries in the session that exposed this (14 requests, one tool call). The next
+  request now carries `tool_choice="required"`; if that reply is plan-only too,
+  the one after it carries `tool_choice="none"` and asks for a direct answer or
+  one clarifying question; a third plan-only reply stops the turn as before, and
+  any other reply restores `auto`. A provider that refuses the value with
+  HTTP 400/422 gets one retry as `auto` and is not sent that value again for the
+  session; an empty reply to a recovery request is retried as `auto`. The
+  Anthropic payload now maps `required` to `{"type": "any"}` and `none` to
+  `{"type": "none"}`. The recovery lines say what the next attempt does.
+- A turn that fails after recovery began no longer poisons the turns after it.
+  The plan-only replies and `[SYSTEM: PLAN_ONLY_*]` nudges stayed in the history
+  for good, so the next request showed the model its own plan-only replies as
+  the pattern of the conversation. They are now removed whenever the turn ends
+  unsuccessfully: the limit, a plan-guard hard stop, the iteration limit, a
+  provider error (that rollback used to pop the nudge instead of the prompt),
+  an interrupt, or a cancelled stream. Executed tool batches stay, a turn that
+  recovered keeps its plan and nudge, and no limit marker is written. `undo`
+  after an interrupted recovery now returns the prompt you typed, not the text
+  of a recovery nudge.
+- Messages the framework injects are no longer counted as turns. Three real
+  prompts with recovery nudges counted as ten turns and fired the history
+  summary early (threshold 8), and the budget trimmer could protect a nudge as
+  the "last turn" instead of the question. Plan corrections, recovery nudges, the
+  empty-response notice, anti-loop hints, logic refresh, and urgent mode now
+  share one predicate (`core/synthetic_messages.py`).
+- Retrieval no longer injects an unrelated skill into every prompt. The GSA
+  ranking kept its best block even when nothing matched, and its tokenizer
+  yields no tokens for Chinese, so every Chinese prompt carried the archive's
+  first skill, on every turn. No overlap now means no block, and the legacy
+  knowledge search returns nothing instead of the newest rows for a query with
+  no keyword. A `# ` category header (and its note) is no longer glued to the
+  tail of the skill above it; a `# ` shell comment inside a code fence still
+  does not cut its skill.
+- What the model is shown of a tool result no longer depends on the UI mode. In
+  the default user-friendly mode every result was head/tail-trimmed to 60 lines,
+  and `list_dir` listed dot-directories first, so a 90-entry home directory
+  reached the model without any of its ordinary directories and the model
+  concluded there was no project. Only file reads, program/shell output, and web
+  content keep head/tail trimming; everything else is cut by the character
+  budget, and `list_dir` now lists hidden entries last. ANSI color codes are
+  stripped from tool results before they reach the model, including delegated
+  workers.
 - Output moving into the scrollback no longer flashes the screen. It went
   through Prompt Toolkit's `run_in_terminal`, which reached the terminal as
   five or six separate writes -- erase the block, switch the TTY to cooked

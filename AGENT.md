@@ -675,7 +675,7 @@ mode.
 authoritative list.** A module is in the island only when CI passes its file
 to mypy; the matching `[[tool.mypy.overrides]]` entry in `pyproject.toml` is
 what actually turns on `disallow_untyped_defs` / `check_untyped_defs` for it.
-Both files, plus the list below, must name the same 55 modules;
+Both files, plus the list below, must name the same 57 modules;
 `tests/test_typed_island_sync.py` fails the build when they diverge.
 
 To add a module: annotate it until it passes
@@ -687,7 +687,8 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `core/provider_models`, `core/api_errors`, `core/tool_calls`,
 `core/tool_registry`, `core/token_estimate`, `core/context_window`, `core/workspace_cleanup`,
 `core/turn_state`, `core/session_tool_loop`, `core/session_snapshot`,
-`core/message_history`, `core/provider_streams`, `core/runtime_metrics`,
+`core/message_history`, `core/plan_recovery`, `core/synthetic_messages`,
+`core/provider_streams`, `core/runtime_metrics`,
 `core/mcp_client_manager`, `core/path_policy`, `core/provider_transport`,
 `core/api_retry`, `core/provider_formats`, `core/provider_protocol`,
 `core/provider_responses`, `core/provider_tui_rows`, `core/provider_tui_state`,
@@ -740,6 +741,42 @@ name at the end is the gate that fails if the invariant is broken.
   generated from `core/provider_tui_rows.py` for the same reason: a
   hand-written menu is how the third format ended up unselectable outside the
   TUI.
+- **Plan-only recovery must change the request, not repeat it.** After a
+  plan-only reply the next request carries `tool_choice="required"`, after the
+  second `"none"` with a message asking for an answer or one clarifying
+  question, after the third the turn stops, and any other reply restores
+  `"auto"` (`core/plan_recovery.RECOVERY_STEPS`; `MAX_PLAN_ONLY_RECOVERIES`
+  must equal its length). Re-sending the identical request plus a sterner user
+  message looks cheaper and is the retry that failed: recovery worked once in
+  nine tries in the session that motivated this. `auto` is never passed to
+  `stream_request`, so an ordinary request is byte-identical to the one sent
+  before recovery existed. `tool_choice` is serialized at the protocol seam
+  only: Chat Completions and Responses send the string, Anthropic maps
+  `required` to `{"type": "any"}` and `none` to `{"type": "none"}` and omits
+  `auto` (`_anthropic_stream_payload`); an `if api_format == ...` in session
+  code is the mistake. A provider that refuses a value with HTTP 400/422 gets
+  exactly one retry as `auto`, and the value is remembered unsupported for
+  that model alias for the session (`ToolChoiceMemory`) -- but only once the
+  retry is flowing: a 400 for another reason (an oversized request) fails the
+  `auto` retry too, and blaming `tool_choice` would switch the escalation off
+  for the session. The fallback sits
+  between `stream_request` and `consume_model_stream`: after the error delta
+  has reached the consumer the user already saw an API error for a request
+  that was silently retried, and once content has streamed a retry would
+  repeat output, so it is skipped then. The refused request carries no usage,
+  which is why nothing is counted twice; the retry is a new `stream_request`
+  call with its own transport retry budget. A provider that *accepts* a value
+  and ignores it cannot be detected: a Responses-format custom provider
+  answered HTTP 200 and echoed `tool_choice` for `auto`/`required`/`none`,
+  yet `required` produced a tool call in 1 of 3 requests (the others were
+  reasoning-only, i.e. empty) and `none` made the model print its own
+  text-dialect tool call as the answer. So an empty reply to a recovery
+  request is retried as `auto` — resending the identical request is the retry
+  that fails again — and the 3-strike bound still ends the turn.
+  `test_recovery_changes_the_request_instead_of_repeating_it`,
+  `test_a_refused_tool_choice_is_retried_once_as_auto_and_never_sent_again`,
+  `test_an_empty_reply_to_a_required_request_is_retried_as_auto`, and
+  `tests/test_plan_recovery.py` (serialization per format, fallback edges).
 - **Auth is an axis orthogonal to the payload format, and `anthropic-version`
   is a protocol constant, not a credential.** The reported 401 was a relay
   serving Anthropic-shaped payloads over `Authorization: Bearer`, which
@@ -1367,6 +1404,78 @@ name at the end is the gate that fails if the invariant is broken.
   `test_load_snapshot_keeps_explicit_token_budget_over_stale_legacy_keys`
   gate both snapshots.
 
+- **A turn that fails after recovery began must not leave its recovery in the
+  history.** The plan-only replies and `[SYSTEM: PLAN_ONLY_*]` nudges a turn
+  appends are tracked by identity (`TurnState.plan_only_artifacts`, exposed as
+  `session._turn_plan_artifacts`) and removed by `purge_messages`. Left in
+  place they are the worst few-shot examples available: the next request shows
+  the model its own plan-only replies as the established pattern of the
+  conversation (14 requests, one tool call, in the session that motivated
+  this). `_run_scheduled_turn` is the one place every unsuccessful turn passes
+  -- plan-only limit, plan-guard hard stop, iteration or time limit, interrupt,
+  stream cancellation, exception -- and it discards *before* the autosave so the
+  checkpoint is clean; a new failure exit needs no cleanup of its own. The one
+  exception is a provider error: its rollback pops "the last message" on the
+  assumption that it is the user's prompt, and with a nudge on top it popped
+  the nudge and stranded the prompt and the plan, so that purge runs inline,
+  before the pop. The ledger is reset at the start of every turn: a turn that
+  fails before it has one (a missing API key) must not discard the previous
+  turn's plan. `undo` had the same blind spot -- it returned the nudge's text
+  as the prompt to re-edit. Executed tool batches are never removed (their side
+  effects happened), a turn that *recovered* keeps its plan and nudge (history
+  that worked), and no limit marker is written. Do not clean by index or
+  content: the history is rewritten mid-turn by the summary refresh, and two
+  turns can carry byte-identical plans. The cleaned history can hold two
+  consecutive user messages, which all three payload builders accept (the
+  Anthropic converter merges them), and the failed-turn autosave that follows
+  shrinks the list, which is what makes the incremental SQLite writer rewrite
+  instead of leaving stale rows.
+  `test_failed_turn_does_not_poison_the_next_request`,
+  `test_provider_error_after_recovery_rolls_back_like_a_first_request_error`,
+  `test_interrupt_during_recovery_leaves_only_the_prompt`,
+  `test_cancelled_stream_during_recovery_leaves_only_the_prompt`,
+  `test_a_turn_that_fails_before_it_starts_keeps_the_previous_recovered_turn`,
+  `test_two_consecutive_user_messages_are_valid_on_every_format`, and
+  `tests/test_failed_turn_persistence.py`.
+- **Framework-injected user messages are not turns.** The loop appends
+  user-role messages nobody typed (plan corrections, recovery nudges, the
+  empty-response notice, anti-loop hints, logic refresh, urgent mode).
+  `core/synthetic_messages.py` owns the marker list (`[SYSTEM:`, `[System]`,
+  `[Logic Refresh`) and `_count_turns`, `context_manager._turn_groups` and the
+  history-summary filter share it. Counting every `role == "user"` message made
+  three real prompts count as ten turns and fired the history summary
+  (threshold 8) early, and let the budget trimmer's protected "last turn" be a
+  nudge instead of the question. A new producer of injected user messages must
+  start with one of the markers; `test_every_framework_injected_user_message_is_recognised_as_synthetic`
+  drives each real producer. `core/naming.py` keeps a private prefix check for
+  snippet selection; it is not a turn counter.
+  `test_three_prompts_with_recovery_signals_do_not_trigger_the_history_summary`,
+  `test_recovery_nudges_do_not_split_a_turn_into_budget_groups`.
+- **Retrieval injects only what overlaps the query, and an empty retrieval
+  adds no block.** GSA ranking returns `[]` when no skill clears the floor and
+  when the query has no ASCII word tokens; the forced top-1 fallback injected
+  the archive's first skill into every Chinese-language prompt, every turn,
+  and the ASCII-only tokenizer makes that invisible in English tests. The
+  archive is split on `^# ` and `^## ` outside code fences, keeping only `##`
+  blocks: splitting on `## ` alone glued the next category's header to the
+  skill above it, and splitting on `# ` without fence awareness cuts a skill at
+  every shell comment (the real archive has them). `search_legacy` returns
+  nothing for a query with no keyword (it used to list the newest rows, and
+  fed the retrieval fallback and the directory auto-intuition hint). Local
+  skill packs have a minimum score instead of a forced fallback, and the
+  SQLite knowledge adapter drops zero-overlap rows;
+  `tests/test_gsa_retrieval.py` and `tests/test_knowledge_memory_adapter.py`
+  pin both. A block that is empty appends no `_turn_context` message;
+  placement, flag, rollback and persistence above are unchanged. Open, not
+  fixed: a single shared common word still clears the 0.025 GSA floor (no
+  stop-word filter), and pack matching is permissive -- a two-letter query
+  keyword matches any pack keyword that contains it, so with packs enabled
+  `hi` or a Chinese greeting still selects packs.
+  `test_unrelated_query_injects_nothing`,
+  `test_query_without_overlap_injects_nothing`,
+  `test_category_header_is_not_glued_to_the_skill_above_it`,
+  `test_prepare_turn_adds_no_context_block_when_retrieval_finds_nothing`.
+
 ### Execution and policy boundaries
 
 - **Security Tools must not bypass the shared Tool Registry, Operation Policy,
@@ -1397,6 +1506,23 @@ name at the end is the gate that fails if the invariant is broken.
   results are lost.
 - **Tool visibility is not an execution gate.** `AGENT_PHASES` only shapes the
   prompt; a registered tool the model names still runs.
+- **What the model is shown of a tool result must not depend on the UI mode,
+  and must not carry terminal escapes.** `truncate_tool_output` and
+  `ToolResultProcessor.process` take no `user_mode` and cannot grow one
+  quietly (`test_truncate_has_no_display_mode_parameter`). They used to, and in
+  the default user-friendly mode every result was head/tail-trimmed to 30+30
+  lines, so a 90-entry home directory reached the model with all sixteen
+  ordinary directories cut from the middle and the model concluded there was no
+  project. Only `DEFAULT_VERBOSE_TOOLS` (file reads, program and shell output,
+  web content) keep head/tail trimming; everything else is cut by
+  `tool_max_chars`. `list_dir` sorts hidden entries last, so any cut removes
+  dot-entries first. ANSI/OSC sequences are stripped before truncation (also
+  for delegated workers) because they cost tokens and character budget;
+  tool-result events carry no body, so no on-screen colour is lost. Still
+  mode-dependent (open): in user mode `ToolExecutor` rewrites a tool
+  *exception* with `user_friendly_error` and the model receives the rewrite.
+  `test_what_the_model_sees_of_a_tool_result_does_not_depend_on_the_ui_mode`,
+  `tests/test_model_facing_tool_results.py`.
 - **Tier presets use advisory plan-guard mode (`plan_guard_mode`)** so weak
   models can run side-effect tools without plan blocks; `/planguard strict` is
   explicit opt-in. Operation Policy is the safety gate, not the CoT Guard.
@@ -1463,7 +1589,7 @@ name at the end is the gate that fails if the invariant is broken.
 - **The typed-island module list is stated in three places** (CI mypy step,
   pyproject overrides, Typed Island section). `tests/test_typed_island_sync.py`
   fails the build when they diverge — treat that failure as the gate, not as a
-  test to relax. All three name the same **55 library modules**; the CI step
+  test to relax. All three name the same **57 library modules**; the CI step
   passes no `tests/` file to mypy, and `tests/test_e2e.py` appears only on the
   pytest command line.
 - **Esc cancellation and recovery prefill are separate test milestones.**

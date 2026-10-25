@@ -72,6 +72,17 @@ def _openai_stream_payload(
     )
 
 
+#: Provider-neutral ``tool_choice`` values the Messages API spells differently.
+#: ``auto`` is that API's default, so it is deliberately absent: it is omitted
+#: from the body, which keeps every ordinary request byte-identical for a relay
+#: that predates the field.  Only the plan-only recovery escalation asks for
+#: ``required`` or ``none``.
+_ANTHROPIC_TOOL_CHOICE: dict[str, dict[str, str]] = {
+    "required": {"type": "any"},
+    "none": {"type": "none"},
+}
+
+
 def _anthropic_stream_payload(
     messages: list,
     model_alias: str,
@@ -81,9 +92,13 @@ def _anthropic_stream_payload(
     tool_choice: str,
     response_format: dict | None,
 ) -> dict[str, Any]:
-    # tool_choice and response_format have no Anthropic equivalent; the
-    # protocol expresses those constraints on the model itself.
-    return _anthropic_build_payload(messages, model_id, max_tokens, tools_schema)
+    # response_format has no Anthropic equivalent; the protocol expresses that
+    # constraint on the model itself.
+    payload = _anthropic_build_payload(messages, model_id, max_tokens, tools_schema)
+    choice = _ANTHROPIC_TOOL_CHOICE.get(tool_choice)
+    if choice is not None and payload.get("tools"):
+        payload["tool_choice"] = dict(choice)
+    return payload
 
 
 def _responses_stream_payload(

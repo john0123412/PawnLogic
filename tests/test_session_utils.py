@@ -832,7 +832,7 @@ def test_run_turn_stops_after_bounded_plan_only_recovery(monkeypatch, capsys):
     from config import DYNAMIC_CONFIG
     from core.plan_guard import MAX_PLAN_ONLY_RECOVERIES
 
-    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
     monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", MAX_PLAN_ONLY_RECOVERIES + 2)
     tool_runs = []
     monkeypatch.setitem(
@@ -860,18 +860,620 @@ def test_run_turn_stops_after_bounded_plan_only_recovery(monkeypatch, capsys):
 
     assert tool_runs == ["write_file"]
     assert s.queue_status()["status"] == "failed"
-    assert sum(
-        message.get("role") == "user"
-        and str(message.get("content", "")).startswith("[SYSTEM: PLAN_ONLY_RECOVERY]")
-        for message in s.messages
-    ) == MAX_PLAN_ONLY_RECOVERIES
-    assert any(
-        message.get("role") == "user"
-        and "PLAN_ONLY_RECOVERY_LIMIT" in str(message.get("content", ""))
-        for message in s.messages
-    )
     s._autosave.assert_called_once_with(turn_status="failed")
     assert "repeatedly sent a plan without an action" in capsys.readouterr().out
+    # The failed turn leaves nothing of the recovery behind: no plan-only
+    # reply, no PLAN_ONLY nudge, no limit marker. The prompt and the executed
+    # tool batch (the write really happened) stay.
+    assert not any("PLAN_ONLY" in str(m.get("content", "")) for m in s.messages)
+    assert not any(m.get("content") == plan_only for m in s.messages)
+    assert [m["role"] for m in s.messages[1:4]] == ["user", "assistant", "tool"]
+    assert s.messages[1]["content"] == "write a file"
+    assert s.messages[2]["tool_calls"][0]["id"] == "call_missing_plan"
+    assert s.messages[3]["tool_call_id"] == "call_missing_plan"
+
+
+def _prepare_quiet_turn_session(monkeypatch):
+    """``_prepare_run_turn_session`` with per-turn retrieval switched off.
+
+    Whether a retrieval block shows up depends on ambient state -- installed
+    skill packs, the GSA archive, and whether an earlier test module imported
+    the real retrieval modules instead of these stubs -- so a test that asserts
+    the exact history must not leave it to chance.
+    """
+    s, session_mod = _prepare_run_turn_session(monkeypatch)
+    monkeypatch.setattr(
+        s,
+        "_build_turn_context",
+        lambda _query: types.SimpleNamespace(block="", loaded_skill_packs=[]),
+    )
+    return s, session_mod
+
+
+def _recording_stream(*responses):
+    """A ``stream_request`` stand-in recording each request's tool_choice and history."""
+    queue = list(responses)
+    calls = []
+
+    def request(messages, model_alias, **kwargs):
+        calls.append({
+            "tool_choice": kwargs.get("tool_choice", "auto"),
+            "tools": bool(kwargs.get("tools_schema")),
+            "messages": [dict(message) for message in messages],
+        })
+        return fake_stream_response(*queue.pop(0))
+
+    return request, calls
+
+
+_PLAN_ONLY_TEXT = "<plan><intent>Continue the pending action.</intent></plan>"
+
+
+def test_recovery_changes_the_request_instead_of_repeating_it(monkeypatch):
+    """Plan-only #1 -> required, plan-only #2 -> none, plan-only #3 stops."""
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 6)
+    request, calls = _recording_stream(*[_assistant_done_response(_PLAN_ONLY_TEXT)] * 3)
+    monkeypatch.setattr(session_mod, "stream_request", request)
+
+    s.run_turn("list the files")
+
+    assert [call["tool_choice"] for call in calls] == ["auto", "required", "none"]
+    assert all(call["tools"] for call in calls)
+    # Each request is told what it must do, in the user's own conversation.
+    assert "must call a tool" in calls[1]["messages"][-1]["content"]
+    assert "tools are switched off" in calls[2]["messages"][-1]["content"]
+    assert s.queue_status()["status"] == "failed"
+
+
+def test_recovery_notices_say_what_the_next_attempt_does(monkeypatch, capsys):
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 6)
+    request, _calls = _recording_stream(*[_assistant_done_response(_PLAN_ONLY_TEXT)] * 3)
+    monkeypatch.setattr(session_mod, "stream_request", request)
+
+    s.run_turn("list the files")
+
+    out = capsys.readouterr().out
+    assert "the next attempt requires a tool call (1/2)" in out
+    assert "asks for a direct answer or a clarifying question, without tools (2/2)" in out
+
+
+def test_a_normal_response_restores_auto(monkeypatch):
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 6)
+    monkeypatch.setitem(session_mod.TOOL_MAP, "list_dir", lambda _args: "a.txt")
+    request, calls = _recording_stream(
+        _assistant_done_response(_PLAN_ONLY_TEXT),
+        _tool_call_response("list_dir", {"path": "."}, include_plan=False),
+        _assistant_done_response("a.txt is the only file."),
+    )
+    monkeypatch.setattr(session_mod, "stream_request", request)
+
+    s.run_turn("list the files")
+
+    assert [call["tool_choice"] for call in calls] == ["auto", "required", "auto"]
+    assert s.queue_status()["status"] == "completed"
+
+
+def test_the_count_starts_over_each_turn(monkeypatch):
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 6)
+    request, calls = _recording_stream(
+        _assistant_done_response(_PLAN_ONLY_TEXT),
+        _assistant_done_response("answer one"),
+        _assistant_done_response("answer two"),
+    )
+    monkeypatch.setattr(session_mod, "stream_request", request)
+
+    s.run_turn("first")
+    s.run_turn("second")
+
+    assert [call["tool_choice"] for call in calls] == ["auto", "required", "auto"]
+
+
+def test_a_refused_tool_choice_is_retried_once_as_auto_and_never_sent_again(
+    monkeypatch, capsys
+):
+    """HTTP 400 on ``required``: retry with auto, remember, keep usage honest."""
+    from config import DYNAMIC_CONFIG
+    from core.api_errors import format_http_error
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 8)
+    monkeypatch.setitem(session_mod.TOOL_MAP, "list_dir", lambda _args: "a.txt")
+    usage = {"_usage": {"prompt_tokens": 100, "completion_tokens": 10}}
+    refusal = {"_error": format_http_error(400, b'{"error": {"message": "tool_choice"}}')}
+    request, calls = _recording_stream(
+        (*_assistant_done_response(_PLAN_ONLY_TEXT), usage),
+        (refusal,),
+        (*_tool_call_response("list_dir", {"path": "."}, include_plan=False), usage),
+        (*_assistant_done_response("a.txt is the only file."), usage),
+        # second turn: plan-only again, but ``required`` is now known bad
+        (*_assistant_done_response(_PLAN_ONLY_TEXT), usage),
+        (*_assistant_done_response("fine"), usage),
+    )
+    monkeypatch.setattr(session_mod, "stream_request", request)
+
+    s.run_turn("list the files")
+
+    assert [call["tool_choice"] for call in calls] == [
+        "auto",
+        "required",  # refused with HTTP 400 ...
+        "auto",      # ... retried once, as auto
+        "auto",
+    ]
+    out = capsys.readouterr().out
+    assert "HTTP 400" not in out and "API Error" not in out
+    assert s.last_turn_api_error is None
+    assert s.queue_status()["status"] == "completed"
+    # The refused request carried no usage, so nothing is counted twice.
+    assert s.total_prompt_tokens == 300
+    assert s.total_completion_tokens == 30
+
+    s.run_turn("and again")
+
+    assert [call["tool_choice"] for call in calls[4:]] == ["auto", "auto"]
+
+
+def test_an_empty_reply_to_a_required_request_is_retried_as_auto(monkeypatch):
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 6)
+    monkeypatch.setattr(session_mod.time, "sleep", lambda _seconds: None)
+    reasoning_only = ({"choices": [{"delta": {"reasoning_content": "hmm"}}]},)
+    request, calls = _recording_stream(
+        _assistant_done_response(_PLAN_ONLY_TEXT),
+        reasoning_only,
+        _assistant_done_response("done"),
+    )
+    monkeypatch.setattr(session_mod, "stream_request", request)
+
+    s.run_turn("list the files")
+
+    assert [call["tool_choice"] for call in calls] == ["auto", "required", "auto"]
+
+
+def test_failed_turn_does_not_poison_the_next_request(monkeypatch):
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 6)
+    request, calls = _recording_stream(
+        *[_assistant_done_response(_PLAN_ONLY_TEXT)] * 3,
+        _assistant_done_response("Hello! Ask me anything."),
+    )
+    monkeypatch.setattr(session_mod, "stream_request", request)
+
+    s.run_turn("first prompt, never answered")
+    s.run_turn("hi")
+
+    next_request = calls[-1]
+    assert next_request["tool_choice"] == "auto"
+    sent = [(m["role"], m["content"]) for m in next_request["messages"][1:]]
+    # No plan-only exemplar, no nudge: just the two prompts the user typed.
+    assert sent == [
+        ("user", "first prompt, never answered"),
+        ("user", "hi"),
+    ]
+
+
+def test_success_after_recovery_keeps_the_plan_and_the_nudge(monkeypatch):
+    """Only a FAILED turn is cleaned up; a recovered one is history that worked."""
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 6)
+    monkeypatch.setitem(session_mod.TOOL_MAP, "list_dir", lambda _args: "a.txt")
+    request, _calls = _recording_stream(
+        _assistant_done_response(_PLAN_ONLY_TEXT),
+        _tool_call_response("list_dir", {"path": "."}, include_plan=False),
+        _assistant_done_response("a.txt is the only file."),
+    )
+    monkeypatch.setattr(session_mod, "stream_request", request)
+
+    s.run_turn("list the files")
+
+    assert any(m.get("content") == _PLAN_ONLY_TEXT for m in s.messages)
+    assert any("PLAN_ONLY_RECOVERY" in str(m.get("content", "")) for m in s.messages)
+
+
+def test_a_turn_that_fails_before_it_starts_keeps_the_previous_recovered_turn(monkeypatch):
+    """The cleanup is scoped to the failing turn, not to the last turn that had one."""
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 6)
+    monkeypatch.setitem(session_mod.TOOL_MAP, "list_dir", lambda _args: "a.txt")
+    request, _calls = _recording_stream(
+        _assistant_done_response(_PLAN_ONLY_TEXT),
+        _tool_call_response("list_dir", {"path": "."}, include_plan=False),
+        _assistant_done_response("a.txt is the only file."),
+    )
+    monkeypatch.setattr(session_mod, "stream_request", request)
+    s.run_turn("list the files")
+    kept = [m for m in s.messages if "PLAN_ONLY" in str(m.get("content", ""))
+            or m.get("content") == _PLAN_ONLY_TEXT]
+    assert len(kept) == 2
+
+    # The next turn fails before any request: the API key is missing.
+    monkeypatch.setattr(session_mod, "validate_api_key", lambda _alias: (False, "SOME_KEY"))
+    s.run_turn("and again")
+
+    assert s.queue_status()["status"] == "failed"
+    assert all(any(m is k for m in s.messages) for k in kept)
+
+
+def test_provider_error_after_recovery_rolls_back_like_a_first_request_error(monkeypatch):
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 6)
+    request, _calls = _recording_stream(
+        _assistant_done_response(_PLAN_ONLY_TEXT),
+        ({"_error": "HTTP 503 Service Unavailable: overloaded"},),
+    )
+    monkeypatch.setattr(session_mod, "stream_request", request)
+
+    s.run_turn("list the files")
+
+    # The popped message used to be the recovery nudge, which stranded the
+    # prompt and the plan. Now the whole attempt is rolled back, so the
+    # user's retry does not stack a second copy of the prompt on the first.
+    assert s.messages == [{"role": "system", "content": "sys"}]
+    assert s.queue_status()["status"] == "failed"
+
+
+def test_interrupt_during_recovery_leaves_only_the_prompt(monkeypatch):
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 6)
+    answers = iter([_assistant_done_response(_PLAN_ONLY_TEXT)])
+
+    def request(_messages, _alias, **_kwargs):
+        try:
+            return fake_stream_response(*next(answers))
+        except StopIteration:
+            raise KeyboardInterrupt from None
+
+    monkeypatch.setattr(session_mod, "stream_request", request)
+
+    with pytest.raises(TurnInterrupted):
+        s.run_turn("list the files")
+
+    assert [(m["role"], m["content"]) for m in s.messages[1:]] == [
+        ("user", "list the files")
+    ]
+    # ... so the CLI's rollback recovers the prompt the user actually typed,
+    # not the text of a recovery nudge.
+    removed, last_text = s.undo(1)
+    assert (removed, last_text) == (1, "list the files")
+    assert s.messages == [{"role": "system", "content": "sys"}]
+
+
+def test_cancelled_stream_during_recovery_leaves_only_the_prompt(monkeypatch):
+    """The live terminal cancels through a token, not KeyboardInterrupt."""
+    from config import DYNAMIC_CONFIG
+    from core.stream_cancellation import StreamCancellationError
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 6)
+    answers = iter([_assistant_done_response(_PLAN_ONLY_TEXT)])
+
+    def request(_messages, _alias, **_kwargs):
+        try:
+            return fake_stream_response(*next(answers))
+        except StopIteration:
+            raise StreamCancellationError("user pressed Esc") from None
+
+    monkeypatch.setattr(session_mod, "stream_request", request)
+
+    with pytest.raises(TurnInterrupted):
+        s.run_turn("list the files")
+
+    assert [(m["role"], m["content"]) for m in s.messages[1:]] == [
+        ("user", "list the files")
+    ]
+    s._autosave.assert_called_with(turn_status="interrupted")
+
+
+def test_plan_guard_hard_stop_after_a_recovered_plan_leaves_no_plan_only_replies(
+    monkeypatch,
+):
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "plan_guard_mode", "strict")
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 8)
+    monkeypatch.setitem(session_mod.TOOL_MAP, "write_file", lambda _args: "OK")
+
+    def unplanned(n):
+        return _tool_call_response(
+            "write_file", {"path": f"{n}.txt"}, call_id=f"call_{n}", include_plan=False
+        )
+
+    request, _calls = _recording_stream(
+        _assistant_done_response(_PLAN_ONLY_TEXT),  # recovered below ...
+        unplanned(1),  # ... the saved plan covers this first batch
+        unplanned(2),
+        unplanned(3),
+        unplanned(4),  # third rejection: hard stop
+    )
+    monkeypatch.setattr(session_mod, "stream_request", request)
+
+    s.run_turn("write the files")
+
+    assert s.queue_status()["status"] == "failed"
+    assert not any("PLAN_ONLY" in str(m.get("content", "")) for m in s.messages)
+    assert not any(m.get("content") == _PLAN_ONLY_TEXT for m in s.messages)
+    assert sum(1 for m in s.messages if m.get("role") == "tool") == 3  # batches stay
+
+
+def test_iteration_limit_after_a_recovered_plan_leaves_no_plan_only_replies(monkeypatch):
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 1)
+    monkeypatch.setitem(session_mod.TOOL_MAP, "write_file", lambda _args: "OK")
+    request, _calls = _recording_stream(
+        _assistant_done_response(_PLAN_ONLY_TEXT),
+        _tool_call_response("write_file", {"path": "x.txt"}, include_plan=False),
+    )
+    monkeypatch.setattr(session_mod, "stream_request", request)
+
+    s.run_turn("write the file")
+
+    assert s.queue_status()["status"] == "failed"
+    assert not any("PLAN_ONLY" in str(m.get("content", "")) for m in s.messages)
+    assert sum(1 for m in s.messages if m.get("role") == "tool") == 1
+
+
+def test_undo_after_a_failed_turn_removes_the_prompt_and_its_retrieval_block(monkeypatch):
+    from config import DYNAMIC_CONFIG
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 6)
+    monkeypatch.setattr(
+        s,
+        "_build_turn_context",
+        lambda _query: types.SimpleNamespace(
+            block="[Retrieved Context]\nskill\n[/Retrieved Context]",
+            loaded_skill_packs=[],
+        ),
+    )
+    request, _calls = _recording_stream(*[_assistant_done_response(_PLAN_ONLY_TEXT)] * 3)
+    monkeypatch.setattr(session_mod, "stream_request", request)
+
+    s.run_turn("list the files")
+
+    # The retrieval block of the failed turn stays with its prompt ...
+    assert [m["role"] for m in s.messages[1:]] == ["assistant", "user"]
+    assert s.messages[1]["_turn_context"] is True
+    # ... and undo takes both away together.
+    assert s.undo(1) == (2, "list the files")
+    assert s.messages == [{"role": "system", "content": "sys"}]
+
+
+def test_prepare_turn_adds_no_context_block_when_retrieval_finds_nothing(monkeypatch):
+    s, _ = _prepare_run_turn_session(monkeypatch)
+    cjk_prompt = "\u4f60\u597d\uff0c\u4f60\u662f\u8c01"  # "hello, who are you"; escaped, files are English-only
+    monkeypatch.setattr(
+        s,
+        "_build_turn_context",
+        lambda _query: types.SimpleNamespace(block="", loaded_skill_packs=[]),
+    )
+
+    s._prepare_turn(cjk_prompt)
+
+    assert [(m["role"], m["content"]) for m in s.messages] == [
+        ("system", "sys"),
+        ("user", cjk_prompt),
+    ]
+    assert not any(m.get("_turn_context") for m in s.messages)
+
+
+def test_prepare_turn_places_a_found_block_at_the_tail_just_before_its_prompt(
+    monkeypatch,
+):
+    s, _ = _prepare_run_turn_session(monkeypatch)
+    s.messages += [_msg("user", "earlier"), _msg("assistant", "earlier answer")]
+    monkeypatch.setattr(
+        s,
+        "_build_turn_context",
+        lambda _query: types.SimpleNamespace(block="[Retrieved Context]", loaded_skill_packs=[]),
+    )
+
+    s._prepare_turn("heap feng shui")
+
+    assert [m["role"] for m in s.messages[-2:]] == ["assistant", "user"]
+    assert s.messages[-2]["_turn_context"] is True
+    assert s.messages[0] == {"role": "system", "content": "sys"}  # prefix untouched
+
+
+def _framework_injected_user_messages(monkeypatch):
+    """Produce every kind of injected user message through its real producer."""
+    from config import DYNAMIC_CONFIG
+    import core.session as session_mod
+    from core.tool_result import build_anti_code_loop_message, build_anti_loop_message
+    from core.turn_state import TurnState
+
+    s, _ = _prepare_run_turn_session(monkeypatch)
+    state = TurnState.for_turn(
+        max_iter=30, max_tokens=2048, is_vision_model=False, current_tools=None
+    )
+    s.messages = [{"role": "system", "content": "sys"}]
+    s._inject_plan_missing_signal()
+    s._inject_plan_only_recovery_signal(1, state)
+    s._inject_plan_only_recovery_signal(2, state)
+    s.messages.append({"role": "user", "content": session_mod._URGENT_SIGNAL})
+    s.messages.append({"role": "user", "content": build_anti_loop_message(3)})
+    s.messages.append({"role": "user", "content": build_anti_code_loop_message(3)})
+
+    # Logic refresh, through its producer.
+    s.messages.extend({"role": "tool", "content": f"observation {i}"} for i in range(3))
+    state.set_iteration(20)
+    s._maybe_trigger_logic_refresh(state)
+
+    # The empty-response notice, through the retry loop that exhausts itself.
+    monkeypatch.setitem(DYNAMIC_CONFIG, "max_iter", 2)
+    monkeypatch.setattr(session_mod.time, "sleep", lambda _seconds: None)
+    hidden = ({"choices": [{"delta": {"reasoning_content": "hmm"}}]},)
+    monkeypatch.setattr(
+        session_mod, "stream_request", lambda *_a, **_k: fake_stream_response(*hidden)
+    )
+    s.run_turn("a real prompt")
+    return [m for m in s.messages if m["role"] == "user" and m["content"] != "a real prompt"]
+
+
+def test_every_framework_injected_user_message_is_recognised_as_synthetic(monkeypatch):
+    from core.synthetic_messages import is_synthetic_user_message
+
+    injected = _framework_injected_user_messages(monkeypatch)
+
+    assert len(injected) >= 8  # six signals + logic refresh + empty-response notice
+    unrecognised = [m["content"][:60] for m in injected if not is_synthetic_user_message(m)]
+    assert unrecognised == []
+
+
+def test_count_turns_counts_prompts_a_person_typed_not_injected_signals(monkeypatch):
+    injected = _framework_injected_user_messages(monkeypatch)
+    s = _make_session()
+    s.messages = [
+        _msg("system", "sys"),
+        _msg("user", "real prompt"),
+        _msg("assistant", "<plan><intent>x</intent></plan>"),
+        *injected,
+        _msg("assistant", "done"),
+    ]
+
+    assert len(s._count_turns(s.messages)) == 1
+
+    s.messages.append(_msg("user", "[System] is a word a person can open a prompt with"))
+    s.messages.append(_msg("user", "a second real prompt"))
+    assert len(s._count_turns(s.messages)) == 2
+
+
+def test_three_prompts_with_recovery_signals_do_not_trigger_the_history_summary(
+    monkeypatch,
+):
+    """3 real prompts + 6 nudges used to count as 9 'turns' against a threshold of 8."""
+    from config import DYNAMIC_CONFIG
+    import core.session as session_mod
+    from core.plan_guard import PLAN_ONLY_NO_TOOLS_SIGNAL, PLAN_ONLY_RECOVERY_SIGNAL
+
+    plan = _msg("assistant", "<plan><intent>x</intent></plan>")
+    messages = [_msg("system", "sys")]
+    for index in range(3):
+        messages += [
+            _msg("user", f"prompt {index}"),
+            plan,
+            _msg("user", PLAN_ONLY_RECOVERY_SIGNAL),
+            plan,
+            _msg("user", PLAN_ONLY_NO_TOOLS_SIGNAL),
+            _msg("assistant", f"answer {index}"),
+        ]
+    s = _make_session()
+    s.messages = messages
+    summarizer_calls = []
+
+    def summarizer(*_args, **_kwargs):
+        summarizer_calls.append(1)
+        return fake_stream_response({"choices": [{"delta": {"content": "summary"}}]})
+
+    monkeypatch.setattr(session_mod, "stream_request", summarizer)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_summary_threshold", 8)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_sliding_turns", 1)
+
+    turns = len(s._count_turns(s.messages))
+    s._maybe_update_summary(s.messages, turns)
+
+    assert turns == 3
+    assert summarizer_calls == []
+
+    # Control: the same history with eight genuinely typed prompts does summarize.
+    s.messages = [_msg("system", "sys")]
+    for index in range(8):
+        s.messages += [_msg("user", f"prompt {index}"), _msg("assistant", "ok")]
+    s._maybe_update_summary(s.messages, len(s._count_turns(s.messages)))
+    assert summarizer_calls == [1]
+
+
+def test_history_summary_leaves_injected_signals_out_of_what_it_summarizes(monkeypatch):
+    from config import DYNAMIC_CONFIG
+    import core.session as session_mod
+    from core.plan_guard import PLAN_ONLY_RECOVERY_SIGNAL
+
+    s = _make_session()
+    s.messages = [
+        _msg("system", "sys"),
+        _msg("user", "old prompt"),
+        _msg("user", PLAN_ONLY_RECOVERY_SIGNAL),
+        _msg("user", "[Logic Refresh — Iteration 20]\nSummarize the path"),
+        _msg("assistant", "old answer"),
+        _msg("user", "recent prompt"),
+        _msg("assistant", "recent answer"),
+    ]
+    sent = []
+
+    def summarizer(messages, *_args, **_kwargs):
+        sent.append(messages[-1]["content"])
+        return fake_stream_response({"choices": [{"delta": {"content": "summary"}}]})
+
+    monkeypatch.setattr(session_mod, "stream_request", summarizer)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_summary_threshold", 3)
+    monkeypatch.setitem(DYNAMIC_CONFIG, "ctx_sliding_turns", 1)
+
+    s._maybe_update_summary(s.messages, current_turn_count=3)
+
+    assert "old prompt" in sent[0]
+    assert "PLAN_ONLY_RECOVERY" not in sent[0]
+    assert "Logic Refresh" not in sent[0]
+
+
+def _tool_message_seen_by_the_model(monkeypatch, *, user_mode):
+    """Run one list_dir turn and return the tool message the model is sent next."""
+    from utils.ansi import BLUE, c
+
+    s, session_mod = _prepare_quiet_turn_session(monkeypatch)
+    s.runtime_context.set_output_mode(debug_mode=not user_mode, user_mode=user_mode)
+    listing = "\n".join(
+        [c(BLUE, f"  📁 .cache{i:02d}/") for i in range(36)]
+        + [c(BLUE, f"  📁 projdir{i:02d}/") for i in range(16)]
+        + [f"  📄 notes{i:02d}.txt  1B" for i in range(40)]
+    )
+    monkeypatch.setitem(session_mod.TOOL_MAP, "list_dir", lambda _args: listing)
+    request, calls = _recording_stream(
+        _tool_call_response("list_dir", {"path": "."}, include_plan=False),
+        _assistant_done_response("There are sixteen project directories."),
+    )
+    monkeypatch.setattr(session_mod, "stream_request", request)
+
+    s.run_turn("what is in my home directory?")
+
+    return next(
+        m["content"] for m in calls[-1]["messages"] if m.get("role") == "tool"
+    )
+
+
+def test_what_the_model_sees_of_a_tool_result_does_not_depend_on_the_ui_mode(monkeypatch):
+    friendly = _tool_message_seen_by_the_model(monkeypatch, user_mode=True)
+    debug = _tool_message_seen_by_the_model(monkeypatch, user_mode=False)
+
+    assert friendly == debug
+    for index in range(16):  # the project directories survive in the default mode
+        assert f"projdir{index:02d}/" in friendly
+    assert "lines truncated" not in friendly
+    assert "\x1b" not in friendly
 
 
 def test_run_turn_clears_interruption_timestamp_after_queue_drains(monkeypatch):

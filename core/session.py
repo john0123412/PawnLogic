@@ -65,6 +65,7 @@ from core.prompt_builder import (
     build_turn_context_block,
     format_context_state_for_prompt,
 )
+from core.synthetic_messages import is_synthetic_user_message, starts_user_turn
 from core.tool_calls import extract_tool_calls
 from core.tool_executor import (
     ToolExecutionOutcome,
@@ -112,6 +113,14 @@ from core.stream_cancellation import StreamCancellationError
 # XML <plan> tag renderer. Re-exported under its original private name so
 # `from core.session import _PlanRenderer` keeps working for existing callers.
 from core.plan_renderer import _PlanRenderer
+from core.plan_recovery import (
+    discard_turn_artifacts,
+    memory_for,
+    purge_messages,
+    recovery_step,
+    stream_with_tool_choice,
+    tool_choice_for_recovery,
+)
 from core.turn_cancellation import (
     TurnCancellationToken,
     activate_turn_cancellation,
@@ -680,8 +689,6 @@ _URGENT_SIGNAL = (
 
 # PLAN_MISSING signal lives in core/plan_guard.py with the guard's contracts.
 _PLAN_MISSING_SIGNAL = _plan_guard.PLAN_MISSING_SIGNAL
-_PLAN_ONLY_RECOVERY_SIGNAL = _plan_guard.PLAN_ONLY_RECOVERY_SIGNAL
-_PLAN_ONLY_RECOVERY_LIMIT_SIGNAL = _plan_guard.PLAN_ONLY_RECOVERY_LIMIT_SIGNAL
 
 _is_plan_exempt = _plan_guard.is_plan_exempt
 _is_plan_only_response = _plan_guard.is_plan_only_response
@@ -1087,7 +1094,8 @@ class AgentSession:
         starts the group of the turn it was retrieved for and absorbs the user
         message that immediately follows it — the same grouping the budget
         trimmer uses (`core.context_manager._turn_groups`). The system message
-        at index 0 is not included in grouping.
+        at index 0 is not included in grouping. A framework-injected user
+        message (recovery nudge, plan correction) is not a turn start.
         """
         turns: list[tuple[int, int]] = []
         i = 1  # skip system
@@ -1098,7 +1106,7 @@ class AgentSession:
                 # Absorb the user message this block was retrieved for.
                 if i < len(msgs) and msgs[i].get("role") == "user":
                     i += 1
-            elif msgs[i].get("role") == "user":
+            elif starts_user_turn(msgs[i]):
                 start = i
                 i += 1
             else:
@@ -1106,7 +1114,7 @@ class AgentSession:
                 continue
             # Absorb assistant/tool messages until the next group start.
             while i < len(msgs) and not (
-                msgs[i].get("role") == "user" or msgs[i].get("_turn_context")
+                starts_user_turn(msgs[i]) or msgs[i].get("_turn_context")
             ):
                 i += 1
             turns.append((start, i))
@@ -1148,7 +1156,7 @@ class AgentSession:
                     clean = _re.sub(r"<[^>]+>", " ", content).strip()[:400]
                     if clean:
                         lines.append(f"[Assistant]: {clean}")
-                elif role == "user" and not content.startswith("[SYSTEM:") and not content.startswith("[System]"):
+                elif role == "user" and not is_synthetic_user_message(m):
                     lines.append(f"[User]: {content[:200]}")
 
         if not lines:
@@ -1420,6 +1428,7 @@ class AgentSession:
         current_max_tokens: int,
         renderer: _PlanRenderer,
         iteration: int,
+        tool_choice: str = "auto",
     ) -> TurnApiResult:
         reasoning_printed = False
         # Live-terminal mode: the status line already shows the same state;
@@ -1499,8 +1508,14 @@ class AgentSession:
             if cancellation is not None:
                 stream_kwargs["cancellation"] = cancellation
             result = consume_model_stream(
-                stream_request(
-                    api_msgs, self.model_alias,
+                stream_with_tool_choice(
+                    stream_request, api_msgs, self.model_alias, tool_choice,
+                    memory_for(self),
+                    on_rejected=lambda value: logger.info(
+                        "tool_choice={!r} refused by the provider; using auto "
+                        "for this session | model={} session={}",
+                        value, self.model_alias, self.session_id[:8],
+                    ),
                     tools_schema=current_tools,
                     max_tokens=current_max_tokens,
                     **stream_kwargs,
@@ -1663,6 +1678,8 @@ class AgentSession:
         current_max_tokens: int,
         renderer: _PlanRenderer,
         iteration: int,
+        tool_choice: str = "auto",
+        plan_artifacts: list | None = None,
     ) -> tuple[str, dict, str] | None:
         _api_retry = 0
         _API_RETRY_MAX = 3
@@ -1670,12 +1687,16 @@ class AgentSession:
         while True:
             _api_start = time.monotonic()
             _api_result = self._consume_api_stream_attempt(
-                api_msgs, current_tools, current_max_tokens, renderer, iteration
+                api_msgs, current_tools, current_max_tokens, renderer, iteration,
+                tool_choice,
             )
             logger.debug(
                 "api_stream {} {:.1f}s", iteration, time.monotonic() - _api_start
             )
             if _api_result.error:
+                # Plan-only replies and nudges first, so the pop below removes
+                # the user's prompt, exactly as it does for a first-request error.
+                purge_messages(self.messages, plan_artifacts or ())
                 self.messages.pop()
                 self._pop_orphan_turn_context_block()
                 return None
@@ -1729,6 +1750,9 @@ class AgentSession:
                 self.model_alias, self.session_id[:8], iteration, _api_retry, _wait,
             )
             time.sleep(_wait)
+            # An empty reply to a recovery tool_choice is retried as plain auto:
+            # resending the identical request is the retry that fails again.
+            tool_choice = "auto"
 
     def _append_assistant_or_tool_call_message(
         self,
@@ -1763,17 +1787,20 @@ class AgentSession:
         self.messages.append(_asst_msg)
         return True
 
-    def _inject_plan_only_recovery_signal(self, recovery_count: int) -> None:
-        self.messages.append({"role": "user", "content": _PLAN_ONLY_RECOVERY_SIGNAL})
+    def _inject_plan_only_recovery_signal(
+        self, recovery_count: int, turn_state: TurnState
+    ) -> None:
+        step = recovery_step(recovery_count)
+        signal = {"role": "user", "content": step.signal}
+        self.messages.append(signal)
+        turn_state.record_plan_only_artifact(signal)
         print(c(
             GRAY,
-            "  🔄 [Plan Recovery] A plan without an action was saved; "
-            f"requesting a tool call or final answer ({recovery_count}/"
-            f"{_MAX_PLAN_ONLY_RECOVERIES}).",
+            f"  🔄 [Plan Recovery] {step.notice} "
+            f"({recovery_count}/{_MAX_PLAN_ONLY_RECOVERIES}).",
         ))
 
     def _stop_plan_only_recovery(self, recovery_count: int) -> None:
-        self.messages.append({"role": "user", "content": _PLAN_ONLY_RECOVERY_LIMIT_SIGNAL})
         print(c(
             RED,
             "  Unable to continue: the model repeatedly sent a plan without an "
@@ -1974,7 +2001,6 @@ class AgentSession:
                 elapsed_ms=_elapsed_ms,
                 failure_warning=_failure_warning,
                 iteration=iteration,
-                user_mode=_user_mode(),
                 max_chars=_dynamic_config()["tool_max_chars"],
             )
 
@@ -2227,21 +2253,29 @@ class AgentSession:
         else:
             activation = nullcontext(active_context)
         with activation, activate_turn_cancellation(cancellation):
+            # Every unsuccessful exit discards the turn's plan-only replies and
+            # nudges BEFORE the autosave, so the checkpoint is already clean
+            # (core.plan_recovery.discard_turn_artifacts). A new failure exit
+            # in _run_turn_active needs no cleanup of its own.
             try:
                 outcome = self._run_turn_active(user_input)
             except TurnInterrupted:
+                discard_turn_artifacts(self)
                 self._autosave(turn_status="interrupted")
                 raise
             except StreamCancellationError as exc:
                 # A cancelled stream is a user interrupt, not a failure:
                 # convert it so the scheduler and CLI take the interrupt
                 # path. Chain the original to preserve its traceback.
+                discard_turn_artifacts(self)
                 self._autosave(turn_status="interrupted")
                 raise TurnInterrupted(str(exc)) from exc
             except Exception:
+                discard_turn_artifacts(self)
                 self._autosave(turn_status="failed")
                 raise
         if outcome == "failed":
+            discard_turn_artifacts(self)
             self._autosave(turn_status="failed")
         return outcome
 
@@ -2272,6 +2306,9 @@ class AgentSession:
         return shutdown_session(self)
 
     def _run_turn_active(self, user_input: str) -> str | None:
+        # A turn that fails before it has a ledger must not discard the
+        # previous turn's (recovered, hence kept) plan-only replies.
+        self._turn_plan_artifacts = ()
         dynamic_cfg = self._prepare_turn(user_input)
         if dynamic_cfg is None:
             return "failed"
@@ -2300,6 +2337,7 @@ class AgentSession:
             logic_refresh_interval=_LOGIC_REFRESH_INTERVAL,
             urgent_mode_active=self._urgent_mode,
         )
+        self._turn_plan_artifacts = turn_state.plan_only_artifacts
 
         tool_executor = self._make_tool_executor()
         # Per-turn tool result processing: owns directory/anti-loop/anti-code-loop
@@ -2328,6 +2366,8 @@ class AgentSession:
                     turn_state.current_max_tokens,
                     renderer,
                     turn_state.iteration,
+                    tool_choice_for_recovery(turn_state.plan_only_recoveries),
+                    turn_state.plan_only_artifacts,
                 )
                 if cancellation is not None and cancellation.cancelled:
                     raise TurnInterrupted()
@@ -2339,13 +2379,15 @@ class AgentSession:
                     continue
 
                 if _is_plan_only_response(text_buf, tc_buf):
-                    self.messages.append(_build_plan_only_message(text_buf, reasoning_buf))
+                    plan_message = _build_plan_only_message(text_buf, reasoning_buf)
+                    self.messages.append(plan_message)
+                    turn_state.record_plan_only_artifact(plan_message)
                     recovery_count = turn_state.increment_plan_only_recoveries()
                     if recovery_count > _MAX_PLAN_ONLY_RECOVERIES:
                         self._stop_plan_only_recovery(recovery_count)
                         return "failed"
                     turn_state.authorize_next_tool_batch_from_plan_only()
-                    self._inject_plan_only_recovery_signal(recovery_count)
+                    self._inject_plan_only_recovery_signal(recovery_count, turn_state)
                     continue
 
                 turn_state.reset_plan_only_recoveries()
