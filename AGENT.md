@@ -675,7 +675,7 @@ mode.
 authoritative list.** A module is in the island only when CI passes its file
 to mypy; the matching `[[tool.mypy.overrides]]` entry in `pyproject.toml` is
 what actually turns on `disallow_untyped_defs` / `check_untyped_defs` for it.
-Both files, plus the list below, must name the same 57 modules;
+Both files, plus the list below, must name the same 59 modules;
 `tests/test_typed_island_sync.py` fails the build when they diverge.
 
 To add a module: annotate it until it passes
@@ -687,7 +687,8 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `core/provider_models`, `core/api_errors`, `core/tool_calls`,
 `core/tool_registry`, `core/token_estimate`, `core/context_window`, `core/workspace_cleanup`,
 `core/turn_state`, `core/session_tool_loop`, `core/session_snapshot`,
-`core/message_history`, `core/plan_recovery`, `core/synthetic_messages`,
+`core/message_history`, `core/plan_recovery`, `core/plan_protocol`,
+`core/tool_markup`, `core/synthetic_messages`,
 `core/provider_streams`, `core/runtime_metrics`,
 `core/mcp_client_manager`, `core/path_policy`, `core/provider_transport`,
 `core/api_retry`, `core/provider_formats`, `core/provider_protocol`,
@@ -777,6 +778,104 @@ name at the end is the gate that fails if the invariant is broken.
   `test_a_refused_tool_choice_is_retried_once_as_auto_and_never_sent_again`,
   `test_an_empty_reply_to_a_required_request_is_retried_as_auto`, and
   `tests/test_plan_recovery.py` (serialization per format, fallback edges).
+- **A reply whose text is a tool call nothing parsed is not a final answer.**
+  A model that writes its call as text in a dialect the extractor does not know
+  (DeepSeek DSML tokens, Qwen `<function=...>`, a provider's `<x_tool_call>`
+  tags, a bare or fenced JSON call) used to end the turn: no parsed tool call
+  meant "final answer", so nothing ran and the markup was printed as the
+  answer (a `tool_choice="none"` recovery request made the stuck provider print
+  `<iquestcoder_tool_call>list_dir<arg_key>...` as its reply). Such a reply now
+  takes the plan-only ladder: same `RECOVERY_STEPS` bound and the same counter
+  (a plan-only reply followed by a text call is the second strike;
+  `unusable_reply_kind` in `core/plan_recovery.py` decides), with a nudge that
+  says the call was written as text and must go through the provider's tool
+  interface (`TOOL_MARKUP_RECOVERY_STEPS`; both nudges start with `[SYSTEM:`,
+  so they are not turns). The reply and the nudge are turn artifacts, so a
+  failed turn discards them. Detection (`core/tool_markup.py`) is shape only
+  and deliberately conservative, because a false positive costs a round trip on
+  an honest answer: fenced code and inline code are blanked first; a tag pair
+  named `*tool_call(s)`, a line-start `<function=...>` block, or a JSON call
+  counts only when it *ends* the reply (a model stops after a call, an
+  explanation of the format keeps talking) and names a tool the request offered
+  (a call is useless without its tool, an explanation shows `tool_name`
+  placeholders -- the product's own `<tool_call>{"name":"tool_name",...}`
+  format quoted at the end of an answer is the case this is for); JSON is
+  additionally only the whole reply (plan blocks removed) or a whole fenced
+  block at the end; reserved special tokens match anywhere outside code. A
+  quoted example that uses a real tool name is indistinguishable from a call
+  and does match (a known limit, pinned). No dialect parser was added, so a
+  recognised call is never executed from reply text, and a call cut off before
+  its closing tag is not recognised. With no tool offered (a vision model)
+  nothing is recovered. The recogniser runs on every reply that has no tool
+  call, so it stays linear on degenerate output and `json.loads` is guarded
+  against `RecursionError` (deep nesting raises that, not `ValueError`); a
+  next saved plan covers the following native batch only if the saved reply
+  contained one (`</plan>`). A new dialect is a pattern plus a positive and a
+  negative test; widening the match to bare words such as `tool_call`, or adding
+  a parser, is the mistake.
+  `tests/test_tool_markup.py` (a positive per dialect, negatives for prose,
+  quoted examples and code, degenerate input),
+  `test_a_tool_call_written_as_text_is_recovered_instead_of_shown_as_the_answer`,
+  and its negative control
+  `test_an_answer_that_only_talks_about_tool_calls_is_still_an_answer` (both
+  directions are needed to know the wiring is live).
+- **The plan protocol is one setting per custom provider, resolved in one
+  place; the prompt, the guard and every injected plan demand follow it.**
+  `"plan_protocol": false` on a custom provider entry in
+  `custom_providers.json` (`/provider plan <name> on|off`) removes the
+  Execution Protocol section from the system prompt; absent or `true` is
+  today's prompt byte for byte, because the section is the module constant
+  `prompt_builder._EXECUTION_PROTOCOL` and `plan_protocol=False` can only omit
+  that text. It exists because a Responses-format custom provider's model
+  treats writing the plan as the action: in a paid A/B the same first request
+  was plan-only 2 of 2 times as built and 0 of 2 times with only that section
+  removed (one reply was a native tool call). The section also carries the
+  text-fallback `<tool_call>` format and the long-output rules, and they go
+  with it: a provider that depends on the text fallback should keep the
+  protocol on. `core/plan_protocol.plan_protocol_enabled` is the only
+  model -> provider -> setting resolver, the way `model_effort_map` is the only
+  effort resolver: built-in providers, a missing key, and any value that is not
+  the literal `false` are on (a hand-edited `"off"` must not switch it off, and
+  a stray key on a built-in entry changes nothing); a consumer that reads
+  `PROVIDERS[...]["plan_protocol"]` itself will drift. Persistence shares
+  `/provider effort`'s boundary (`config.providers._set_custom_provider_flag`):
+  it refuses `BUILTIN_PROVIDER_NAMES` and requires an existing entry that
+  already carries `base_url` and `api_key_env`, and it never creates an entry,
+  because one incomplete entry makes the loader discard the whole file. The
+  validator copies unknown keys (`**prov`, unchanged since 0.3.9), so a release
+  that predates the key still loads the file and simply keeps the protocol on.
+  `test_set_provider_plan_protocol_refuses_builtins_without_the_command_layer`,
+  `test_set_provider_plan_protocol_never_mints_a_partial_entry` and
+  `test_set_provider_plan_protocol_refuses_a_complete_shadow_entry` pin the
+  guards separately, as for effort. The setting is the prompt's third rebuild
+  key (`_prompt_plan_protocol`, beside phase and urgent mode): a model switch or
+  a toggle on the current provider rebuilds it once, and nothing else does
+  (`test_toggling_the_current_provider_rebuilds_the_prompt_once`,
+  `test_prepare_turn_keeps_system_prompt_byte_identical_across_turns`).
+  Precedence: the provider setting outranks `plan_guard_mode`. With the
+  protocol off the guard flags, annotates (`TOOL_PLAN_NOTICE`), signals
+  (`PLAN_MISSING`) and counts nothing in any mode, because enforcing an
+  instruction the model never received contradicts the prompt; `/planguard`
+  says so instead of silently doing nothing. The guard, the loop notices and
+  the turn-context block read the setting the *prompt* was built with
+  (`prompt_plan_protocol`), not the live one: an urgent-mode model swap in the
+  middle of a turn must not start enforcing a protocol the prompt does not carry
+  (`test_the_guard_follows_the_prompt_not_a_mid_turn_model_swap`,
+  `test_plan_less_tool_batches_are_not_flagged_when_the_protocol_is_off`, with
+  `test_plan_less_tool_batches_are_still_flagged_when_the_protocol_is_on` as
+  its positive control). Plan-only recovery stays on, because a model may still
+  write a plan of its own accord and a bare plan is still not an answer
+  (`test_plan_only_recovery_stays_on_when_the_protocol_is_off`). Two other
+  texts asked for a `<plan>` and follow the switch -- the GSA conflict warning
+  and the anti-loop notices
+  (`test_the_gsa_conflict_warning_does_not_ask_for_a_plan_with_the_protocol_off`,
+  `test_loop_notices_are_unchanged_with_the_protocol_on_and_plan_free_when_off`)
+  -- so a new injected sentence that says "in your `<plan>`" is the mistake. The
+  language rule's "your internal `<plan>` tags MAY use English" is deliberately
+  left (it requires nothing). `/provider plan` arrives as `arg="plan"`,
+  `arg2="<name> [on|off]"` and is dispatched beside `effort`
+  (`test_provider_plan_off_reaches_the_handler_with_name_and_state_split`,
+  `test_provider_completion_covers_every_dispatched_subcommand`).
 - **Auth is an axis orthogonal to the payload format, and `anthropic-version`
   is a protocol constant, not a credential.** The reported 401 was a relay
   serving Anthropic-shaped payloads over `Authorization: Bearer`, which
@@ -1370,7 +1469,8 @@ name at the end is the gate that fails if the invariant is broken.
 - **`/abort` clears queued input but cannot cancel a provider request already
   handed to a synchronous stream**; Ctrl+C remains the in-flight path.
 - **The system prompt is a cache prefix, not a scratchpad.** It is rebuilt
-  only when its inputs change (`_prompt_phase` / `_prompt_urgent`), and it
+  only when its inputs change (`_prompt_phase` / `_prompt_urgent` / the
+  plan-protocol setting `_prompt_plan_protocol`), and it
   must stay byte-stable across turns: rewriting it invalidates the provider
   prompt cache from position zero, so every request pays full prefill again.
   Per-turn retrieval (knowledge hits, GSA skills, local packs) is injected
@@ -1459,7 +1559,13 @@ name at the end is the gate that fails if the invariant is broken.
   archive is split on `^# ` and `^## ` outside code fences, keeping only `##`
   blocks: splitting on `## ` alone glued the next category's header to the
   skill above it, and splitting on `# ` without fence awareness cuts a skill at
-  every shell comment (the real archive has them). `search_legacy` returns
+  every shell comment (the real archive has them). `prune_zombie_skills` writes
+  the archive back, so it uses the same boundaries
+  (`gsa._archive_segments`, whose segments reassemble the file exactly) and
+  removes skill blocks only: it used to split on `## ` alone, so pruning the
+  last skill of a category also deleted the next category's `# ` header and
+  its note from the owner's file (`tests/test_gsa_prune.py`; never remove a
+  `# ` line that is outside a skill). `search_legacy` returns
   nothing for a query with no keyword (it used to list the newest rows, and
   fed the retrieval fallback and the directory auto-intuition hint). Local
   skill packs have a minimum score instead of a forced fallback, and the
@@ -1518,14 +1624,29 @@ name at the end is the gate that fails if the invariant is broken.
   `tool_max_chars`. `list_dir` sorts hidden entries last, so any cut removes
   dot-entries first. ANSI/OSC sequences are stripped before truncation (also
   for delegated workers) because they cost tokens and character budget;
-  tool-result events carry no body, so no on-screen colour is lost. Still
+  tool-result events carry no body, so no on-screen colour is lost -- except
+  for `run_shell` (`core.tool_result.ANSI_PRESERVING_TOOLS`, applied by
+  `model_facing_text` in both the main loop and delegated workers): CTF
+  challenges hide data in escape sequences (concealed text, cursor moves that
+  overwrite what a terminal shows, OSC titles), and a model that never sees the
+  bytes cannot find it. `run_code` is deliberately still stripped (open
+  question for the owner), and the stored bytes are raw again for `run_shell`,
+  so a display path must strip at the sink: `/resume` does, and the
+  `/chat view` tool preview does (`format_session_messages_pretty`;
+  `test_tool_preview_strips_escape_sequences_before_a_terminal_prints_it`). A
+  new path that prints stored tool content to the terminal must call
+  `utils.ansi.strip_ansi` first. Still
   mode-dependent (open): in user mode `ToolExecutor` rewrites a tool
   *exception* with `user_friendly_error` and the model receives the rewrite.
   `test_what_the_model_sees_of_a_tool_result_does_not_depend_on_the_ui_mode`,
+  `test_run_shell_keeps_its_escape_sequences_byte_for_byte`,
+  `test_only_run_shell_is_exempt_from_stripping`,
   `tests/test_model_facing_tool_results.py`.
 - **Tier presets use advisory plan-guard mode (`plan_guard_mode`)** so weak
   models can run side-effect tools without plan blocks; `/planguard strict` is
-  explicit opt-in. Operation Policy is the safety gate, not the CoT Guard.
+  explicit opt-in. Operation Policy is the safety gate, not the CoT Guard. A
+  custom provider's `plan_protocol` setting outranks the mode: with it off no
+  mode flags anything (see the plan-protocol entry above).
 
 ### Testing traps
 
@@ -1589,7 +1710,7 @@ name at the end is the gate that fails if the invariant is broken.
 - **The typed-island module list is stated in three places** (CI mypy step,
   pyproject overrides, Typed Island section). `tests/test_typed_island_sync.py`
   fails the build when they diverge — treat that failure as the gate, not as a
-  test to relax. All three name the same **57 library modules**; the CI step
+  test to relax. All three name the same **59 library modules**; the CI step
   passes no `tests/` file to mypy, and `tests/test_e2e.py` appears only on the
   pytest command line.
 - **Esc cancellation and recovery prefill are separate test milestones.**
@@ -1613,6 +1734,15 @@ name at the end is the gate that fails if the invariant is broken.
   marker land on the prefilled draft. The test appends to the draft rather
   than clearing it, so it also fails when the prefill stops landing at all —
   the Ctrl-U form passed with the prefill stubbed out.
+- **`tests/test_session_utils.py` depends on module state the full suite
+  establishes.** Run in the same process right after
+  `test_provider_commands.py` (or `test_model_facing_tool_results.py`) its
+  `test_run_turn_*` tests fail with `sqlite3.OperationalError: no such table:
+  knowledge` — 25 of them on `main` at 0.4.7, so this predates the plan-only
+  recovery work; alone, or in the full suite's order, it passes. A
+  verification script, a mutation harness or a CI shard that combines test
+  files must give `test_session_utils.py` its own process, or it reports
+  failures that no code change caused.
 - **The language-policy test scans tracked files only.** Re-run it after
   staging; a green pre-commit run misses new untracked files.
 - **A project-local pytest basetemp under `.agent-work/` must set

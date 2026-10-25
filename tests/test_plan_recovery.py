@@ -15,15 +15,20 @@ from core import provider_protocol
 from core.api_errors import HTTP_STATUS_HINTS, format_http_error, http_status_from_error
 from core.plan_guard import MAX_PLAN_ONLY_RECOVERIES
 from core.plan_recovery import (
+    KIND_PLAN_ONLY,
+    KIND_TOOL_MARKUP,
     RECOVERY_STEPS,
     TOOL_CHOICE_AUTO,
     TOOL_CHOICE_NONE,
     TOOL_CHOICE_REQUIRED,
+    TOOL_MARKUP_RECOVERY_STEPS,
     ToolChoiceMemory,
     purge_messages,
     recovery_step,
+    recovery_stop_message,
     stream_with_tool_choice,
     tool_choice_for_recovery,
+    unusable_reply_kind,
 )
 
 # ── the ladder ───────────────────────────────────────────────────────
@@ -63,6 +68,88 @@ def test_each_step_tells_the_model_and_the_user_what_the_next_attempt_does():
 
     # The required step must not offer the escape the provider is closing off.
     assert "provide a normal final answer" not in required.signal
+
+
+# ── a tool call written as text takes the same ladder ────────────────
+
+
+def test_the_text_call_ladder_is_the_plan_only_ladder_in_other_words():
+    """One bound, one escalation: only the nudge wording differs per kind."""
+    assert len(TOOL_MARKUP_RECOVERY_STEPS) == len(RECOVERY_STEPS) == MAX_PLAN_ONLY_RECOVERIES
+    assert [step.tool_choice for step in TOOL_MARKUP_RECOVERY_STEPS] == [
+        step.tool_choice for step in RECOVERY_STEPS
+    ]
+    # tool_choice_for_recovery is kind-independent because the rungs agree.
+    for count in range(0, MAX_PLAN_ONLY_RECOVERIES + 2):
+        wanted = tool_choice_for_recovery(count)
+        if count:
+            assert recovery_step(count, KIND_TOOL_MARKUP).tool_choice == wanted
+
+
+def test_text_call_steps_say_the_call_was_written_as_text():
+    required = recovery_step(1, KIND_TOOL_MARKUP)
+    no_tools = recovery_step(2, KIND_TOOL_MARKUP)
+
+    assert required.signal.startswith("[SYSTEM: TOOL_CALL_AS_TEXT]")
+    assert "plain text" in required.signal and "nothing was executed" in required.signal
+    assert "provider's tool interface" in required.signal
+    assert "requires a real tool call" in required.notice
+    assert no_tools.signal.startswith("[SYSTEM: TOOL_CALL_AS_TEXT_NO_TOOLS]")
+    assert "without tools" in no_tools.notice
+    # They never talk about plans: the reply that triggered them had none.
+    assert "<plan>" not in required.signal and "<plan>" not in no_tools.signal
+    assert required.label == no_tools.label == "Tool-Call Recovery"
+    assert recovery_step(1).label == "Plan Recovery"  # the plan-only wording is unchanged
+
+
+def test_text_call_step_index_clamps_like_the_plan_only_ladder():
+    last = TOOL_MARKUP_RECOVERY_STEPS[-1]
+
+    assert recovery_step(0, KIND_TOOL_MARKUP) is TOOL_MARKUP_RECOVERY_STEPS[0]
+    assert recovery_step(99, KIND_TOOL_MARKUP) is last
+    assert recovery_step(1) is RECOVERY_STEPS[0]  # the default kind is plan-only
+
+
+def test_the_stop_message_names_what_the_model_kept_doing():
+    assert "sent a plan without an action" in recovery_stop_message(KIND_PLAN_ONLY)
+    assert "sent a plan without an action" in recovery_stop_message()
+    assert "wrote tool calls as text" in recovery_stop_message(KIND_TOOL_MARKUP)
+
+
+TOOLS = [
+    {"type": "function", "function": {"name": "list_dir", "parameters": {}}},
+    {"type": "function", "function": {"name": "read_file", "parameters": {}}},
+]
+PLAN = "<plan><intent>Continue.</intent></plan>"
+TEXT_CALL = "<iquestcoder_tool_call>list_dir<arg_key>path</arg_key><arg_value>.</arg_value></iquestcoder_tool_call>"
+# A reserved token needs no tool name to be recognised, so with no tool offered
+# only the explicit rule below keeps it from being "recovered".
+TOKEN_CALL = "<|tool_calls_section_begin|><|tool_call_begin|>functions.list_dir:0<|tool_call_end|>"
+
+
+@pytest.mark.parametrize(
+    ("text", "tc_buf", "tools", "expected"),
+    [
+        (PLAN, {}, TOOLS, KIND_PLAN_ONLY),
+        (TEXT_CALL, {}, TOOLS, KIND_TOOL_MARKUP),
+        (PLAN + "\n" + TEXT_CALL, {}, TOOLS, KIND_TOOL_MARKUP),
+        ("The directory holds three files.", {}, TOOLS, None),
+        (PLAN + "\nThe directory holds three files.", {}, TOOLS, None),
+        # A parsed tool call is an action whatever else the reply says.
+        (TEXT_CALL, {0: {"id": "c", "name": "list_dir", "args": "{}"}}, TOOLS, None),
+        (PLAN, {0: {"id": "c", "name": "list_dir", "args": "{}"}}, TOOLS, None),
+        # With no tool offered, a text call is not a failed attempt at anything ...
+        (TEXT_CALL, {}, None, None),
+        (TEXT_CALL, {}, [], None),
+        (TOKEN_CALL, {}, TOOLS, KIND_TOOL_MARKUP),
+        (TOKEN_CALL, {}, None, None),
+        (TOKEN_CALL, {}, [], None),
+        # ... but a bare plan is still not an answer.
+        (PLAN, {}, None, KIND_PLAN_ONLY),
+    ],
+)
+def test_unusable_reply_kind(text, tc_buf, tools, expected):
+    assert unusable_reply_kind(text, tc_buf, tools) == expected
 
 
 # ── per-session memory ───────────────────────────────────────────────

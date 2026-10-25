@@ -20,8 +20,15 @@ which the ladder above already bounds, or an empty one, which the session
 retries as ``auto`` -- resending the identical request is the retry that fails
 again.
 
+A reply whose text is a tool call that nothing parsed (``core/tool_markup.py``:
+a dialect the extractor does not know, shown to the user as if it were the
+answer) is the same kind of non-result and takes the same ladder: the counter is
+shared, so a plan-only reply followed by a text call is the second strike.  Only
+the wording differs -- the nudge says the call was written as text and must go
+through the provider's tool interface.
+
 When a turn fails after recovery began -- the limit is reached, the provider
-errors, the user interrupts -- the plan-only replies and recovery nudges that
+errors, the user interrupts -- the unusable replies and recovery nudges that
 turn collected are removed from the history.  Left in place they are the worst
 possible few-shot examples: the next turn's request would show the model its own
 plan-only replies as the established pattern of this conversation.  Executed
@@ -30,12 +37,22 @@ tool batches are never touched; their side effects happened.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, MutableSequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, MutableSequence
 from dataclasses import dataclass
 from typing import Any
 
 from core.api_errors import http_status_from_error
-from core.plan_guard import PLAN_ONLY_NO_TOOLS_SIGNAL, PLAN_ONLY_RECOVERY_SIGNAL
+from core.plan_guard import (
+    PLAN_ONLY_NO_TOOLS_SIGNAL,
+    PLAN_ONLY_RECOVERY_SIGNAL,
+    is_plan_only_response,
+)
+from core.tool_markup import (
+    TOOL_MARKUP_NO_TOOLS_SIGNAL,
+    TOOL_MARKUP_RECOVERY_SIGNAL,
+    find_unparsed_tool_call,
+    offered_tool_names,
+)
 
 TOOL_CHOICE_AUTO = "auto"
 TOOL_CHOICE_REQUIRED = "required"
@@ -45,14 +62,19 @@ TOOL_CHOICE_NONE = "none"
 #: implement.  Anything else (auth, rate limit, 5xx) is not about tool_choice.
 REJECTED_PARAMETER_STATUSES = frozenset({400, 422})
 
+#: Why a reply that carries no tool call cannot end the turn.
+KIND_PLAN_ONLY = "plan_only"
+KIND_TOOL_MARKUP = "tool_markup"
+
 
 @dataclass(frozen=True)
 class RecoveryStep:
-    """What the request that follows one plan-only reply looks like."""
+    """What the request that follows one unusable reply looks like."""
 
     tool_choice: str
     signal: str
     notice: str
+    label: str = "Plan Recovery"
 
 
 #: One step per tolerated plan-only reply; ``core.plan_guard.MAX_PLAN_ONLY_RECOVERIES``
@@ -72,10 +94,76 @@ RECOVERY_STEPS: tuple[RecoveryStep, ...] = (
 )
 
 
-def recovery_step(recovery_count: int) -> RecoveryStep:
-    """Return the step for the ``recovery_count``-th consecutive plan-only reply."""
-    index = min(max(recovery_count, 1), len(RECOVERY_STEPS)) - 1
-    return RECOVERY_STEPS[index]
+#: The same ladder for a tool call written as text: identical ``tool_choice``
+#: per rung (``tests/test_plan_recovery.py`` pins it), different words.
+TOOL_MARKUP_RECOVERY_STEPS: tuple[RecoveryStep, ...] = (
+    RecoveryStep(
+        TOOL_CHOICE_REQUIRED,
+        TOOL_MARKUP_RECOVERY_SIGNAL,
+        "A tool call written as text was not executed; the next attempt requires "
+        "a real tool call",
+        "Tool-Call Recovery",
+    ),
+    RecoveryStep(
+        TOOL_CHOICE_NONE,
+        TOOL_MARKUP_NO_TOOLS_SIGNAL,
+        "Still no real tool call; the next attempt asks for a direct answer or a "
+        "clarifying question, without tools",
+        "Tool-Call Recovery",
+    ),
+)
+
+_LADDERS: dict[str, tuple[RecoveryStep, ...]] = {
+    KIND_PLAN_ONLY: RECOVERY_STEPS,
+    KIND_TOOL_MARKUP: TOOL_MARKUP_RECOVERY_STEPS,
+}
+
+_STOP_MESSAGES: dict[str, str] = {
+    KIND_PLAN_ONLY: (
+        "Unable to continue: the model repeatedly sent a plan without an "
+        "action. Please rephrase the task or choose another model."
+    ),
+    KIND_TOOL_MARKUP: (
+        "Unable to continue: the model repeatedly wrote tool calls as text "
+        "instead of using the tool interface. Please rephrase the task or "
+        "choose another model."
+    ),
+}
+
+
+def recovery_step(recovery_count: int, kind: str = KIND_PLAN_ONLY) -> RecoveryStep:
+    """Return the step for the ``recovery_count``-th consecutive unusable reply."""
+    steps = _LADDERS[kind]
+    index = min(max(recovery_count, 1), len(steps)) - 1
+    return steps[index]
+
+
+def recovery_stop_message(kind: str = KIND_PLAN_ONLY) -> str:
+    """Return what the user is told when the ladder is exhausted."""
+    return _STOP_MESSAGES[kind]
+
+
+def unusable_reply_kind(
+    text_buf: str,
+    tc_buf: Mapping[Any, Any],
+    tools: Iterable[Mapping[str, Any]] | None,
+) -> str | None:
+    """Return why a reply cannot end the turn, or ``None`` when it can.
+
+    A reply with a tool call is an action, and any other reply is an answer --
+    except a complete ``<plan>`` on its own (``KIND_PLAN_ONLY``), and text that
+    is a tool call in a dialect nothing parsed (``KIND_TOOL_MARKUP``).  The
+    second needs a tool the request offered: with none, a text call is not a
+    failed attempt at anything.
+    """
+    if tc_buf:
+        return None
+    if is_plan_only_response(text_buf, {}):
+        return KIND_PLAN_ONLY
+    names = offered_tool_names(tools)
+    if names and find_unparsed_tool_call(text_buf, names) is not None:
+        return KIND_TOOL_MARKUP
+    return None
 
 
 def tool_choice_for_recovery(recoveries: int) -> str:
@@ -226,17 +314,22 @@ def discard_turn_artifacts(session: Any) -> int:
 
 
 __all__ = [
+    "KIND_PLAN_ONLY",
+    "KIND_TOOL_MARKUP",
     "RECOVERY_STEPS",
     "REJECTED_PARAMETER_STATUSES",
     "TOOL_CHOICE_AUTO",
     "TOOL_CHOICE_NONE",
     "TOOL_CHOICE_REQUIRED",
+    "TOOL_MARKUP_RECOVERY_STEPS",
     "RecoveryStep",
     "ToolChoiceMemory",
     "discard_turn_artifacts",
     "memory_for",
     "purge_messages",
     "recovery_step",
+    "recovery_stop_message",
     "stream_with_tool_choice",
     "tool_choice_for_recovery",
+    "unusable_reply_kind",
 ]

@@ -205,6 +205,8 @@ module = [
     "core.session_snapshot",
     "core.message_history",
     "core.plan_recovery",
+    "core.plan_protocol",
+    "core.tool_markup",
     "core.synthetic_messages",
     "core.turn_scheduler",
     "core.live_turn_control",

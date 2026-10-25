@@ -34,6 +34,7 @@ from core.runtime_context import RuntimeContext
 from core.context_window import migrate_legacy_context_budget
 from core.message_history import repair_dangling_tool_calls
 from core.session_snapshot import SessionSnapshot
+from utils.ansi import strip_ansi
 from core.turn_scheduler import (
     ControlAction,
     ControlKind,
@@ -579,7 +580,9 @@ def format_session_messages_pretty(rows: list) -> list[dict]:
             "seq": row["seq"],
             "role": row["role"],
             "content_full": row["content"] or "",
-            "preview": content[:120].replace("\n", " "),
+            # Display-only: `/chat view` prints this straight to the terminal,
+            # and a run_shell result keeps its escape sequences for the model.
+            "preview": strip_ansi(content)[:120].replace("\n", " "),
             "is_pinned": bool(row["is_pinned"]),
             "created_at": row["created_at"],
         })

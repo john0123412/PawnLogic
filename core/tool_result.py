@@ -43,6 +43,17 @@ DEFAULT_VERBOSE_TOOLS: frozenset[str] = frozenset(
     }
 )
 
+# Tools whose output reaches the model with its terminal escape sequences
+# intact.  Every other result is stripped (``model_facing_text``): colour codes
+# are noise that costs tokens.  ``run_shell`` is the exception because what a
+# program or a file prints *is* the data -- CTF challenges hide flags and hints
+# in escape sequences (cursor moves that overwrite text, OSC titles, SGR
+# "invisible" runs), and a model that never sees the bytes cannot find them.
+# ``run_code`` is deliberately not listed: its output is what the model's own
+# program printed, which the model can dump escaped if it needs the bytes.
+# Shared by the main loop and delegated workers.
+ANSI_PRESERVING_TOOLS: frozenset[str] = frozenset({"run_shell"})
+
 # Ordered shell-error signals used to label a failed run_shell result. The order
 # is significant: the first match wins.
 SHELL_ERROR_SIGNALS: tuple[str, ...] = (
@@ -67,6 +78,17 @@ REDUNDANT_PATTERNS: tuple[str, ...] = (
 
 _REDUNDANT_MAX_LEN = 300  # Only short errors are eligible for compaction.
 _REDUNDANT_THRESHOLD = 3  # Compact occurrences beyond this count.
+
+
+def model_facing_text(tool_name: str, text: str) -> str:
+    """Return ``text`` as the model should see it: escapes stripped unless exempt.
+
+    The single place that decides whether a tool result keeps its terminal
+    escape sequences (see ``ANSI_PRESERVING_TOOLS``).  Both the main loop
+    (``ToolResultProcessor.process``) and delegated workers call it, so the
+    two cannot disagree.
+    """
+    return text if tool_name in ANSI_PRESERVING_TOOLS else strip_ansi(text)
 
 
 def truncate_tool_output(
@@ -178,7 +200,15 @@ _CMD_ERROR_HISTORY = 20      # Retained (cmd, error) pairs.
 _CODE_OUTPUT_HISTORY = 10    # Retained output signatures.
 
 
-def build_anti_loop_message(count: int) -> str:
+# The closing instruction of both loop notices.  With the plan protocol off
+# (core/plan_protocol.py) the model was never asked for a ``<plan>``, so it is
+# not asked for one here -- and it is told to carry on with a tool call, since a
+# model that explains and stops has ended the turn.
+_REPLAN_WITH_PLAN = "Explain the new approach in <plan> before continuing."
+_REPLAN_WITHOUT_PLAN = "Briefly state the new approach, then continue with the next tool call."
+
+
+def build_anti_loop_message(count: int, *, plan_protocol: bool = True) -> str:
     """Re-evaluation injection for repeated identical shell command errors."""
     return (
         "[System] The current path appears blocked: detected "
@@ -187,11 +217,11 @@ def build_anti_loop_message(count: int) -> str:
         "  1. Re-examine your assumptions about the target and environment\n"
         "  2. Try a different tool or a different approach\n"
         "  3. Ask the user to confirm the target environment details\n"
-        "Explain the new approach in <plan> before continuing."
+        + (_REPLAN_WITH_PLAN if plan_protocol else _REPLAN_WITHOUT_PLAN)
     )
 
 
-def build_anti_code_loop_message(count: int) -> str:
+def build_anti_code_loop_message(count: int, *, plan_protocol: bool = True) -> str:
     """Re-evaluation injection for repeated near-identical tool outputs."""
     return (
         f"[System] Detected {count} consecutive nearly identical tool outputs. "
@@ -199,7 +229,7 @@ def build_anti_code_loop_message(count: int) -> str:
         "  1. Are you repeating commands already known to fail?\n"
         "  2. Do you need a different attack vector or tool?\n"
         "  3. Should you ask the user to confirm the target environment?\n"
-        "Explain the new approach in <plan> before continuing."
+        + (_REPLAN_WITH_PLAN if plan_protocol else _REPLAN_WITHOUT_PLAN)
     )
 
 
@@ -278,6 +308,9 @@ class ToolResultProcessor:
     dir_threshold: int = DIR_THRESHOLD
     repeat_error_threshold: int = REPEAT_ERROR_THRESHOLD
     repeat_code_threshold: int = REPEAT_CODE_THRESHOLD
+    # False when the session's prompt carries no plan protocol: the loop
+    # notices then stop asking for a <plan> (core/plan_protocol.py).
+    plan_protocol: bool = True
 
     # Per-turn mutable state (migrated from run_turn locals).
     _dir_search_count: int = 0
@@ -301,7 +334,7 @@ class ToolResultProcessor:
         )
         self._repeat_error_count = 0  # Reset to avoid repeated injection.
         return AntiLoopInjection(
-            injection=build_anti_loop_message(count),
+            injection=build_anti_loop_message(count, plan_protocol=self.plan_protocol),
             notices=[ToolResultNotice(
                 "debug", YELLOW,
                 f"  🔁 [Anti-Loop] Detected {count} repeated errors; injected bypass hint",
@@ -353,8 +386,9 @@ class ToolResultProcessor:
         #    escapes are for a terminal; to a model they are noise that costs
         #    tokens and eats the character budget. Nothing displays this
         #    content (tool-result events carry no body), so no colour is lost.
+        #    ``run_shell`` keeps its escapes: for a CTF they can be the data.
         content = truncate_tool_output(
-            strip_ansi(content),
+            model_facing_text(tool_name, content),
             tool_name=tool_name,
             verbose_tools=self.verbose_tools,
             max_chars=max_chars,
@@ -408,7 +442,9 @@ class ToolResultProcessor:
 
             if self._repeat_code_count >= self.repeat_code_threshold:
                 count = self._repeat_code_count
-                injections.append(build_anti_code_loop_message(count))
+                injections.append(
+                    build_anti_code_loop_message(count, plan_protocol=self.plan_protocol)
+                )
                 notices.append(ToolResultNotice(
                     "always", YELLOW,
                     f"  🔁 [Anti-Code-Loop] {count} identical outputs detected; injected re-evaluation hint",
@@ -429,6 +465,7 @@ class ToolResultProcessor:
 
 
 __all__ = [
+    "ANSI_PRESERVING_TOOLS",
     "DEFAULT_VERBOSE_TOOLS",
     "DIR_THRESHOLD",
     "REDUNDANT_PATTERNS",
@@ -445,6 +482,7 @@ __all__ = [
     "build_directory_intuition_hint",
     "compact_redundant_tool_error_messages",
     "detect_shell_error_signal",
+    "model_facing_text",
     "output_signature",
     "truncate_tool_output",
 ]

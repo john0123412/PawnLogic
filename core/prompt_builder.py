@@ -104,6 +104,7 @@ def build_turn_context_block(
     skill_scanner: Any,
     retrieve_knowledge: Callable[..., Any] | None = None,
     format_retrieval_hits: Callable[..., str] | None = None,
+    plan_protocol: bool = True,
 ) -> TurnContextResult:
     """Retrieve this turn's knowledge hits, GSA skills, and local skill packs.
 
@@ -130,7 +131,7 @@ def build_turn_context_block(
     conflict_warning = ""
     with suppress(Exception):
         relevant_skills_md, conflict_warning = load_relevant_skills(
-            knowledge_query, top_k=3
+            knowledge_query, top_k=3, **_plan_kwargs(plan_protocol)
         )
 
     local_skills_md = ""
@@ -178,6 +179,101 @@ def build_turn_context_block(
     )
 
 
+# The Execution Protocol section of the system prompt: it asks for a full <plan>
+# before ANY tool call and says an unplanned call is flagged.  It is a module
+# constant so that `plan_protocol=False` omits exactly this text and nothing else
+# (core/plan_protocol.py); with the protocol on, the prompt is byte-for-byte what
+# it was before the switch existed.  It also carries the text-fallback
+# <tool_call> format and the long-output rules: a provider that turns the
+# protocol off loses those sentences with it.
+_EXECUTION_PROTOCOL = (
+    "=== Execution Protocol (MANDATORY) ===\n"
+
+    "ARCHITECTURE NOTE: You are the 'Brain' in a pipeline:\n"
+    "  User Input → [YOU] → <plan> parser → tool executor → result injector → [YOU again]\n"
+    "The <plan> tag anchors your intent across long tasks. A single short line is enough:\n"
+    "  <plan><intent>what to do next and why</intent></plan>\n"
+    "Tool calls emitted without <plan> are flagged and trigger a self-correction signal.\n\n"
+    "PLAN-TOOL SEQUENCING RULES:\n"
+    "  WHEN OUTPUTTING BOTH A <plan> BLOCK AND A TOOL CALL:\n"
+    "    1. The <plan> block MUST come FIRST in your response.\n"
+    "    2. The first tool invocation must immediately follow </plan>.\n"
+    "       The first <tool_call> must immediately follow </plan>. This applies to text fallback.\n"
+    "    3. Do not insert explanatory text, reasoning, or apologies between </plan> and the "
+    "first tool invocation.\n"
+    "    4. Use the current provider's tool interface for that invocation.\n\n"
+
+    "Thinking Process: You are an autonomous agent. Like a human expert, you MUST think\n"
+    "step-by-step. Before any tool_use or code block, output a <plan> to decompose\n"
+    "the problem into concrete, ordered steps.\n\n"
+
+    "BEFORE invoking ANY tool, output your thought process using the full plan format:\n\n"
+    "<plan>\n"
+    "  <intent>One sentence: what am I trying to accomplish right now?</intent>\n"
+    "  <tool>Tool name I will call</tool>\n"
+    "  <why>Why this specific tool? What do I expect to find?</why>\n"
+    "  <next>If this succeeds, my next action will be: ...</next>\n"
+    "</plan>\n\n"
+    "Minimal plan (for simple single-tool calls):\n"
+    "  <plan><intent>Check binary protections before analysis.</intent></plan>\n\n"
+    "  · For pure conversation (no tools), a plan is optional.\n"
+    "  · For even a single tool call, output AT MINIMUM: <plan><intent>reason</intent></plan>\n\n"
+    "### === TOOL CALLING PROTOCOL (CRITICAL) ===\n"
+    "Use the tool-calling interface supplied by the current provider. When native "
+    "function tools are available, invoke them through that native interface. When "
+    "text fallback is required: Use exactly this text tool-call format:\n"
+    "  <tool_call>{\"name\":\"tool_name\",\"arguments\":{\"key\":\"value\"}}</tool_call>\n\n"
+    "Text fallback rules:\n"
+    "  - Every text fallback tool call MUST be a <tool_call> block containing one JSON object.\n"
+    "  - Do not emit a bare JSON object as a tool call.\n"
+    "  - Do not use the legacy XML call syntax.\n"
+    "  - `name` must be the exact tool name and `arguments` must be a JSON object.\n"
+    "  - Use JSON escaping for strings, including text, code, quotes, and newlines.\n"
+    "  - Do not put prose, reasoning, or Markdown code fences inside a <tool_call> block.\n\n"
+    "NO WAITING RULE: Output the <plan> block and immediately invoke the tool through "
+    "the current provider's tool interface in the same response.\n"
+    "Do not output only a plan or wait for user confirmation.\n\n"
+
+    "Self-Correction Protocol (when you see PLAN_MISSING signal):\n"
+    "  Do NOT apologize. Do NOT repeat failed call text.\n"
+    "  Respond with:\n"
+    "    <plan>\n"
+    "      <intent>[your original intent]</intent>\n"
+    "      <tool>[original tool name]</tool>\n"
+    "      <why>[brief justification]</why>\n"
+    "      <correction>true</correction>\n"
+    "    </plan>\n"
+    "    [immediately re-emit the original tool call through the current provider's "
+    "tool interface; use the <tool_call> JSON envelope only for text fallback]\n"
+    "  Never respond with the plan by itself.\n\n"
+
+    "Anti-Drift Anchor (use when iteration count > 15):\n"
+    "  Prepend to your <plan>:\n"
+    "    <anchor>\n"
+    "      Current phase: [PHASE N — description]\n"
+    "      Confirmed so far: [offset=X, NX=enabled/disabled, libc=X]\n"
+    "      Still needed: [what remains for gate pass]\n"
+    "    </anchor>\n\n"
+
+    "Long Output Management:\n"
+    "  When a tool result > 100 lines:\n"
+    "    · EXTRACT only what is needed for the current phase.\n"
+    "    · SUMMARIZE the rest in one sentence.\n"
+    "    · Issue targeted follow-ups: run_shell('ROPgadget ... | grep pop rdi') rather than full dump.\n\n"
+
+)
+
+
+def _plan_kwargs(plan_protocol: bool) -> dict[str, bool]:
+    """Extra ``load_relevant_skills`` arguments: none unless the protocol is off.
+
+    The GSA conflict warning tells the model to reason "in your <plan> block".
+    A model that was not asked for plans must not be asked for one here, but a
+    protocol-on call stays exactly the call it always was.
+    """
+    return {} if plan_protocol else {"plan_protocol": False}
+
+
 def build_session_prompt(
     *,
     cfg: Mapping[str, Any],
@@ -198,6 +294,7 @@ def build_session_prompt(
     skill_scanner: Any,
     retrieve_knowledge: Callable[..., Any] | None = None,
     format_retrieval_hits: Callable[..., str] | None = None,
+    plan_protocol: bool = True,
 ) -> PromptBuildResult:
     knowledge_block = ""
     if knowledge_query:
@@ -230,7 +327,7 @@ def build_session_prompt(
         if knowledge_query:
             with suppress(Exception):
                 _relevant_skills_md, _conflict_warning = load_relevant_skills(
-                    knowledge_query, top_k=3
+                    knowledge_query, top_k=3, **_plan_kwargs(plan_protocol)
                 )
 
         with suppress(Exception):
@@ -333,81 +430,9 @@ def build_session_prompt(
         f"max_tokens={cfg['max_tokens']}  max_iter={cfg['max_iter']}  "
         f"ctx={resolve_context_budget(cfg)[0]//1000}k tokens  tool_out={cfg['tool_max_chars']}\n\n"
 
-        "=== Execution Protocol (MANDATORY) ===\n"
+        + (_EXECUTION_PROTOCOL if plan_protocol else "")
 
-        "ARCHITECTURE NOTE: You are the 'Brain' in a pipeline:\n"
-        "  User Input → [YOU] → <plan> parser → tool executor → result injector → [YOU again]\n"
-        "The <plan> tag anchors your intent across long tasks. A single short line is enough:\n"
-        "  <plan><intent>what to do next and why</intent></plan>\n"
-        "Tool calls emitted without <plan> are flagged and trigger a self-correction signal.\n\n"
-        "PLAN-TOOL SEQUENCING RULES:\n"
-        "  WHEN OUTPUTTING BOTH A <plan> BLOCK AND A TOOL CALL:\n"
-        "    1. The <plan> block MUST come FIRST in your response.\n"
-        "    2. The first tool invocation must immediately follow </plan>.\n"
-        "       The first <tool_call> must immediately follow </plan>. This applies to text fallback.\n"
-        "    3. Do not insert explanatory text, reasoning, or apologies between </plan> and the "
-        "first tool invocation.\n"
-        "    4. Use the current provider's tool interface for that invocation.\n\n"
-
-        "Thinking Process: You are an autonomous agent. Like a human expert, you MUST think\n"
-        "step-by-step. Before any tool_use or code block, output a <plan> to decompose\n"
-        "the problem into concrete, ordered steps.\n\n"
-
-        "BEFORE invoking ANY tool, output your thought process using the full plan format:\n\n"
-        "<plan>\n"
-        "  <intent>One sentence: what am I trying to accomplish right now?</intent>\n"
-        "  <tool>Tool name I will call</tool>\n"
-        "  <why>Why this specific tool? What do I expect to find?</why>\n"
-        "  <next>If this succeeds, my next action will be: ...</next>\n"
-        "</plan>\n\n"
-        "Minimal plan (for simple single-tool calls):\n"
-        "  <plan><intent>Check binary protections before analysis.</intent></plan>\n\n"
-        "  · For pure conversation (no tools), a plan is optional.\n"
-        "  · For even a single tool call, output AT MINIMUM: <plan><intent>reason</intent></plan>\n\n"
-        "### === TOOL CALLING PROTOCOL (CRITICAL) ===\n"
-        "Use the tool-calling interface supplied by the current provider. When native "
-        "function tools are available, invoke them through that native interface. When "
-        "text fallback is required: Use exactly this text tool-call format:\n"
-        "  <tool_call>{\"name\":\"tool_name\",\"arguments\":{\"key\":\"value\"}}</tool_call>\n\n"
-        "Text fallback rules:\n"
-        "  - Every text fallback tool call MUST be a <tool_call> block containing one JSON object.\n"
-        "  - Do not emit a bare JSON object as a tool call.\n"
-        "  - Do not use the legacy XML call syntax.\n"
-        "  - `name` must be the exact tool name and `arguments` must be a JSON object.\n"
-        "  - Use JSON escaping for strings, including text, code, quotes, and newlines.\n"
-        "  - Do not put prose, reasoning, or Markdown code fences inside a <tool_call> block.\n\n"
-        "NO WAITING RULE: Output the <plan> block and immediately invoke the tool through "
-        "the current provider's tool interface in the same response.\n"
-        "Do not output only a plan or wait for user confirmation.\n\n"
-
-        "Self-Correction Protocol (when you see PLAN_MISSING signal):\n"
-        "  Do NOT apologize. Do NOT repeat failed call text.\n"
-        "  Respond with:\n"
-        "    <plan>\n"
-        "      <intent>[your original intent]</intent>\n"
-        "      <tool>[original tool name]</tool>\n"
-        "      <why>[brief justification]</why>\n"
-        "      <correction>true</correction>\n"
-        "    </plan>\n"
-        "    [immediately re-emit the original tool call through the current provider's "
-        "tool interface; use the <tool_call> JSON envelope only for text fallback]\n"
-        "  Never respond with the plan by itself.\n\n"
-
-        "Anti-Drift Anchor (use when iteration count > 15):\n"
-        "  Prepend to your <plan>:\n"
-        "    <anchor>\n"
-        "      Current phase: [PHASE N — description]\n"
-        "      Confirmed so far: [offset=X, NX=enabled/disabled, libc=X]\n"
-        "      Still needed: [what remains for gate pass]\n"
-        "    </anchor>\n\n"
-
-        "Long Output Management:\n"
-        "  When a tool result > 100 lines:\n"
-        "    · EXTRACT only what is needed for the current phase.\n"
-        "    · SUMMARIZE the rest in one sentence.\n"
-        "    · Issue targeted follow-ups: run_shell('ROPgadget ... | grep pop rdi') rather than full dump.\n\n"
-
-        "=== NEGATIVE CONSTRAINTS — DO NOT VIOLATE ===\n"
+        + "=== NEGATIVE CONSTRAINTS — DO NOT VIOLATE ===\n"
         "NEVER do the following (violations will be intercepted and cancelled by the system):\n\n"
 
         "  ✗  NEVER use 'sudo' in run_shell. The host is NOT your playground.\n"

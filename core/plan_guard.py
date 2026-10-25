@@ -1,4 +1,15 @@
-"""Plan guard helpers for tool-call authorization."""
+"""Plan guard helpers for tool-call authorization.
+
+The guard enforces the plan protocol the session's system prompt carries.
+Precedence: the provider's ``plan_protocol`` setting first, ``plan_guard_mode``
+second.  With the protocol off for the active model's provider
+(``core/plan_protocol.py``) the prompt holds no Execution Protocol, so a
+plan-missing tool batch is neither flagged, annotated (``TOOL_PLAN_NOTICE``),
+signalled (``PLAN_MISSING_SIGNAL``) nor counted toward a hard stop, in either
+mode -- enforcing an instruction the model never received would contradict the
+prompt.  ``is_plan_only_response`` is not affected: a bare plan is still not an
+answer.
+"""
 
 import json
 

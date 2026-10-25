@@ -101,6 +101,7 @@ Completions。它们共用 `openai` provider 与 `OPENAI_API_KEY`。
 /provider activate|deactivate <name>    # 显示或隐藏某 provider 的模型
 /provider list                         # provider 与 key 状态
 /provider test <model>                 # 免费连通性检查，不推理
+/provider plan <name> [on|off]         # 自定义 provider：工具调用前是否要求 <plan>（默认开）
 /setkey                                # 重新跑 key 配置
 /keys                                  # key 状态
 ```
@@ -120,6 +121,25 @@ Key 存放在 `~/.pawnlogic/.env`；provider 配置在
 鉴权与协议是两套独立设置：`auto`、`bearer`、`x_api_key`、`both`。默认
 `auto` 沿用各协议的历史鉴权方式，已有 provider 不受影响。401 报错时会
 指明实际发送的 credential header——先改 `Auth`，确认不行再换 key。
+
+### 计划协议
+
+默认情况下，系统提示会要求每个模型在调用工具前先写一个 `<plan>`，计划守卫
+（`/planguard`）会标记没有计划就发出的工具调用。有些模型把"写计划"本身当成
+了被要求的动作，于是对一个请求只回一份计划、不调用工具。自定义 provider 可以
+关闭这套协议：
+
+```bash
+/provider plan <name>                  # 查看当前设置
+/provider plan <name> off              # 提示词里不再有计划段，也没有需要强制的东西
+/provider plan <name> on               # 恢复默认
+```
+
+关闭后，提示词中的 Execution Protocol 段会被移除（该段同时包含文本回退的
+`<tool_call>` 格式，所以不能原生调用工具的 provider 应保持开启），计划守卫在
+两种 `/planguard` 模式下都不再标记任何东西。只回了一份计划的回复仍会被重试。
+该设置以 `"plan_protocol": false` 存在 `~/.pawnlogic/custom_providers.json`
+中，下一轮生效，内置 provider 不可修改。
 
 ## 推理强度
 

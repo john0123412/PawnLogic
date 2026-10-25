@@ -7,7 +7,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- `/provider plan <name> [on|off]` switches the plan protocol for a custom
+  provider (`"plan_protocol": false` in `custom_providers.json`; absent or
+  `true` is the previous behavior, and built-in providers cannot be switched).
+  A model that treats writing the `<plan>` as the action it was asked for
+  answers a request with a plan and no tool call: on one such provider the
+  same first request was plan-only 2 of 2 times as built and 0 of 2 times with
+  the Execution Protocol section removed, and one of those replies was a native
+  tool call. With the protocol off that section leaves the system prompt (it
+  also holds the text-fallback `<tool_call>` format and the long-output rules,
+  so a provider that needs the text fallback should keep it on), the GSA
+  conflict warning and the anti-loop notices stop asking for a `<plan>`, and the
+  plan guard flags, annotates and counts nothing in either `/planguard` mode --
+  the setting outranks the mode, and `/planguard` says so. A reply that is only
+  a plan is still retried. The system prompt is rebuilt when a model switch or
+  a toggle on the current provider changes the setting, and stays byte-stable
+  otherwise. `/provider plan <name>` shows the current state; built-in names are
+  refused and no config entry is ever created, as for `/provider effort`.
+
 ### Fixed
+- `/chat view` no longer prints a stored tool result's escape sequences to the
+  terminal. A `run_shell` result now keeps them for the model, and the tool
+  preview printed them raw in readline mode (an OSC 52 clipboard write or a
+  screen clear in a command's output reached the terminal). The preview strips
+  them; the stored content is unchanged.
+- A reply that is a tool call written as text no longer ends the turn as if it
+  were the answer. A model that wrote its call in a dialect the extractor does
+  not know (DeepSeek DSML tokens, Qwen `<function=...>`, a provider's
+  `<xyz_tool_call>` tags, a bare or fenced JSON call) used to finish the turn
+  with nothing executed and the markup printed as the answer. Such a reply now
+  takes the same bounded ladder as a plan-only one -- `tool_choice="required"`,
+  then `"none"` asking for a direct answer, then the turn stops -- with a nudge
+  saying the call was written as text and must go through the tool interface;
+  the reply and the nudge are removed when the turn fails. Detection looks at the
+  shape only: a tag pair, a `<function=` block or a JSON call must end the reply
+  and name a tool the request offered, fenced and inline code are ignored, and
+  prose or an explanation of the format never matches; no dialect is parsed or
+  executed. A call cut off before its closing tag is not recognised.
+- `prune_zombie_skills` no longer deletes category headers. It split the archive
+  on `## ` only, so removing the last skill under a `# ` category also removed
+  the next `# ` category's header and the note under it from
+  `global_skills.md`. It now uses the same boundaries as retrieval and removes
+  skill blocks only.
 - Recovery from a plan-only reply now changes the request instead of repeating
   it. A reply that is only a `<plan>` used to be answered by re-sending the
   identical request plus a sterner user message, which recovered once in nine
@@ -52,7 +94,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   content keep head/tail trimming; everything else is cut by the character
   budget, and `list_dir` now lists hidden entries last. ANSI color codes are
   stripped from tool results before they reach the model, including delegated
-  workers.
+  workers -- except `run_shell`, whose escape sequences are kept: CTF
+  challenges hide data in them (concealed text, cursor moves that overwrite what
+  a terminal shows, OSC titles).
 - Output moving into the scrollback no longer flashes the screen. It went
   through Prompt Toolkit's `run_in_terminal`, which reached the terminal as
   five or six separate writes -- erase the block, switch the TTY to cooked

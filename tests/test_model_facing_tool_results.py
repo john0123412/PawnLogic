@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 from core import delegation_runtime
 from core.tool_registry import ToolRegistry, ToolSpec
-from core.tool_result import ToolResultProcessor
+from core.tool_result import ANSI_PRESERVING_TOOLS, ToolResultProcessor, model_facing_text
 from tools import file_ops
 from utils.ansi import BLUE, GRAY, c, strip_ansi
 
@@ -96,7 +96,9 @@ def test_model_facing_text_never_contains_terminal_escapes():
         + "\x1b]0;window title\x07"  # an OSC sequence a tool might echo back
     )
 
-    for tool in ("list_dir", "read_file_lines", "run_shell"):  # budget and head/tail paths
+    # run_shell is the one exemption and has its own test below; run_code is
+    # deliberately not exempt (see ANSI_PRESERVING_TOOLS).
+    for tool in ("list_dir", "read_file_lines", "run_code"):  # budget and head/tail paths
         seen = _process(tool, colored)
         assert ESC not in seen
         assert "src/" in seen and "main.py" in seen and "12B" in seen
@@ -110,18 +112,61 @@ def test_escapes_do_not_eat_the_character_budget():
     assert seen == "x" * 400
 
 
-def test_delegated_worker_tool_results_are_escape_free_too(monkeypatch):
-    handler = lambda _args: c(BLUE, "  📁 src/") + "\n" + c(GRAY, "12B")
+# A CTF challenge can hide data in the escape sequences themselves: a cursor
+# move that overwrites what a terminal shows, an OSC title, an SGR run that
+# paints text invisible.  Stripping them before the model sees run_shell output
+# would delete the evidence.
+HIDDEN_IN_ESCAPES = (
+    "visible line\n"
+    "\x1b[8mflag{hidden_by_sgr_conceal}\x1b[0m\n"            # concealed text
+    "decoy\x1b[5D\x1b[Kreal\n"                                   # cursor move + erase
+    "\x1b]0;flag{in_the_window_title}\x07\n"                    # OSC title
+)
+
+
+def test_run_shell_keeps_its_escape_sequences_byte_for_byte():
+    seen = _process("run_shell", HIDDEN_IN_ESCAPES)
+
+    assert seen == HIDDEN_IN_ESCAPES
+    assert "flag{hidden_by_sgr_conceal}" in seen
+    assert "\x1b]0;flag{in_the_window_title}\x07" in seen
+
+
+def test_only_run_shell_is_exempt_from_stripping():
+    # run_code is an open question for the owner, so its stripping is pinned
+    # here: widening the exemption has to change this assertion on purpose.
+    assert frozenset({"run_shell"}) == ANSI_PRESERVING_TOOLS
+    for tool in ("list_dir", "read_file", "read_file_lines", "run_code", "web_search", "fetch_url"):
+        assert model_facing_text(tool, HIDDEN_IN_ESCAPES) == strip_ansi(HIDDEN_IN_ESCAPES)
+        assert ESC not in _process(tool, HIDDEN_IN_ESCAPES)
+    assert model_facing_text("run_shell", HIDDEN_IN_ESCAPES) == HIDDEN_IN_ESCAPES
+
+
+def test_run_shell_escapes_still_count_against_the_head_tail_trim():
+    # The exemption keeps the bytes; it does not lift the 30+30 line trim that
+    # run_shell output already had, and an escape in the kept head survives it.
+    lines = [f"\x1b[31mline{index:03d}\x1b[0m" for index in range(200)]
+
+    seen = _process("run_shell", "\n".join(lines))
+
+    assert "\x1b[31mline000\x1b[0m" in seen and "\x1b[31mline199\x1b[0m" in seen
+    assert "line100" not in seen
+    assert "lines truncated for token efficiency" in seen
+
+
+def _delegated_tool_message(monkeypatch, tool_name: str, output: str) -> str:
+    """Run a delegated worker through one tool call and return the tool message."""
+    handler = lambda _args: output
     registry = ToolRegistry()
     registry.register_many_owned(
         "builtin",
         [
             ToolSpec(
-                name="list_dir",
+                name=tool_name,
                 handler=handler,
                 schema={
                     "type": "function",
-                    "function": {"name": "list_dir", "parameters": {"type": "object"}},
+                    "function": {"name": tool_name, "parameters": {"type": "object"}},
                 },
             )
         ],
@@ -131,7 +176,7 @@ def test_delegated_worker_tool_results_are_escape_free_too(monkeypatch):
             SimpleNamespace(
                 error=None,
                 usage={"prompt_tokens": 1, "completion_tokens": 1},
-                tool_calls={0: {"id": "call-1", "name": "list_dir", "args": "{}"}},
+                tool_calls={0: {"id": "call-1", "name": tool_name, "args": "{}"}},
                 text="",
             ),
             SimpleNamespace(
@@ -142,11 +187,11 @@ def test_delegated_worker_tool_results_are_escape_free_too(monkeypatch):
             ),
         ]
     )
-    monkeypatch.setattr(delegation_runtime, "_tool_map", lambda: {"list_dir": handler})
+    monkeypatch.setattr(delegation_runtime, "_tool_map", lambda: {tool_name: handler})
     monkeypatch.setattr(
         delegation_runtime,
         "_tools_schema",
-        lambda: [{"type": "function", "function": {"name": "list_dir"}}],
+        lambda: [{"type": "function", "function": {"name": tool_name}}],
     )
     monkeypatch.setattr(delegation_runtime, "_tool_capabilities", lambda: {})
     monkeypatch.setattr(
@@ -162,10 +207,26 @@ def test_delegated_worker_tool_results_are_escape_free_too(monkeypatch):
         delegation_runtime, "consume_model_stream", lambda *_a, **_k: next(responses)
     )
 
-    worker = delegation_runtime.SubAgentSession("list it", "worker", context_mode="none")
+    worker = delegation_runtime.SubAgentSession("run it", "worker", context_mode="none")
 
     assert worker.run() == "done"
     tool_messages = [m for m in worker.messages if m.get("role") == "tool"]
     assert len(tool_messages) == 1
-    assert ESC not in tool_messages[0]["content"]
-    assert "src/" in tool_messages[0]["content"]
+    return tool_messages[0]["content"]
+
+
+def test_delegated_worker_tool_results_are_escape_free_too(monkeypatch):
+    content = _delegated_tool_message(
+        monkeypatch, "list_dir", c(BLUE, "  📁 src/") + "\n" + c(GRAY, "12B")
+    )
+
+    assert ESC not in content
+    assert "src/" in content
+
+
+def test_delegated_worker_run_shell_keeps_its_escape_sequences(monkeypatch):
+    content = _delegated_tool_message(monkeypatch, "run_shell", HIDDEN_IN_ESCAPES)
+
+    # The same rule as the main loop, from the same helper: a worker investigating
+    # a CTF challenge must see the bytes the challenge hides data in.
+    assert content == HIDDEN_IN_ESCAPES

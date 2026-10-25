@@ -179,6 +179,8 @@ jobs:
             core/session_snapshot.py \
             core/message_history.py \
             core/plan_recovery.py \
+            core/plan_protocol.py \
+            core/tool_markup.py \
             core/synthetic_messages.py \
             core/turn_scheduler.py \
             core/live_turn_control.py \

@@ -326,6 +326,7 @@ HELP_TEXT = f"""
   {c(CYAN, "/provider deactivate <name>")} Hide provider models
   {c(CYAN, "/provider test <model>")} Test provider connectivity
   {c(CYAN, "/provider effort <name> on|off")} Send reasoning_effort for a custom provider
+  {c(CYAN, "/provider plan <name> [on|off]")} Ask a custom provider's models for a <plan> (default on)
   {c(CYAN, "/provider remove <name>")} Remove a custom provider
 
 {c(BOLD, "Sessions & Memory")}
@@ -1253,6 +1254,7 @@ async def _main_impl():
         ("remove", "Delete a custom provider"),
         ("test",   "Test provider connectivity"),
         ("effort", "Send reasoning_effort for a custom provider's models (on|off)"),
+        ("plan",   "Ask a custom provider's models for a <plan> before tool calls (on|off)"),
     ]:
         _w = f"/provider {_sub}"
         _all_words.append(_w)
