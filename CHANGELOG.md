@@ -7,7 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-10-24
+
 ### Fixed
+- Colored text no longer changes color when it moves into the scrollback.
+  The host flush stripped every escape sequence, so dim `🧠 [thinking]` text
+  and the green `▶ You >` echo were gray or green in the live viewport and
+  turned default-colored each time the 2-second debounced flush wrote them
+  out — visible as text flickering between colors. The flush now keeps SGR
+  color codes (cursor, erase, and OSC sequences are still dropped), re-opens
+  a color left open by an earlier flush, closes it at the end of each write,
+  and the CJK pre-wrap gives color codes zero width.
 - A completed answer no longer appears twice in tmux scrollback. When more
   output arrived inside one 2-second host-flush window than fit on screen,
   the live viewport grew to the full terminal height, so its top row was the
