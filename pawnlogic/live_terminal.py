@@ -24,7 +24,6 @@ import time
 from typing import Any, TextIO
 
 from prompt_toolkit.application import Application
-from prompt_toolkit.application import run_in_terminal as _run_in_terminal
 from prompt_toolkit.auto_suggest import AutoSuggest
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.completion import Completer
@@ -34,6 +33,7 @@ from prompt_toolkit.history import History
 from prompt_toolkit.input.base import Input
 from prompt_toolkit.key_binding import DynamicKeyBindings, KeyBindings, merge_key_bindings
 
+from .terminal_frames import FramedApplication, write_history_frame
 from .terminal_transcript import TerminalTranscript
 from .selectors import (
     EmbeddedSelector,
@@ -53,7 +53,7 @@ from prompt_toolkit.layout.containers import (
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
-from prompt_toolkit.output import Output
+from prompt_toolkit.output import DummyOutput, Output
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.styles import BaseStyle, Style, merge_styles
 from prompt_toolkit.data_structures import Point
@@ -75,15 +75,15 @@ _KEY_SEQUENCE_TIMEOUT_SECONDS = 0.1
 _HOST_FLUSH_MAX_ATTEMPTS = 3
 _HOST_FLUSH_RETRY_BASE_SECONDS = 0.05
 _HOST_FLUSH_RETRY_MAX_SECONDS = 0.2
-# Minimum spacing between two live host flushes. Every ``run_in_terminal``
-# handoff erases and redraws the whole inline application; on hosts whose
-# wcwidth disagrees with the terminal (CJK text + emoji in Windows Terminal /
-# WSL), each erase leaves residue on wrapped rows, so a long streamed answer
-# accretes overlapping ghost copies in the scrollback. Batching live flushes
-# to at most one per interval shrinks the number of erase/redraw cycles from
-# one per burst to a bounded trickle; the final flush at close still emits
-# everything exactly once.
-_HOST_FLUSH_MIN_INTERVAL_SECONDS = 2.0
+# Minimum spacing between two live host flushes.  Each flush is one atomic
+# history frame (see ``pawnlogic.terminal_frames``): the lines move from the
+# live viewport into the scrollback at the same screen rows, so the interval
+# does not change what the user sees -- it only batches a fast stream into a
+# bounded number of frames.  It used to be 2 s because every flush was a
+# multi-write ``run_in_terminal`` erase/redraw cycle that showed as a flash;
+# a frame is a single write, so the interval can follow the stream closely.
+# The final flush at close still emits everything exactly once.
+_HOST_FLUSH_MIN_INTERVAL_SECONDS = 0.1
 # Only the trailing lines of the transcript are rendered in the live
 # viewport. The full transcript still exists for scrollback flushing;
 # this cap keeps render cost constant for very large sessions.
@@ -166,23 +166,38 @@ class _HeadroomContainer(DynamicContainer):
     """Root container whose preferred height stays below the host height.
 
     Prompt Toolkit caps an inline block at the terminal height, and a block
-    that tall starts at screen row 0.  Every ``run_in_terminal`` handoff
-    erases the block by moving to its first row and sending ``ESC[J``, so a
-    full-height block is erased from the home position.  tmux's default
-    ``scroll-on-clear`` turns an erase from home into a full-screen clear that
-    keeps the old contents in the scrollback: the transient viewport was
-    preserved there and the flush then wrote the same answer again.  The
-    viewport grows that tall whenever more undelivered output arrives than
-    fits on screen inside one host-flush debounce window.
+    that tall starts at screen row 0.  Every history frame erases the block
+    by moving to its first row and sending ``ESC[J``, so a full-height block
+    is erased from the home position.  tmux's default ``scroll-on-clear``
+    turns an erase from home into a full-screen clear that keeps the old
+    contents in the scrollback: the transient viewport was preserved there
+    and the flush then wrote the same answer again.  The viewport grows that
+    tall whenever more undelivered output arrives than fits on screen
+    between two host flushes.
+
+    ``floor`` reports the rows a history frame asks the repaint to keep, so
+    the block's bottom edge -- and with it the composer -- stays on the row
+    it occupied before the frame (see ``PersistentTerminal._history_floor``).
     """
+
+    def __init__(
+        self,
+        get_container: Callable[[], Any],
+        floor: Callable[[], int] | None = None,
+    ) -> None:
+        super().__init__(get_container)
+        self._floor = floor
 
     def preferred_height(self, width: int, max_available_height: int) -> Dimension:
         dimension = super().preferred_height(width, max_available_height)
         ceiling = max(1, max_available_height - _INLINE_HEADROOM_ROWS)
+        preferred = dimension.preferred
+        if self._floor is not None:
+            preferred = max(preferred, self._floor())
         return Dimension(
             min=min(dimension.min, ceiling),
-            max=min(dimension.max, ceiling),
-            preferred=min(dimension.preferred, ceiling),
+            max=min(max(dimension.max, preferred), ceiling),
+            preferred=min(preferred, ceiling),
             weight=dimension.weight,
         )
 
@@ -418,6 +433,11 @@ class PersistentTerminal:
         # user" line while the worker thread is busy.  ``_status_ticker`` is
         # scheduled in :meth:`prepare_run` and cancelled in :meth:`close`.
         self._status_ticker: asyncio.TimerHandle | None = None
+        # Text of the ticker-polled surfaces as last painted, so a tick can
+        # tell whether a repaint would change anything. ``None`` until the
+        # first render, which makes the first tick repaint.
+        self._painted_toolbar: str | None = None
+        self._painted_queue_preview: str | None = None
         self._max_output_chars = max_output_chars
         self._input = input
         self._output = output
@@ -439,14 +459,22 @@ class PersistentTerminal:
         # instance. All writers (TerminalSink, the stdout/stderr proxy, the
         # legacy append_output path) must route through it. See ADR 0010.
         self._transcript = TerminalTranscript(max_chars=max_output_chars)
-        # Host scrollback is flushed from the Prompt Toolkit event loop via
-        # ``run_in_terminal``.  A single in-flight future serializes writes
-        # while producers may continue appending from worker threads.
+        # Host scrollback is written from the Prompt Toolkit event loop as one
+        # atomic history frame (``pawnlogic.terminal_frames``).  Producers may
+        # keep appending from worker threads; ``_host_flush_scheduled`` is the
+        # single pending reservation, and ``_host_flush_in_progress`` keeps a
+        # frame from re-entering itself through a nested schedule.
         self._host_flush_scheduled = False
-        self._host_flush_task: asyncio.Future[Any] | None = None
-        self._host_flush_end = 0
-        self._host_flush_prefix = ""
-        self._host_flush_is_final = False
+        self._host_flush_in_progress = False
+        # Rows the repaint inside a history frame must keep so the block's
+        # bottom edge stays put (read by ``_HeadroomContainer``).  Non-zero
+        # only for the duration of one frame.
+        self._history_floor = 0
+        # SGR state in effect at the host-delivery cursor.  The live viewport
+        # renders only undelivered text, so a color span opened in delivered
+        # text must be re-opened there, or the rest of that span shows in the
+        # default color until it, too, is delivered.
+        self._delivered_sgr = ""
         self._host_flush_closing = False
         self._host_flush_attempts = 0
         self._host_flush_retry_handle: asyncio.TimerHandle | None = None
@@ -862,6 +890,9 @@ class PersistentTerminal:
         thread (the live_status callable itself is allowed to read
         session state from any thread because the session surfaces are
         either thread-local copies or guarded by locks).
+
+        A tick repaints only when a polled surface would change; see
+        :meth:`_invalidate_if_polled_surface_changed`.
         """
         with self._lock:
             if self._status_ticker is not None or self._closed:
@@ -876,12 +907,32 @@ class PersistentTerminal:
                 if self._closed:
                     return
             try:
-                self._schedule_ui(self._invalidate_on_ui)
+                self._schedule_ui(self._invalidate_if_polled_surface_changed)
             finally:
                 self._start_status_ticker()
 
         with self._lock:
             self._status_ticker = loop.call_later(0.25, _tick)
+
+    def _invalidate_if_polled_surface_changed(self) -> None:
+        """Repaint only when the toolbar or queue preview text changed.
+
+        Prompt Toolkit hides and re-shows the cursor on every render, even
+        one whose screen diff is empty, so an unconditional tick sent the
+        host four cursor hide/show cycles a second while idle -- visible as
+        constant flicker after every answer.  The comparison is against the
+        text last *painted*, not the last tick, so a state that changed and
+        changed back between two ticks cannot leave a stale row on screen.
+        """
+        try:
+            stale = (
+                self._compose_toolbar() != self._painted_toolbar
+                or self._queue_preview_text() != self._painted_queue_preview
+            )
+        except Exception:
+            stale = True
+        if stale:
+            self._invalidate_on_ui()
 
     def _stop_status_ticker(self) -> None:
         """Cancel the 250 ms status ticker (no-op if not started)."""
@@ -1068,34 +1119,42 @@ class PersistentTerminal:
         except Exception:
             return None
 
-    def _write_host_payload(
+    def _host_payload_text(
         self,
-        original_stdout: TextIO,
         payload: str,
         *,
         include_partial: bool,
         prefix: str = "",
-    ) -> bool:
-        """Write a transcript payload while Prompt Toolkit is suspended.
+    ) -> str:
+        """Return ``payload`` as the pre-wrapped rows the host scrollback gets.
 
         ``prefix`` is the transcript through the end of ``payload`` (see
         ``pending_host_flush``); the text before ``payload`` is what earlier
         flushes delivered, which decides the color the payload starts in.
+        Returns ``""`` when the payload has no visible text.
         """
         delivered = prefix[: len(prefix) - len(payload)] if prefix.endswith(payload) else ""
         plain = _host_scrollback_text(payload, delivered)
         visible = _SGR.sub("", plain)
         if not visible:
-            return True
+            return ""
         if include_partial and not visible.endswith("\n"):
             plain = f"{plain}\n"
-        plain = _wrap_host_payload(plain, _host_terminal_columns())
-        # Keep the payload and a close-time newline in one write call.  If a
+        return _wrap_host_payload(plain, _host_terminal_columns())
+
+    def _write_host_payload(self, original_stdout: TextIO, text: str) -> bool:
+        """Write prepared host rows straight to ``original_stdout``.
+
+        Used where no live block is on the host to erase and repaint around
+        the rows: a ``DummyOutput`` application, and the closing fallback
+        when no renderer is running.
+        """
+        # Keep the rows and a close-time newline in one write call.  If a
         # second write fails, replaying the whole snapshot could duplicate a
         # partial tail in host scrollback.  Permissive text streams may return
         # ``None``; otherwise reject a short write so the cursor is retried.
-        written = original_stdout.write(plain)
-        if isinstance(written, int) and written != len(plain):
+        written = original_stdout.write(text)
+        if isinstance(written, int) and written != len(text):
             raise OSError("host stdout accepted only a partial transcript write")
         flush = getattr(original_stdout, "flush", None)
         if callable(flush):
@@ -1105,6 +1164,60 @@ class PersistentTerminal:
             with contextlib.suppress(Exception):
                 flush()
         return True
+
+    def _deliver_host_payload(
+        self,
+        application: Application[Any],
+        original_stdout: TextIO,
+        payload: str,
+        *,
+        end: int,
+        prefix: str,
+        include_partial: bool,
+    ) -> tuple[bool, bool]:
+        """Move one transcript payload into the host scrollback.
+
+        Returns ``(succeeded, repainted)``.  A real terminal gets one atomic
+        history frame (``write_history_frame``) that also repaints the live
+        block, so the delivery cursor advances *before* that repaint -- the
+        block must not show the delivered rows a second time -- and is
+        restored if the frame cannot be written.  A ``DummyOutput``
+        application renders nowhere, so its rows go straight to the host
+        stream and the viewport is invalidated afterwards instead.
+        """
+        transcript = self._transcript
+        text = self._host_payload_text(
+            payload, include_partial=include_partial, prefix=prefix
+        )
+        if isinstance(application.output, DummyOutput):
+            if text:
+                self._write_host_payload(original_stdout, text)
+            if transcript.mark_host_flushed(end, prefix):
+                self._delivered_sgr = _active_sgr(prefix)
+            return True, False
+        previous_offset = transcript.host_flush_offset()
+        if not transcript.mark_host_flushed(end, prefix):
+            # A carriage-return rewrite replaced this snapshot after it was
+            # taken.  Write nothing; the next flush takes a fresh one.
+            return True, False
+        previous_sgr = self._delivered_sgr
+        self._delivered_sgr = _active_sgr(prefix)
+        if not text:
+            return True, False
+        screen = application.renderer.last_rendered_screen
+        block_rows = screen.height if screen is not None else 0
+        # Keep the block's bottom edge where it was: the rows the history
+        # takes come off the top of the block, never off the composer's row.
+        self._history_floor = max(0, block_rows - text.count("\n"))
+        try:
+            write_history_frame(application, text)
+        except BaseException:
+            transcript.mark_host_flushed(previous_offset)
+            self._delivered_sgr = previous_sgr
+            raise
+        finally:
+            self._history_floor = 0
+        return True, True
 
     @staticmethod
     def _host_flush_retry_delay(attempts: int) -> float:
@@ -1131,24 +1244,22 @@ class PersistentTerminal:
         )
 
     def _schedule_host_flush_locked(self) -> None:
-        """Schedule one serialized host flush from the PT event loop.
+        """Reserve one serialized host flush on the PT event loop.
 
         This method is called with ``self._lock`` held, often by a worker
-        thread.  Only the event-loop callback calls ``run_in_terminal``; the
-        producer never writes to the physical TTY directly.
+        thread.  Only the event-loop callback writes to the terminal; the
+        producer never touches the physical TTY.
 
-        Live flushes are debounced to at most one per
-        :data:`_HOST_FLUSH_MIN_INTERVAL_SECONDS`: each ``run_in_terminal``
-        handoff erases and redraws the inline application, and on hosts whose
-        effective column width disagrees with wcwidth (CJK + emoji), the erase
-        leaves residue that stacks into the duplicated/interleaved scrollback
-        the owner reported.  A pending timer is the reservation; when it fires
-        the accumulated complete lines flush in one batch.  The closing flush
-        bypasses the debounce so shutdown is never delayed, and an in-flight
-        retry (``_host_flush_retry_handle``) still has priority so a failed
-        write is replayed before any new snapshot.
+        Live flushes are spaced at least
+        :data:`_HOST_FLUSH_MIN_INTERVAL_SECONDS` apart, so a fast stream
+        becomes a bounded number of history frames.  A pending reservation,
+        retry timer, or debounce timer already owns the next snapshot, so a
+        burst of appends schedules exactly one flush.  The closing flush
+        bypasses the interval so shutdown is never delayed, and a pending
+        retry still has priority so a failed write is replayed before any
+        new snapshot.
         """
-        if self._host_flush_task is not None:
+        if self._host_flush_scheduled or self._host_flush_in_progress:
             return
         if self._host_flush_retry_handle is not None:
             return
@@ -1172,20 +1283,34 @@ class PersistentTerminal:
                         due - now, self._start_host_flush_on_ui
                     )
                 return
+        # Always a fresh loop iteration, even from the loop thread itself: a
+        # history frame is synchronous, so running it inline here would nest
+        # one flush inside the completion of the previous one.
+        try:
+            loop.call_soon_threadsafe(self._start_host_flush_on_ui)
+        except RuntimeError:
+            return
         self._host_flush_scheduled = True
-        self._schedule_on_loop(self._start_host_flush_on_ui, loop=loop)
 
     def _start_host_flush_on_ui(self) -> None:
-        """Start a live or final flush; this callback runs on PT's loop."""
+        """Run a live or final flush; this callback runs on PT's loop."""
         with self._lock:
             # If this callback came from a retry or debounce timer, release
             # its reservation before taking the next snapshot.
             self._host_flush_retry_handle = None
             self._host_flush_debounce_handle = None
             self._host_flush_scheduled = False
-            if self._host_flush_task is not None:
+            if self._host_flush_in_progress:
                 return
-            if self._application is None or not self._running:
+            application = self._application
+            if application is None or not self._running:
+                return
+            if getattr(application, "_running_in_terminal", False):
+                # A ``run_in_terminal`` notice owns the TTY and will redraw
+                # the block itself when it returns.  Painting a frame into
+                # the middle of it would interleave the two; come back
+                # shortly instead, without spending a write attempt.
+                self._schedule_host_flush_retry_locked()
                 return
             include_partial = self._host_flush_closing
             payload, end, prefix = self._transcript.pending_host_flush(
@@ -1200,66 +1325,37 @@ class PersistentTerminal:
             if is_closing:
                 self._finish_close_on_ui()
             return
-        if original_stdout is None:
-            return
+        assert original_stdout is not None
 
         with self._lock:
             self._host_flush_attempts += 1
-
-        async def _flush() -> bool:
-            def _write_and_commit() -> bool:
-                # Runs INSIDE the run_in_terminal window: Prompt Toolkit is
-                # suspended here. The delivery cursor must advance before
-                # this callable returns — the redraw that happens right
-                # after run_in_terminal resumes then projects the
-                # post-delivery state. Committing anywhere later (done
-                # callback, after await) leaves a first frame that still
-                # shows the just-delivered lines. On write failure the
-                # cursor stays put and the payload remains undelivered for
-                # the bounded retry.
-                written = self._write_host_payload(
-                    original_stdout,
-                    payload,
-                    include_partial=include_partial,
-                    prefix=prefix,
-                )
-                if written:
-                    self._transcript.mark_host_flushed(end, prefix)
-                return written
-
-            try:
-                return bool(await _run_in_terminal(_write_and_commit))
-            except Exception:
-                return False
-
-        task = asyncio.ensure_future(_flush())
-        with self._lock:
-            self._host_flush_task = task
-            self._host_flush_end = end
-            self._host_flush_prefix = prefix
-            self._host_flush_is_final = include_partial
-        task.add_done_callback(self._host_flush_done)
-
-    def _host_flush_done(self, task: asyncio.Future[Any]) -> None:
-        """Commit a completed host flush and schedule the next snapshot."""
-        with self._lock:
-            if self._host_flush_task is not task:
-                return
-            is_final = self._host_flush_is_final
-            self._host_flush_task = None
-            self._host_flush_end = 0
-            self._host_flush_prefix = ""
-            self._host_flush_is_final = False
+            self._host_flush_in_progress = True
+        succeeded = repainted = False
         try:
-            succeeded = bool(task.result())
+            succeeded, repainted = self._deliver_host_payload(
+                application,
+                original_stdout,
+                payload,
+                end=end,
+                prefix=prefix,
+                include_partial=include_partial,
+            )
         except Exception:
             succeeded = False
-        if succeeded:
-            # The cursor was already committed inside the run_in_terminal
-            # window (before PT's restored redraw). Only invalidate here:
-            # the done-callback runs after that redraw, so re-marking would
-            # be a no-op, but the viewport must drop the delivered lines in
-            # case no render happened inside the window.
+        finally:
+            with self._lock:
+                self._host_flush_in_progress = False
+        self._host_flush_completed(
+            succeeded, is_final=include_partial, repainted=repainted
+        )
+
+    def _host_flush_completed(
+        self, succeeded: bool, *, is_final: bool, repainted: bool
+    ) -> None:
+        """Record one host flush outcome and schedule what comes next."""
+        if succeeded and not repainted:
+            # The viewport must drop the delivered lines.  A history frame
+            # already repainted it; a direct host write did not.
             with self._lock:
                 self._schedule_invalidation_locked()
 
@@ -1273,19 +1369,17 @@ class PersistentTerminal:
                 self._host_flush_circuit_open = False
                 if loop is not None:
                     self._host_flush_last_ts = loop.time()
-                if not closing and not is_final:
-                    self._schedule_host_flush_locked()
-                    return
                 if not is_final:
-                    # A live flush completed after close() was requested; run
-                    # one final include-partial handoff before exiting.
+                    # More live output, or close() was requested while this
+                    # live flush ran: either way the next flush takes the
+                    # snapshot, and a closing one includes the partial line.
                     self._schedule_host_flush_locked()
                     return
-                # The final task includes the current partial line.  No
+                # The final flush included the current partial line.  No
                 # further producer can append after close() marks the
                 # terminal closed, so it is now safe to release the app.
             else:
-                # A failed task did not advance the transcript cursor. Keep
+                # A failed flush did not advance the transcript cursor. Keep
                 # the exact payload pending and retry with exponential
                 # backoff until the finite budget is exhausted.
                 if self._host_flush_attempts < _HOST_FLUSH_MAX_ATTEMPTS:
@@ -1324,7 +1418,7 @@ class PersistentTerminal:
 
         This synchronous fallback is used only when no Prompt Toolkit
         renderer is active.  While the application is alive, callers must use
-        ``_start_host_flush_on_ui`` so ``run_in_terminal`` owns the handoff.
+        ``_start_host_flush_on_ui`` so a history frame owns the handoff.
         """
         payload, end, prefix = self._transcript.pending_host_flush(
             include_partial=True
@@ -1334,11 +1428,10 @@ class PersistentTerminal:
         original_stdout = self._host_stdout()
         if original_stdout is None:
             return
+        text = self._host_payload_text(payload, include_partial=True, prefix=prefix)
         for attempt in range(1, _HOST_FLUSH_MAX_ATTEMPTS + 1):
             try:
-                succeeded = self._write_host_payload(
-                    original_stdout, payload, include_partial=True, prefix=prefix
-                )
+                succeeded = not text or self._write_host_payload(original_stdout, text)
             except Exception:
                 succeeded = False
             if succeeded:
@@ -1637,8 +1730,8 @@ class PersistentTerminal:
                 return modal.container
             return body
 
-        root = _HeadroomContainer(root_content)
-        self._application = Application(
+        root = _HeadroomContainer(root_content, floor=lambda: self._history_floor)
+        self._application = FramedApplication(
             layout=Layout(root, focused_element=self._composer),
             key_bindings=bindings,
             full_screen=False,
@@ -1721,7 +1814,7 @@ class PersistentTerminal:
         host flush has already delivered to the native scrollback is
         owned by the host and must NOT be re-rendered inside the
         application viewport — doing so showed every completed turn twice
-        (once in the scrollback from ``run_in_terminal``, once here). The
+        (once in the host scrollback, once here). The
         viewport therefore renders only text still awaiting delivery,
         which is exactly the streaming tail plus the current partial
         line. The full transcript is untouched for close-time history
@@ -1742,6 +1835,11 @@ class PersistentTerminal:
           advances the offset without bumping ``version()``, so the
           cursor alone must invalidate the cache or a delivered line
           would keep its stale in-app copy until the next append.
+
+        A color span that began in delivered text is re-opened
+        (``_delivered_sgr``, which moves with the offset): without it the
+        span's remainder rendered in the default color here and changed
+        color the moment it, too, was delivered.
         """
         version = self._transcript.version()
         offset = self._transcript.host_flush_offset()
@@ -1749,6 +1847,8 @@ class PersistentTerminal:
         if cached is not None and cached[0] == (version, offset):
             return cached[1]
         text = self._transcript.undelivered_tail(_RENDER_TAIL_LINES)
+        if text and self._delivered_sgr:
+            text = self._delivered_sgr + text
         plain_text = _ANSI_ESCAPE.sub("", text)
         self._rendered_output_line_count = len(plain_text.split("\n"))
         rendered: Any = ANSI(text) if "\x1b[" in text else text
@@ -1769,6 +1869,11 @@ class PersistentTerminal:
         return self._render_output()
 
     def _render_toolbar(self) -> Any:
+        line = self._compose_toolbar()
+        self._painted_toolbar = line
+        return line
+
+    def _compose_toolbar(self) -> str:
         text = self._toolbar_text()
         # Fold the transient turn status into the fixed toolbar row.  The
         # idle state contributes nothing: the toolbar's own fields already
@@ -1941,7 +2046,11 @@ class PersistentTerminal:
             return ""
 
     def _has_queue_preview(self) -> bool:
-        return bool(self._queue_preview_text())
+        # Evaluated as the preview's visibility filter on every render, so
+        # it records what was painted even while the preview is hidden.
+        text = self._queue_preview_text()
+        self._painted_queue_preview = text
+        return bool(text)
 
     def _queue_preview_height(self) -> int:
         text = self._queue_preview_text()

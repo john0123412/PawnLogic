@@ -81,9 +81,9 @@ class TerminalTranscript:
 
     The host :attr:`sink` is consulted only when :meth:`flush` is
     explicitly called. The persistent terminal uses
-    :meth:`pending_host_flush` to hand complete lines to Prompt Toolkit's
-    ``run_in_terminal`` context, while the final close handoff may include
-    an unfinished partial line.
+    :meth:`pending_host_flush` to move complete lines into the host
+    scrollback as atomic history frames (``pawnlogic.terminal_frames``),
+    while the final close handoff may include an unfinished partial line.
 
     The class does not raise on a misbehaving sink. A sink that throws
     is treated as a dropped chunk: the in-memory buffer still holds the

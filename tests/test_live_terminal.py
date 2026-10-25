@@ -73,6 +73,67 @@ def test_terminal_refresh_is_event_driven_to_avoid_tty_backpressure() -> None:
     asyncio.run(scenario())
 
 
+def test_idle_status_ticker_does_not_repaint_an_unchanged_screen() -> None:
+    """The 250 ms ticker must not render when no polled surface changed.
+
+    Prompt Toolkit hides and re-shows the cursor on every render, even one
+    whose screen diff is empty, so an unconditional tick sent the host four
+    cursor hide/show cycles a second while idle -- the flicker the owner saw
+    after every answer.
+    """
+    async def scenario() -> None:
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+            run_task = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+            assert terminal.application is not None
+            await asyncio.sleep(0.3)
+            renders: list[int] = []
+            terminal.application.after_render += lambda _app: renders.append(1)
+
+            await asyncio.sleep(1.1)
+
+            assert renders == []
+            terminal.close()
+            await run_task
+
+    asyncio.run(scenario())
+
+
+def test_status_ticker_repaints_when_the_polled_status_changes() -> None:
+    """A status change nobody invalidates for still reaches the toolbar."""
+    async def scenario() -> None:
+        session = SimpleNamespace(
+            queue_status=lambda: {"pending_count": pending[0]},
+            _turn_submitted_at=0.0,
+            _turn_start_time=0.0,
+            _turn_first_delta=True,
+            _current_tool_activity="",
+            _last_interrupt_at=None,
+        )
+        pending = [0]
+        with create_pipe_input() as pipe:
+            terminal = PersistentTerminal(input=pipe, output=DummyOutput())
+            terminal._session = session  # type: ignore[attr-defined]
+            run_task = asyncio.create_task(terminal.run())
+            await terminal.wait_until_ready()
+            await asyncio.sleep(0.3)
+            assert "Thinking" not in terminal.rendered_screen_lines()[-1]
+
+            pending[0] = 1
+            await asyncio.sleep(0.6)
+            assert "Thinking" in terminal.rendered_screen_lines()[-1]
+
+            pending[0] = 0
+            await asyncio.sleep(0.6)
+            assert "Thinking" not in terminal.rendered_screen_lines()[-1]
+
+            terminal.close()
+            await run_task
+
+    asyncio.run(scenario())
+
+
 def test_queue_preview_stays_muted_immediately_above_bottom_composer() -> None:
     async def scenario() -> None:
         preview = [
@@ -1022,14 +1083,19 @@ def test_wrap_host_payload_folds_cjk_rows_to_terminal_columns() -> None:
     assert _wrap_host_payload("a\u200bb", 10) == "a\u200bb"
 
 
-def test_live_host_flush_is_debounced_between_flush_cycles() -> None:
+def test_live_host_flush_is_debounced_between_flush_cycles(monkeypatch) -> None:
     """Streaming bursts schedule at most one host flush per interval.
 
     The write itself still happens on the debounce timer, so complete lines
-    reach the host scrollback without being dropped or duplicated.
+    reach the host scrollback without being dropped or duplicated.  The
+    interval is widened here so the parked window is observable; production
+    keeps it short because each flush is one atomic frame.
     """
 
-    from pawnlogic.live_terminal import _HOST_FLUSH_MIN_INTERVAL_SECONDS
+    from pawnlogic import live_terminal
+
+    interval = 0.6
+    monkeypatch.setattr(live_terminal, "_HOST_FLUSH_MIN_INTERVAL_SECONDS", interval)
 
     async def scenario() -> None:
         with create_pipe_input() as pipe:
@@ -1067,19 +1133,20 @@ def test_live_host_flush_is_debounced_between_flush_cycles() -> None:
                 host_writes.clear()
                 for i in range(50):
                     terminal.append_line(f"burst-{i}")
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.2)
                 assert host_writes == [], (
                     "burst flushes must be debounced, saw "
                     f"{len(host_writes)} writes"
                 )
 
                 # Once the debounce interval elapses, the timer flushes the
-                # accumulated complete lines exactly once.
-                await asyncio.sleep(
-                    _HOST_FLUSH_MIN_INTERVAL_SECONDS + 0.5
-                )
+                # accumulated complete lines exactly once, in one write.
+                await asyncio.sleep(interval + 0.3)
                 burst_writes = [w for w in host_writes if "burst-" in w]
-                assert burst_writes, "debounce timer must flush accumulated lines"
+                assert len(burst_writes) == 1, (
+                    "a burst must coalesce into one host write, saw "
+                    f"{len(burst_writes)}"
+                )
                 joined = "".join(burst_writes)
                 assert joined.count("burst-0\n") == 1
                 assert joined.count("burst-49\n") == 1
@@ -1237,9 +1304,14 @@ def test_wrap_host_payload_progresses_at_one_column_with_wide_glyph() -> None:
     assert result.replace("\n", "") == "\u72ec\u89d2\u517d"
 
 
-def test_close_does_not_wait_for_the_debounce_window() -> None:
+def test_close_does_not_wait_for_the_debounce_window(monkeypatch) -> None:
     """close() with a parked debounce timer must finish immediately; the
-    old behavior deferred the final handoff to the 2 s debounce tick."""
+    old behavior deferred the final handoff to the debounce tick.  A wide
+    interval keeps the reservation parked long enough to observe."""
+    from pawnlogic import live_terminal
+
+    monkeypatch.setattr(live_terminal, "_HOST_FLUSH_MIN_INTERVAL_SECONDS", 2.0)
+
     async def scenario() -> None:
         with create_pipe_input() as pipe:
             terminal = PersistentTerminal(input=pipe, output=DummyOutput())

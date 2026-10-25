@@ -213,6 +213,7 @@ module = [
     "pawnlogic.selectors",
     "pawnlogic.confirm_selector",
     "pawnlogic.terminal_transcript",
+    "pawnlogic.terminal_frames",
     "pawnlogic.restart_recovery",
     "tools.text_patch",
     "tools.shell_ops",

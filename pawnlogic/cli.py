@@ -114,12 +114,12 @@ try:
     from prompt_toolkit.styles import Style as _PTStyle
     from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.application import run_in_terminal as _pt_run_in_terminal
-    from prompt_toolkit.output.defaults import create_output as _pt_create_output
+    from pawnlogic.terminal_frames import create_live_output as _create_live_output
     _HAS_PROMPT_TOOLKIT = True
 except Exception as _e:
     _PT_IMPORT_ERROR = str(_e)
     _pt_run_in_terminal = None
-    _pt_create_output = None
+    _create_live_output = None
     # Define dummy classes to prevent NameError in class definitions below
     class Completer:
         pass
@@ -1344,7 +1344,7 @@ async def _main_impl():
             queue_preview=build_queue_preview(session),
             live_status=_build_live_status_text,
             style=_pawn_style,
-            output=_pt_create_output(stdout=sys.stdout),
+            output=_create_live_output(sys.stdout),
         )
         # The status line reads scheduler state through ``self._session``;
         # attaching the session after construction keeps the live terminal
