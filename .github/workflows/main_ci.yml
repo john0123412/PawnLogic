@@ -187,6 +187,7 @@ jobs:
             pawnlogic/selectors.py \
             pawnlogic/confirm_selector.py \
             pawnlogic/terminal_transcript.py \
+            pawnlogic/terminal_frames.py \
             pawnlogic/restart_recovery.py \
             tools/check_doc_structure.py \
             tools/check_release_consistency.py \

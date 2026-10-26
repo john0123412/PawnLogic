@@ -7,6 +7,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Output moving into the scrollback no longer flashes the screen. It went
+  through Prompt Toolkit's `run_in_terminal`, which reached the terminal as
+  five or six separate writes -- erase the block, switch the TTY to cooked
+  mode, write the rows, reset, ask for the cursor position, redraw -- and the
+  terminal showed the erased block between them. Each flush is now one
+  history frame (ADR 0015, modeled on Codex's TUI): the erase, the rows, and
+  the repaint leave as a single write wrapped in synchronized-update mode
+  (DEC 2026), which Windows Terminal, kitty, WezTerm, iTerm2, foot, Ghostty,
+  and Alacritty present atomically and other terminals ignore. No cursor
+  query or cooked-mode switch happens per flush, a resize repaint is one
+  write too, the composer keeps its row when history is added, and the
+  undelivered half of a colored span keeps its color in the live viewport.
+  With flushes atomic, the 2-second batching interval drops to 0.1 s.
+- The live terminal no longer flickers while idle. The 250 ms status ticker
+  repainted unconditionally, and Prompt Toolkit hides and re-shows the cursor
+  on every render even when nothing on screen changed, so after each answer
+  the host received four cursor hide/show cycles a second. A tick now repaints
+  only when the toolbar or queue-preview text differs from what was last
+  painted: an idle terminal writes nothing, and a running Turn repaints once
+  per elapsed-second change instead of four times a second.
+
 ## [0.4.7] - 2026-10-25
 
 ### Fixed

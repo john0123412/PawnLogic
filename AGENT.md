@@ -675,7 +675,7 @@ mode.
 authoritative list.** A module is in the island only when CI passes its file
 to mypy; the matching `[[tool.mypy.overrides]]` entry in `pyproject.toml` is
 what actually turns on `disallow_untyped_defs` / `check_untyped_defs` for it.
-Both files, plus the list below, must name the same 54 modules;
+Both files, plus the list below, must name the same 55 modules;
 `tests/test_typed_island_sync.py` fails the build when they diverge.
 
 To add a module: annotate it until it passes
@@ -695,7 +695,7 @@ Current stable modules: `core/turn_api`, `core/turn_guards`, `core/tool_result`,
 `core/live_turn_control`, `core/turn_cancellation`, `core/queue_tui`,
 `pawnlogic/live_repl`, `pawnlogic/live_terminal`, `pawnlogic/selectors`,
 `pawnlogic/confirm_selector`, `pawnlogic/terminal_transcript`,
-`pawnlogic/restart_recovery`, `tools/check_doc_structure`,
+`pawnlogic/restart_recovery`, `pawnlogic/terminal_frames`, `tools/check_doc_structure`,
 `tools/check_release_consistency`, `tools/merge_ctf_skills`, `tools/browser_ops`,
 `tools/policy_proxy`, `tools/proxy_protocol`, `tools/text_patch`, `tools/shell_ops`,
 `tools/docker_plan`, `tools/container_http_proxy`, `tools/container_http_protocol`,
@@ -1119,7 +1119,10 @@ name at the end is the gate that fails if the invariant is broken.
   handler leaves that e2e green.
 - **A live-side notice must go through `run_in_terminal`; a direct `print`
   from the Application's event loop is swallowed,** because the renderer owns
-  stdout. `_terminal_notice` is the only correct route. The two idle sources
+  stdout. `_terminal_notice` is the only correct route, and it is now the only
+  remaining `run_in_terminal` user: each notice still erases and redraws the
+  block in several writes, so it must stay a rare, explicit event and never
+  carry streamed output (see the history-frame entry below). The two idle sources
   are also independent schedulers (one closure variable each in
   `build_prompt_toolkit_bindings` and in `install_live_interrupt_handler`), so
   a new source needs its own guard. The live SIGINT handler is disarmed to
@@ -1143,7 +1146,7 @@ name at the end is the gate that fails if the invariant is broken.
   `buffer.insert_text`; until then the only way is one pre-formatted `send`.
 - **The inline block must never be as tall as the host terminal.** Prompt
   Toolkit caps an inline block at `rows`, and a block that tall starts at
-  screen row 0, so the `run_in_terminal` erase (`ESC[<n>A` to the block's
+  screen row 0, so the history-frame erase (`ESC[<n>A` to the block's
   first row, then `ESC[J`) runs from the home position. tmux's default
   `scroll-on-clear` treats that as a full-screen clear and keeps the old rows
   in the scrollback: the transient viewport survived there and the flush
@@ -1155,8 +1158,10 @@ name at the end is the gate that fails if the invariant is broken.
   `rows - _INLINE_HEADROOM_ROWS`; replacing the root with a bare
   `DynamicContainer` reintroduces the duplicate. The clamp cannot cover a
   cursor already at row 0, where Prompt Toolkit's cursor-position report
-  alone makes the block full height; nothing in the app clears the screen
-  today, so do not add a clear without revisiting this.
+  alone makes the block full height. Prompt Toolkit's default `c-l`
+  (`clear-screen`) is the one path that puts the block there: the next
+  history frame then erases from home once, and tmux keeps one stale copy of
+  the block. Do not add another clear without revisiting this.
   `test_inline_block_never_claims_the_terminal_top_row`.
 - **Rich in-Application TUIs (`/provider`, `/skills`)** contribute containers,
   key bindings, and focus targets to the persistent Application. Their live
@@ -1170,22 +1175,55 @@ name at the end is the gate that fails if the invariant is broken.
   keep its bounded sequence-resolution latency covered. Mouse-wheel and
   coordinate-free ScrollUp/ScrollDown stay owned by the output viewport so
   composer history cannot consume them.
-- **Live host scrollback must use `run_in_terminal`; worker threads must never
-  write to the TTY.** Complete lines stream live, partial lines flush once at
-  close, and a failed host write must not advance the flush cursor. Live
-  flushes are debounced (`_HOST_FLUSH_MIN_INTERVAL_SECONDS`) and payloads are
-  pre-wrapped to the host's real column count via `_wrap_host_payload`
-  (`pawnlogic/live_terminal.py`) — an
-  erase cycle assuming one row per logical line leaves residue on rows the host
-  wrapped itself (wcwidth mismatch on CJK/emoji), which stacked into duplicated
-  interleaved scrollback.
+- **The status ticker must not repaint an unchanged screen.** Prompt
+  Toolkit's renderer hides and re-shows the cursor on *every* render, even
+  one with an empty screen diff, so the 250 ms ticker's unconditional
+  `invalidate()` sent four cursor hide/show cycles a second to an idle host —
+  the post-answer flicker. `_invalidate_if_polled_surface_changed` compares
+  the toolbar and queue-preview text against what was last *painted*
+  (`_painted_toolbar`, recorded in `_render_toolbar`; `_painted_queue_preview`,
+  recorded in the preview's visibility filter), not against the previous tick,
+  so a state that flips and flips back between ticks cannot strand a stale
+  row. A new time-polled surface must join that comparison, or it stops
+  updating; an unconditional repaint anywhere on a timer reintroduces the
+  flicker. `test_idle_status_ticker_does_not_repaint_an_unchanged_screen`,
+  `test_status_ticker_repaints_when_the_polled_status_changes`.
+- **Live host scrollback is one atomic history frame; worker threads must
+  never write to the TTY and streamed output must never go through
+  `run_in_terminal`.** `run_in_terminal` reached the terminal as five or six
+  writes (erase+flush, cooked mode, the rows, reset+flush, a `ESC[6n`
+  cursor query, redraw), and the terminal displayed the erased block between
+  them — the full-screen flash the owner saw on every flush, which a 2 s
+  debounce only made rarer. `write_history_frame` (`pawnlogic/terminal_frames.py`,
+  ADR 0015) holds every flush, runs the renderer's own `erase()`, writes the
+  rows, and calls `Application._redraw()`, so erase, rows and repaint leave as
+  ONE write, bracketed by DEC 2026 synchronized update via
+  `SynchronizedVt100Output`, which `pawnlogic/cli.py` must keep creating
+  (`create_live_output`). Three ways to reintroduce the flash: a flush path
+  that writes rows outside `output_frame`, `invalidate()` in place of
+  `_redraw()` inside the frame (the repaint then lands in a later write), or
+  a Prompt Toolkit upgrade that flushes from somewhere the frame does not
+  hold. The delivery cursor advances *before* the repaint, or the repainted
+  block shows the delivered rows a second time, and is restored if the frame
+  cannot be written; complete lines stream live, partial lines flush once at
+  close, and the bounded retry/breaker is unchanged. The repaint keeps the
+  block's bottom edge (`_history_floor` via `_HeadroomContainer`), or the
+  composer jumps up after a preview or selector closes. Insertion scrolls the
+  whole screen (Codex's Windows Terminal strategy) rather than a DECSTBM
+  region, which discards rows on Windows Terminal. Live flushes stay spaced
+  by `_HOST_FLUSH_MIN_INTERVAL_SECONDS` (0.1 s; batching only) and payloads
+  are pre-wrapped to the host's real column count via `_wrap_host_payload`.
   The payload keeps SGR and drops every other escape
-  (`_host_scrollback_text`): stripping SGR too made each debounced flush
-  repaint dim thinking text in the default color, which the owner saw as
-  flicker. Color state crosses flush boundaries from the delivered prefix, so
-  a new flush path must pass `prefix` to `_write_host_payload`; without it a
-  span split by a flush loses its color on the far side. `_wrap_host_payload`
-  must keep giving SGR zero width, or colored CJK rows fold early.
+  (`_host_scrollback_text`): stripping SGR too made each flush repaint dim
+  thinking text in the default color, which the owner saw as flicker. Color
+  state crosses flush boundaries from the delivered prefix, so a new flush
+  path must pass `prefix` to `_host_payload_text`; without it a span split by
+  a flush loses its color on the far side. The live viewport re-opens the
+  same span (`_delivered_sgr`), or the undelivered half of a span renders in
+  the default color until it is delivered. `_wrap_host_payload` must keep
+  giving SGR zero width, or colored CJK rows fold early.
+  `tests/test_terminal_frames.py` (one write per flush, no erase without its
+  repaint, no CPR or cooked mode, rollback, floor, live-viewport color),
   `test_live_host_flush_carries_color_across_flushes`.
 - **The ratatui frontend is a separate wire-v1 client**, not a UI embedded in
   the Python REPL. Its terminal guard must restore raw mode, alternate screen,
@@ -1425,7 +1463,7 @@ name at the end is the gate that fails if the invariant is broken.
 - **The typed-island module list is stated in three places** (CI mypy step,
   pyproject overrides, Typed Island section). `tests/test_typed_island_sync.py`
   fails the build when they diverge — treat that failure as the gate, not as a
-  test to relax. All three name the same **54 library modules**; the CI step
+  test to relax. All three name the same **55 library modules**; the CI step
   passes no `tests/` file to mypy, and `tests/test_e2e.py` appears only on the
   pytest command line.
 - **Esc cancellation and recovery prefill are separate test milestones.**
