@@ -378,26 +378,27 @@ def set_provider_active(name: str, active: bool) -> bool:
     return True
 
 
-def set_provider_reasoning_effort(name: str, enabled: bool) -> bool:
-    """Persist whether a provider's models accept ``reasoning_effort``.
+def _set_custom_provider_flag(name: str, key: str, enabled: bool, *, action: str) -> bool:
+    """Persist one boolean capability flag on an existing custom provider entry.
 
-    Off by default for every custom provider.  The field is only sent when a
-    model declares it or the user turns it on here, so a relay that rejects
-    the parameter cannot turn an effort change into a 400 the user did not
-    ask for.  Built-in models declare their own capability and are unaffected,
-    which is why a built-in name is refused below.
+    The flag lands in ``custom_providers.json``, where
+    ``_validated_custom_provider_data`` requires *every* entry to carry a valid
+    ``base_url`` and an ``api_key_env``, and ``load_custom_providers`` abandons
+    the whole file on the first failure -- so one incomplete entry discards
+    every other custom provider, every custom model, and all persisted
+    activation state on the next start.  That is why a flag can only be set on a
+    custom provider that already exists on disk, never created:
 
-    Only a custom provider that already exists on disk can be opted in.  This
-    writes ``custom_providers.json``, where ``_validated_custom_provider_data``
-    requires *every* entry to carry a valid ``base_url`` and an
-    ``api_key_env``, and ``load_custom_providers`` abandons the whole file on
-    the first failure — so one incomplete entry discards every other custom
-    provider, every custom model, and all persisted activation state on the
-    next start.  ``setdefault`` used to build exactly such a bare
-    ``{"reasoning_effort": true}`` entry for a built-in name and reported
-    success, which silently destroyed the user's configuration.  A shadowing
-    custom entry is not an escape hatch either: the loader skips any provider
-    whose name is a built-in, so the write could never have taken effect.
+    * a built-in name is refused.  ``setdefault`` used to build a bare
+      ``{"reasoning_effort": true}`` entry for one and reported success, which
+      silently destroyed the user's configuration.  A shadowing custom entry is
+      not an escape hatch either: the loader skips any provider whose name is a
+      built-in, so the write could never have taken effect;
+    * the entry must already carry ``base_url`` and ``api_key_env``.
+
+    Both guards are pinned separately in ``tests/test_provider_commands.py``
+    (and ``tests/test_plan_protocol.py``): either one alone covers the ordinary
+    case, so a test that exercises only one would let the other rot.
     """
     with _PROVIDER_STORE_LOCK:
         if name not in PROVIDERS:
@@ -409,7 +410,7 @@ def set_provider_reasoning_effort(name: str, enabled: bool) -> bool:
     data: dict = {"providers": {}, "models": {}, "provider_states": {}}
     loaded = _read_custom_provider_json(
         data,
-        action="update reasoning-effort support in",
+        action=action,
         allow_replacement=False,
     )
     if loaded is None:
@@ -422,16 +423,61 @@ def set_provider_reasoning_effort(name: str, enabled: bool) -> bool:
     if not isinstance(entry, dict) or not entry.get("base_url") or not entry.get("api_key_env"):
         # Never mint a partial entry: the whole file would be rejected next load.
         return False
-    entry["reasoning_effort"] = bool(enabled)
+    entry[key] = bool(enabled)
     atomic_write_text(CUSTOM_PROVIDERS_PATH, json.dumps(data, ensure_ascii=False, indent=2))
     with _PROVIDER_STORE_LOCK:
-        PROVIDERS[name]["reasoning_effort"] = bool(enabled)
+        PROVIDERS[name][key] = bool(enabled)
     return True
+
+
+def set_provider_reasoning_effort(name: str, enabled: bool) -> bool:
+    """Persist whether a provider's models accept ``reasoning_effort``.
+
+    Off by default for every custom provider.  The field is only sent when a
+    model declares it or the user turns it on here, so a relay that rejects
+    the parameter cannot turn an effort change into a 400 the user did not
+    ask for.  Built-in models declare their own capability and are unaffected,
+    which is why a built-in name is refused (see ``_set_custom_provider_flag``).
+    """
+    return _set_custom_provider_flag(
+        name, "reasoning_effort", enabled, action="update reasoning-effort support in"
+    )
+
+
+def set_provider_plan_protocol(name: str, enabled: bool) -> bool:
+    """Persist whether a custom provider's models are asked to write a ``<plan>``.
+
+    On by default (an absent key means on), so every existing provider keeps
+    today's prompt.  Turning it off removes the Execution Protocol section from
+    the system prompt and stops the plan guard from flagging tool calls made
+    without a plan (``core/plan_protocol.py``): a model that treats writing the
+    plan as the action it was asked for answers a request with a plan and no
+    tool call.  The unknown key is carried through ``_validated_custom_provider_data``
+    untouched, so a release that predates it still loads the file.  Built-in
+    providers always keep the protocol, which is why a built-in name is refused
+    (see ``_set_custom_provider_flag``).
+    """
+    return _set_custom_provider_flag(
+        name, "plan_protocol", enabled, action="update plan-protocol support in"
+    )
 
 
 def provider_supports_reasoning_effort(name: str) -> bool:
     """Return whether a provider opted into sending ``reasoning_effort``."""
     return bool((PROVIDERS.get(name) or {}).get("reasoning_effort"))
+
+
+def provider_plan_protocol(name: str) -> bool:
+    """Return whether a provider's models are asked to write a ``<plan>``.
+
+    Built-in providers always are.  For a custom one only a literal ``false``
+    in ``custom_providers.json`` turns it off: a missing key, ``true`` or a
+    value of any other type (a hand edit such as ``"off"`` or ``0``) leaves the
+    protocol on, which is today's behaviour and the safe reading of a typo.
+    """
+    if name in BUILTIN_PROVIDER_NAMES:
+        return True
+    return (PROVIDERS.get(name) or {}).get("plan_protocol", True) is not False
 
 
 # ════════════════════════════════════════════════════════════════════

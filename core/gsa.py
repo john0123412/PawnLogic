@@ -16,10 +16,11 @@ Public API:
   load_toc()
       → Extract all # / ## headings for System Prompt injection.
 
-  load_relevant_skills(query, top_k=3)
+  load_relevant_skills(query, top_k=3, plan_protocol=True)
       → (skills_markdown: str, conflict_warning: str)
       Uses FinalScore (FSRS power-law decay + stability + score floor)
-      plus conflict detection.
+      plus conflict detection.  ``plan_protocol=False`` words the conflict
+      warning without asking for a ``<plan>`` (core/plan_protocol.py).
 
   bump_skill(skill_name)
       → (ok: bool, message: str)
@@ -370,7 +371,8 @@ _CASE_STRIP_RE = re.compile(r'\s+Case\s+\d+\s*$', re.IGNORECASE)
 
 
 def _detect_conflicts(
-    scored_blocks: list[tuple[float, str, str]]
+    scored_blocks: list[tuple[float, str, str]],
+    plan_protocol: bool = True,
 ) -> str:
     """
     Detect whether Top-K contains multiple variants from the same Case series.
@@ -381,7 +383,10 @@ def _detect_conflicts(
       · 2+ skills share the same base name after stripping a Case suffix.
 
     Returns a formatted <conflict_warning> string when conflicts exist,
-    otherwise an empty string.
+    otherwise an empty string.  With ``plan_protocol=False`` the warning asks
+    for the same meta-reasoning without naming a ``<plan>`` block: a model that
+    was not asked for plans (core/plan_protocol.py) must not be asked for one
+    here.
     """
     base_groups: dict[str, list[tuple[float, str]]] = {}
     for score, title, _ in scored_blocks:
@@ -392,10 +397,12 @@ def _detect_conflicts(
     if not conflicts:
         return ""
 
+    where = " in your <plan> block" if plan_protocol else ""
+    stated_in = " in <plan><why>" if plan_protocol else ""
     lines: list[str] = [
         "<conflict_warning>",
         "ATTENTION: Multiple skill variants found for the same domain.",
-        "MANDATORY Meta-Reasoning required in your <plan> block before proceeding:\n",
+        f"MANDATORY Meta-Reasoning required{where} before proceeding:\n",
     ]
     for base, variants in conflicts.items():
         lines.append(f"  Conflict cluster: '{base}'")
@@ -403,7 +410,7 @@ def _detect_conflicts(
             lines.append(f"    • [score={score:.3f}] ## {title}")
         lines.append(
             "  → EVALUATE each variant's applicability to THIS specific context.\n"
-            "  → SELECT the best-matching one and STATE your choice in <plan><why>.\n"
+            f"  → SELECT the best-matching one and STATE your choice{stated_in}.\n"
             "  → REJECT the other(s) with a brief rationale.\n"
         )
     lines.append("</conflict_warning>")
@@ -415,7 +422,63 @@ def _detect_conflicts(
 # scoring and conflict detection.
 # ════════════════════════════════════════════════════════
 
+def _archive_segments(content: str) -> list[tuple[bool, str]]:
+    """Split the archive into ``(is_skill, text)`` segments that reassemble it exactly.
+
+    A skill is a ``##`` block and ends at the next ``#`` or ``##`` heading.
+    Everything else -- the file header, each ``#`` category header and the note
+    under it -- is non-skill text. ``"".join`` of the segments is always the
+    original content, which is what lets a writer drop one skill without
+    touching its neighbours. Splitting on ``## `` alone glued every ``# ``
+    category header, and the note under it, onto the tail of the skill above
+    it, so a retrieved skill dragged an unrelated category's header into the
+    prompt, and pruning that skill deleted the header with it. A ``# `` line
+    inside a fenced code block is a shell comment, not a heading, and must not
+    cut the skill that contains it; a ``## `` line has always opened a skill
+    wherever it appears, and still does, which also stops one unbalanced fence
+    from swallowing every skill below it.
+    """
+    segments: list[tuple[bool, str]] = []
+    current: list[str] = []
+    is_skill = False
+    in_fence = False
+    for line in content.splitlines(keepends=True):
+        if line.startswith("## "):
+            if current:
+                segments.append((is_skill, "".join(current)))
+            current, is_skill, in_fence = [line], True, False
+            continue
+        if is_skill and not in_fence and line.startswith("# "):
+            segments.append((True, "".join(current)))
+            current, is_skill = [line], False  # a category header is not part of any skill
+            continue
+        if is_skill and line.lstrip().startswith(("```", "~~~")):
+            in_fence = not in_fence
+        current.append(line)
+    if current:
+        segments.append((is_skill, "".join(current)))
+    return segments
+
+
+def _skill_blocks(content: str) -> list[str]:
+    """Return the archive's ``##`` skill blocks, one stripped string per skill."""
+    return [
+        text.strip()
+        for is_skill, text in _archive_segments(content)
+        if is_skill and text.strip()
+    ]
+
+
 def _rank_relevant_blocks(query: str, top_k: int) -> list[tuple[float, str, str]]:
+    """Rank archive skills against ``query``; return only those that overlap it.
+
+    No overlap means no skill. A query that yields no word tokens (Chinese
+    only: the tokenizer is ASCII word characters) cannot overlap anything, and a
+    forced top-1 fallback used to inject the archive's first skill into every
+    such prompt, for the whole session, as if it were relevant.
+    """
+    if not _word_tokens(query):
+        return []
     try:
         content = _ensure_file()
     except Exception:
@@ -424,12 +487,7 @@ def _rank_relevant_blocks(query: str, top_k: int) -> list[tuple[float, str, str]
     if not content.strip():
         return []
 
-    # Split by "## " while preserving heading lines.
-    raw_blocks = [
-        block.strip()
-        for block in re.split(r'(?=^## )', content, flags=re.MULTILINE)
-        if block.strip().startswith("## ")
-    ]
+    raw_blocks = _skill_blocks(content)
     if not raw_blocks:
         return []
 
@@ -453,12 +511,9 @@ def _rank_relevant_blocks(query: str, top_k: int) -> list[tuple[float, str, str]
     scored.sort(key=lambda x: x[0], reverse=True)
     top = scored[:top_k]
 
-    # Filter truly unrelated entries below the floor while keeping at least one.
+    # Drop entries below the floor. Nothing above it means nothing is injected.
     threshold = _SCORE_FLOOR * 0.5   # Slightly relaxed to avoid false negatives.
-    filtered = [(s, t, b) for s, t, b in top if s >= threshold]
-    if not filtered:
-        filtered = [top[0]]
-    return filtered
+    return [(s, t, b) for s, t, b in top if s >= threshold]
 
 
 def search_gsa_hits(
@@ -524,6 +579,7 @@ class GSAKnowledgeAdapter:
 def load_relevant_skills(
     query: str,
     top_k: int = 3,
+    plan_protocol: bool = True,
 ) -> tuple[str, str]:
     """Load relevant GSA blocks while preserving the legacy prompt shape."""
     filtered = _rank_relevant_blocks(query, top_k)
@@ -531,7 +587,7 @@ def load_relevant_skills(
         return "", ""
 
     # Conflict detection.
-    conflict_warning = _detect_conflicts(filtered)
+    conflict_warning = _detect_conflicts(filtered, plan_protocol)
 
     skills_md = "\n\n".join(b for _, _, b in filtered)
     return skills_md, conflict_warning
@@ -632,14 +688,14 @@ def prune_zombie_skills(
     except Exception:
         return 0, []
 
-    # Split by ## while preserving the file header.
-    raw_blocks = re.split(r'(?=^## )', content, flags=re.MULTILINE)
+    # Same boundaries as retrieval (_archive_segments): a skill ends at the next
+    # ``#`` or ``##`` heading, so removing it never takes a category header or
+    # the note under it along. Non-skill text is kept verbatim.
     kept:   list[str] = []
     pruned: list[str] = []
 
-    for block in raw_blocks:
-        # Preserve the file header, comments, and blank lines.
-        if not block.strip().startswith("## "):
+    for is_skill, block in _archive_segments(content):
+        if not is_skill:
             kept.append(block)
             continue
 

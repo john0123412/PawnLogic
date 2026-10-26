@@ -7,7 +7,110 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- `/provider plan <name> [on|off]` switches the plan protocol for a custom
+  provider (`"plan_protocol": false` in `custom_providers.json`; absent or
+  `true` is the previous behavior, and built-in providers cannot be switched).
+  A model that treats writing the `<plan>` as the action it was asked for
+  answers a request with a plan and no tool call: on one such provider the
+  same first request was plan-only 2 of 2 times as built and 0 of 2 times with
+  the Execution Protocol section removed, and one of those replies was a native
+  tool call. With the protocol off that section leaves the system prompt (it
+  also holds the text-fallback `<tool_call>` format and the long-output rules,
+  so a provider that needs the text fallback should keep it on), the GSA
+  conflict warning and the anti-loop notices stop asking for a `<plan>`, and the
+  plan guard flags, annotates and counts nothing in either `/planguard` mode --
+  the setting outranks the mode, and `/planguard` says so. A reply that is only
+  a plan is still retried. The system prompt is rebuilt when a model switch or
+  a toggle on the current provider changes the setting, and stays byte-stable
+  otherwise. `/provider plan <name>` shows the current state; built-in names are
+  refused and no config entry is ever created, as for `/provider effort`.
+
 ### Fixed
+- The terminal no longer floods when a model repeats itself. A weak model asked
+  for a final answer sometimes loops on one sentence until it fills the whole
+  output budget (one reply was 37 KB, a sentence repeated 52 times, the full
+  8192-token cap). A streaming guard now stops reading as soon as a substantial
+  line recurs too often, or the recent window is too repetitive, keeping the
+  useful prefix, marking the reply, and closing the request so the rest is not
+  billed. `PAWNLOGIC_STREAM_LOOP_GUARD=0` disables it.
+- An answer that quotes the `<plan>` tag is no longer rendered as a plan. The
+  stream renderer opened a plan at any `<plan>`, so an answer explaining the
+  plan protocol -- the tag inside a code block, mid-line -- printed a
+  "[plan start]" line in the middle and the rest of the answer dim gray, like
+  the thinking stream. A `<plan>` now opens a plan only outside code and at the
+  start of a line or directly followed by a plan sub-tag; replayed over the 421
+  stored replies containing the tag, the 419 real plans render as before.
+- `/chat view` no longer prints a stored tool result's escape sequences to the
+  terminal. A `run_shell` result now keeps them for the model, and the tool
+  preview printed them raw in readline mode (an OSC 52 clipboard write or a
+  screen clear in a command's output reached the terminal). The preview strips
+  them; the stored content is unchanged.
+- A reply that is a tool call written as text no longer ends the turn as if it
+  were the answer. A model that wrote its call in a dialect the extractor does
+  not know (DeepSeek DSML tokens, Qwen `<function=...>`, a provider's
+  `<xyz_tool_call>` tags, a bare or fenced JSON call) used to finish the turn
+  with nothing executed and the markup printed as the answer. Such a reply now
+  takes the same bounded ladder as a plan-only one -- `tool_choice="required"`,
+  then `"none"` asking for a direct answer, then the turn stops -- with a nudge
+  saying the call was written as text and must go through the tool interface;
+  the reply and the nudge are removed when the turn fails. Detection looks at the
+  shape only: a tag pair, a `<function=` block or a JSON call must end the reply
+  and name a tool the request offered, fenced and inline code are ignored, and
+  prose or an explanation of the format never matches; no dialect is parsed or
+  executed. A call cut off before its closing tag is not recognised.
+- `prune_zombie_skills` no longer deletes category headers. It split the archive
+  on `## ` only, so removing the last skill under a `# ` category also removed
+  the next `# ` category's header and the note under it from
+  `global_skills.md`. It now uses the same boundaries as retrieval and removes
+  skill blocks only.
+- Recovery from a plan-only reply now changes the request instead of repeating
+  it. A reply that is only a `<plan>` used to be answered by re-sending the
+  identical request plus a sterner user message, which recovered once in nine
+  tries in the session that exposed this (14 requests, one tool call). The next
+  request now carries `tool_choice="required"`; if that reply is plan-only too,
+  the one after it carries `tool_choice="none"` and asks for a direct answer or
+  one clarifying question; a third plan-only reply stops the turn as before, and
+  any other reply restores `auto`. A provider that refuses the value with
+  HTTP 400/422 gets one retry as `auto` and is not sent that value again for the
+  session; an empty reply to a recovery request is retried as `auto`. The
+  Anthropic payload now maps `required` to `{"type": "any"}` and `none` to
+  `{"type": "none"}`. The recovery lines say what the next attempt does.
+- A turn that fails after recovery began no longer poisons the turns after it.
+  The plan-only replies and `[SYSTEM: PLAN_ONLY_*]` nudges stayed in the history
+  for good, so the next request showed the model its own plan-only replies as
+  the pattern of the conversation. They are now removed whenever the turn ends
+  unsuccessfully: the limit, a plan-guard hard stop, the iteration limit, a
+  provider error (that rollback used to pop the nudge instead of the prompt),
+  an interrupt, or a cancelled stream. Executed tool batches stay, a turn that
+  recovered keeps its plan and nudge, and no limit marker is written. `undo`
+  after an interrupted recovery now returns the prompt you typed, not the text
+  of a recovery nudge.
+- Messages the framework injects are no longer counted as turns. Three real
+  prompts with recovery nudges counted as ten turns and fired the history
+  summary early (threshold 8), and the budget trimmer could protect a nudge as
+  the "last turn" instead of the question. Plan corrections, recovery nudges, the
+  empty-response notice, anti-loop hints, logic refresh, and urgent mode now
+  share one predicate (`core/synthetic_messages.py`).
+- Retrieval no longer injects an unrelated skill into every prompt. The GSA
+  ranking kept its best block even when nothing matched, and its tokenizer
+  yields no tokens for Chinese, so every Chinese prompt carried the archive's
+  first skill, on every turn. No overlap now means no block, and the legacy
+  knowledge search returns nothing instead of the newest rows for a query with
+  no keyword. A `# ` category header (and its note) is no longer glued to the
+  tail of the skill above it; a `# ` shell comment inside a code fence still
+  does not cut its skill.
+- What the model is shown of a tool result no longer depends on the UI mode. In
+  the default user-friendly mode every result was head/tail-trimmed to 60 lines,
+  and `list_dir` listed dot-directories first, so a 90-entry home directory
+  reached the model without any of its ordinary directories and the model
+  concluded there was no project. Only file reads, program/shell output, and web
+  content keep head/tail trimming; everything else is cut by the character
+  budget, and `list_dir` now lists hidden entries last. ANSI color codes are
+  stripped from tool results before they reach the model, including delegated
+  workers -- except `run_shell`, whose escape sequences are kept: CTF
+  challenges hide data in them (concealed text, cursor moves that overwrite what
+  a terminal shows, OSC titles).
 - Output moving into the scrollback no longer flashes the screen. It went
   through Prompt Toolkit's `run_in_terminal`, which reached the terminal as
   five or six separate writes -- erase the block, switch the TTY to cooked

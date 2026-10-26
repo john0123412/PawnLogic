@@ -156,3 +156,67 @@ def test_consume_model_stream_propagates_keyboard_interrupt():
 
     with pytest.raises(KeyboardInterrupt):
         consume_model_stream(deltas(), ensure_tool_call_id=_ensure_id, iteration=0)
+
+
+def test_repetition_guard_stops_a_looping_content_stream():
+    """A model that repeats one sentence to max_tokens is cut short."""
+    from core.turn_api import REPETITION_NOTICE
+
+    closed = {"n": 0}
+    emitted = []
+
+    def deltas():
+        try:
+            for _ in range(5000):
+                yield {"choices": [{"delta": {"content": "I will now write the full analysis.\n"}}]}
+        finally:
+            closed["n"] += 1
+
+    # Hold a reference so the generator is not garbage-collected when
+    # consume_model_stream returns: then only the explicit close() inside it can
+    # run the generator's finally, so this test fails if that close is removed.
+    gen = deltas()
+    result = consume_model_stream(
+        gen,
+        ensure_tool_call_id=_ensure_id,
+        iteration=1,
+        on_content=emitted.append,
+    )
+
+    assert result.repetition_stopped is True
+    assert result.text.endswith(REPETITION_NOTICE)
+    # Only a handful of repeats leaked, not thousands.
+    assert result.text.count("I will now write the full analysis.") < 20
+    assert emitted[-1] == REPETITION_NOTICE
+    assert closed["n"] == 1  # the generator was closed to stop the request, before return
+    assert gen is not None  # keep the reference alive past the assertion above
+
+
+def test_repetition_guard_leaves_a_normal_answer_untouched():
+    events = [
+        {"choices": [{"delta": {"content": f"Distinct line number {i} with its own content.\n"}}]}
+        for i in range(100)
+    ]
+    result = consume_model_stream(
+        fake_stream_response(*events),
+        ensure_tool_call_id=_ensure_id,
+        iteration=1,
+    )
+    assert result.repetition_stopped is False
+    assert "repeating itself" not in result.text
+    assert result.text.count("Distinct line number") == 100
+
+
+def test_repetition_guard_can_be_disabled_by_env(monkeypatch):
+    monkeypatch.setenv("PAWNLOGIC_STREAM_LOOP_GUARD", "0")
+    events = [
+        {"choices": [{"delta": {"content": "The same repeated sentence over and over.\n"}}]}
+        for _ in range(100)
+    ]
+    result = consume_model_stream(
+        fake_stream_response(*events),
+        ensure_tool_call_id=_ensure_id,
+        iteration=1,
+    )
+    assert result.repetition_stopped is False
+    assert result.text.count("The same repeated sentence over and over.") == 100

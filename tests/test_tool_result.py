@@ -24,7 +24,7 @@ from core.tool_result import (
 def test_truncate_keeps_short_non_verbose_output_unchanged():
     text = "line\n" * 5
     out = truncate_tool_output(
-        text, tool_name="list_dir", user_mode=False, max_chars=1000
+        text, tool_name="list_dir", max_chars=1000
     )
     assert out == text
 
@@ -32,7 +32,7 @@ def test_truncate_keeps_short_non_verbose_output_unchanged():
 def test_truncate_hard_truncates_long_non_verbose_output():
     text = "x" * 5000
     out = truncate_tool_output(
-        text, tool_name="list_dir", user_mode=False, max_chars=1000
+        text, tool_name="list_dir", max_chars=1000
     )
     assert "[truncated to 1000 chars]" in out
     assert out.startswith("x" * 500)
@@ -42,19 +42,31 @@ def test_truncate_hard_truncates_long_non_verbose_output():
 def test_truncate_verbose_tool_uses_smart_head_tail():
     text = "\n".join(f"line{i}" for i in range(200))
     out = truncate_tool_output(
-        text, tool_name="run_shell", user_mode=False, max_chars=1000
+        text, tool_name="run_shell", max_chars=1000
     )
     assert "lines truncated for token efficiency" in out
     assert out.startswith("line0")
     assert out.endswith("line199")
 
 
-def test_truncate_user_mode_uses_smart_head_tail_even_for_non_verbose():
-    text = "\n".join(f"line{i}" for i in range(200))
-    out = truncate_tool_output(
-        text, tool_name="list_dir", user_mode=True, max_chars=1000
-    )
-    assert "lines truncated for token efficiency" in out
+def test_truncate_non_verbose_output_is_never_line_trimmed():
+    """A listing is cut by the character budget only, never to 30+30 lines.
+
+    The old ``user_mode`` branch head/tail-trimmed every tool in the default
+    mode, which removed the middle of a directory listing from the model.
+    """
+    text = "\n".join(f"  entry{i:03d}/" for i in range(200))
+    out = truncate_tool_output(text, tool_name="list_dir", max_chars=100_000)
+    assert out == text
+    assert "lines truncated for token efficiency" not in out
+
+
+def test_truncate_has_no_display_mode_parameter():
+    """What the model sees cannot depend on the UI mode: no way to pass it."""
+    import inspect
+
+    assert "user_mode" not in inspect.signature(truncate_tool_output).parameters
+    assert "user_mode" not in inspect.signature(ToolResultProcessor.process).parameters
 
 
 def test_default_verbose_tools_contains_expected_members():
@@ -197,7 +209,6 @@ def _process(
     fn_args: dict | None = None,
     audit_ok: bool = True,
     failure_warning: str = "",
-    user_mode: bool = False,
     max_chars: int = 100_000,
     iteration: int = 0,
     elapsed_ms: int = 5,
@@ -212,7 +223,6 @@ def _process(
         elapsed_ms=elapsed_ms,
         failure_warning=failure_warning,
         iteration=iteration,
-        user_mode=user_mode,
         max_chars=max_chars,
     )
 

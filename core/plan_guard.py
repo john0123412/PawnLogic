@@ -1,4 +1,15 @@
-"""Plan guard helpers for tool-call authorization."""
+"""Plan guard helpers for tool-call authorization.
+
+The guard enforces the plan protocol the session's system prompt carries.
+Precedence: the provider's ``plan_protocol`` setting first, ``plan_guard_mode``
+second.  With the protocol off for the active model's provider
+(``core/plan_protocol.py``) the prompt holds no Execution Protocol, so a
+plan-missing tool batch is neither flagged, annotated (``TOOL_PLAN_NOTICE``),
+signalled (``PLAN_MISSING_SIGNAL``) nor counted toward a hard stop, in either
+mode -- enforcing an instruction the model never received would contradict the
+prompt.  ``is_plan_only_response`` is not affected: a bare plan is still not an
+answer.
+"""
 
 import json
 
@@ -17,7 +28,9 @@ PLAN_EXEMPT_TOOLS = {
 
 # A model that answers a correction signal with only a complete plan has not
 # produced a usable turn result. Recover a small, fixed number of times before
-# stopping rather than silently treating the plan as the final answer.
+# stopping rather than silently treating the plan as the final answer. Each
+# recovery changes the request itself (see core/plan_recovery.py): re-sending
+# the same request with a sterner message is the retry that fails the same way.
 MAX_PLAN_ONLY_RECOVERIES = 2
 
 # Appended to each executed tool result of a plan-missing batch. The notice
@@ -43,19 +56,25 @@ PLAN_MISSING_SIGNAL = (
     "only a plan, apologize, or repeat previous text."
 )
 
+# Sent with tool_choice="required": the provider is asked to refuse a reply that
+# is not a tool call, so the text must not offer a final answer as an escape.
 PLAN_ONLY_RECOVERY_SIGNAL = (
     "[SYSTEM: PLAN_ONLY_RECOVERY]\n"
     "You supplied a complete <plan> but did not invoke a tool or provide a "
     "final answer. The plan is saved in the conversation history.\n"
-    "In your next response, immediately continue the pending action through "
+    "This reply must call a tool: continue the pending action now through "
     "the current provider's tool interface. Do NOT output another plan by "
-    "itself. If no tool is needed, provide a normal final answer."
+    "itself."
 )
 
-PLAN_ONLY_RECOVERY_LIMIT_SIGNAL = (
-    "[SYSTEM: PLAN_ONLY_RECOVERY_LIMIT]\n"
-    "Automatic execution stopped because the model repeatedly returned a plan "
-    "without an action or final answer."
+# Sent with tool_choice="none": the last attempt asks for words, not a call.
+PLAN_ONLY_NO_TOOLS_SIGNAL = (
+    "[SYSTEM: PLAN_ONLY_RECOVERY_NO_TOOLS]\n"
+    "Two replies in a row contained only a <plan>, so tools are switched off "
+    "for this reply.\n"
+    "Answer the user directly with what you already know, or ask them one "
+    "clarifying question. Do NOT output a <plan> block and do NOT attempt a "
+    "tool call."
 )
 
 

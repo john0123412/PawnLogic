@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import socket
 
 from core.api_retry import RETRYABLE_HTTP_STATUS_CODES, is_retryable_http_status
@@ -160,6 +161,20 @@ def format_http_error(
     return msg
 
 
+_HTTP_ERROR_PREFIX = re.compile(r"HTTP (\d{3})\b")
+
+
+def http_status_from_error(message: str) -> int | None:
+    """Return the status of a message built by ``format_http_error``, else ``None``.
+
+    ``stream_request`` reports a provider HTTP failure as a formatted string, so
+    the status is recovered from the one place that formats it.  Transport and
+    in-stream errors do not start with ``HTTP <status>`` and return ``None``.
+    """
+    match = _HTTP_ERROR_PREFIX.match(message)
+    return int(match.group(1)) if match else None
+
+
 def format_transport_error(
     exc: BaseException,
     *,
@@ -228,6 +243,7 @@ __all__ = [
     "auth_failure_hint",
     "format_http_error",
     "format_transport_error",
+    "http_status_from_error",
     "is_retryable_http_status",
     "model_listing_unavailable_hint",
     "retry_after_max_from_env",

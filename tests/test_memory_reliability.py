@@ -93,6 +93,41 @@ def test_session_display_and_markdown_export_use_shared_formatters(
     assert "report contents" in exported
 
 
+def test_tool_preview_strips_escape_sequences_before_a_terminal_prints_it(
+    isolated_memory,
+    tmp_path,
+):
+    """`/chat view` prints a tool row's preview straight to the terminal.
+
+    A ``run_shell`` result keeps its escape sequences for the model (CTF data
+    can hide in them), so the stored content may carry an OSC 52 clipboard
+    write or a cursor move; the preview is display-only and must not.
+    """
+    memory = isolated_memory
+    session_id = "session-escapes"
+    memory.upsert_session(
+        session_id=session_id,
+        name="Escape test",
+        model="ds-v4-flash",
+        cwd=str(tmp_path),
+        config_dict={},
+    )
+    raw = "\x1b]52;c;ZXZpbA==\x07\x1b[31mred\x1b[0m \x1b[2Joutput"
+    memory.save_messages(
+        session_id,
+        [
+            {"role": "user", "content": "run it"},
+            {"role": "tool", "tool_call_id": "call_1", "content": raw},
+        ],
+    )
+
+    pretty = memory.get_session_messages_pretty(session_id)
+
+    assert pretty[1]["preview"] == "[Tool result call_id=call_1] red output"
+    assert "\x1b" not in pretty[1]["preview"]
+    assert pretty[1]["content_full"] == raw
+
+
 def test_save_messages_handles_concurrent_writes(isolated_memory, tmp_path):
     memory = isolated_memory
     session_ids = [f"session-save-{idx}" for idx in range(24)]

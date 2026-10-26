@@ -417,7 +417,12 @@ class SQLiteKnowledgeAdapter:
     def search_legacy(self, query: str, limit: int = 5) -> list[sqlite3.Row]:
         bounded = min(max(int(limit), 1), MAX_LEGACY_LIMIT)
         if not _keywords(query):
-            return self.list_legacy(bounded)
+            # A search with nothing to search for finds nothing. Returning the
+            # newest rows instead presented unrelated entries as matches to
+            # every caller of this legacy search (the retrieval-block fallback
+            # branch, the directory auto-intuition hint). Listing the newest
+            # rows is ``list_legacy``'s job, not a search's.
+            return []
         batch = self.query(
             KnowledgeQuery(
                 text=query,

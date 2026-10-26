@@ -55,6 +55,7 @@ from core.commands._effort_flow import (
     report_current,
     set_provider_effort_support,
 )
+from core.commands._plan_flow import set_provider_plan_protocol
 # Re-exported, not re-implemented: the call site resolves the name in this
 # module's globals, so tests that replace ``provider_commands.cc_style_model_selector``
 # must keep working.
@@ -819,14 +820,15 @@ async def _handle_provider_cmd(
         _provider_set_active(sub_arg.strip(), False)
     elif sub == "remove":
         _provider_remove(sub_arg)
-    elif sub == "effort":
-        set_provider_effort_support(sub_arg.strip())
+    elif sub in ("effort", "plan"):
+        flag = set_provider_plan_protocol if sub == "plan" else set_provider_effort_support
+        flag(sub_arg.strip())
     elif sub == "test":
         maybe_result = _provider_test(session, sub_arg)
         if inspect.isawaitable(maybe_result):
             await maybe_result
     else:
-        _print(c(RED, f"  ✗ Unknown sub-command '{sub}'. Available: list · add · fetch · update · activate · deactivate · effort · remove · test"))
+        _print(c(RED, f"  ✗ Unknown sub-command '{sub}'. Available: list · add · fetch · update · activate · deactivate · effort · plan · remove · test"))
 
 
 # ════════════════════════════════════════════════════════

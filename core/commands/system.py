@@ -42,6 +42,7 @@ from config import (
 from core.api_client import stream_request
 from core.memory import list_failures, clear_failures
 from core.context_window import _ctx_tokens, resolve_context_budget
+from core.plan_protocol import prompt_plan_protocol
 from core.session import STATE_FILENAME
 from core.state import (
     state as _runtime_state,
@@ -468,11 +469,28 @@ async def cmd_toolsize(ctx: CommandContext) -> None:
         _print(c(RED, "  ✗ Invalid number"))
 
 
+def _plan_guard_note(ctx: CommandContext) -> str:
+    """Say so when the active model's provider has the plan protocol off.
+
+    The plan guard enforces the protocol the prompt carries
+    (``core/plan_protocol.py``).  With it off the guard flags nothing in any
+    mode, and a mode that silently does nothing is worse than one that says so.
+    """
+    session = getattr(ctx, "session", None)
+    if session is None or prompt_plan_protocol(session):
+        return ""
+    return (
+        f"  (not enforced: the plan protocol is off for {session.model_alias};"
+        " see /provider plan)"
+    )
+
+
 @register("/planguard")
 async def cmd_planguard(ctx: CommandContext) -> None:
     """Show, select, or switch CoT plan-guard enforcement."""
     current = str(runtime_config().get("plan_guard_mode", "advisory"))
     arg = (ctx.arg or "").strip().lower()
+    note = _plan_guard_note(ctx)
     if not arg:
         from core.output import JsonSink
 
@@ -506,16 +524,16 @@ async def cmd_planguard(ctx: CommandContext) -> None:
             _print(c(GRAY, f"  Plan-guard mode unchanged ({current})."))
             return
         set_dynamic_config_value("plan_guard_mode", selected)
-        _print(c(GREEN, f"  ✓ plan_guard_mode={selected} (was {current})"))
+        _print(c(GREEN, f"  ✓ plan_guard_mode={selected} (was {current})") + note)
         return
     if arg == "status":
-        _print(c(GRAY, f"  Current: plan_guard_mode={current}"))
+        _print(c(GRAY, f"  Current: plan_guard_mode={current}") + note)
         return
     if arg not in ("strict", "advisory"):
         _print(c(RED, "  ✗ Usage: /planguard [strict|advisory|status]"))
         return
     set_dynamic_config_value("plan_guard_mode", arg)
-    _print(c(GREEN, f"  ✓ plan_guard_mode={arg} (was {current})"))
+    _print(c(GREEN, f"  ✓ plan_guard_mode={arg} (was {current})") + note)
 
 
 def _effort_tui_available() -> bool:

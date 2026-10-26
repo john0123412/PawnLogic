@@ -161,6 +161,7 @@ jobs:
             core/tool_calls.py \
             core/tool_registry.py \
             core/token_estimate.py \
+            core/stream_repetition.py \
             core/context_window.py \
             core/workspace_cleanup.py \
             core/turn_state.py \
@@ -178,6 +179,10 @@ jobs:
             core/session_tool_loop.py \
             core/session_snapshot.py \
             core/message_history.py \
+            core/plan_recovery.py \
+            core/plan_protocol.py \
+            core/tool_markup.py \
+            core/synthetic_messages.py \
             core/turn_scheduler.py \
             core/live_turn_control.py \
             core/turn_cancellation.py \

@@ -229,3 +229,32 @@ def test_rebuild_uses_database_side_insert_without_corpus_materialization(
             """
         ).fetchone()[0]
     assert count == 1_200
+
+
+def test_query_without_search_terms_finds_nothing_instead_of_the_newest_rows(
+    isolated_memory,
+):
+    # The legacy search used to answer a query with no usable keyword by
+    # returning the newest rows, which presented unrelated entries as matches
+    # (to the retrieval-block fallback and to the directory auto-intuition).
+    memory = isolated_memory
+    memory.add_knowledge("Heap exploitation", "Use safe unlink checks.", "pwn", "s1")
+    memory.add_knowledge("Web notes", "Cookie handling guidance.", "web", "s2")
+
+    for query in ("123", "!!!", "?"):
+        assert memory.search_knowledge_records(query, top_k=3, max_chars=200) == []
+    for query in ("", "   ", "123", "!!!", "?"):
+        assert memory.search_knowledge(query, limit=3) == []
+
+    # Listing is a different operation and still lists.
+    assert len(memory.list_knowledge(5)) == 2
+
+
+def test_query_that_overlaps_no_record_finds_nothing(isolated_memory):
+    memory = isolated_memory
+    memory.add_knowledge("Heap exploitation", "Use safe unlink checks.", "pwn", "s1")
+
+    assert memory.search_knowledge_records("quantum chromodynamics", top_k=3) == []
+    assert memory.search_knowledge("quantum chromodynamics", limit=3) == []
+    # Control: a real overlap is still found.
+    assert len(memory.search_knowledge("unlink", limit=3)) == 1

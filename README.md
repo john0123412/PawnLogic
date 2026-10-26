@@ -110,6 +110,7 @@ and `OPENAI_API_KEY`.
 /provider activate|deactivate <name>    # show or hide a provider's models
 /provider list                         # provider and key status
 /provider test <model>                 # free connectivity check, no inference
+/provider plan <name> [on|off]         # custom providers: ask for a <plan> before tool calls (default on)
 /setkey                                # re-run key setup
 /keys                                  # key status
 ```
@@ -130,6 +131,28 @@ Auth is independent from format: `auto`, `bearer`, `x_api_key`, or `both`.
 The default `auto` keeps each protocol's historical scheme, so existing
 providers keep working unchanged. A 401 names the credential header that was
 actually sent — change `Auth` before rotating the key.
+
+### Plan protocol
+
+By default the system prompt asks every model for a `<plan>` before its tool
+calls, and the plan guard (`/planguard`) flags a tool call that arrives
+without one. A model that treats writing the plan as the action it was asked
+for answers a request with a plan and no tool call. A custom provider can
+switch the protocol off:
+
+```bash
+/provider plan <name>                  # show the current setting
+/provider plan <name> off              # no plan section in the prompt, nothing to enforce
+/provider plan <name> on               # back to the default
+```
+
+With the protocol off, the prompt's Execution Protocol section is removed (it
+also holds the text-fallback `<tool_call>` format, so keep the protocol on for
+a provider that cannot call tools natively) and the plan guard flags nothing
+in either `/planguard` mode. A reply that is only a plan is still retried. The
+setting is stored as `"plan_protocol": false` in
+`~/.pawnlogic/custom_providers.json`, takes effect on the next turn, and is
+refused for built-in providers.
 
 ## Reasoning Effort
 

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from core.message_history import repair_dangling_tool_calls
+from core.synthetic_messages import starts_user_turn
 from core.token_estimate import estimate_tokens
 
 
@@ -86,12 +87,14 @@ def _turn_groups(messages: Sequence[Mapping[str, Any]]) -> list[tuple[int, ...]]
     # user message that immediately follows the block joins that same group —
     # treating the user as a second start would split the turn in two, and
     # budget trimming could then keep the question while evicting the
-    # retrieval block that was fetched for it.
+    # retrieval block that was fetched for it.  A framework-injected user
+    # message (a recovery nudge, a plan correction) is not a turn start: it
+    # stays in the group of the turn it was injected into.
     starts: list[int] = []
     for index, message in enumerate(messages):
         if message.get("_turn_context"):
             starts.append(index)
-        elif message.get("role") == "user":
+        elif starts_user_turn(message):
             preceded_by_block = index > 0 and messages[index - 1].get("_turn_context")
             if not preceded_by_block:
                 starts.append(index)

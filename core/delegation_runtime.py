@@ -32,6 +32,7 @@ from core.tool_executor import (
 )
 from core.turn_api import consume_model_stream
 from core.prompt_builder import format_context_envelope_for_prompt
+from core.tool_result import model_facing_text
 
 
 CAPABILITY_PROFILES = ("inherited", "read_only", "no_shell", "custom")
@@ -626,7 +627,9 @@ class SubAgentSession:
             fn_args=arguments,
             context=context,
         )
-        result = execution.content
+        # Same rule as the main loop: colour escapes cost a worker tokens, except
+        # where the bytes are the data (core.tool_result.ANSI_PRESERVING_TOOLS).
+        result = model_facing_text(name, execution.content)
         limit = min(int(runtime_config()["tool_max_chars"]), 6000)
         if len(result) > limit:
             result = (

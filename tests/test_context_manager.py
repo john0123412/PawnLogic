@@ -435,3 +435,52 @@ def test_structured_state_inserts_after_the_first_full_turn():
     assert user_index == block_index + 1
     assert answer_index == user_index + 1
     assert state_index > answer_index
+
+
+def test_recovery_nudges_do_not_split_a_turn_into_budget_groups():
+    # A framework-injected user message (here a plan-only recovery nudge) is
+    # not a turn start. Counted as one, the real question and its retrieval
+    # block fall into an earlier group than the "last turn" the trimmer
+    # protects, so a tight budget could keep the nudge and evict the question.
+    from core.context_manager import _turn_groups
+    from core.plan_guard import PLAN_ONLY_RECOVERY_SIGNAL
+
+    plan = {"role": "assistant", "content": "<plan><intent>x</intent></plan>"}
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "assistant", "content": "[Retrieved Context]", "_turn_context": True},
+        {"role": "user", "content": "real question"},
+        plan,
+        {"role": "user", "content": PLAN_ONLY_RECOVERY_SIGNAL},
+        plan,
+        {"role": "user", "content": PLAN_ONLY_RECOVERY_SIGNAL},
+        {"role": "assistant", "content": "answer"},
+        {"role": "user", "content": "second question"},
+        {"role": "assistant", "content": "second answer"},
+    ]
+
+    groups = _turn_groups(messages)
+
+    assert groups == [(1, 2, 3, 4, 5, 6, 7), (8, 9)]
+
+
+def test_trimmer_protects_the_real_question_not_the_last_nudge():
+    from core.plan_guard import PLAN_ONLY_RECOVERY_SIGNAL
+
+    filler = "x" * 400
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": filler},
+        {"role": "user", "content": "the live question"},
+        {"role": "assistant", "content": "<plan><intent>x</intent></plan>"},
+        {"role": "user", "content": PLAN_ONLY_RECOVERY_SIGNAL},
+    ]
+
+    kept = [
+        str(m.get("content"))
+        for m in ContextManager(max_tokens=60, trim_tokens=40).build(messages).messages
+    ]
+
+    assert "the live question" in kept
+    assert PLAN_ONLY_RECOVERY_SIGNAL in kept
