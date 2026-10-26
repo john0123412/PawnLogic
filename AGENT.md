@@ -1681,6 +1681,17 @@ name at the end is the gate that fails if the invariant is broken.
   custom provider's `plan_protocol` setting outranks the mode: with it off no
   mode flags anything (see the plan-protocol entry above).
 
+- **MCP tool registration must survive the `mcp` SDK's field renames.** An
+  `mcp` minor bump (2.2 → 2.3) renamed `Tool.inputSchema` to
+  `Tool.input_schema`; reading only one name raised `AttributeError` per tool,
+  so every server initialized and then registered `0` tools — MCP stayed
+  broken with a startup log that still says servers are online. Tool
+  attributes are read through `core.mcp_client_manager._tool_input_schema`,
+  which tries `input_schema` then `inputSchema`; a new renamed field, or a
+  direct `tool.<field>` access on an SDK type, is the mistake.
+  `test_tool_input_schema_reads_both_sdk_field_names` in
+  `tests/test_mcp_client_manager.py`.
+
 ### Testing traps
 
 - **A test binding `from config import DYNAMIC_CONFIG` (or `MODELS`,

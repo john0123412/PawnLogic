@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- MCP tools are discovered again under `mcp` 2.3.0. That SDK release renamed
+  `Tool.inputSchema` to `Tool.input_schema`, so every tool raised
+  `AttributeError` during registration: servers still reported "online" but
+  `0 tool(s) discovered`, silently disabling playwright, filesystem, tavily
+  and every other configured server. Registration now reads the schema
+  through a helper that accepts both field names, keeping the `mcp>=2.2.0`
+  floor working.
+
 ## [0.4.8] - 2026-10-26
 
 ### Added
