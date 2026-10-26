@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from types import SimpleNamespace
 
 from core import mcp_client_manager
 
@@ -135,3 +136,20 @@ def test_mcp_enabled_false_keeps_global_manager_unconstructed(monkeypatch, tmp_p
 
     assert mcp_client_manager.init_external_mcp(tmp_path / "mcp_configs.json") is None
     assert constructed.is_set() is False
+
+
+def test_tool_input_schema_reads_both_sdk_field_names():
+    """mcp 2.3.0 renamed Tool.inputSchema to Tool.input_schema (mcp>=2.2.0 floor)."""
+    renamed = SimpleNamespace(
+        input_schema={"type": "object", "properties": {"a": {"type": "string"}}}
+    )
+    legacy = SimpleNamespace(inputSchema={"type": "object"})
+    schemaless = SimpleNamespace(name="t", description="d")
+
+    assert mcp_client_manager._tool_input_schema(renamed) == renamed.input_schema
+    assert mcp_client_manager._tool_input_schema(legacy) == legacy.inputSchema
+    assert mcp_client_manager._tool_input_schema(schemaless) is None
+    assert mcp_client_manager._tool_input_schema(schemaless) or {
+        "type": "object",
+        "properties": {},
+    } == {"type": "object", "properties": {}}

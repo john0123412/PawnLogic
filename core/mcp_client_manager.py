@@ -173,6 +173,19 @@ def _truncate_stderr_log(path: Path, max_bytes: int = MCP_STDERR_LOG_MAX_BYTES) 
         logger.debug(f"[MCP] failed to truncate stderr log {path}: {exc}")
 
 
+def _tool_input_schema(tool: object) -> dict[str, Any] | None:
+    """Return an MCP tool's input schema across SDK field renames.
+
+    mcp 2.3.0 renamed ``Tool.inputSchema`` to ``Tool.input_schema`` while the
+    release floor stays ``mcp>=2.2.0``, so both attribute names must be tried.
+    """
+    for attr in ("input_schema", "inputSchema"):
+        value = getattr(tool, attr, None)
+        if value:
+            return value
+    return None
+
+
 def _resolve_roots() -> list[Path]:
     roots: list[Path] = []
     candidates = []
@@ -643,7 +656,7 @@ class MCPClientManager:
                 "server":        name,
                 "original_name": tname,
                 "description":   tool.description or "",
-                "input_schema":  tool.inputSchema or {"type": "object", "properties": {}},
+                "input_schema":  _tool_input_schema(tool) or {"type": "object", "properties": {}},
                 "timeout":       timeout,
                 "phase":         phase,
                 # Binds the tool to the exact server invocation (issue #177.1).
