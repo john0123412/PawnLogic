@@ -4,6 +4,7 @@
 
 | Version | Supported |
 |---------|-----------|
+| 0.4.8   | ✅ Yes     |
 | 0.4.7   | ✅ Yes     |
 | 0.4.6   | ✅ Yes     |
 | 0.4.5   | ⚠️ Upgrade recommended |
