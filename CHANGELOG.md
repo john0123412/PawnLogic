@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-10-26
+
 ### Added
 - `/provider plan <name> [on|off]` switches the plan protocol for a custom
   provider (`"plan_protocol": false` in `custom_providers.json`; absent or
