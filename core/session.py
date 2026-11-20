@@ -163,6 +163,25 @@ def _debug_mode() -> bool:
     return bool(_runtime_state.debug_mode)
 
 
+def _log_raw_tool_calls(session_id: str, iteration: int, tc_buf: dict) -> None:
+    """P7: raw tool_call argument logging for driver escaping diagnostics."""
+    if not tc_buf or not _debug_mode():
+        return
+    # Deferred import avoids cycles; raw model JSON may embed secrets,
+    # so redact before truncation and before it reaches the debug log.
+    from core.operation_policy import redact_command
+
+    for idx, tc in tc_buf.items():
+        raw_name = tc["name"]
+        raw_args = redact_command(tc["args"])
+        logger.debug(
+            "RAW tool_call | session={} iter={} idx={} "
+            "name={!r} args_preview={!r}",
+            session_id[:8], iteration, idx,
+            raw_name, raw_args[:200],
+        )
+
+
 def _dynamic_config() -> MutableMapping[str, Any]:
     """Return the currently loaded mutable runtime config via the runtime interface."""
     context = current_runtime_context()
@@ -1549,17 +1568,7 @@ class AgentSession:
 
         leftover = renderer.flush()
 
-        # P7: raw tool_call argument logging for driver escaping diagnostics.
-        if tc_buf and _debug_mode():
-            for idx, tc in tc_buf.items():
-                raw_name = tc["name"]
-                raw_args = tc["args"]
-                logger.debug(
-                    "RAW tool_call | session={} iter={} idx={} "
-                    "name={!r} args_preview={!r}",
-                    self.session_id[:8], iteration, idx,
-                    raw_name, raw_args[:200],
-                )
+        _log_raw_tool_calls(self.session_id, iteration, tc_buf)
 
         # P2: rich Markdown rendering for non-plan text. The tail also rides
         # content_delta; printing only here would lose it for wire consumers.

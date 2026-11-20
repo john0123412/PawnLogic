@@ -177,7 +177,24 @@ def resolve_tool_arguments(tool_call: Mapping[str, Any]) -> dict:
 
 def preview_tool_arguments(fn_args: Mapping[str, Any]) -> str:
     """Return the compact argument preview used in tool logs and audit records."""
-    return ", ".join(f"{key}={repr(value)[:40]}" for key, value in fn_args.items())
+    # Redact before truncation: a clipped secret could evade the credential
+    # patterns. Redaction runs with the argument key attached so sensitive-word
+    # patterns (token=, --api-key=, ...) see the key=value context they need.
+    # Deferred import: operation_policy pulls config, which must not be loaded
+    # before the executor in some startup paths (mirror core/logger.py).
+    from core.operation_policy import redact_command
+
+    parts = []
+    for key, value in fn_args.items():
+        # repr() covers strings (quoted) and every other value type alike.
+        # Model-controlled keys can themselves look like secrets, so redact
+        # the key too and slice past the redacted form to keep the value
+        # budget aligned with the historical 40-char preview format.
+        redacted_key = redact_command(key)
+        redacted = redact_command(f"{redacted_key}={value!r}")
+        clipped = redacted[len(redacted_key) + 1:][:40]
+        parts.append(f"{redacted_key}={clipped}")
+    return ", ".join(parts)
 
 
 def classify_tool_failure(content: object) -> str:

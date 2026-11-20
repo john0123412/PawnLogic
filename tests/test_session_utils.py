@@ -3375,3 +3375,54 @@ def test_count_turns_plain_history_is_unchanged():
     ]
 
     assert s._count_turns(s.messages) == [(1, 3), (3, 5)]
+
+
+# ── _log_raw_tool_calls: debug raw tool_call logging must redact secrets ──
+
+
+def _capture_raw_tool_call_debug(monkeypatch, *, debug: bool):
+    import core.session as session_module
+
+    recorded = []
+    monkeypatch.setattr(session_module, "_debug_mode", lambda: debug)
+    monkeypatch.setattr(
+        session_module.logger, "debug", lambda *args, **kwargs: recorded.append(args)
+    )
+    return recorded
+
+
+def test_log_raw_tool_calls_redacts_args_before_debug_log(monkeypatch):
+    recorded = _capture_raw_tool_call_debug(monkeypatch, debug=True)
+    tc_buf = {
+        0: {
+            "name": "run_shell",
+            "args": '{"command": "OPENAI_API_KEY=plainsecretvalue curl https://x"}',
+        }
+    }
+
+    core_session_module = sys.modules["core.session"]
+    core_session_module._log_raw_tool_calls("session-abcdef123456", 3, tc_buf)
+
+    assert len(recorded) == 1
+    logged = "".join(str(part) for part in recorded[0])
+    assert "plainsecretvalue" not in logged
+    assert "<redacted>" in logged
+    assert "run_shell" in logged
+
+
+def test_log_raw_tool_calls_skipped_when_debug_off(monkeypatch):
+    recorded = _capture_raw_tool_call_debug(monkeypatch, debug=False)
+
+    sys.modules["core.session"]._log_raw_tool_calls(
+        "session-abcdef123456", 3, {0: {"name": "run_shell", "args": "token=abc"}}
+    )
+
+    assert recorded == []
+
+
+def test_log_raw_tool_calls_skipped_when_no_tool_calls(monkeypatch):
+    recorded = _capture_raw_tool_call_debug(monkeypatch, debug=True)
+
+    sys.modules["core.session"]._log_raw_tool_calls("session-abcdef123456", 3, {})
+
+    assert recorded == []

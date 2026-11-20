@@ -86,7 +86,9 @@ _REVERSE_SHELL_PATTERNS = [
     re.compile(r"\bpython[23]?\b.*socket.*connect.*(?:dup2|subprocess|pty)", re.IGNORECASE),
 ]
 _SENSITIVE_WORD_RE = re.compile(
-    r"(?i)\b(api[_-]?key|access[_-]?key|token|password|passwd|secret|private[_-]?key)"
+    # Lookbehind instead of \b: \b cannot sit between "_" and a letter, so
+    # compound key names (OPENAI_API_KEY=, session_token=) would slip through.
+    r"(?i)(?<![A-Za-z0-9])(api[_-]?key|access[_-]?key|token|password|passwd|secret|private[_-]?key)"
     r"(\s*[:=]\s*)(['\"]?)([^'\"\s;&|]+)"
 )
 _SENSITIVE_FLAG_RE = re.compile(
