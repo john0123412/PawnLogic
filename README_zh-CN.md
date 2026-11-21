@@ -93,6 +93,14 @@ GPT-6 系列只在 OpenAI 的 Responses API 上支持工具调用，因此这些
 `responses` 格式（`POST .../v1/responses`），其余 OpenAI 别名仍走 Chat
 Completions。它们共用 `openai` provider 与 `OPENAI_API_KEY`。
 
+更新的前沿模型不内置为别名：OpenAI 的 GPT-6.2 Astra 与 GPT-6.2 Sol
+（`gpt-6.2-astra`、`gpt-6.2-sol`，2026 年 11 月发布）以及 Anthropic 的
+Claude Fable 5.2 与 Mythos 5.2 都在本表冻结之后发布；其中面向网络安全任务
+的档位（GPT-6.2 Astra、Mythos 系列）还需要在 provider 账号侧获得 cyber
+访问批准或通过审查，PawnLogic 无法代为授予，所以普通用户把它们当作自定义
+模型使用：先 `/provider add` 添加 provider，再 `/provider fetch <name>`
+选取新的模型 ID，之后它们会和其他拉取到的模型一样出现在 `/model` 里。
+
 ```bash
 /provider                              # provider TUI
 /provider add <name> <base_url> <ENV_KEY> [format] [auth]

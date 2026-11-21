@@ -97,6 +97,16 @@ aliases use the `responses` format (`POST .../v1/responses`) while the other
 OpenAI aliases keep Chat Completions. All of them share the `openai` provider
 and `OPENAI_API_KEY`.
 
+Newer frontier releases are not built-in aliases: OpenAI's GPT-6.2 Astra and
+GPT-6.2 Sol (`gpt-6.2-astra`, `gpt-6.2-sol`, Nov 2026) and Anthropic's Claude
+Fable 5.2 and Mythos 5.2 shipped after this table was frozen. The
+cyber-focused tiers — GPT-6.2 Astra and the Mythos line — additionally require
+provider-side cyber access approval or vetting on your account, which
+PawnLogic cannot grant, so ordinary users reach them as custom models:
+`/provider add` the provider once, then `/provider fetch <name>` and select
+the new model IDs; they then appear under `/model` like any other fetched
+model.
+
 ```bash
 /provider                              # provider TUI
 /provider add <name> <base_url> <ENV_KEY> [format] [auth]
