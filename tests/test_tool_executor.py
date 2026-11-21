@@ -856,3 +856,16 @@ def test_preview_tool_arguments_redacts_token_shaped_keys():
 
     assert "sk-projabcdefghijklmnopq" not in preview
     assert "plainvalue" in preview
+
+
+def test_preview_tool_arguments_redacts_quoted_json_and_nested_values():
+    preview = preview_tool_arguments(
+        {
+            "payload": '{"api_key": "plainsecretvalue"}',
+            "auth": {"token": "hunter2secretvalue"},
+        }
+    )
+
+    assert "plainsecretvalue" not in preview
+    assert "hunter2secretvalue" not in preview
+    assert "<redacted>" in preview

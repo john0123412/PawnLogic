@@ -88,8 +88,10 @@ _REVERSE_SHELL_PATTERNS = [
 _SENSITIVE_WORD_RE = re.compile(
     # Lookbehind instead of \b: \b cannot sit between "_" and a letter, so
     # compound key names (OPENAI_API_KEY=, session_token=) would slip through.
+    # Optional quotes around the separator cover JSON and nested-repr shapes
+    # ({"api_key": "..."}, {'token': '...'}) whose quote blocks a bare [: =].
     r"(?i)(?<![A-Za-z0-9])(api[_-]?key|access[_-]?key|token|password|passwd|secret|private[_-]?key)"
-    r"(\s*[:=]\s*)(['\"]?)([^'\"\s;&|]+)"
+    r"(['\"]?)(\s*[:=]\s*)(['\"]?)([^'\"\s;&|]+)"
 )
 _SENSITIVE_FLAG_RE = re.compile(
     r"(?i)(--(?:api[_-]?key|access[_-]?key|token|password|secret|private[_-]?key)"
@@ -104,7 +106,7 @@ _KNOWN_SECRET_RE = re.compile(
 
 def redact_command(command: str) -> str:
     """Redact credential-like values before logging policy decisions."""
-    text = _SENSITIVE_WORD_RE.sub(r"\1\2\3<redacted>", command)
+    text = _SENSITIVE_WORD_RE.sub(r"\1\2\3\4<redacted>", command)
     text = _SENSITIVE_FLAG_RE.sub(r"\1<redacted>", text)
     return _KNOWN_SECRET_RE.sub("<redacted>", text)
 

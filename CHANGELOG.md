@@ -30,7 +30,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   names: `\b` cannot sit between `_` and a letter, so `OPENAI_API_KEY=`,
   `MY_TOKEN=` and `session_token=` passed through unredacted while bare
   `token=` was caught. The lookbehind guard still leaves lookalike
-  identifiers (`notatoken=`, `tokenize=`) untouched.
+  identifiers (`notatoken=`, `tokenize=`) untouched. A follow-up audit
+  found one more gap: a quote between key and separator defeats a bare
+  `[: =]` match, so JSON tool-arg shapes (`{"api_key": "..."}`) and
+  nested reprs (`auth={'token': '...'}`) leaked into the debug log and
+  preview sinks. The pattern now allows optional quotes around the
+  separator; all previously covered shapes redact byte-identically.
 
 ### Fixed
 - MCP tools are discovered again under `mcp` 2.3.0. That SDK release renamed
