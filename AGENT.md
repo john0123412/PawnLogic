@@ -194,6 +194,18 @@ Documentation drift is considered a bug.
   or `myrelay/gpt-4o` unless the text is specifically testing legacy filtering.
 - If a scan finds old provider/model wording, either update it or document why
   it is intentionally present in a test.
+- Verify before you write. Whenever a doc edit adds or changes factual claims
+  — model names/IDs, release or shutdown dates, provider access tiers
+  (cyber/vetting-gated models), version numbers, benchmark figures, config
+  defaults — search the web for the provider announcement or system card
+  first, then cross-check against this repository (`config/providers.py`
+  `MODELS`, `pyproject.toml`, `CHANGELOG.md`, the CLI help text). Never write
+  a model name, date, or access-tier claim from memory alone; if a search
+  cannot confirm it, mark the uncertainty explicitly in the text or leave the
+  claim out. New provider models stay out of the built-in alias list until
+  they are broadly accessible: gated or cyber-tier models are documented as
+  custom-model territory (`/provider add` + `/provider fetch`) instead, so
+  built-in aliases keep working with just an API key.
 
 Useful drift scans:
 
