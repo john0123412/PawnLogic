@@ -86,21 +86,37 @@ _REVERSE_SHELL_PATTERNS = [
     re.compile(r"\bpython[23]?\b.*socket.*connect.*(?:dup2|subprocess|pty)", re.IGNORECASE),
 ]
 _SENSITIVE_WORD_RE = re.compile(
-    # Lookbehind instead of \b: \b cannot sit between "_" and a letter, so
-    # compound key names (OPENAI_API_KEY=, session_token=) would slip through.
+    # Key-start boundary, three ways:
+    #  - lookbehind instead of \b: \b cannot sit between "_" and a letter, so
+    #    compound key names (OPENAI_API_KEY=, session_token=) would slip through;
+    #  - a case-sensitive camel hump (lower→UPPER) so authToken=/clientSecret=
+    #    are caught while glued lowercase words (notatoken=) stay benign;
+    #  - an explicit separator glued to a preceding key part (db_pass=, auth-token=).
     # Optional quotes around the separator cover JSON and nested-repr shapes
     # ({"api_key": "..."}, {'token': '...'}) whose quote blocks a bare [: =].
-    r"(?i)(?<![A-Za-z0-9])(api[_-]?key|access[_-]?key|token|password|passwd|secret|private[_-]?key)"
+    r"(?i)(?:(?<![A-Za-z0-9])|(?-i:(?<=[a-z])(?=[A-Z]))|(?<=[A-Za-z0-9][-_]))"
+    r"(api[_-]?key|access[_-]?key|token|pass(?:word|wd)?|secret|private[_-]?key)"
     r"(['\"]?)(\s*[:=]\s*)(['\"]?)([^'\"\s;&|]+)"
 )
 _SENSITIVE_FLAG_RE = re.compile(
-    r"(?i)(--(?:api[_-]?key|access[_-]?key|token|password|secret|private[_-]?key)"
+    r"(?i)(--(?:api[_-]?key|access[_-]?key|token|pass(?:word|wd)?|secret|private[_-]?key)"
     r"(?:=|\s+))([^'\"\s;&|]+)"
 )
 _KNOWN_SECRET_RE = re.compile(
     r"(sk-(?:proj-|svcacct-|live-)?[A-Za-z0-9_-]{12,}|"
     r"ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{30,}|"
-    r"AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16})"
+    r"AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|"
+    # JWTs: three dot-joined base64url segments (header.payload.signature).
+    r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{8,}|"
+    # Bearer credentials in header position (12+ token chars, so placeholder
+    # prose like "the Bearer of bad news" stays untouched).
+    r"(?i:bearer\s+)[A-Za-z0-9._~+/=-]{12,}|"
+    # URL userinfo credentials scheme://user:password@host. The value class
+    # stops at "/" and "@", so ports (example.com:8080) and git@ remotes
+    # (ssh://git@host) never match.
+    r"(?:https?|ftps?|ssh|git|mysql|postgres(?:ql)?|redis|mongodb(?:\+srv)?|amqp)"
+    r"://[^\s@/:]+:[^\s@/]+@"
+    r")"
 )
 
 
