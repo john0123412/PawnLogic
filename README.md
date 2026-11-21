@@ -51,7 +51,8 @@ pawn
 Optional extras: `pawnlogic[docker]`, `pawnlogic[browser]`, `pawnlogic[ctf]`.
 The `[ctf]` extra installs tooling only (pwntools, ROPgadget, ropper); skill
 packs stay separate and are installed explicitly with
-`/skills install <repo_url>`.
+`/skills install <repo_url>` into `~/.pawnlogic/skills` (or the checkout's own
+`skills/` directory when running from a source checkout that contains one).
 
 The first run opens the API key setup. Runtime data lives under
 `~/.pawnlogic/`, never inside the project directory.
@@ -64,12 +65,6 @@ pawn --continue                          # resume the newest recoverable session
 pawn resume <session>                    # load a session without running it
 pawn --debug                             # full diagnostics
 ```
-
-Optional extras: `pawnlogic[docker]`, `pawnlogic[browser]`, `pawnlogic[ctf]`.
-The `[ctf]` extra installs tooling only (pwntools, ROPgadget, ropper); skill
-packs stay separate and are installed explicitly with
-`/skills install <repo_url>` into `~/.pawnlogic/skills` (or the checkout's own
-`skills/` directory when running from a source checkout that contains one).
 
 ## Models and Providers
 

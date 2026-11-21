@@ -86,7 +86,7 @@ from pathlib import Path
 
 PROMPT_TEMPLATE = open("prompt-template.txt").read()
 
-def migrate_function(ref_disasm, ref_procedure, target_disasm, target_procedure, symbols, api_url, api_key, model="deepseek-chat"):
+def migrate_function(ref_disasm, ref_procedure, target_disasm, target_procedure, symbols, api_url, api_key, model="deepseek-flash"):
     prompt = PROMPT_TEMPLATE.format(
         disasm_for_reference=ref_disasm,
         procedure_for_reference=ref_procedure,
@@ -159,15 +159,15 @@ def apply_results(results, ida_session):
 # 默认用 DeepSeek（便宜）
 default:
   api_url: "https://api.deepseek.com/v1/chat/completions"
-  model: "deepseek-chat"
+  model: "deepseek-flash"
   
 # 超大函数回退到 GPT
 fallback:
   api_url: "https://api.openai.com/v1/chat/completions"
-  model: "gpt-4o"
+  model: "gpt-5.5"
 
 # 或者用 Claude
 alternative:
   api_url: "https://api.anthropic.com/v1/messages"
-  model: "claude-sonnet-4-20250514"
+  model: "claude-sonnet-5-5"
 ```
