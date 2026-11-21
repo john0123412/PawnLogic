@@ -581,3 +581,12 @@ def test_redact_command_leaves_lookalike_identifiers_alone():
     # survive redaction untouched.
     assert redact_command("notatoken=abc123") == "notatoken=abc123"
     assert redact_command("tokenize=abc123") == "tokenize=abc123"
+
+
+def test_redact_command_covers_quoted_json_shapes():
+    # A quote between the key and the separator defeats a bare [: =] match:
+    # JSON tool args and nested reprs must redact like flat key=value text.
+    assert redact_command('{"api_key": "hunter2secretvalue"}') == '{"api_key": "<redacted>"}'
+    assert redact_command('{"token":"abc123def456"}') == '{"token":"<redacted>"}'
+    assert redact_command("env={'API_TOKEN': 'xyzsecretvalue1'}") == "env={'API_TOKEN': '<redacted>'}"
+    assert redact_command("password=\"p@ssw0rd!\"") == 'password="<redacted>"'
