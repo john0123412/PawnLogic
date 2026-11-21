@@ -812,3 +812,47 @@ def test_execute_tool_handler_watchdog_defaults_to_runtime_config(monkeypatch):
 
     assert result.audit_ok is False
     assert "watchdog" in result.content.lower()
+
+
+def test_preview_tool_arguments_redacts_embedded_secrets():
+    preview = preview_tool_arguments(
+        {
+            "cmd": "curl -H 'Authorization: Bearer sk-proj-abcdefghijklmnop'",
+            "token": "hunter2secretvalue",
+            "flag": "--api-key=AKIAIOSFODNN7EXAMPLE",
+        }
+    )
+
+    assert "sk-proj-abcdefghijklmnop" not in preview
+    assert "hunter2secretvalue" not in preview
+    assert "AKIAIOSFODNN7EXAMPLE" not in preview
+    assert "<redacted>" in preview
+
+
+def test_preview_tool_arguments_redacts_before_truncation():
+    # Discriminating input: the sk- key starts ~37 chars into the repr, so
+    # truncate-first would leave a visible "sk-" remnant; redact-first must
+    # remove the whole secret before the 40-char clip ever runs. The clip
+    # leaves only the "<re" prefix of the marker visible — that prefix is
+    # still proof redaction fired before truncation.
+    preview = preview_tool_arguments({"cmd": "echo " + "x" * 30 + " sk-proj-abcdefghijklmnop"})
+
+    assert "sk-" not in preview
+    assert "<re" in preview
+
+
+def test_preview_tool_arguments_redacts_compound_key_names():
+    # Compound env-style key names must be caught inside tool arguments too.
+    preview = preview_tool_arguments({"cmd": "export OPENAI_API_KEY=plainsecretvalue"})
+
+    assert "plainsecretvalue" not in preview
+    assert "<redacted>" in preview
+
+
+def test_preview_tool_arguments_redacts_token_shaped_keys():
+    # Model-controlled dict keys can themselves look like secrets; the preview
+    # must not echo them back verbatim and the value must stay aligned.
+    preview = preview_tool_arguments({"sk-projabcdefghijklmnopq": "plainvalue"})
+
+    assert "sk-projabcdefghijklmnopq" not in preview
+    assert "plainvalue" in preview

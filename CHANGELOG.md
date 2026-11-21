@@ -7,6 +7,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+- Dependency floor raised to `opentelemetry-api>=1.45.2`. The OpenTelemetry
+  Python API up to 1.45.1 (pulled in transitively by the `mcp` dependency)
+  parses `traceparent` values in quadratic time, so a carrier holding
+  attacker-controlled data can stall the process (ReDoS, CVE-2026-126360);
+  1.45.2 bounds the parsing work. The floor excludes every vulnerable build.
+- Tool-call argument previews, shell failure logs and raw tool_call debug
+  records are redacted now. `preview_tool_arguments` — the single source of
+  the durable `audit_*.jsonl` args field, the failure-DB/GSA summaries and the
+  in-session tool preview — redacts credential-like content through
+  `redact_command` before truncation, with the argument key attached so
+  `token=`/`--api-key=` shapes match; model-controlled keys that themselves
+  look like secrets are redacted too. `run_shell` failure paths (non-zero
+  exit, timeout, spawn error) and the terminal `⚡` announce in both
+  `run_shell` and `run_interactive` log/show the policy-redacted command and
+  a redacted stderr excerpt instead of raw input; the debug-mode raw
+  tool_call log (now the module-level `_log_raw_tool_calls`) redacts args the
+  same way. A raw failed command with an embedded `OPENAI_API_KEY=…` or
+  `sk-…` used to land unredacted in the plaintext log file and audit JSONL.
+- `redact_command`'s sensitive-word pattern no longer misses compound key
+  names: `\b` cannot sit between `_` and a letter, so `OPENAI_API_KEY=`,
+  `MY_TOKEN=` and `session_token=` passed through unredacted while bare
+  `token=` was caught. The lookbehind guard still leaves lookalike
+  identifiers (`notatoken=`, `tokenize=`) untouched.
+
 ### Fixed
 - MCP tools are discovered again under `mcp` 2.3.0. That SDK release renamed
   `Tool.inputSchema` to `Tool.input_schema`, so every tool raised

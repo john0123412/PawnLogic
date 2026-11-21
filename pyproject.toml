@@ -41,6 +41,11 @@ dependencies = [
     # (Cycode). Fixed in 2.2.0 / 1.30.0; 2.2.0 floor excludes every vulnerable
     # build (>=1.30.0 alone would still admit vulnerable 2.0.x-2.1.x).
     "mcp>=2.2.0",
+    # Floor raised to 1.45.2 (2026-11-21): opentelemetry-api <=1.45.1 (pulled
+    # in transitively by the MCP SDK) parses attacker-controlled traceparent
+    # values in quadratic time, a ReDoS DoS when a carrier holds them
+    # (CVE-2026-126360). 1.45.2 bounds the parsing work.
+    "opentelemetry-api>=1.45.2",
 ]
 
 [project.optional-dependencies]

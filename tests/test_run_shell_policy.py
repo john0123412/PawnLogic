@@ -8,7 +8,7 @@ import pytest
 
 from tools import file_shell
 
-from core.operation_policy import OperationAction, RiskLevel
+from core.operation_policy import OperationAction, OperationDecision, RiskLevel, redact_command
 from tools import file_ops
 
 
@@ -441,3 +441,143 @@ def test_run_shell_timeout_path_signals_whole_process_group(
     assert "timed out" in output
     assert sent[0] == (4242, int(signal.SIGTERM))
     assert sent[-1] == (4242, int(signal.SIGKILL))
+
+
+# ---------------------------------------------------------------------------
+# Failure-path log redaction: every log line a failed run_shell emits must
+# carry the policy-redacted command (and redacted stderr), never raw input.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingLogger:
+    def __init__(self):
+        self.debugs = []
+        self.warnings = []
+        self.errors = []
+
+    def debug(self, *args, **kwargs):
+        self.debugs.append(args)
+
+    def warning(self, *args, **kwargs):
+        self.warnings.append(args)
+
+    def error(self, *args, **kwargs):
+        self.errors.append(args)
+
+
+def _allowing_authorize(command):
+    decision = OperationDecision(
+        action=OperationAction.ALLOW,
+        risk=RiskLevel.MEDIUM,
+        reason="test allow",
+        matched_rule="test",
+        redacted_command=redact_command(command),
+    )
+    return lambda cmd, cwd: (True, decision)
+
+
+class _FailingProc:
+    returncode = 7
+
+    def __init__(self, stderr=b""):
+        self._stderr = stderr
+
+    def communicate(self, timeout=None):
+        return b"", self._stderr
+
+    def terminate(self):
+        return None
+
+    def kill(self):
+        return None
+
+
+def _run_shell_with_fakes(command, *, logger, popen):
+    return file_shell.run_shell(
+        command,
+        timeout=5,
+        work_dir=".",
+        env={},
+        authorize=_allowing_authorize(command),
+        format_policy_block=lambda decision: "BLOCKED",
+        logger=logger,
+        emit_warning=lambda: None,
+        announce=lambda cmd: None,
+        max_chars=lambda: 10_000,
+        popen=popen,
+        timeout_error=subprocess.TimeoutExpired,
+    )
+
+
+def test_run_shell_failure_log_redacts_command_and_stderr():
+    secret = "sk-proj-abcdefghijklmnop"
+    command = f"OPENAI_API_KEY={secret} curl https://example.test"
+    logger = _RecordingLogger()
+
+    _run_shell_with_fakes(
+        command,
+        logger=logger,
+        popen=lambda *a, **k: _FailingProc(
+            stderr=f"curl: (7) auth failed for {secret}".encode()
+        ),
+    )
+
+    logged = "".join(str(arg) for warning in logger.warnings for arg in warning)
+    assert secret not in logged
+    assert "<redacted>" in logged
+
+
+def test_run_shell_timeout_log_redacts_command():
+    secret = "ghp_" + "a" * 20
+    command = f"git push --token={secret}"
+    logger = _RecordingLogger()
+
+    class _HangingProc:
+        returncode = None
+
+        def communicate(self, timeout=None):
+            raise subprocess.TimeoutExpired(cmd=command, timeout=timeout or 5)
+
+        def terminate(self):
+            return None
+
+        def kill(self):
+            return None
+
+    _run_shell_with_fakes(
+        command, logger=logger, popen=lambda *a, **k: _HangingProc()
+    )
+
+    logged = "".join(str(arg) for warning in logger.warnings for arg in warning)
+    assert secret not in logged
+    assert "<redacted>" in logged
+
+
+def test_run_shell_spawn_error_log_redacts_command():
+    secret = "AKIAIOSFODNN7EXAMPLE"
+    command = f"aws s3 cp --secret {secret} x y"
+    logger = _RecordingLogger()
+
+    def _exploding_popen(*args, **kwargs):
+        raise RuntimeError("spawn failed")
+
+    _run_shell_with_fakes(command, logger=logger, popen=_exploding_popen)
+
+    logged = "".join(str(arg) for error in logger.errors for arg in error)
+    assert secret not in logged
+    assert "<redacted>" in logged
+
+
+def test_redact_command_covers_compound_key_names():
+    # \b cannot sit between "_" and a letter, so compound key names need the
+    # lookbehind guard; these shapes are the normal env-style secret carriers.
+    assert redact_command("MY_TOKEN=supersecretvalue99") == "MY_TOKEN=<redacted>"
+    assert redact_command("OPENAI_API_KEY=plainsecretvalue") == "OPENAI_API_KEY=<redacted>"
+    assert redact_command("session_token=abc123") == "session_token=<redacted>"
+
+
+def test_redact_command_leaves_lookalike_identifiers_alone():
+    # Non-secret identifiers that merely contain a sensitive substring must
+    # survive redaction untouched.
+    assert redact_command("notatoken=abc123") == "notatoken=abc123"
+    assert redact_command("tokenize=abc123") == "tokenize=abc123"

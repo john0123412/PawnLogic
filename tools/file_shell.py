@@ -13,6 +13,8 @@ import time
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from core.operation_policy import redact_command
+
 
 def run_shell(
     command: str,
@@ -43,7 +45,9 @@ def run_shell(
         work_dir,
     )
     emit_warning()
-    announce(command)
+    # Announce the redacted form: the terminal echo must not print secrets
+    # either (same convention as the confirmation prompt's Command line).
+    announce(decision.redacted_command)
     process = None
     try:
         process = popen(
@@ -62,9 +66,12 @@ def run_shell(
         )
         output = _truncate_shell_output(output, max_chars())
         if process.returncode != 0:
+            # Failure paths log the redacted command and redacted stderr: a
+            # failed call may embed credentials just like a successful one.
+            stderr_snippet = redact_command(stderr.decode("utf-8", errors="ignore"))[:300]
             logger.warning(
                 f"[run_shell] command returned non-zero exit code {process.returncode}: "
-                f"{command!r}\n  stderr: {stderr[:300]!r}"
+                f"{decision.redacted_command!r}\n  stderr: {stderr_snippet!r}"
             )
         return _add_missing_path_hint(output, command) or "(no output)"
     except timeout_error:
@@ -74,7 +81,7 @@ def run_shell(
             if partial.strip()
             else ""
         )
-        logger.warning(f"[run_shell] timeout ({timeout}s): {command!r}")
+        logger.warning(f"[run_shell] timeout ({timeout}s): {decision.redacted_command!r}")
         return (
             f"ERROR: command timed out (>{timeout}s); process terminated.{partial_hint}\n\n"
             "Did you run an interactive program such as gdb, python, vim, or nc?\n"
@@ -84,7 +91,7 @@ def run_shell(
         )
     except Exception as error:
         logger.error(
-            f"[run_shell] execution error: {command!r} - "
+            f"[run_shell] execution error: {decision.redacted_command!r} - "
             f"{type(error).__name__}: {error}"
         )
         return f"ERROR: {type(error).__name__}: {error}"
@@ -112,7 +119,7 @@ def run_interactive(
     if not ok:
         return format_policy_block(decision)
 
-    announce(command)
+    announce(decision.redacted_command)
     output_queue: queue.Queue[str] = queue.Queue()
     try:
         process = popen(
