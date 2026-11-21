@@ -14,6 +14,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Mythos line) require provider-side access approval or vetting that
   PawnLogic cannot grant, and accounts that have access use them as custom
   models via `/provider add` + `/provider fetch`.
+- AGENT.md's Documentation Synchronization Policy gains a verify-before-you-
+  write rule: factual doc claims (model names/IDs, dates, access tiers,
+  versions, benchmarks) require a web search of the provider announcement
+  plus a cross-check against the repository before landing, and gated or
+  cyber-tier models stay out of the built-in alias list.
 
 ## [0.4.9] - 2026-11-21
 
