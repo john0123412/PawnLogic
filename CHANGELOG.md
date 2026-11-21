@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-11-21
+
 ### Security
 - Dependency floor raised to `opentelemetry-api>=1.45.2`. The OpenTelemetry
   Python API up to 1.45.1 (pulled in transitively by the `mcp` dependency)
