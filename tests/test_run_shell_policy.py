@@ -590,3 +590,35 @@ def test_redact_command_covers_quoted_json_shapes():
     assert redact_command('{"token":"abc123def456"}') == '{"token":"<redacted>"}'
     assert redact_command("env={'API_TOKEN': 'xyzsecretvalue1'}") == "env={'API_TOKEN': '<redacted>'}"
     assert redact_command("password=\"p@ssw0rd!\"") == 'password="<redacted>"'
+
+
+def test_redact_command_covers_compound_and_camel_keys():
+    # Separator-glued compounds and camelCase humps are key boundaries;
+    # glued lowercase words and separator-less compounds stay benign.
+    assert redact_command("db_pass=supersecret1") == "db_pass=<redacted>"
+    assert redact_command("authToken=abc123def456") == "authToken=<redacted>"
+    assert redact_command("clientSecret=zzz") == "clientSecret=<redacted>"
+    assert redact_command("auth-token=qqq") == "auth-token=<redacted>"
+    assert redact_command("notatoken=abc123") == "notatoken=abc123"
+    assert redact_command("bypass=1") == "bypass=1"
+
+
+def test_redact_command_covers_jwt_bearer_and_url_credentials():
+    jwt = ("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+           "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+           "dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+    assert redact_command(f"Authorization: Bearer {jwt}") == "Authorization: <redacted>"
+    assert redact_command(
+        "git push https://user:secretpw@github.com/x"
+    ) == "git push <redacted>github.com/x"
+    assert redact_command("mysql://root:hunter2pass@db.local/x") == "<redacted>db.local/x"
+
+
+def test_redact_command_keeps_non_secret_urls_and_prose():
+    assert redact_command("https://example.com:8080/path") == "https://example.com:8080/path"
+    assert redact_command(
+        "ssh://git@github.com/john0123412/PawnLogic.git"
+    ) == "ssh://git@github.com/john0123412/PawnLogic.git"
+    assert redact_command("Authorization: Bearer <placeholder>") == "Authorization: Bearer <placeholder>"
+    assert redact_command("the Bearer of bad news") == "the Bearer of bad news"
+    assert redact_command("passphrase=hunter2") == "passphrase=hunter2"

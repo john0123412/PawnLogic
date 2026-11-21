@@ -35,7 +35,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `[: =]` match, so JSON tool-arg shapes (`{"api_key": "..."}`) and
   nested reprs (`auth={'token': '...'}`) leaked into the debug log and
   preview sinks. The pattern now allows optional quotes around the
-  separator; all previously covered shapes redact byte-identically.
+  separator; all previously covered shapes redact byte-identically. The
+  follow-up audit also flagged key-name gaps (bare `pass`, separator-glued
+  compounds like `db_pass=`, camelCase humps like `authToken=`) and
+  key-less secret shapes (JWTs, `Bearer` header credentials, URL userinfo
+  `scheme://user:password@host`). The key-start boundary now accepts a
+  camel hump or an explicit separator (glued lowercase words like
+  `notatoken=` stay benign), the word list gains bare `pass`, and the
+  known-secret patterns add JWTs, Bearer header credentials and URL
+  userinfo credentials — placeholder prose and credential-free URLs
+  (`example.com:8080`, `ssh://git@host`) stay untouched.
 
 ### Fixed
 - MCP tools are discovered again under `mcp` 2.3.0. That SDK release renamed
