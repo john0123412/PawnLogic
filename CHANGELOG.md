@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Docs
+- Model sections in both READMEs explain that the newest gated frontier
+  releases (OpenAI GPT-6.2 Astra/Sol, Anthropic Claude Fable 5.2/Mythos 5.2)
+  are not built-in aliases: the cyber-focused tiers (GPT-6.2 Astra, the
+  Mythos line) require provider-side access approval or vetting that
+  PawnLogic cannot grant, and accounts that have access use them as custom
+  models via `/provider add` + `/provider fetch`.
+
 ## [0.4.9] - 2026-11-21
 
 ### Security
