@@ -138,11 +138,11 @@
 | `frontends/ratatui/src/wire.rs` | Rust wire parser (Phase 2b) | `parse_line()`, `build_request()` | cargo test (golden fixture alignment) | Accepts v1 fixture events, rejects unknown versions and malformed envelopes, and ignores unknown event types for additive v1 compatibility. |
 | `frontends/ratatui/src/composer.rs` + `ui.rs` + `main.rs` | Rust fullscreen UI (Phase 2b) | `Composer`, `apply_event()`, `handle_event()`, `drive_loop()` | cargo test (composer/ui/main modules) | Alternate-screen fullscreen with in-app scrolling, Unicode-safe cursor editing, paste, mouse capture, single-render stream ownership, backend failure monitoring, and RAII terminal restoration. Enter=prompt/steer, Esc=interrupt, Ctrl+C or exit aliases=shutdown. |
 
-## Planned 0.3.0 Seams
+## 0.3.0 Seams
 
-These Modules are approved design targets in the proposed 0.3.0 plan. They are
-listed here to reserve ownership boundaries, not to imply that the
-implementations already exist.
+These Modules were the approved design targets in the proposed 0.3.0 plan.
+The table records their ownership boundaries; every row is implemented in the
+current runtime.
 
 | Module | Intended Interface | Seam / Adapter | Status |
 |--------|--------------------|----------------|--------|

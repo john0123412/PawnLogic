@@ -68,11 +68,11 @@ session prompt context.
 
 Skill Packs are runtime assets, not package data in PyPI distributions.
 
-## Planned 0.3.0 Terms
+## 0.3.0 Terms
 
-The terms below are reserved by the proposed 0.3.0 architecture plan. They
-describe planned contracts and do not imply that the implementation already
-exists.
+The terms below were reserved by the 0.3.0 architecture plan and are
+implemented in the current runtime; `docs/MODULE_MAP.md` records the
+implemented seams. Later plans must extend this vocabulary, not redefine it.
 
 ### Extension
 
